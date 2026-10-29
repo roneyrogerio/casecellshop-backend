@@ -17,13 +17,15 @@ jobs:
     env:
       REDOCLY_TELEMETRY: 'off'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           # A conferência das migrações compara com a base do PR, então precisa do histórico.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
+          # Se os dois inputs vierem preenchidos, o setup-node usa só o node-version
+          # e avisa; por isso um deles fica sempre vazio.
           node-version: ${{ matrix.node != 'nvmrc' && matrix.node || '' }}
           node-version-file: ${{ matrix.node == 'nvmrc' && '.nvmrc' || '' }}
           cache: npm
