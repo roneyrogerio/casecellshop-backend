@@ -15,7 +15,7 @@ A sessão principal do Claude Code orquestra o marco: escreve as specs, o contra
 5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança. O parecer vai como comentário no PR.
 6. A pessoa responsável faz o merge, sem squash, para o histórico mostrar o teste antes do código.
 
-**Escalonamento**, só no `implementer` e contado por problema (um achado do `reviewer`, ou um check do CI vermelho pela mesma causa): a primeira correção roda em Sonnet com esforço alto; se o mesmo problema voltar, em Opus com esforço alto, até resolver. Cada degrau é uma chamada nova, com o modelo e o esforço passados na chamada, e o esforço `max` não é usado. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e o uso de IA é registrado para o `PROMPTS.md`.
+**Escalonamento**, só no `implementer` e contado por problema (um achado do `reviewer`, ou um check do CI vermelho pela mesma causa): a primeira correção roda em Sonnet com esforço alto; se o mesmo problema voltar, em Opus com esforço alto, até resolver. Cada degrau é uma chamada nova, com o modelo e o esforço passados na chamada, e o esforço `max` não é usado. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e as decisões e o uso de IA são registrados no mesmo PR, no `STATE.md` e no `PROMPTS.md`.
 
 ## Dos requisitos aos marcos
 
@@ -107,7 +107,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de diagnóstico e arquitetura alvo, versão final (`DOC-DIA`), e a revisão do `ARCHITECTURE.md` pelos critérios `DOC-*` e contra o código.
 - README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese de que depende e o teste que a prova; decisões em uma linha, com link para as ADRs; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com os prompts principais e o link para o `PROMPTS.md`.
-- `PROMPTS.md` com os prompts relevantes, o que foi aceito, corrigido ou rejeitado e como foi verificado, revisado para manter só conteúdo técnico.
+- `PROMPTS.md`, alimentado em cada marco, revisado para manter só conteúdo técnico.
 - `/security-review` final.
 - Verificação: repositório público; clone limpo pela URL pública, sem credenciais; compose, testes e CI verde.
 

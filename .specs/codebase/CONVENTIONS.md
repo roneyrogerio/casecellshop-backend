@@ -6,6 +6,7 @@ Valem para todo o repositório, desde o primeiro commit.
   - O tipo fica em inglês, porque é a palavra fixa do padrão: `feat`, `fix`, `test`, `refactor`, `docs`, `build`, `ci` ou `chore`.
   - A descrição fica em português, com o verbo no presente, em minúscula, sem ponto final e com até 72 caracteres no cabeçalho. Exemplo: `feat(checkout): adiciona reserva atômica de estoque`.
   - O corpo explica a motivação.
+  - Um commit com contribuição relevante da IA leva o trailer `Co-Authored-By` do modelo, e a descrição do PR diz o que a IA gerou. Quem faz o merge revisou o resultado e responde por ele.
   - O tipo no início separa feature, correção, teste e documentação no histórico.
 - **Pull requests:** um por marco, com o título no formato do commit, a descrição em português pelo template ("o que a IA gerou / o que foi mudado / como foi verificado") e o merge feito por uma pessoa, sem squash, para o histórico mostrar o teste antes do código.
   - O PR abre em rascunho no início do marco, com o plano aprovado como checklist na descrição, marcado conforme cada parte entra.
@@ -17,11 +18,11 @@ Valem para todo o repositório, desde o primeiro commit.
 - **Testes:** ficam em `test/`, fora do `src/`, em arquivos `*.test.ts`, o padrão que o Vitest encontra sem configuração.
   - `test/unit/`: sem Docker (`npm run test:unit`);
   - `test/integration/`: com Testcontainers e supertest, uma pasta por área do `spec.md`, como `checkout/`, `orders/` e `catalog/`.
-  - O Vitest separa os dois como *projects*, como no exemplo da documentação dele.
+  - O Vitest separa os dois como *projects*.
   - O nome de cada teste começa com o ID do critério que ele prova, seguido da descrição em português, como `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`. As variáveis e funções do teste seguem em inglês.
 - **Instruções da IA:**
   - o `AGENTS.md` é a fonte única. O `CLAUDE.md` só o importa (`@AGENTS.md`), para o Claude Code lê-lo também nas sessões que não leem o `AGENTS.md` direto;
-  - o `AGENTS.md` fica abaixo de 200 linhas, a meta da documentação do Claude Code para o arquivo de instruções, que carrega em toda sessão. A mesma régua vale para cada agente de `.claude/agents/`;
+  - o `AGENTS.md` fica abaixo de 200 linhas, porque carrega em toda sessão: quanto maior, mais contexto ocupa e menos é seguido. A mesma régua vale para cada agente de `.claude/agents/`;
   - cada agente tem um papel só, e a `description` dele é curta, porque as de todos carregam em toda sessão;
   - quando um desses arquivos muda, o `/doctor prompt-audit` roda antes do merge;
   - os limites de papel e as ações que pedem aprovação são aplicados pelo Claude Code, não só pela instrução (`.claude/settings.json`): um hook impede o `test-writer` de editar fora de `test/` e o `implementer` de editar testes, specs, contrato e instruções; commit, push e escrita no PR sempre pedem aprovação; merge, revisão de PR, issue, push forçado e leitura do `.env` são negados.
