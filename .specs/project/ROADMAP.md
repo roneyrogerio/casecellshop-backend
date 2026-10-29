@@ -6,16 +6,16 @@ Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md);
 
 ## Como cada marco é feito
 
-A sessão principal do Claude Code orquestra o marco e é a única que escreve código. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Três agentes, em `.claude/agents/`, apoiam cada um num ponto em que um olhar separado reduz um viés:
+A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
 
 1. O `planner` (Opus, esforço alto, só leitura) confere a spec contra o código já feito e propõe o plano do marco, com os desvios encontrados. A pessoa responsável aprova, e a sessão principal atualiza a spec.
-2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no `openapi.yaml`.
+2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no `openapi.yaml`; com esse commit, abre-se o PR em rascunho, com o plano como checklist na descrição.
 3. O `test-writer` (Sonnet, esforço alto) escreve os testes que falham a partir dos critérios e do contrato, sem ler a implementação (commit `test:`).
-4. A sessão principal implementa até o CI ficar verde (commit `feat:`).
-5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança.
+4. O `implementer` (Sonnet, esforço médio) escreve o código até os testes e o CI passarem, sem poder alterar os testes (commit `feat:`).
+5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança. O parecer vai como comentário no PR.
 6. A pessoa responsável faz o merge, sem squash, para o histórico mostrar o teste antes do código.
 
-Se o `reviewer` reprovar o mesmo marco duas vezes, a correção roda em Opus. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e o uso de IA é registrado para o `PROMPTS.md`.
+**Escalonamento**, só no `implementer` e contado por problema (um achado do `reviewer`, ou um check do CI vermelho pela mesma causa): a primeira correção roda em Sonnet com esforço alto; se o mesmo problema voltar, em Opus com esforço alto, até resolver. Cada degrau é uma chamada nova, com o modelo e o esforço passados na chamada, e o esforço `max` não é usado. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e as decisões e o uso de IA são registrados no mesmo PR, no `STATE.md` e no `PROMPTS.md`.
 
 ## Dos requisitos aos marcos
 
@@ -48,13 +48,13 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Meta:** o esqueleto roda, testa e passa no CI antes de existir regra de negócio.
 
-- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), os três agentes, `.claude/settings.json` com `opusplan` e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
+- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), o `CLAUDE.md` que o importa, os quatro agentes, `.claude/settings.json` com `opusplan`, as guardas de papel e as regras de aprovação, e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
 - Design de diagnóstico em rascunho (`DOC-DIA`).
 - Spike de ferramental (R8): Express, validador com um schema OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
 - Compose com PostgreSQL (com healthcheck), serviço de migração, API e worker, estes só depois das migrações (`depends_on` com `service_completed_successfully`); `node` como comando de cada contêiner; `stop_grace_period: 30s` e `restart: unless-stopped` na API e no worker.
 - Migrações da loja e do `erp_sim`, este com os dados iniciais do ERP simulado; até o M4, cada teste cria os dados que usa.
-- CI: `npm ci` → lint → `tsc --noEmit` → testes → limite de tamanho das specs, na versão do `.nvmrc`.
+- CI: `npm ci` → lint → `tsc --noEmit` → testes → limite de tamanho das specs e das instruções da IA, na versão do `.nvmrc`.
 - Contrato base (schema de erro RFC 9457 e resposta `default`), telemetria, `/health`, encerramento gracioso e o ERP simulado.
 - README inicial: pré-requisitos (Docker e Node a partir da 24.12), um comando para subir e outro para testar, a tabela requisito → arquivo → teste e um `requests.http`.
 
@@ -107,7 +107,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de diagnóstico e arquitetura alvo, versão final (`DOC-DIA`), e a revisão do `ARCHITECTURE.md` pelos critérios `DOC-*` e contra o código.
 - README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese de que depende e o teste que a prova; decisões em uma linha, com link para as ADRs; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com os prompts principais e o link para o `PROMPTS.md`.
-- `PROMPTS.md` com os prompts relevantes, o que foi aceito, corrigido ou rejeitado e como foi verificado, revisado para manter só conteúdo técnico.
+- `PROMPTS.md`, alimentado em cada marco, revisado para manter só conteúdo técnico.
 - `/security-review` final.
 - Verificação: repositório público; clone limpo pela URL pública, sem credenciais; compose, testes e CI verde.
 
