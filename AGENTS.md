@@ -31,7 +31,7 @@ The workflow, the conventions, the decision-record rule and the decisions in `ST
 
 ## Workflow
 
-The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.json`): Opus while planning, Sonnet while executing. It writes the specs, the contract in `src/contract/` (and regenerates `openapi.yaml`), `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
+The main session orchestrates. It runs on `opus` with `effortLevel: high` (set in `.claude/settings.json`) for planning and executing alike, and changes only when the maintainer explicitly asks for another model or effort. It writes the specs, the contract in `src/contract/` (and regenerates `openapi.yaml`), `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
 
 1. Delegate to `planner`: it proposes the milestone plan and the spec deviations. The maintainer approves; the main session updates the spec.
 2. Draft the milestone section of `ARCHITECTURE.md`, add the criteria to `spec.md` and the routes to the contract, then regenerate `openapi.yaml`. Commit them and open a draft PR with the approved plan as a checklist in its description.
@@ -80,7 +80,7 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 
 | Who | Model | Effort |
 | --- | --- | --- |
-| Main session | `opusplan`: Opus while planning, Sonnet while executing | Session default |
+| Main session | Opus, fixed in `.claude/settings.json` | `high`, fixed there too |
 | `planner` | Opus | `high` |
 | `test-writer` | Sonnet | `high` |
 | `implementer` | Sonnet | `medium` |
@@ -99,7 +99,7 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 - A new problem starts at step 1. The next milestone starts again from the frontmatter.
 - Nothing above step 2: more effort does not fix a wrong premise. Sonnet never goes above `high`; when `high` is not enough, change the model. `max` is never used: it shows diminishing returns and tends to overthink.
 - `planner`, `test-writer` and `reviewer` never escalate. A review that does not convince becomes a question to the maintainer.
-- Do not set `CLAUDE_CODE_EFFORT_LEVEL` or `maxEffortLevel`: they override the effort of every agent. Per-call `model` and `effort` need Claude Code v2.1.292 or later.
+- Do not set `CLAUDE_CODE_EFFORT_LEVEL` or `maxEffortLevel`: they override the effort of every agent. The project `effortLevel` sets only the main session's default; a maintainer's `/effort` or `--effort` still wins. Per-call `model` and `effort` need Claude Code v2.1.292 or later.
 
 ## Spec and instruction maintenance
 

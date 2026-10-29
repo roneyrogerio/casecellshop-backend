@@ -6,7 +6,7 @@ Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md);
 
 ## Como cada marco é feito
 
-A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
+A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em Opus com esforço `high`, fixos em `.claude/settings.json`; só muda a pedido explícito do mantenedor. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
 
 1. O `planner` (Opus, esforço alto, só leitura) confere a spec contra o código já feito e propõe o plano do marco, com os desvios encontrados. A pessoa responsável aprova, e a sessão principal atualiza a spec.
 2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no contrato (`src/contract/`, que gera o `openapi.yaml`); com esse commit, abre-se o PR em rascunho, com o plano como checklist na descrição.
