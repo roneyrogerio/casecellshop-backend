@@ -48,7 +48,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Meta:** o esqueleto roda, testa e passa no CI antes de existir regra de negócio.
 
-- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), o `CLAUDE.md` que o importa, os quatro agentes, `.claude/settings.json` com `opusplan`, as guardas de papel e as regras de aprovação, e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
+- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), o `CLAUDE.md` que o importa, os quatro agentes, `.claude/settings.json` com o modelo da sessão principal, as guardas de papel e as regras de aprovação, e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
 - Design de diagnóstico em rascunho (`DOC-DIA`).
 - Spike de ferramental (R8): Express com um schema zod que valida a requisição e gera o OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
