@@ -20,7 +20,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 - **FND-03** Uma requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` no corpo e no `X-Request-Id`.
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
 - **FND-05** O span do repositório sai como filho do span da requisição.
-- **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md).
+- **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md), ou se o `AGENTS.md` ou um agente de `.claude/agents/` passar de 200 linhas ([`CONVENTIONS.md`](../../codebase/CONVENTIONS.md)).
 
 ## Checkout
 
