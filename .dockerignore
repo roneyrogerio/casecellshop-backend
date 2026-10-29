@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+.specs
+node_modules
+coverage
+dist
+spike
+*.log
+.env
+.env.*
+.DS_Store
+# Testes ficam fora da imagem de execução.
+test
+**/*.test.ts
