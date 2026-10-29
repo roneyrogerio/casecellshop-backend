@@ -44,7 +44,8 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 ## Report
 
 - **Veredito:** `APROVADO` or `REPROVADO`. Any high-severity finding means `REPROVADO`.
-- **Achados**, most severe first. For each: severity (`alta`, `média` or `baixa`), `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix.
+- **Achados**, most severe first, numbered `A1`, `A2`… For each: severity (`alta`, `média` or `baixa`), `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix.
+- **Rodada anterior**, from the second review of the same PR on: each earlier finding, by its number, as `corrigido` or `não corrigido (rodada k)`, where k is how many fixes it has received. Keep the numbers across reviews; a new finding gets the next number. This marking drives the escalation of the fix.
 - **Critérios sem teste.**
 - **Resultado** of `npm test`, lint and `tsc`.
 

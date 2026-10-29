@@ -28,13 +28,13 @@ When the code and the spec disagree, do not silently pick one: mark the criterio
 
 ## Workflow
 
-The main session orchestrates and is the only one that writes production code. It runs on `opusplan` (set in `.claude/settings.json`): Opus while planning, Sonnet while executing. For each milestone:
+The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.json`): Opus while planning, Sonnet while executing. It writes the specs, `openapi.yaml`, `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
 
 1. Delegate to `planner`: it proposes the milestone plan and the spec deviations. The maintainer approves; the main session updates the spec.
 2. Draft the milestone section of `ARCHITECTURE.md`, add the criteria to `spec.md` and the routes to `openapi.yaml`.
 3. Delegate to `test-writer`: failing tests from the criteria and the contract. Commit `test(<scope>): …`.
-4. Implement until CI is green. Commit `feat(<scope>): …`.
-5. Delegate to `reviewer` on the PR and fix the confirmed findings.
+4. Delegate to `implementer`: code until the tests and CI pass. Commit `feat(<scope>): …`.
+5. Delegate to `reviewer` and post its report on the PR as a comment. Code findings go back to `implementer`, following the escalation ladder; spec and doc findings are fixed by the main session.
 6. The maintainer merges, without squash.
 
 - Run `/security-review` on the M2 PR and before delivery.
@@ -43,16 +43,30 @@ The main session orchestrates and is the only one that writes production code. I
 
 ## Models and effort
 
+The defaults live in each agent's frontmatter in `.claude/agents/`:
+
 | Who | Model | Effort |
 | --- | --- | --- |
-| Main session | `opusplan`: Opus while planning, Sonnet while executing | Default; `high` (`/effort high`) while writing concurrency, idempotency and outbox code |
+| Main session | `opusplan`: Opus while planning, Sonnet while executing | Session default |
 | `planner` | Opus | `high` |
 | `test-writer` | Sonnet | `high` |
+| `implementer` | Sonnet | `medium` |
 | `reviewer` | Opus | `high` |
 
-- **Escalation:** if `reviewer` returns `REPROVADO` twice for the same milestone, the main session runs the fix on Opus with `high` effort (`/model opus`, `/effort high`), then returns to `opusplan`.
-- Never use `max` effort: it tends to overthink without better results.
-- Each agent's model and effort live in its frontmatter in `.claude/agents/`. Do not override them when delegating.
+**Escalation ladder**, only for `implementer`, counted per problem. A problem is one reviewer finding, or one CI check failing for one cause. Escalate by passing `model` and `effort` on the `implementer` call; never change the frontmatter.
+
+| Step | When | Call with |
+| --- | --- | --- |
+| 0 | First implementation of the milestone | Frontmatter: `sonnet`, `medium` |
+| 1 | First fix of a problem | `model: sonnet`, `effort: high` |
+| 2 | The same problem comes back | `model: opus`, `effort: high`, until it is fixed |
+
+- "Comes back" is a verifiable signal, never an impression: `reviewer` marks the finding `não corrigido (rodada k)`, or the same CI check fails for the same cause. Read the step from the last PR comment of each problem.
+- Each step is a new `implementer` call that receives the finding, the link to its PR comment and the previous commit. Never resume the previous agent: a resumed agent keeps its effort.
+- A new problem starts at step 1. The next milestone starts again from the frontmatter.
+- Nothing above step 2: more effort does not fix a wrong premise. Sonnet never goes above `high`; when `high` is not enough, change the model. `max` is never used: it shows diminishing returns and tends to overthink.
+- `planner`, `test-writer` and `reviewer` never escalate. A review that does not convince becomes a question to the maintainer.
+- Do not set `CLAUDE_CODE_EFFORT_LEVEL` or `maxEffortLevel`: they override the effort of every agent. Per-call `model` and `effort` need Claude Code v2.1.292 or later.
 
 ## Spec maintenance
 

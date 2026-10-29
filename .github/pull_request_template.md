@@ -7,7 +7,7 @@
 
 ## O que a IA gerou
 
-<!-- O que veio de cada agente (planner, test-writer, sessão principal) e os prompts principais, que entram no PROMPTS.md. -->
+<!-- O que veio de cada agente (planner, test-writer, implementer, reviewer) e, em cada correção, o degrau do escalonamento usado. Os prompts principais entram no PROMPTS.md. -->
 
 ## O que foi mudado
 
