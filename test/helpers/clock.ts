@@ -24,5 +24,5 @@ export function createManualClock(startMs = Date.UTC(2026, 0, 1)): ManualClock {
         else sleepers.push(sleeper);
       }
     },
-  } as ManualClock;
+  };
 }
