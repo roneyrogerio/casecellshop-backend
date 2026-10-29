@@ -246,3 +246,13 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Verificação:**
   - fontes primárias: o Rust Book (unitário junto do código para testar a unidade isolada; integração numa pasta à parte, pela interface pública), o guia de estilo do Angular ("Unit tests should live in the same directory as the code-under-test"), o artigo de Kent C. Dodds sobre colocação e a documentação do `go build`, que ignora os `_test.go`;
   - o hook, chamado direto com onze pares de agente e caminho, decidiu cada um como esperado.
+
+### Decisões do implementer conferidas com o mantenedor
+
+- **Pedido:** o `implementer` escreveu o código do M1 e listou as decisões que tomou sem a spec fixá-las; três dependiam do mantenedor.
+- **O que a IA fez e o que ficou:**
+  - **Sem migração da loja no M1.** O plano aprovado previa "uma migração mínima da loja", mas nenhum critério do M1 usa tabela da loja, e uma migração na `main` não pode mais ser editada. A primeira tabela da loja nasce no M2, com o teste que a usa.
+  - **`pino-http` removido.** O pino continua como a biblioteca de log; o `pino-http` só gera o log da requisição, e o middleware do projeto já o faz junto com o span e a métrica. A auto-instrumentação do OpenTelemetry, que dispensaria os spans manuais, depende em ESM do `module.register()`, descontinuado no Node 26 (DEP0205), e a AD-008 continua valendo.
+  - **Exportador de traces desligado por padrão,** ligado com `OTEL_TRACES_EXPORTER=console` ou `otlp`. O design dizia "console em desenvolvimento", o que encheria o log com o healthcheck a cada 2 s; o design foi corrigido.
+- **Corrigido:** as actions do CI estavam na v4; a AD-011 pede a última estável, e foram para a v7 (degrau 1 da escada).
+- **Verificação:** a documentação do OpenTelemetry (logs pelas bibliotecas existentes; logs em JS "em desenvolvimento"), a do Node 26 (`module.register`) e a do `pino-http`; a comparação de pino, winston, bunyan e LogTape no npm; `npm test` com 125 testes verdes, inclusive o compose real.
