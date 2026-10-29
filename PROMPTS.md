@@ -256,3 +256,19 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
   - **Exportador de traces desligado por padrão,** ligado com `OTEL_TRACES_EXPORTER=console` ou `otlp`. O design dizia "console em desenvolvimento", o que encheria o log com o healthcheck a cada 2 s; o design foi corrigido.
 - **Corrigido:** as actions do CI estavam na v4; a AD-011 pede a última estável, e foram para a v7 (degrau 1 da escada).
 - **Verificação:** a documentação do OpenTelemetry (logs pelas bibliotecas existentes; logs em JS "em desenvolvimento"), a do Node 26 (`module.register`) e a do `pino-http`; a comparação de pino, winston, bunyan e LogTape no npm; `npm test` com 125 testes verdes, inclusive o compose real.
+
+### Jaeger no compose
+
+- **Pedido:** o mantenedor quis ver os traces localmente, com um servidor subindo junto com o compose, e pediu a melhor forma.
+- **O que a IA fez:** comparou o Jaeger 2 all-in-one, o Grafana `otel-lgtm` e um OpenTelemetry Collector no meio, e conferiu que a documentação do OpenTelemetry para JavaScript e o guia do Docker usam o Jaeger em desenvolvimento.
+- **Corrigido:** a IA indicou ao `implementer` a API antiga do Jaeger (`/api/traces`); no 2.22 ela é a `/api/v3/traces`, e o `implementer` achou a certa. O mantenedor entendeu que o PDF exigia visualizar os traces na entrevista; o PDF pede "trace/span real ou stub justificado" e um exemplo para o "Datadog ou equivalente", sem exigir painel.
+- **Resultado:** Jaeger 2.22.0 no compose, recebendo OTLP da API e do worker pelas variáveis padrão do OpenTelemetry, e o healthcheck da API a cada 30 s depois da subida (linha "Visualização de traces").
+- **Verificação:** o trace de `GET /health`, com o filho `health.ping`, consultado na API do Jaeger; `npm test` verde com o serviço novo.
+
+### TypeScript 7, oxlint e o piso do Node
+
+- **Pedido:** usar as últimas versões estáveis, e decidir entre continuar com o ESLint no TypeScript 6 ou trocar de linter, e entre suportar só o Node 26 ou manter o piso na 24.
+- **O que a IA fez:** conferiu no npm e nas fontes que o `typescript-eslint` 8.72.1 só aceita TypeScript abaixo da 6.1 (issue #10940 aberta) e que o tsgolint, o lint com tipos do oxlint, está estável desde 09/2026; e, no calendário do Node, que a 24 tem suporte até 30/04/2028 e que o *type stripping* ficou estável na 24.12.
+- **Corrigido:** a IA recomendou esperar o TypeScript 7.1; o mantenedor escolheu o 7.0.2 com o oxlint. A spec dizia que faltavam 2 de 61 regras com tipos; o `implementer` conferiu que as 43 do `recommendedTypeChecked`, que o projeto usava, existem todas no oxlint.
+- **Resultado:** TypeScript 7.0.2 com o oxlint 1.90.0 e o tsgolint 7.0.2005 (AD-011 e R1); Node 26 em produção e no desenvolvimento, com o piso na 24.12, que sobe para a 26 se o projeto precisar de uma API só dela.
+- **Verificação:** o lint acusou uma promessa não tratada e um `any` inseguro num arquivo descartável; `npm test`, `tsc`, lint, OpenAPI e limites verdes.
