@@ -54,7 +54,8 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
   ensureContextManager();
 
   const resource = resourceFromAttributes({
-    'service.name': options.serviceName ?? 'casecellshop',
+    // OTEL_SERVICE_NAME vence, como no padrão do OpenTelemetry; o nome dos mains vale fora do compose.
+    'service.name': process.env['OTEL_SERVICE_NAME'] ?? options.serviceName ?? 'casecellshop',
     'deployment.environment.name': process.env['DEPLOY_ENV'] ?? 'development',
     'service.version': process.env['SERVICE_VERSION'] ?? '0.0.0',
   });

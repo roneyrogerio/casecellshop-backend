@@ -34,6 +34,9 @@ services:
     environment:
       DATABASE_URL: *database-url
       PORT: "3000"
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: casecellshop-api
     ports:
       - "${API_PORT:-3000}:3000"
     depends_on:
@@ -41,9 +44,12 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 2s
+      # Cada chamada gera um trace de /health: na subida checa a cada 2 s, depois a cada 30 s.
+      interval: 30s
       timeout: 3s
-      retries: 30
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
     # O processo encerra em 25 s; o Docker manda SIGKILL 10 s depois do SIGTERM se o prazo não for maior.
     stop_grace_period: 30s
     restart: unless-stopped
@@ -53,10 +59,21 @@ services:
     command: ["node", "src/main/worker.ts"]
     environment:
       DATABASE_URL: *database-url
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: casecellshop-worker
     depends_on:
       migrate:
         condition: service_completed_successfully
     stop_grace_period: 30s
+    restart: unless-stopped
+
+  # All-in-one em memória, sem arquivo de configuração: os traces somem ao derrubar o serviço.
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "4318:4318"
     restart: unless-stopped
 
 volumes:
