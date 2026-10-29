@@ -28,6 +28,8 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | `design.md` | 4.800 |
 | `CONVENTIONS.md` | 1.800 |
 
+Dois arquivos ficam fora da tabela. O `project/STATE-ARCHIVE.md` guarda só ADs substituídas e nenhum agente o carrega, como na `tlc-spec-driven`. O `ARCHITECTURE.md` da raiz é a resposta conceitual do desafio, escrita para quem avalia, e não um documento que os agentes carregam em todo trabalho.
+
 **Mudanças.**
 
 - Toda mudança na spec entra pelo PR do marco que a causou.
@@ -102,12 +104,18 @@ Linha da tabela de ferramentas: `| Tema | Escolha | Descartado | Por quê |`.
 
 Entrada do `PROMPTS.md`:
 
-```markdown
+~~~markdown
 ### <assunto>
 
 - **Pedido:** <o que foi pedido>
+- **Prompt** (opcional): o texto literal, no idioma original:
+
+  ```text
+  <prompt>
+  ```
+
 - **O que a IA fez:** <o que ela produziu>
 - **Corrigido** ou **Rejeitado:** <o que mudou e por quê, se mudou>
 - **Resultado:** <o que ficou>
 - **Verificação:** <teste, comando ou fonte que confirmou>
-```
+~~~

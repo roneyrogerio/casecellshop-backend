@@ -27,6 +27,7 @@ The workflow, the conventions, the decision-record rule and the decisions in `ST
 
 - **English:** identifiers, file names, metric and log event names, API error codes, and instructions written for AI (this file, `.claude/`).
 - **Brazilian Portuguese:** code comments, log and error messages, test names after the criterion ID, documentation, commit descriptions, and every answer or report given to the maintainer.
+- **A prompt quoted verbatim** keeps its original language, in a code block, like code; the explanation around it is in Brazilian Portuguese.
 - **Everything published on GitHub** is in Brazilian Portuguese: the PR title after its Conventional Commits type, the PR description and every comment. Identifiers, paths, commands, criterion IDs and code stay exactly as they are.
 
 ## Workflow

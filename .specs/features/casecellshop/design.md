@@ -182,6 +182,24 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Gauges e counters lidos do banco** saem da API, que não é o processo monitorado; os alertas de fila e de sincronização também disparam sem dados. Um counter derivado do banco só sobe quando um `UPDATE … RETURNING` marca a linha.
 - **Alertas e dashboard:** em PromQL, com os nomes de `/metrics`; um teste confere cada nome usado. No Datadog, o Agent coleta o mesmo endpoint pela integração OpenMetrics, que acrescenta um namespace.
 
+## Fundação (M1)
+
+- **Pontos de injeção,** que os testes usam sem ler o resto de `src/`:
+  - `src/app.ts`: `createApp({ pool, logger, telemetry })` devolve o app do Express, sem abrir porta;
+  - `src/telemetry.ts`: `createTelemetry({ spanExporter? })`; os testes passam o `InMemorySpanExporter` do `sdk-trace`;
+  - `src/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`;
+  - `src/erp/erp-client.ts`: a porta `ErpClient` (`listCatalog(page)`, `createOrder(order)`, `findOrderByReference(reference)`); `src/erp/sim/` a implementa;
+  - `src/clock.ts`: a porta `Clock`;
+  - `src/db/migrate.ts`: `migrate(pool)` aplica as migrações dos dois schemas, e `seed(pool)` grava os dados iniciais do `erp_sim`.
+- **Migrações:** node-pg-migrate, com arquivos `.sql` em `migrations/store/` e `migrations/erp_sim/`, nome com data e hora, uma transação por arquivo, *advisory lock* e conferência de ordem; cada schema tem a sua tabela de controle. Como a ferramenta não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main`.
+- **Dados iniciais:** `seed(pool)` grava o catálogo de exemplo do `erp_sim` com `ON CONFLICT DO NOTHING`, e só o serviço `migrate` do compose o roda, depois das migrações. Os testes não o rodam: cada um cria os dados que usa.
+- **`/health`:** `200` se o banco responde a um `SELECT 1` feito pelo repositório; senão, `503` em problem+json. Fica no contrato; o `/metrics` fica fora dele.
+- **`X-Request-Id`:** aceito com 1 a 128 caracteres ASCII visíveis; fora disso, um UUID novo.
+- **`type` dos erros:** `/problems/<causa>`, como `/problems/invalid-request`.
+- **Compose:** `postgres`, `migrate`, `api` e `worker`, com as credenciais locais como padrão no `compose.yaml`, sem `.env`, que os agentes não leem. O teste do `FND-01` sobe esse arquivo pelo `DockerComposeEnvironment` do Testcontainers, com nome de projeto próprio e sem publicar portas no host.
+- **Lint do OpenAPI:** Redocly com `recommended-strict`, em que aviso também reprova. Uma regra que não se aplica a uma rota é desligada só para ela, no `redocly.yaml`, com o motivo num comentário.
+- **Limite das specs (`FND-06`):** palavras contadas como no `wc -w`, pela tabela do `.specs/README.md`; `scripts/check-spec-limits.ts` falha acima dela, ou acima de 200 linhas no `AGENTS.md` ou num agente.
+
 ## Parâmetros
 
 Ficam em configuração. Os que dependem de carga saem das premissas do [`PROJECT.md`](../../project/PROJECT.md).

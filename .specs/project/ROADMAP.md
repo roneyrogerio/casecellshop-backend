@@ -53,7 +53,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - Spike de ferramental (R8): Express com um schema zod que valida a requisição e gera o OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
 - Compose com PostgreSQL (com healthcheck), serviço de migração, API e worker, estes só depois das migrações (`depends_on` com `service_completed_successfully`); `node` como comando de cada contêiner; `stop_grace_period: 30s` e `restart: unless-stopped` na API e no worker.
-- Migrações da loja e do `erp_sim`, este com os dados iniciais do ERP simulado; até o M4, cada teste cria os dados que usa.
+- Migrações da loja e do `erp_sim`, e os dados iniciais do ERP simulado num *seed* que só o compose roda; até o M4, cada teste cria os dados que usa.
 - CI: `npm ci` → lint → `tsc --noEmit` → testes → `openapi.yaml` em dia → limite de tamanho das specs e das instruções da IA, no Node do `.nvmrc` e na 24.12.
 - Contrato base (schema de erro RFC 9457 e resposta `default`), telemetria, `/health`, encerramento gracioso e o ERP simulado.
 - README inicial: pré-requisitos (Docker e Node a partir da 24.12), um comando para subir e outro para testar, a tabela requisito → arquivo → teste e um `requests.http`.

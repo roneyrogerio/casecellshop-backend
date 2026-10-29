@@ -28,4 +28,5 @@ Valem para todo o repositório, desde o primeiro commit.
   - os limites de papel e as ações que pedem aprovação são aplicados pelo Claude Code, não só pela instrução (`.claude/settings.json`): um hook impede o `test-writer` de editar fora de `test/` e o `implementer` de editar testes, specs, contrato e instruções; commit, push e escrita no PR sempre pedem aprovação; merge, revisão de PR, issue, push forçado e leitura do `.env` são negados.
 - **Idioma:**
   - **inglês** para o que é identificador ou instrução de máquina: nomes de arquivos, variáveis, funções, classes, métricas e eventos de log, códigos de erro da API, e as instruções lidas pela IA (`AGENTS.md`). Assim, os nomes do código ficam no mesmo idioma das bibliotecas e dos padrões que ele usa (HTTP, OpenTelemetry, Prometheus);
-  - **português** para o que pessoas leem: comentários, mensagens de log e de erro, documentação, descrição de commits e de PRs.
+  - **português** para o que pessoas leem: comentários, mensagens de log e de erro, documentação, descrição de commits e de PRs;
+  - um **prompt citado** literalmente mantém o idioma em que foi escrito, num bloco de código, como código; a explicação ao redor fica em português.
