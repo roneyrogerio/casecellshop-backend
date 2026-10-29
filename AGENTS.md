@@ -21,6 +21,8 @@ Read the specs before planning or changing anything. The spec wins over the code
 
 When the code and the spec disagree, do not silently pick one: mark the criterion `SPEC_DEVIATION` and resolve it in the same PR.
 
+The workflow, the conventions, the decision-record rule and the decisions in `STATE.md` are settled: apply them as written, without researching or deciding them again. Reopen one only when a fact it rests on has changed (a tool version, a documented behavior, a requirement) or its "Rever quando" condition is met, and then propose a superseding AD or table row in the milestone PR, with the new evidence. Research only what the specs leave open, and record the outcome as "Decision records" describes, so it is not researched again.
+
 ## Language
 
 - **English:** identifiers, file names, metric and log event names, API error codes, and instructions written for AI (this file, `.claude/`).
@@ -39,7 +41,7 @@ The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.j
 6. The maintainer merges, without squash.
 
 - Run `/security-review` on the M2 PR and before delivery.
-- Record the relevant prompts, and what was accepted, corrected or rejected, for `PROMPTS.md`.
+- Record decisions and AI usage in the same PR, as "Decision records" describes.
 - Never commit or push without the maintainer's approval.
 
 ## GitHub
@@ -48,6 +50,20 @@ The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.j
 - The only comments are the `reviewer` reports: one comment per review round, posted exactly as written. Progress shows in the commits and the checklist; CI failures stay in the checks.
 - No issues: the unit of work is the milestone in `ROADMAP.md`, with its criteria in `spec.md`, and the PR points to them.
 - No agent approves or requests changes. The PR comes from the maintainer's account, which cannot approve its own PR, and the merge is the maintainer's decision.
+
+## Decision records
+
+Record a decision in the PR where it is made, so the reasoning stays reviewable next to the code, when it changes structure, a quality attribute, a dependency, a contract or how the system is built (library, tool, process); is costly to reverse; had two or more viable options; or corrects an earlier decision or assumption. Do not record internal choices that are easy to refactor, details that follow from a recorded decision (they go in `design.md`), or how-to instructions. Full rule, AD structure and lifecycle: [`.specs/README.md`](.specs/README.md).
+
+| Kind | Where |
+| --- | --- |
+| Product or architecture | A new `AD-NNN` in `STATE.md`, "proposta" in the PR and "aceita" on merge |
+| Tool or process | A row in the tool table of `STATE.md` |
+| Open risk; mistake that changed course | The risk table or a new `L-NNN` in `STATE.md` |
+| AI usage | `PROMPTS.md`: the request, what the AI produced, what was accepted, corrected or rejected, and how it was verified |
+
+- State the reason in the project's own terms (requirements, constraints, trade-offs), so it stands alone. Documentation, standards and other projects go only under "Referências", as verifiable evidence, never as the reason.
+- `test-writer` and `implementer` list the decisions they made that the plan or the spec did not settle; the main session applies this filter and records the ones that pass.
 
 ## Guardrails
 

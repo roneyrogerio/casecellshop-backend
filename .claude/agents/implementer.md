@@ -39,3 +39,4 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 2. The result of `tsc`, lint and tests.
 3. Anything in the tests, the spec or the contract that looks wrong, with the evidence.
 4. Divergences from the spec (`SPEC_DEVIATION`), for the main session to resolve.
+5. Decisions you made that the plan or the spec did not settle, each with the alternative you rejected and why.

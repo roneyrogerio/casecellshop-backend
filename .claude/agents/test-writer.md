@@ -43,3 +43,4 @@ Run the tests you wrote. Each must fail because the behavior is missing (a missi
 2. Criteria not covered, and why.
 3. What the implementation must expose for the tests to run (ports, factories, configuration).
 4. Ambiguities found in the spec while writing the tests.
+5. Decisions you made that the spec did not settle, such as how a criterion is measured, each with the alternative you rejected and why.

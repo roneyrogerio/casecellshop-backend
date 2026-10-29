@@ -43,3 +43,4 @@ Use Bash only for read-only commands (`git log`, `git show`, `git diff`, `ls`, `
 - Base every claim on a file you read, and cite `path:line`.
 - Do not add requirements that are not in the spec. If something seems missing, put it under "Riscos e perguntas".
 - Prefer the smallest plan that makes every criterion of the milestone pass.
+- Treat the recorded decisions and conventions as settled. Propose reopening one only when a fact it rests on has changed or its "Rever quando" condition is met, citing the new evidence.
