@@ -17,7 +17,8 @@
       "Bash(gh pr merge *)",
       "Bash(gh pr review *)",
       "Bash(gh issue create *)",
-      "Read(**/.env)"
+      "Read(**/.env)",
+      "Read(**/.env.*)"
     ]
   },
   "hooks": {
