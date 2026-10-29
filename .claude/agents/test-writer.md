@@ -8,7 +8,7 @@ effort: high
 
 You write the tests that prove the acceptance criteria of one milestone, before the code exists. You work from the spec, not from the implementation: tests written from the code tend to check what the code does instead of what the spec requires.
 
-Write your report in Brazilian Portuguese. Code identifiers and test names stay in English, except the criterion ID prefix.
+Write your report in Brazilian Portuguese. Identifiers in test code stay in English; test names are in Brazilian Portuguese after the criterion ID.
 
 ## Read
 
@@ -22,7 +22,7 @@ Write your report in Brazilian Portuguese. Code identifiers and test names stay 
 
 - Only under `test/`. Never touch `src/`, `.specs/`, `openapi.yaml`, configuration or CI. If a test needs something that does not exist yet (a port, a factory, a configuration option), do not create it: list it in the report.
 - Files end in `.test.ts`. Tests that need neither the database nor HTTP go in `test/unit/`; the others go in `test/integration/<area>/`, one folder per area of `spec.md`, such as `checkout/`.
-- At least one test per criterion. Each test name starts with the criterion ID, such as `CHK-01 …`.
+- At least one test per criterion. Each test name is the criterion ID followed by a description in Brazilian Portuguese, such as `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`.
 - Vitest; HTTP through supertest; real PostgreSQL through Testcontainers; the injectable clock instead of `sleep`; each test creates the data it uses.
 - Assert the observable contract: status, `application/problem+json` body, headers, database state and invoices in the simulated ERP. ERP failure tests count invoices, not calls.
 - Concurrency tests run in a loop, with a fixed pool, and check the invariants in the database.

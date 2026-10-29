@@ -24,7 +24,7 @@ When the code and the spec disagree, do not silently pick one: mark the criterio
 ## Language
 
 - **English:** identifiers, file names, metric and log event names, API error codes, and instructions written for AI (this file, `.claude/`).
-- **Brazilian Portuguese:** code comments, log and error messages, documentation, commit descriptions, and every answer or report given to the maintainer.
+- **Brazilian Portuguese:** code comments, log and error messages, test names after the criterion ID, documentation, commit descriptions, and every answer or report given to the maintainer.
 - **Everything published on GitHub** is in Brazilian Portuguese: the PR title after its Conventional Commits type, the PR description and every comment. Identifiers, paths, commands, criterion IDs and code stay exactly as they are.
 
 ## Workflow
@@ -48,6 +48,15 @@ The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.j
 - The only comments are the `reviewer` reports: one comment per review round, posted exactly as written. Progress shows in the commits and the checklist; CI failures stay in the checks.
 - No issues: the unit of work is the milestone in `ROADMAP.md`, with its criteria in `spec.md`, and the PR points to them.
 - No agent approves or requests changes. The PR comes from the maintainer's account, which cannot approve its own PR, and the merge is the maintainer's decision.
+
+## Guardrails
+
+Claude Code enforces these whatever the instructions say (`.claude/settings.json`):
+
+- `test-writer` can edit only `test/`; `implementer` cannot edit `test/`, `.specs/`, `.claude/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `CLAUDE.md`. A `PreToolUse` hook keyed by `agent_type` checks every edit (`.claude/hooks/path-guard.mjs`).
+- `git commit`, `git push` and PR writes with `gh` always ask the maintainer, in every permission mode.
+- Force pushes, `gh pr merge`, `gh pr review`, `gh issue create` and reading `.env` files are denied.
+- Bash rules match the usual form of a command and are not a security boundary; the reviewer's history check and the maintainer's merge stay the final checks. Never work around a guardrail: report the block instead.
 
 ## Models and effort
 
@@ -103,7 +112,7 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 - Tests live in `test/`, never in `src/`, as `*.test.ts` files:
   - `test/unit/`: no Docker (`npm run test:unit`);
   - `test/integration/<area>/`: Testcontainers and supertest, one folder per area of `spec.md`, such as `checkout/`, `orders/` and `catalog/`.
-- Each test name starts with the ID of the criterion it proves, e.g. `CHK-01 …`.
+- Each test name is the ID of the criterion it proves followed by a description in Brazilian Portuguese, e.g. `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`. Identifiers in test code stay in English.
 - Anything that touches the database runs against real PostgreSQL; no database mocks.
 - No `sleep`: use the injectable clock and timestamps seeded in the database.
 - ERP failure tests count invoices in the simulated ERP, not calls.
