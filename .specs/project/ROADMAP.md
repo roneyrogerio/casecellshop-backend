@@ -6,16 +6,16 @@ Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md);
 
 ## Como cada marco é feito
 
-A sessão principal do Claude Code orquestra o marco e é a única que escreve código. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Três agentes, em `.claude/agents/`, apoiam cada um num ponto em que um olhar separado reduz um viés:
+A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
 
 1. O `planner` (Opus, esforço alto, só leitura) confere a spec contra o código já feito e propõe o plano do marco, com os desvios encontrados. A pessoa responsável aprova, e a sessão principal atualiza a spec.
 2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no `openapi.yaml`.
 3. O `test-writer` (Sonnet, esforço alto) escreve os testes que falham a partir dos critérios e do contrato, sem ler a implementação (commit `test:`).
-4. A sessão principal implementa até o CI ficar verde (commit `feat:`).
-5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança.
+4. O `implementer` (Sonnet, esforço médio) escreve o código até os testes e o CI passarem, sem poder alterar os testes (commit `feat:`).
+5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança. O parecer vai como comentário no PR.
 6. A pessoa responsável faz o merge, sem squash, para o histórico mostrar o teste antes do código.
 
-Se o `reviewer` reprovar o mesmo marco duas vezes, a correção roda em Opus. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e o uso de IA é registrado para o `PROMPTS.md`.
+**Escalonamento**, só no `implementer` e contado por problema (um achado do `reviewer`, ou um check do CI vermelho pela mesma causa): a primeira correção roda em Sonnet com esforço alto; se o mesmo problema voltar, em Opus com esforço alto, até resolver. Cada degrau é uma chamada nova, com o modelo e o esforço passados na chamada, e o esforço `max` não é usado. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e o uso de IA é registrado para o `PROMPTS.md`.
 
 ## Dos requisitos aos marcos
 
@@ -48,7 +48,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Meta:** o esqueleto roda, testa e passa no CI antes de existir regra de negócio.
 
-- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), os três agentes, `.claude/settings.json` com `opusplan` e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
+- **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), os quatro agentes, `.claude/settings.json` com `opusplan` e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
 - Design de diagnóstico em rascunho (`DOC-DIA`).
 - Spike de ferramental (R8): Express, validador com um schema OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
