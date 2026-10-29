@@ -21,6 +21,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
 - **FND-05** O span do repositório sai como filho do span da requisição.
 - **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md), ou se o `AGENTS.md` ou um agente de `.claude/agents/` passar de 200 linhas ([`CONVENTIONS.md`](../../codebase/CONVENTIONS.md)).
+- **FND-07** O CI falha se o `openapi.yaml` commitado divergir do gerado pelo contrato em `src/contract/`, ou se não passar no lint de OpenAPI 3.1.
 
 ## Checkout
 

@@ -78,3 +78,28 @@ Registro do uso de IA neste repositório. Cada entrada traz o pedido, o que a IA
   - a leitura do `.env` foi negada pela regra.
   
   Merge, revisão e criação de issue não foram testados ao vivo, porque uma falha teria efeito real.
+
+## M1 — Fundação
+
+### Contrato: escrito à mão ou gerado pelo código
+
+- **Pedido:** decidir, com dados, entre o `openapi.yaml` escrito à mão com um validador e o OpenAPI gerado a partir do código.
+- **O que a IA fez:** levantou as opções compatíveis com Node 24, Express 5, TypeScript 6 e *type stripping*, com versões, downloads e mantenedores, e recomendou manter o contrato à mão, pesando o esforço de escrever a validação.
+- **Corrigido:** o critério. O código é escrito pela IA e revisado antes do merge, então o esforço não decide; a escolha passou a ser só pela qualidade: uma fonte para validação, tipos e documentação.
+- **Resultado:** AD-010, contrato em zod gerando o OpenAPI 3.1, conferido no CI (`FND-07`), em substituição à AD-007.
+- **Verificação:** versões e mantenedores no npm; o suporte ao TypeScript 6 do gerador de tipos, ainda em issues abertas; a geração de OpenAPI 3.1 na documentação do `zod-to-openapi`.
+
+### Versões
+
+- **Pedido:** usar as versões estáveis mais atuais, já que o plano estava no Node 24 com o 26 disponível.
+- **O que a IA fez:** conferiu, nas fontes, a última versão de cada peça e as compatibilidades entre elas (`engines` e `peerDependencies`).
+- **Resultado:** AD-011.
+  - Node 26.13.0 LTS, com piso na 24.12 e CI nas duas linhas.
+  - OpenTelemetry 3.
+  - O resto já estava na última versão.
+  - O TypeScript fica no 6.0.3, porque o `typescript-eslint` exige `<6.1.0`.
+  - O PostgreSQL 18.6 é o mais atual; o 19 ainda não saiu.
+- **Verificação:**
+  - o índice de versões e o calendário de releases do Node;
+  - `npm view` de cada pacote;
+  - a página de versões do PostgreSQL e as imagens oficiais no Docker Hub.

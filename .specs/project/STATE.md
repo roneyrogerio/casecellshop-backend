@@ -251,12 +251,67 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ---
 
+### AD-010 · Contrato em zod antes do código, com o OpenAPI 3.1 gerado
+
+**Status:** proposta (29/10/2026). Substitui a AD-007.
+
+**Contexto.** O contrato é a fonte da verdade da API e precisa cobrir sucesso, erro e o fluxo assíncrono. Com o contrato só em YAML (AD-007), os tipos das rotas ficam escritos à mão, porque o gerador de tipos a partir do OpenAPI não aceita o TypeScript 6, e o compilador não confere se o código segue o contrato; a validação depende de um pacote com um mantenedor e sem release desde janeiro.
+
+**Decisão.**
+
+- O contrato é escrito em zod 4.6.7 num módulo próprio, `src/contract/`, antes de qualquer handler: os schemas de requisição, resposta e erro, e o registro de cada rota com status e cabeçalhos.
+- O `@asteasolutions/zod-to-openapi` 9.1.0 gera o `openapi.yaml` (OpenAPI 3.1), escrito com o `yaml` 2.9.1. O arquivo fica commitado, e o CI falha se ele divergir do gerado ou não passar no lint do Redocly CLI 2.72.1 (`FND-07`).
+- Os mesmos schemas validam toda requisição (parâmetros, query, cabeçalhos e corpo) num middleware próprio e, nos testes, o corpo e os cabeçalhos de toda resposta. Os tipos dos handlers são inferidos deles.
+- Erros em `application/problem+json` (RFC 9457), com `correlationId` e um `type` por causa, produzidos por um middleware único; falhas do banco mapeadas pelo passo da transação.
+- `X-Request-Id` em toda resposta; preço sempre do banco, em centavos; só mudanças aditivas.
+- Detalhes: [`design.md`, "Contrato"](../features/casecellshop/design.md#contrato-ad-010).
+
+**Alternativas consideradas:**
+
+- **`openapi.yaml` à mão, validado pelo `express-openapi-validator` (AD-007).** Valida sem código próprio, mas deixa os tipos fora da checagem do compilador e depende de um pacote com um mantenedor e releases parados.
+- **`zod-openapi`.** Usa os metadados nativos do zod 4, sem estendê-lo em tempo de execução, mas tem um mantenedor só.
+- **TypeBox.** Gera JSON Schema, mas o documento OpenAPI (rotas, status e cabeçalhos) seria montado à mão.
+- **Decorators (tsoa).** Não rodam com *type stripping*.
+- **oRPC ou express-zod-api.** Trocam o roteamento do Express por um modelo próprio.
+- **Formato de erro próprio.** Mais um formato para quem consome a API, sem media type registrado nem campos de extensão definidos.
+- **Paginação por cursor.** Resiste a inserções entre páginas, mas aqui as páginas de um TTL já vêm do mesmo instantâneo.
+
+**Trade-off.** A validação das requisições é código próprio, coberto por testes de contrato por rota (R2). O gerador estende o zod uma vez, ao carregar o módulo de contrato.
+
+**Rever quando:** um consumidor precisar de cliente gerado a partir do contrato, ou o gerador deixar de acompanhar as versões do zod. No segundo caso, a troca é pelo `zod-openapi`, sem mudar os schemas.
+
+### AD-011 · Versões: a última estável compatível, fixada
+
+**Status:** proposta (29/10/2026). Altera a AD-008 (versão do OpenTelemetry) e a linha "Runtime" da tabela de ferramentas.
+
+**Contexto.** As versões foram escolhidas antes do código, e duas linhas viraram estáveis nesse meio-tempo: o Node 26 entrou em LTS ativo em 28/10/2026, e o OpenTelemetry JS lançou a linha 3 em 20/10/2026. Sem código escrito, migrar agora não custa nada; depois, cada versão atrasada vira uma migração de código que já roda.
+
+**Decisão.**
+
+- Cada dependência entra na última versão estável compatível com as outras, fixada exata no `package.json`, sem `^` nem `~`. A imagem e o `.nvmrc` também fixam a versão.
+- Node.js 26.13.0 LTS (LTS ativo até 20/10/2027, suporte até 30/04/2029) no `.nvmrc`, na imagem e no CI. O `engines` aceita a partir da 24.12, e o CI roda também nela. Os tipos (`@types/node` 24.19.2) ficam na linha mínima, para o compilador barrar uma API que só exista no 26.
+- OpenTelemetry JS na linha 3: API 1.10.0, SDK 3.0.0 (`sdk-trace`, `sdk-metrics`, `context-async-hooks`, `core`, `resources`) e exporters 0.300.0.
+- Desvio: TypeScript 6.0.3, e não o 7.0.2. O `typescript-eslint` 8.72.1, que dá as regras de lint com tipos (como a de promessa não tratada), aceita só TypeScript abaixo da 6.1, porque o 7 ainda não tem a API que ele usa (R1).
+- Uma versão nova só entra por uma linha na tabela de ferramentas ou por uma AD, no PR de um marco.
+
+**Alternativas consideradas:**
+
+- **Manter o Node 24.** Funciona, mas entrou em manutenção em 20/10/2026 e perde o suporte em 30/04/2028.
+- **Exigir o Node 26 de quem clona.** Garante uma versão só, mas obriga a instalar uma linha com dias de LTS para rodar os testes.
+- **Manter o OpenTelemetry 2.12.** Evita uma linha com dias de lançamento, mas deixa o projeto um major atrás desde o primeiro commit. O spike do M1 (R8) confere a 3, e a 2.12 fica de plano B.
+- **TypeScript 7 com outro linter** (oxlint ou Biome). Ganha velocidade na checagem de tipos, mas troca as regras com tipos do `typescript-eslint` por regras mais novas e menos cobertas.
+- **Intervalos de versão (`^`).** Cada `npm install` poderia trazer uma versão diferente da testada.
+
+**Trade-off.** Linhas com poucos dias de lançamento (o Node 26 como LTS e o OpenTelemetry 3) podem ter defeitos que ainda não apareceram; o CI na 24.12 e o spike do M1 reduzem o risco.
+
+**Rever quando:** o `typescript-eslint` aceitar o TypeScript 7, ou o OpenTelemetry 3 falhar no spike; no segundo caso, volta-se à 2.12.
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
 | --- | --- | --- | --- |
-| Runtime | Node.js 24.22.2 LTS (suporte até 30/04/2028), fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12. ESM, *type stripping* (estável na linha 24) e `erasableSyntaxOnly`. TypeScript 6.0.3 só com `--noEmit` | Node 26; build com `tsc`; `tsx`; TypeScript 7.0 | Sem build, o que roda é o código do repositório. O Node 24 roda tudo o que o serviço usa, com suporte até 2028, e não exige uma versão recém-lançada na máquina de quem clona. O TS 7.0 não tem API, e o `typescript-eslint` 8.72.1 exige `<6.1.0` |
-| HTTP | Express 5.3.0 | NestJS; Fastify | O Node não aceita decorators no *type stripping*, e o Nest depende deles. No Fastify, o schema declarado no código vira a fonte da validação e disputa esse papel com o `openapi.yaml` (AD-007). O framework não é o gargalo: a vitrine responde do cache, e o checkout é uma transação curta |
+| Runtime | Node.js 26.13.0 LTS, fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12 e o CI nas duas linhas (AD-011). ESM, *type stripping* e `erasableSyntaxOnly`. TypeScript 6.0.3 só com `--noEmit` | Node 24 como alvo; build com `tsc`; `tsx`; TypeScript 7 | Sem build, o que roda é o código do repositório. O Node 26 é o LTS ativo, e a 24.12 fica como piso para quem clona com o LTS anterior. O TypeScript 7 ainda não tem a API que o `typescript-eslint` 8.72.1 usa, e ele exige `<6.1.0` |
+| HTTP | Express 5.3.0 | NestJS; Fastify | O Nest depende de decorators, que o Node não aceita no *type stripping*. A validação pelo contrato em zod (AD-010) é um middleware curto no Express, que já se integra ao `pino-http` e à instrumentação do OpenTelemetry; o Fastify faria o mesmo por plugins, sem ganho aqui, porque o framework não é o gargalo: a vitrine responde do cache, e o checkout é uma transação curta |
 | Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1 | Mocks do banco; service container no CI | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. `npm run test:unit` roda sem Docker |
 | Guardas dos agentes | Hook `PreToolUse` no `.claude/settings.json`, que identifica o agente pelo `agent_type` e limita as edições de cada papel; regras `ask` para commit, push e escrita no PR, e `deny` para merge, revisão de PR, issue, push forçado e `.env` | Hook no frontmatter de cada agente; regras de Bash como barreira; sandbox | O hook do frontmatter é pulado sem aviso quando a pasta exata não está marcada como confiável, e não roda em `claude -p`; no `settings.json` vale em toda sessão do projeto. Uma regra de Bash compara o texto do comando e não é barreira, então só cobre a forma comum (commit, push, merge). O sandbox isolaria o socket do Docker que o Testcontainers usa |
 | Registro de decisões | ADs no `STATE.md`, com o filtro, a estrutura e o ciclo no `.specs/README.md`; as substituídas vão para `STATE-ARCHIVE.md` perto do limite | Um arquivo por decisão | As ADs são curtas e se citam entre si; num arquivo só, o `planner` lê o log inteiro no início de cada marco, e o limite de tamanho força a consolidação |
@@ -266,13 +321,13 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 | ID | Risco | Mitigação |
 | --- | --- | --- |
 | R1 | `npm i typescript` instala o 7.0, que quebra o `typescript-eslint` | `typescript` fixado em 6.0.3 |
-| R2 | O `express-openapi-validator` está sem release desde 20/01/2026 | Testes de contrato; `openapi-backend` como plano B |
+| R2 | A validação das requisições é código próprio e pode deixar passar um caso | Testes de contrato por rota (parâmetro desconhecido, tipo errado, cabeçalho ausente, corpo acima do limite); o CI confere o `openapi.yaml` gerado (`FND-07`) |
 | R3 | Quem clonar o repositório pode não ter Docker | `npm run test:unit` sem Docker; o CI mostra a suíte completa |
 | R4 | O teste de concorrência pode passar sem provar nada | Controle negativo com janela forçada, que precisa vender além do estoque (CHK-02); várias conexões; repetição em laço |
 | R5 | Testes intermitentes no CI | Relógio injetável, sem `sleep`, horários semeados no banco, pool fixo |
 | R6 | A H1b (deduplicação) ou a H4 (tempo de processamento) podem não valer para um ERP real | Marcador de envio gravado antes da chamada; consulta pela referência depois do primeiro envio, sempre após o atraso mínimo; provada com o fake sem a H1b e com o modo "fatura depois do timeout". **Resíduo:** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP, ou falho com uma fatura que aparece depois, e a loja não detecta esses casos; um teste acima da H4 os demonstra (ORD-06), e o README os declara. Se nem a H1a valer, a consulta por referência lê o MySQL do ERP, isolada atrás da porta `ErpClient`: é a única exceção à regra de falar com o ERP só pela API |
 | R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, sem ter visto a escrita, num modelo mais forte; o `test-writer` escreve os testes a partir dos critérios, sem ler a implementação, e um hook impede o `implementer` de alterá-los; cada PR é aprovado por uma pessoa |
-| R8 | Ferramental recente pode não se integrar (TS 6, Vitest 5, validador com Express 5 e OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1: um teste ponta a ponta mínimo, com um schema 3.1, um span filho e uma métrica. Planos B: `openapi-backend` e o PostgreSQL do compose no lugar do Testcontainers |
+| R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TS 6, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1: um teste ponta a ponta mínimo, com um schema 3.1, um span filho e uma métrica. Planos B: `openapi-backend` e o PostgreSQL do compose no lugar do Testcontainers |
 | R9 | A H2 pode não valer: o ERP fatura sem estoque e fica negativo | A sincronização grava zero, registra o caso em log, e a loja para de vender o SKU |
 
 ## Lições

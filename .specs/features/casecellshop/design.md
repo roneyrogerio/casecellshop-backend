@@ -62,10 +62,13 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **rejeição permanente:** `reserved` baixa na transação que marca `failed`;
 - **pedido na DLQ:** a reserva fica, porque o pedido ainda pode ser faturado.
 
-## Contrato (AD-007)
+<a id="contrato-ad-007"></a>
 
-- **Validação:** o `express-openapi-validator` valida toda requisição e, nos testes, o corpo de toda resposta. `Location`, `Retry-After`, `X-Request-Id` e `Cache-Control` têm asserção própria.
-- **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, `additionalProperties: false`.
+## Contrato (AD-010)
+
+- **Validação:** o contrato em `src/contract/` (zod) valida toda requisição (parâmetros, query, cabeçalhos e corpo) num middleware que responde `400` em problem+json; o `415` e o `413` vêm do parser de JSON. Nos testes, um helper valida o corpo e os cabeçalhos de toda resposta pelo schema da rota. `Location`, `Retry-After`, `X-Request-Id` e `Cache-Control` têm asserção própria.
+- **Geração:** `npm run openapi` gera o `openapi.yaml` (OpenAPI 3.1) a partir do registro de rotas; o CI gera de novo, compara com o commitado e passa o lint (`FND-07`).
+- **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, objetos estritos (`.strict()`, que vira `additionalProperties: false` no OpenAPI).
 - **`X-Request-Id`:** aceito se for válido, gerado se não. É o `correlationId` dos logs e volta em toda resposta, inclusive no `202`, e no problem+json. Um `traceparent` de entrada continua o trace.
 - **Fluxo assíncrono:** o `202` traz `Location` e `Retry-After`; o `503` também traz `Retry-After`.
 - **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento). Um pedido na DLQ continua `pending`.
@@ -166,7 +169,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `info`: checkout aceito, pedido faturado, rodada de sincronização;
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização.
-- **Pacotes:** `@opentelemetry/api` 1.9.1 (o SDK 2.12 exige a API abaixo da 1.10); SDK 2.12.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`, deprecated), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.223.0 (`exporter-prometheus`, `exporter-trace-otlp-http`).
+- **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`).
 - **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. Console em desenvolvimento; OTLP/HTTP para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version`.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
   - **HTTP:** duração por rota (histogram), base dos SLOs de latência;

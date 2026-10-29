@@ -9,6 +9,7 @@ const PROTECTED_FROM_IMPLEMENTER = [
   'test',
   '.specs',
   '.claude',
+  'src/contract',
   'openapi.yaml',
   'architecture.md',
   'agents.md',

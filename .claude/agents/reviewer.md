@@ -20,7 +20,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 
 - `AGENTS.md`.
 - In `.specs/`: the milestone criteria in `spec.md`, `design.md`, the ADs in `STATE.md` and `CONVENTIONS.md`.
-- `openapi.yaml`, the changed files and the code they call.
+- The contract in `src/contract/`, `openapi.yaml`, the changed files and the code they call.
 
 ## Check
 
@@ -28,7 +28,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 2. **Spec and decisions:** the code does what `design.md` and the ADs say. A divergence not marked `SPEC_DEVIATION` is a finding.
 3. **Concurrency and consistency:** lock order; conditional `UPDATE`s and compare-and-set; the idempotency key with `ON CONFLICT`; the outbox written in the same transaction as the order; no ERP call inside a transaction; the claim token on every outbox transition; the database clock for stored deadlines.
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
-5. **Contract:** routes, statuses, headers and bodies match `openapi.yaml`; errors in `application/problem+json`.
+5. **Contract:** routes, statuses, headers and bodies match the contract in `src/contract/`; handlers take their types from it; the committed `openapi.yaml` is the generated one; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
 7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; `test/` changes only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/`); spec files within their word limits; accepted ADs not edited.
 

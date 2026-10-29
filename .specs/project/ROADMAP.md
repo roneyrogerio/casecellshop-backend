@@ -9,7 +9,7 @@ Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md);
 A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em `opusplan` (definido em `.claude/settings.json`): Opus quando planeja, Sonnet quando executa. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
 
 1. O `planner` (Opus, esforço alto, só leitura) confere a spec contra o código já feito e propõe o plano do marco, com os desvios encontrados. A pessoa responsável aprova, e a sessão principal atualiza a spec.
-2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no `openapi.yaml`; com esse commit, abre-se o PR em rascunho, com o plano como checklist na descrição.
+2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no contrato (`src/contract/`, que gera o `openapi.yaml`); com esse commit, abre-se o PR em rascunho, com o plano como checklist na descrição.
 3. O `test-writer` (Sonnet, esforço alto) escreve os testes que falham a partir dos critérios e do contrato, sem ler a implementação (commit `test:`).
 4. O `implementer` (Sonnet, esforço médio) escreve o código até os testes e o CI passarem, sem poder alterar os testes (commit `feat:`).
 5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança. O parecer vai como comentário no PR.
@@ -28,7 +28,7 @@ A sessão principal do Claude Code orquestra o marco: escreve as specs, o contra
 | Worker simulando o envio ao ERP; retry, DLQ e reconciliação | M3 | `ORD-*` |
 | `GET /products` com cache e TTL | M4 | `CAT-*` |
 | Vitrine sem preço ou disponibilidade defasados além do limite da meta 2; preço informado igual ao cobrado | M2, M4 | `CHK-06`, `CAT-06` |
-| OpenAPI com schemas de sucesso e erro | M1 a M4 | validação de requisição e resposta em todos os testes |
+| OpenAPI com schemas de sucesso e erro | M1 a M4 | validação de requisição e resposta em todos os testes; `FND-07` |
 | Logs com `correlationId` e `orderId`; métricas de cache, checkout e fila; trace ligando requisição, cache, repositório e worker | M1 a M5 | `OBS-*`, `FND-05`, `CAT-12`, `ORD-18` |
 | Dashboard, alertas e runbook | M5 | README e `OBS-03` |
 | Garantias do sistema; modos de falha com mitigação e instrumentação | M5, M6 | README, cada linha ligada a um teste |
@@ -50,11 +50,11 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - **Primeiro PR, só o fluxo de trabalho:** `AGENTS.md` (instruções em inglês, apontando para as convenções), o `CLAUDE.md` que o importa, os quatro agentes, `.claude/settings.json` com `opusplan`, as guardas de papel e as regras de aprovação, e o template de PR ("o que a IA gerou / o que foi mudado / como foi verificado").
 - Design de diagnóstico em rascunho (`DOC-DIA`).
-- Spike de ferramental (R8): Express, validador com um schema OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
+- Spike de ferramental (R8): Express com um schema zod que valida a requisição e gera o OpenAPI 3.1, PostgreSQL no Testcontainers, um span filho e uma métrica.
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
 - Compose com PostgreSQL (com healthcheck), serviço de migração, API e worker, estes só depois das migrações (`depends_on` com `service_completed_successfully`); `node` como comando de cada contêiner; `stop_grace_period: 30s` e `restart: unless-stopped` na API e no worker.
 - Migrações da loja e do `erp_sim`, este com os dados iniciais do ERP simulado; até o M4, cada teste cria os dados que usa.
-- CI: `npm ci` → lint → `tsc --noEmit` → testes → limite de tamanho das specs e das instruções da IA, na versão do `.nvmrc`.
+- CI: `npm ci` → lint → `tsc --noEmit` → testes → `openapi.yaml` em dia → limite de tamanho das specs e das instruções da IA, no Node do `.nvmrc` e na 24.12.
 - Contrato base (schema de erro RFC 9457 e resposta `default`), telemetria, `/health`, encerramento gracioso e o ERP simulado.
 - README inicial: pré-requisitos (Docker e Node a partir da 24.12), um comando para subir e outro para testar, a tabela requisito → arquivo → teste e um `requests.http`.
 
