@@ -291,7 +291,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - Cada dependência entra na última versão estável compatível com as outras, fixada exata no `package.json`, sem `^` nem `~`. A imagem e o `.nvmrc` também fixam a versão.
 - Node.js 26.13.0 LTS (LTS ativo até 20/10/2027, suporte até 30/04/2029) no `.nvmrc`, na imagem e no CI. O `engines` aceita a partir da 24.12, e o CI roda também nela. Os tipos (`@types/node` 24.19.2) ficam na linha mínima, para o compilador barrar uma API que só exista no 26.
 - OpenTelemetry JS na linha 3: API 1.10.0, SDK 3.0.0 (`sdk-trace`, `sdk-metrics`, `context-async-hooks`, `core`, `resources`) e exporters 0.300.0.
-- Desvio: TypeScript 6.0.3, e não o 7.0.2. O `typescript-eslint` 8.72.1, que dá as regras de lint com tipos (como a de promessa não tratada), aceita só TypeScript abaixo da 6.1, porque o 7 ainda não tem a API que ele usa (R1).
+- TypeScript 7.0.2, com o lint pelo oxlint 1.90.0 e o tsgolint 7.0.2005 (estável desde 09/2026; 59 das 61 regras com tipos do `typescript-eslint`, que só aceita TypeScript abaixo da 6.1) (R1).
 - Uma versão nova só entra por uma linha na tabela de ferramentas ou por uma AD, no PR de um marco.
 
 **Alternativas consideradas:**
@@ -299,18 +299,18 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - **Manter o Node 24.** Funciona, mas entrou em manutenção em 20/10/2026 e perde o suporte em 30/04/2028.
 - **Exigir o Node 26 de quem clona.** Garante uma versão só, mas obriga a instalar uma linha com dias de LTS para rodar os testes.
 - **Manter o OpenTelemetry 2.12.** Evita uma linha com dias de lançamento, mas deixa o projeto um major atrás desde o primeiro commit. O spike do M1 (R8) confere a 3, e a 2.12 fica de plano B.
-- **TypeScript 7 com outro linter** (oxlint ou Biome). Ganha velocidade na checagem de tipos, mas troca as regras com tipos do `typescript-eslint` por regras mais novas e menos cobertas.
+- **TypeScript 6.0.3 com o `typescript-eslint`.** Todas as regras com tipos, mas um major atrás até ele aceitar o 7. O Biome cobre só parte da regra de promessa não tratada.
 - **Intervalos de versão (`^`).** Cada `npm install` poderia trazer uma versão diferente da testada.
 
 **Trade-off.** Linhas com poucos dias de lançamento (o Node 26 como LTS e o OpenTelemetry 3) podem ter defeitos que ainda não apareceram; o CI na 24.12 e o spike do M1 reduzem o risco.
 
-**Rever quando:** o `typescript-eslint` aceitar o TypeScript 7, ou o OpenTelemetry 3 falhar no spike; no segundo caso, volta-se à 2.12.
+**Rever quando:** o projeto precisar de uma API que só exista no Node 26 (o piso sobe para a 26), ou o oxlint deixar de cobrir uma regra com tipos de que o projeto dependa.
 
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
 | --- | --- | --- | --- |
-| Runtime | Node.js 26.13.0 LTS, fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12 e o CI nas duas linhas (AD-011). ESM, *type stripping* e `erasableSyntaxOnly`. TypeScript 6.0.3 só com `--noEmit` | Node 24 como alvo; build com `tsc`; `tsx`; TypeScript 7 | Sem build, o que roda é o código do repositório. O Node 26 é o LTS ativo, e a 24.12 fica como piso para quem clona com o LTS anterior. O TypeScript 7 ainda não tem a API que o `typescript-eslint` 8.72.1 usa, e ele exige `<6.1.0` |
+| Runtime | Node.js 26.13.0 LTS, fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12 e o CI nas duas linhas (AD-011). ESM, *type stripping* e `erasableSyntaxOnly`. TypeScript 7.0.2 só com `--noEmit` | Node 24 como alvo; build com `tsc`; `tsx` | Sem build, o que roda é o código do repositório. O Node 26 é o LTS ativo, e a 24.12, onde o *type stripping* ficou estável, é o piso para quem clona com o LTS anterior |
 | HTTP | Express 5.3.0 | NestJS; Fastify | O Nest depende de decorators, que o Node não aceita no *type stripping*. A validação pelo contrato em zod (AD-010) é um middleware curto no Express, que já se integra ao pino e aos spans manuais do OpenTelemetry; o Fastify faria o mesmo por plugins, sem ganho aqui, porque o framework não é o gargalo: a vitrine responde do cache, e o checkout é uma transação curta |
 | Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1; unitários ao lado do arquivo testado, integração em `test/integration/<área>/` | Mocks do banco; service container no CI; todos os testes em `test/` (PR #1) | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. O unitário testa um arquivo isolado e muda, move e some com ele; o de integração atravessa HTTP, banco e worker e não pertence a um arquivo. A guarda separa os papéis pelo nome `*.test.ts`, e o `.dockerignore` deixa os testes fora da imagem |
 | Migrações | node-pg-migrate 9.0.0, com arquivos `.sql`, *advisory lock* e conferência de ordem; o CI barra a alteração de uma migração que já está na `main` | Runner próprio; Flyway; dbmate; Postgrator; postgres-migrations; graphile-migrate; `@databases/pg-migrations`; umzug | Mantido, roda em Node com o `pg` e mantém as migrações em `.sql` (AD-001); os outros trazem Java, um binário sem API para Node, outro driver, ou não têm lock, transação por arquivo ou versão recente. Não confere o conteúdo do que já rodou; a regra do CI cobre isso no PR |
@@ -324,7 +324,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 | ID | Risco | Mitigação |
 | --- | --- | --- |
-| R1 | `npm i typescript` instala o 7.0, que quebra o `typescript-eslint` | `typescript` fixado em 6.0.3 |
+| R1 | O oxlint não cobre 2 das 61 regras com tipos do `typescript-eslint` | Reavaliar quando o `typescript-eslint` aceitar o TypeScript 7 |
 | R2 | A validação das requisições é código próprio e pode deixar passar um caso | Testes de contrato por rota (parâmetro desconhecido, tipo errado, cabeçalho ausente, corpo acima do limite); o CI confere o `openapi.yaml` gerado (`FND-07`) |
 | R3 | Quem clonar o repositório pode não ter Docker | `npm run test:unit` sem Docker; o CI mostra a suíte completa |
 | R4 | O teste de concorrência pode passar sem provar nada | Controle negativo com janela forçada, que precisa vender além do estoque (CHK-02); várias conexões; repetição em laço |
