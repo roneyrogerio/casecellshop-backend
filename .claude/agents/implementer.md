@@ -31,7 +31,7 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 ## Never
 
 - Edit, skip or delete a test to make it pass.
-- Commit or push. The main session commits with `feat(<scope>): …` or `fix(<scope>): …`.
+- Commit, push or post on GitHub. The main session commits with `feat(<scope>): …` or `fix(<scope>): …` and uses your report in the PR description.
 
 ## Report
 

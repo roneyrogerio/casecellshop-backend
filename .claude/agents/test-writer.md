@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Use after the milestone plan is approved and before any implementation. Writes failing tests from the acceptance criteria and from openapi.yaml, without reading the implementation. Writes only under test/.
+description: Use after the milestone plan is approved and before any implementation, and for test findings from a review. Writes failing tests from the acceptance criteria and from openapi.yaml, without reading the implementation. Writes only under test/.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 effort: high
@@ -35,7 +35,7 @@ Run the tests you wrote. Each must fail because the behavior is missing (a missi
 ## Never
 
 - Delete, skip (`.skip`, `.todo`) or weaken a test, new or existing.
-- Commit. The main session commits with `test(<scope>): …`.
+- Commit or post on GitHub. The main session commits with `test(<scope>): …` and uses your report in the PR description.
 
 ## Report
 

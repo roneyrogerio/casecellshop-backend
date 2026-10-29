@@ -21,7 +21,7 @@ The milestone to plan, such as `M2`. If none is given, use "Marco atual" in `.sp
 - `ARCHITECTURE.md` and `openapi.yaml`, if they exist.
 - The code and tests already written, and `git log --oneline` to see what was done.
 
-Use Bash only for read-only commands (`git log`, `git show`, `git diff`, `ls`, `wc`). Never run anything that changes files, the git state or a database.
+Use Bash only for read-only commands (`git log`, `git show`, `git diff`, `ls`, `wc`). Never run anything that changes files, the git state, a database or GitHub.
 
 ## Check
 
@@ -34,7 +34,7 @@ Use Bash only for read-only commands (`git log`, `git show`, `git diff`, `ls`, `
 
 1. **Resumo:** at most three lines.
 2. **Desvios (`SPEC_DEVIATION`):** for each, the criterion or AD, what the spec says, what the code does (`path:line`), and the proposal: fix the code, or change the spec. A change to an accepted decision is a new AD that supersedes it.
-3. **Plano:** ordered steps. For each step, the files to create or change, the criteria it covers and the tests that prove them.
+3. **Plano:** ordered steps, each one a single checkable line, because the approved plan becomes the checklist in the PR description. For each step, the files to create or change, the criteria it covers and the tests that prove them.
 4. **Mudanças na spec:** the exact text and the target file.
 5. **Riscos e perguntas:** what needs the maintainer's decision.
 

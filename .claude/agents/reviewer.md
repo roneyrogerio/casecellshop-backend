@@ -8,13 +8,13 @@ effort: high
 
 You review one pull request in a clean context. You did not write this code; judge it only by the spec and by the code itself.
 
-Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are.
+Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are. The main session posts your report on the PR exactly as you write it, so write it for the maintainer reading it there.
 
 ## Scope
 
 The current branch against `main`: `git diff main...HEAD` and `git log main..HEAD`.
 
-Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `npx tsc --noEmit`. Never edit files, commit, push or touch a database outside the test containers.
+Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `npx tsc --noEmit`. Never edit files, commit, push, post on GitHub or touch a database outside the test containers. Your verdict informs the maintainer; it is never a GitHub approval or change request.
 
 ## Read
 
@@ -30,7 +30,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
 5. **Contract:** routes, statuses, headers and bodies match `openapi.yaml`; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
-7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; spec files within their word limits; accepted ADs not edited.
+7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; `test/` changes only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/`); spec files within their word limits; accepted ADs not edited.
 
 ## Security checklist
 
@@ -43,6 +43,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 
 ## Report
 
+- Start with the heading `## Revisão <n>`, where n is the review round of this PR.
 - **Veredito:** `APROVADO` or `REPROVADO`. Any high-severity finding means `REPROVADO`.
 - **Achados**, most severe first, numbered `A1`, `A2`… For each: severity (`alta`, `média` or `baixa`), `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix.
 - **Rodada anterior**, from the second review of the same PR on: each earlier finding, by its number, as `corrigido` or `não corrigido (rodada k)`, where k is how many fixes it has received. Keep the numbers across reviews; a new finding gets the next number. This marking drives the escalation of the fix.

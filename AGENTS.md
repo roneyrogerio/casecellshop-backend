@@ -17,29 +17,37 @@ Read the specs before planning or changing anything. The spec wins over the code
 | [`.specs/project/STATE.md`](.specs/project/STATE.md) | Decisions (`AD-NNN`), tool choices, risks, lessons |
 | [`.specs/features/casecellshop/spec.md`](.specs/features/casecellshop/spec.md) | Acceptance criteria with IDs |
 | [`.specs/features/casecellshop/design.md`](.specs/features/casecellshop/design.md) | How each part is built, and every parameter |
-| [`.specs/codebase/CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md) | Commits, pull requests, branches, language |
+| [`.specs/codebase/CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md) | Commits, pull requests, branches, tests, language, AI instructions |
 
 When the code and the spec disagree, do not silently pick one: mark the criterion `SPEC_DEVIATION` and resolve it in the same PR.
 
 ## Language
 
 - **English:** identifiers, file names, metric and log event names, API error codes, and instructions written for AI (this file, `.claude/`).
-- **Brazilian Portuguese:** code comments, log and error messages, documentation, commit and PR descriptions, and every answer given to the maintainer.
+- **Brazilian Portuguese:** code comments, log and error messages, documentation, commit descriptions, and every answer or report given to the maintainer.
+- **Everything published on GitHub** is in Brazilian Portuguese: the PR title after its Conventional Commits type, the PR description and every comment. Identifiers, paths, commands, criterion IDs and code stay exactly as they are.
 
 ## Workflow
 
 The main session orchestrates. It runs on `opusplan` (set in `.claude/settings.json`): Opus while planning, Sonnet while executing. It writes the specs, `openapi.yaml`, `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
 
 1. Delegate to `planner`: it proposes the milestone plan and the spec deviations. The maintainer approves; the main session updates the spec.
-2. Draft the milestone section of `ARCHITECTURE.md`, add the criteria to `spec.md` and the routes to `openapi.yaml`.
+2. Draft the milestone section of `ARCHITECTURE.md`, add the criteria to `spec.md` and the routes to `openapi.yaml`. Commit them and open a draft PR with the approved plan as a checklist in its description.
 3. Delegate to `test-writer`: failing tests from the criteria and the contract. Commit `test(<scope>): …`.
-4. Delegate to `implementer`: code until the tests and CI pass. Commit `feat(<scope>): …`.
-5. Delegate to `reviewer` and post its report on the PR as a comment. Code findings go back to `implementer`, following the escalation ladder; spec and doc findings are fixed by the main session.
+4. Delegate to `implementer`: code until the tests and CI pass. Commit `feat(<scope>): …`. Tick each checklist item as it lands.
+5. Delegate to `reviewer` and post its report on the PR as a comment. Code findings go back to `implementer`, following the escalation ladder; test findings go back to `test-writer`; spec and doc findings are fixed by the main session.
 6. The maintainer merges, without squash.
 
 - Run `/security-review` on the M2 PR and before delivery.
 - Record the relevant prompts, and what was accepted, corrected or rejected, for `PROMPTS.md`.
 - Never commit or push without the maintainer's approval.
+
+## GitHub
+
+- Only the main session writes to GitHub; agents never post. The agents' reports feed the PR description ("o que a IA gerou").
+- The only comments are the `reviewer` reports: one comment per review round, posted exactly as written. Progress shows in the commits and the checklist; CI failures stay in the checks.
+- No issues: the unit of work is the milestone in `ROADMAP.md`, with its criteria in `spec.md`, and the PR points to them.
+- No agent approves or requests changes. The PR comes from the maintainer's account, which cannot approve its own PR, and the merge is the maintainer's decision.
 
 ## Models and effort
 
@@ -61,16 +69,17 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 | 1 | First fix of a problem | `model: sonnet`, `effort: high` |
 | 2 | The same problem comes back | `model: opus`, `effort: high`, until it is fixed |
 
-- "Comes back" is a verifiable signal, never an impression: `reviewer` marks the finding `não corrigido (rodada k)`, or the same CI check fails for the same cause. Read the step from the last PR comment of each problem.
-- Each step is a new `implementer` call that receives the finding, the link to its PR comment and the previous commit. Never resume the previous agent: a resumed agent keeps its effort.
+- "Comes back" is a verifiable signal, never an impression: `reviewer` marks the finding `não corrigido (rodada k)`, or the same CI check fails for the same cause. Read the step from the last `reviewer` comment for a finding, or from the PR's CI runs for a CI problem.
+- Each step is a new `implementer` call that receives the finding, the link to its PR comment or CI run, and the previous commit. Never resume the previous agent: a resumed agent keeps its effort.
 - A new problem starts at step 1. The next milestone starts again from the frontmatter.
 - Nothing above step 2: more effort does not fix a wrong premise. Sonnet never goes above `high`; when `high` is not enough, change the model. `max` is never used: it shows diminishing returns and tends to overthink.
 - `planner`, `test-writer` and `reviewer` never escalate. A review that does not convince becomes a question to the maintainer.
 - Do not set `CLAUDE_CODE_EFFORT_LEVEL` or `maxEffortLevel`: they override the effort of every agent. Per-call `model` and `effort` need Claude Code v2.1.292 or later.
 
-## Spec maintenance
+## Spec and instruction maintenance
 
 - Each spec file has a word limit, listed in [`.specs/README.md`](.specs/README.md); CI fails above it (`FND-06`). Near a limit, consolidate; never delete content without moving it to the right file.
+- This file and each agent in `.claude/agents/` stay under 200 lines, and agent descriptions stay short ([`CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md)); CI enforces it (`FND-06`). `CLAUDE.md` only imports this file. After changing them, the maintainer runs `/doctor prompt-audit`.
 - An accepted `AD-NNN` is never edited: a new AD supersedes it, and the old one is marked "substituída por AD-NNN".
 - A spec change goes in the PR of the milestone that caused it.
 
