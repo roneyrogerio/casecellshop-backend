@@ -70,7 +70,7 @@ Record a decision in the PR where it is made, so the reasoning stays reviewable 
 
 Claude Code enforces these whatever the instructions say (`.claude/settings.json`):
 
-- `test-writer` can edit only `test/`; `implementer` cannot edit `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `CLAUDE.md`. A `PreToolUse` hook keyed by `agent_type` checks every edit (`.claude/hooks/path-guard.mjs`).
+- `test-writer` can edit only `*.test.ts` files and `test/`; `implementer` cannot edit `*.test.ts` files, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `CLAUDE.md`. A `PreToolUse` hook keyed by `agent_type` checks every edit (`.claude/hooks/path-guard.mjs`).
 - `git commit`, `git push` and PR writes with `gh` always ask the maintainer, in every permission mode.
 - Force pushes, `gh pr merge`, `gh pr review`, `gh issue create` and reading `.env` files are denied.
 - Bash rules match the usual form of a command and are not a security boundary; the reviewer's history check and the maintainer's merge stay the final checks. Never work around a guardrail: report the block instead.
@@ -127,9 +127,10 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 
 ## Tests
 
-- Tests live in `test/`, never in `src/`, as `*.test.ts` files:
-  - `test/unit/`: no Docker (`npm run test:unit`);
-  - `test/integration/<area>/`: Testcontainers and supertest, one folder per area of `spec.md`, such as `checkout/`, `orders/` and `catalog/`.
+- Tests are `*.test.ts` files, placed by what they exercise:
+  - unit tests (no database, network or Docker) sit next to the file they test, such as `src/cache/ttl.test.ts` or `scripts/check-spec-limits.test.ts` (`npm run test:unit`);
+  - integration tests live in `test/integration/<area>/`: Testcontainers and supertest, one folder per area of `spec.md`, such as `checkout/`, `orders/` and `catalog/`;
+  - shared helpers and fixtures live in `test/helpers/` and `test/fixtures/`. No test ships in the image (`.dockerignore`).
 - Each test name is the ID of the criterion it proves followed by a description in Brazilian Portuguese, e.g. `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`. Identifiers in test code stay in English.
 - Anything that touches the database runs against real PostgreSQL; no database mocks.
 - No `sleep`: use the injectable clock and timestamps seeded in the database.

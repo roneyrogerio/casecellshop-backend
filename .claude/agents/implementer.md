@@ -15,12 +15,12 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 - `AGENTS.md`, especially the code rules.
 - The plan or the findings you received. On a fix, also the PR comment of each finding, the previous commit and the CI log.
 - `.specs/features/casecellshop/design.md`, the ADs in `.specs/project/STATE.md` and the milestone criteria in `.specs/features/casecellshop/spec.md`.
-- The contract in `src/contract/`, the generated `openapi.yaml` and the milestone tests in `test/`.
+- The contract in `src/contract/`, the generated `openapi.yaml` and the milestone tests (`*.test.ts` files and `test/`).
 
 ## Write
 
 - Production code and infrastructure: `src/`, migrations, `package.json`, compose, CI and configuration.
-- Never touch `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
+- Never touch `*.test.ts` files, `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
 - Follow `design.md` and the ADs. A new dependency needs a decision in `STATE.md`: report it instead of adding it.
 - Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings.
 

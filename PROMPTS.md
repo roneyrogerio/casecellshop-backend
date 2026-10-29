@@ -236,3 +236,13 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Resultado:** com `Write` de arquivos novos, o hook negou o `test-writer` em `src/` e o `implementer` em `test/`, `.specs/`, `src/contract/`, `.claude/`, `Test/` (outra caixa), `./src/../test/` e no caminho absoluto de `test/`, e deixou o `implementer` criar `src/sonda-guarda.ts`, apagado em seguida. O R10 registra o que a guarda não cobre: a escrita pelo Bash.
 - **Verificação:** a mensagem de negação do hook em cada caso; `git status` limpo depois de cada sonda.
 - **Atrito do fluxo:** a alteração do `.claude/settings.json` no commit `a17d028` foi feita por um script no Bash e passou, enquanto o `Edit` do mesmo arquivo foi negado agora. Daqui em diante, uma mudança em `.claude/` pela sessão principal só entra com o diff mostrado ao mantenedor antes.
+
+### Onde ficam os testes
+
+- **Pedido:** o mantenedor perguntou se o padrão em projetos grandes é a pasta de testes separada ou o teste junto do arquivo que ele testa, e pediu o porquê técnico.
+- **O que a IA fez:** mostrou que não há um padrão único e que o mais recomendado é o híbrido. Recomendou manter tudo em `test/`, decidido no PR #1.
+- **Corrigido:** o argumento principal da IA, de que a guarda de caminho deixaria de funcionar com o teste ao lado do código, estava errado: o hook pode separar os papéis pelo nome `*.test.ts`. O mantenedor decidiu pelo híbrido.
+- **Resultado:** unitários ao lado do arquivo testado; integração em `test/integration/<área>/`; helpers e fixtures em `test/`; o `.dockerignore` deixa os testes fora da imagem. O hook, os três agentes, o `AGENTS.md`, o `CONVENTIONS.md`, o `FND-08`, o `vitest.config.ts` e o `tsconfig.json` mudaram juntos (linha "Testes" da tabela de ferramentas, que substitui a escolha do PR #1).
+- **Verificação:**
+  - fontes primárias: o Rust Book (unitário junto do código para testar a unidade isolada; integração numa pasta à parte, pela interface pública), o guia de estilo do Angular ("Unit tests should live in the same directory as the code-under-test"), o artigo de Kent C. Dodds sobre colocação e a documentação do `go build`, que ignora os `_test.go`;
+  - o hook, chamado direto com onze pares de agente e caminho, decidiu cada um como esperado.

@@ -30,7 +30,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
 5. **Contract:** routes, statuses, headers and bodies match the contract in `src/contract/`; handlers take their types from it; the committed `openapi.yaml` is the generated one; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
-7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; `test/` changes only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/`); spec files within their word limits; accepted ADs not edited.
+7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/ '*.test.ts'`); spec files within their word limits; accepted ADs not edited.
 
 ## Security checklist
 

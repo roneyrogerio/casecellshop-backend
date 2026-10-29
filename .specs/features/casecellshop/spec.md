@@ -22,7 +22,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 - **FND-05** O span do repositório sai como filho do span da requisição.
 - **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md), ou se o `AGENTS.md` ou um agente de `.claude/agents/` passar de 200 linhas ([`CONVENTIONS.md`](../../codebase/CONVENTIONS.md)).
 - **FND-07** O CI falha se o `openapi.yaml` commitado divergir do gerado pelo contrato em `src/contract/`, ou se não passar no lint de OpenAPI 3.1.
-- **FND-08** A guarda de caminho (`.claude/hooks/path-guard.mjs`) nega ao `test-writer` editar fora de `test/`, e ao `implementer` editar `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` e `CLAUDE.md`, com o caminho relativo, absoluto, com `..` ou em outra caixa; nega também um caminho fora do repositório e uma entrada ilegível, e deixa passar a sessão principal.
+- **FND-08** A guarda de caminho (`.claude/hooks/path-guard.mjs`) nega ao `test-writer` editar fora de `test/` e dos arquivos `*.test.ts`, e ao `implementer` editar os arquivos `*.test.ts`, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` e `CLAUDE.md`, com o caminho relativo, absoluto, com `..` ou em outra caixa; nega também um caminho fora do repositório e uma entrada ilegível, e deixa passar a sessão principal.
 
 ## Checkout
 

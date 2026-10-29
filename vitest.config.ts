@@ -8,7 +8,8 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          include: ['test/unit/**/*.test.ts'],
+          // Unitários ficam ao lado do arquivo que testam (CONVENTIONS.md, "Testes").
+          include: ['src/**/*.test.ts', 'scripts/**/*.test.ts', '.claude/hooks/**/*.test.ts'],
         },
       },
       {
