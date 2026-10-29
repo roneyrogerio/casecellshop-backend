@@ -18,12 +18,13 @@ Valem para todo o repositório, desde o primeiro commit.
   - `test/unit/`: sem Docker (`npm run test:unit`);
   - `test/integration/`: com Testcontainers e supertest, uma pasta por área do `spec.md`, como `checkout/`, `orders/` e `catalog/`.
   - O Vitest separa os dois como *projects*, como no exemplo da documentação dele.
-  - O nome de cada teste começa com o ID do critério que ele prova.
+  - O nome de cada teste começa com o ID do critério que ele prova, seguido da descrição em português, como `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`. As variáveis e funções do teste seguem em inglês.
 - **Instruções da IA:**
   - o `AGENTS.md` é a fonte única. O `CLAUDE.md` só o importa (`@AGENTS.md`), para o Claude Code lê-lo também nas sessões que não leem o `AGENTS.md` direto;
   - o `AGENTS.md` fica abaixo de 200 linhas, a meta da documentação do Claude Code para o arquivo de instruções, que carrega em toda sessão. A mesma régua vale para cada agente de `.claude/agents/`;
   - cada agente tem um papel só, e a `description` dele é curta, porque as de todos carregam em toda sessão;
-  - quando um desses arquivos muda, o `/doctor prompt-audit` roda antes do merge.
+  - quando um desses arquivos muda, o `/doctor prompt-audit` roda antes do merge;
+  - os limites de papel e as ações que pedem aprovação são aplicados pelo Claude Code, não só pela instrução (`.claude/settings.json`): um hook impede o `test-writer` de editar fora de `test/` e o `implementer` de editar testes, specs, contrato e instruções; commit, push e escrita no PR sempre pedem aprovação; merge, revisão de PR, issue, push forçado e leitura do `.env` são negados.
 - **Idioma:**
   - **inglês** para o que é identificador ou instrução de máquina: nomes de arquivos, variáveis, funções, classes, métricas e eventos de log, códigos de erro da API, e as instruções lidas pela IA (`AGENTS.md`). Assim, os nomes do código ficam no mesmo idioma das bibliotecas e dos padrões que ele usa (HTTP, OpenTelemetry, Prometheus);
   - **português** para o que pessoas leem: comentários, mensagens de log e de erro, documentação, descrição de commits e de PRs.
