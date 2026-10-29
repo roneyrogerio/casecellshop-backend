@@ -291,7 +291,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - Cada dependência entra na última versão estável compatível com as outras, fixada exata no `package.json`, sem `^` nem `~`. A imagem e o `.nvmrc` também fixam a versão.
 - Node.js 26.13.0 LTS (LTS ativo até 20/10/2027, suporte até 30/04/2029) no `.nvmrc`, na imagem e no CI. O `engines` aceita a partir da 24.12, e o CI roda também nela. Os tipos (`@types/node` 24.19.2) ficam na linha mínima, para o compilador barrar uma API que só exista no 26.
 - OpenTelemetry JS na linha 3: API 1.10.0, SDK 3.0.0 (`sdk-trace`, `sdk-metrics`, `context-async-hooks`, `core`, `resources`) e exporters 0.300.0.
-- TypeScript 7.0.2, com o lint pelo oxlint 1.90.0 e o tsgolint 7.0.2005 (estável desde 09/2026; 59 das 61 regras com tipos do `typescript-eslint`, que só aceita TypeScript abaixo da 6.1) (R1).
+- TypeScript 7.0.2, com o lint pelo oxlint 1.90.0 e o tsgolint 7.0.2005 (estável desde 09/2026, com todas as regras do `recommendedTypeChecked` do `typescript-eslint`, que só aceita TypeScript abaixo da 6.1) (R1).
 - Uma versão nova só entra por uma linha na tabela de ferramentas ou por uma AD, no PR de um marco.
 
 **Alternativas consideradas:**
@@ -324,7 +324,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 | ID | Risco | Mitigação |
 | --- | --- | --- |
-| R1 | O oxlint não cobre 2 das 61 regras com tipos do `typescript-eslint` | Reavaliar quando o `typescript-eslint` aceitar o TypeScript 7 |
+| R1 | Fora do `recommendedTypeChecked`, 2 das 61 regras com tipos do `typescript-eslint` não existem no oxlint | Reavaliar quando o `typescript-eslint` aceitar o TypeScript 7 |
 | R2 | A validação das requisições é código próprio e pode deixar passar um caso | Testes de contrato por rota (parâmetro desconhecido, tipo errado, cabeçalho ausente, corpo acima do limite); o CI confere o `openapi.yaml` gerado (`FND-07`) |
 | R3 | Quem clonar o repositório pode não ter Docker | `npm run test:unit` sem Docker; o CI mostra a suíte completa |
 | R4 | O teste de concorrência pode passar sem provar nada | Controle negativo com janela forçada, que precisa vender além do estoque (CHK-02); várias conexões; repetição em laço |

@@ -9,7 +9,7 @@
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "lint": "eslint .",
+    "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
     "lint:openapi": "redocly lint openapi.yaml",
@@ -39,11 +39,11 @@
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
-    "eslint": "10.13.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "supertest": "7.3.1",
     "testcontainers": "12.2.1",
-    "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1",
+    "typescript": "7.0.2",
     "vitest": "5.0.5"
   },
   "license": "MIT"
