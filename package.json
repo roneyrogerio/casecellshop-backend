@@ -11,7 +11,9 @@
     "test:unit": "vitest run --project unit",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "openapi": "node scripts/generate-openapi.ts"
+    "openapi": "node scripts/generate-openapi.ts",
+    "lint:openapi": "redocly lint openapi.yaml",
+    "check:specs": "node scripts/check-spec-limits.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "9.1.0",
