@@ -225,3 +225,14 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Lint do OpenAPI:** a IA recomendou o `recommended`, em que aviso não reprova. O mantenedor pediu para conferir a documentação antes; como vários avisos apontam contrato incorreto (exemplo que contradiz o schema, campo obrigatório inexistente), ficou o `recommended-strict`, com cada exceção justificada.
 - **Limites do `STATE-ARCHIVE.md` e do `ARCHITECTURE.md`:** conferidos na `tlc-spec-driven` v2.0.0 (commit `1a6fffb`). O arquivo morto não tem limite e não é carregado; o `ARCHITECTURE.md` limitado da skill é o mapeamento de código existente, em `.specs/codebase/`, e não o documento de entrega da raiz.
 - **Dados iniciais do ERP simulado:** *seed* separado das migrações, como o guia do Rails recomenda para dados de demonstração.
+
+### Teste da guarda de caminho no fluxo real
+
+- **Pedido:** confirmar, com os subagentes chamados pela sessão principal, que a guarda barra o `test-writer` fora de `test/` e o `implementer` em `test/`, `.specs/`, `src/contract/` e nas instruções da IA. No PR #1, o teste tinha sido feito só com `claude -p --agent`.
+- **O que a IA fez:** seguiu a sonda do plano: um `Edit` de texto inexistente em cada caminho, para nada mudar se a guarda falhasse.
+- **Corrigido:**
+  - nenhuma das 13 sondas do `implementer` e das 2 do `test-writer` foi barrada; todas voltaram "arquivo não existe" ou "texto não encontrado", e a guarda pareceu quebrada. O script do hook, chamado direto com a mesma entrada, negava. A causa era a sonda: o `Edit` inválido para na validação da ferramenta e não chega ao hook (L-006);
+  - para ver a entrada do hook, a IA tentou acrescentar um hook temporário ao `.claude/settings.json`; o classificador do modo automático negou a edição como "Self-Modification", e ela não foi contornada.
+- **Resultado:** com `Write` de arquivos novos, o hook negou o `test-writer` em `src/` e o `implementer` em `test/`, `.specs/`, `src/contract/`, `.claude/`, `Test/` (outra caixa), `./src/../test/` e no caminho absoluto de `test/`, e deixou o `implementer` criar `src/sonda-guarda.ts`, apagado em seguida. O R10 registra o que a guarda não cobre: a escrita pelo Bash.
+- **Verificação:** a mensagem de negação do hook em cada caso; `git status` limpo depois de cada sonda.
+- **Atrito do fluxo:** a alteração do `.claude/settings.json` no commit `a17d028` foi feita por um script no Bash e passou, enquanto o `Edit` do mesmo arquivo foi negado agora. Daqui em diante, uma mudança em `.claude/` pela sessão principal só entra com o diff mostrado ao mantenedor antes.

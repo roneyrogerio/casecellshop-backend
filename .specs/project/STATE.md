@@ -330,8 +330,9 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 | R5 | Testes intermitentes no CI | Relógio injetável, sem `sleep`, horários semeados no banco, pool fixo |
 | R6 | A H1b (deduplicação) ou a H4 (tempo de processamento) podem não valer para um ERP real | Marcador de envio gravado antes da chamada; consulta pela referência depois do primeiro envio, sempre após o atraso mínimo; provada com o fake sem a H1b e com o modo "fatura depois do timeout". **Resíduo:** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP, ou falho com uma fatura que aparece depois, e a loja não detecta esses casos; um teste acima da H4 os demonstra (ORD-06), e o README os declara. Se nem a H1a valer, a consulta por referência lê o MySQL do ERP, isolada atrás da porta `ErpClient`: é a única exceção à regra de falar com o ERP só pela API |
 | R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, sem ter visto a escrita, num modelo mais forte; o `test-writer` escreve os testes a partir dos critérios, sem ler a implementação, e um hook impede o `implementer` de alterá-los; cada PR é aprovado por uma pessoa |
-| R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TS 6, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers |
+| R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TS 6, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers. **Resultado (29/10/2026):** os dez pontos passaram no Node 26.13.0 e na 24.12.0, sem plano B |
 | R9 | A H2 pode não valer: o ERP fatura sem estoque e fica negativo | A sincronização grava zero, registra o caso em log, e a loja para de vender o SKU |
+| R10 | A guarda de caminho só cobre `Edit`, `Write` e `NotebookEdit`; um agente pode escrever pelo Bash | A sessão principal confere o `git status` contra o papel de cada agente depois de cada chamada, e o `reviewer` confere o histórico de `test/` |
 
 ## Lições
 
@@ -369,6 +370,13 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 **Problema.** O reprocessamento zera o contador de tentativas, e um marcador gravado depois da chamada some quando o worker morre no meio dela. Nos dois casos, a tentativa seguinte criaria sem consultar.
 **Solução.** `first_sent_at` gravado na reivindicação, com commit antes da chamada, e nunca apagado.
 **Previne.** Fatura duplicada depois de um reprocessamento ou de uma queda do worker.
+
+### L-006 · Sonda com `Edit` inválido não chega à guarda
+
+**Contexto.** O plano do M1 sondava a guarda de caminho com um `Edit` de texto inexistente, para nada mudar se ela falhasse.
+**Problema.** O `Edit` inválido para na validação da ferramenta e não chega ao hook: nenhuma sonda foi barrada, e a guarda pareceu quebrada.
+**Solução.** Sondar com `Write` de um arquivo novo, que chega ao hook; o arquivo do controle positivo é apagado depois.
+**Previne.** Concluir algo sobre uma guarda a partir de uma sonda que nunca a exercitou.
 
 ## Ideias adiadas
 

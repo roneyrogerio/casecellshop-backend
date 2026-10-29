@@ -169,7 +169,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `info`: checkout aceito, pedido faturado, rodada de sincronização;
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização.
-- **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`).
+- **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`). No SDK 3, o provider é o `TracerProvider` do `sdk-trace`, e os processadores recebem `{ exporter }`; nos testes, `forceFlush()` vem antes de ler o `InMemorySpanExporter`.
 - **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. Console em desenvolvimento; OTLP/HTTP para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version`.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
   - **HTTP:** duração por rota (histogram), base dos SLOs de latência;
@@ -197,7 +197,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **`X-Request-Id`:** aceito com 1 a 128 caracteres ASCII visíveis; fora disso, um UUID novo.
 - **`type` dos erros:** `/problems/<causa>`, como `/problems/invalid-request`.
 - **Compose:** `postgres`, `migrate`, `api` e `worker`, com as credenciais locais como padrão no `compose.yaml`, sem `.env`, que os agentes não leem. O teste do `FND-01` sobe esse arquivo pelo `DockerComposeEnvironment` do Testcontainers, com nome de projeto próprio e sem publicar portas no host.
-- **Lint do OpenAPI:** Redocly com `recommended-strict`, em que aviso também reprova. Uma regra que não se aplica a uma rota é desligada só para ela, no `redocly.yaml`, com o motivo num comentário.
+- **Lint do OpenAPI:** Redocly com `recommended-strict`, em que aviso também reprova. O contrato declara `servers: [{ url: '/' }]` e `security: []` nas rotas públicas. Uma regra que não se aplica a uma rota é desligada só para ela, no `redocly.yaml`, com o motivo num comentário.
 - **Limite das specs (`FND-06`):** palavras contadas como no `wc -w`, pela tabela do `.specs/README.md`; `scripts/check-spec-limits.ts` falha acima dela, ou acima de 200 linhas no `AGENTS.md` ou num agente.
 
 ## Parâmetros
