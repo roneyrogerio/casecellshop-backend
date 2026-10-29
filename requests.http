@@ -1,0 +1,17 @@
+# Requisições de exemplo, para o REST Client do VS Code ou o cliente HTTP do JetBrains.
+# Suba antes com `docker compose up --build`.
+
+@baseUrl = http://localhost:3000
+
+### A API e o banco respondem: 200 com {"status":"ok"} e o cabeçalho x-request-id.
+GET {{baseUrl}}/health
+
+### Um X-Request-Id válido volta igual na resposta e aparece nos logs como correlationId.
+GET {{baseUrl}}/health
+X-Request-Id: exemplo-123
+
+### Fora do contrato (parâmetro desconhecido): 400 em application/problem+json.
+GET {{baseUrl}}/health?verbose=1
+
+### Métricas no formato Prometheus, como a duração das requisições HTTP.
+GET {{baseUrl}}/metrics
