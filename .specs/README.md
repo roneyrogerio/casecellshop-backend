@@ -18,7 +18,7 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 
 **O que vai em cada arquivo.** Visão, metas, escopo e hipóteses no `PROJECT`; marcos no `ROADMAP`; decisões de projeto, riscos, lições e ideias adiadas no `STATE`; critérios com ID no `spec.md`; o "como" no `design.md`; convenções no `CONVENTIONS`.
 
-**Tamanho.** As specs não têm teto de palavras: os agentes as leem por trecho, guiados pelo mapa de cada tarefa, e não inteiras (AD-012). O que tem limite é o que o Claude Code carrega em toda sessão: o `AGENTS.md`, o `CLAUDE.md` e cada agente até 200 linhas, e cada skill até 500 (`FND-06`). Para a leitura por trecho funcionar, cada assunto fica sob um título próprio e estável, e as ADs ficam em blocos `### AD-NNN`.
+**Tamanho.** As specs não têm teto de palavras: os agentes as leem por trecho, guiados pelo mapa de cada tarefa, e não inteiras (AD-012). O que tem limite é o que o Claude Code carrega em toda sessão ou reanexa depois de compactar: o `AGENTS.md`, o `CLAUDE.md` e cada agente até 200 linhas; cada skill até 500 linhas e 12.000 bytes; e cada regra de `.claude/rules/` até 40.000 caracteres (`FND-06`). Para a leitura por trecho funcionar, cada assunto fica sob um título próprio e estável, e as ADs ficam em blocos `### AD-NNN`.
 
 O `ARCHITECTURE.md` da raiz é a resposta conceitual do desafio, escrita para quem avalia, e não um documento que os agentes carregam em todo trabalho.
 
