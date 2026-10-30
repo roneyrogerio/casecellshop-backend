@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M1 — Fundação
+**Marco atual:** M2 — Checkout
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -44,7 +44,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Pronto quando:** cada requisito está ligado a um marco e cada decisão tem as alternativas registradas.
 
-## M1 — Fundação
+## M1 — Fundação · CONCLUÍDO
 
 **Meta:** o esqueleto roda, testa e passa no CI antes de existir regra de negócio.
 

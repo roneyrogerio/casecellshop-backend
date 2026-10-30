@@ -168,33 +168,11 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-007 · Contrato OpenAPI antes do código e erros em RFC 9457
 
-**Status:** aceita (29/10/2026)
-
-**Contexto.** O contrato é a fonte da verdade da API e precisa cobrir sucesso, erro e o fluxo assíncrono.
-
-**Decisão.**
-
-- `openapi.yaml` (OpenAPI 3.1) escrito à mão; cada rota entra nele antes do código.
-- O `express-openapi-validator` 5.6.2 valida toda requisição e, nos testes, o corpo das respostas, então cada teste de integração é também um teste de contrato.
-- Erros em `application/problem+json` (RFC 9457), com `correlationId` e um `type` por causa, produzidos por um middleware único; falhas do banco mapeadas pelo passo da transação.
-- `X-Request-Id` em toda resposta; preço sempre do banco, em centavos; só mudanças aditivas.
-- Detalhes: [`design.md`, "Contrato"](../features/casecellshop/design.md#contrato-ad-007).
-
-**Alternativas consideradas:**
-
-- **Code-first** (zod ou TypeBox gerando o OpenAPI). A spec passa a descrever a implementação, em vez de defini-la.
-- **`openapi-backend`.** Substitui o roteamento do Express; é o plano B (R2).
-- **Tipos gerados do `openapi.yaml`** (`openapi-typescript`). Eliminam a divergência entre tipo e contrato, ao custo de um passo de geração; com três rotas, a validação das respostas já pega a divergência.
-- **Formato de erro próprio.** Mais um formato para quem consome a API, sem media type registrado nem campos de extensão definidos.
-- **Paginação por cursor.** Resiste a inserções entre páginas, mas aqui as páginas de um TTL já vêm do mesmo instantâneo.
-
-**Trade-off.** Os tipos TypeScript das rotas são escritos à mão; a validação das respostas nos testes pega a divergência.
-
-**Rever quando:** surgir um segundo consumidor da API. Aí entram os tipos gerados e a verificação automática de quebra de contrato no CI.
+**Status:** aceita (29/10/2026); substituída por AD-010 (29/10/2026). O texto está no [`STATE-ARCHIVE.md`](STATE-ARCHIVE.md).
 
 ### AD-008 · Observabilidade com OpenTelemetry (spans manuais) e pino
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026); alterada pela AD-011 (versão do OpenTelemetry)
 
 **Contexto.** Cada pedido precisa ser rastreável da requisição ao ERP. As métricas precisam mostrar cache, checkout, fila, estoque, ERP e sincronização, e os alertas precisam apontar para séries que existem.
 
@@ -253,7 +231,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-010 · Contrato em zod antes do código, com o OpenAPI 3.1 gerado
 
-**Status:** proposta (29/10/2026). Substitui a AD-007.
+**Status:** aceita (29/10/2026). Substitui a AD-007.
 
 **Contexto.** O contrato é a fonte da verdade da API e precisa cobrir sucesso, erro e o fluxo assíncrono. Com o contrato só em YAML (AD-007), os tipos das rotas ficam escritos à mão, porque o gerador de tipos a partir do OpenAPI não aceita o TypeScript 6, e o compilador não confere se o código segue o contrato; a validação depende de um pacote com um mantenedor e sem release desde janeiro.
 
@@ -282,7 +260,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-011 · Versões: a última estável compatível, fixada
 
-**Status:** proposta (29/10/2026). Altera a AD-008 (versão do OpenTelemetry) e a linha "Runtime" da tabela de ferramentas.
+**Status:** aceita (29/10/2026). Altera a AD-008 (versão do OpenTelemetry) e a linha "Runtime" da tabela de ferramentas.
 
 **Contexto.** As versões foram escolhidas antes do código, e duas linhas viraram estáveis nesse meio-tempo: o Node 26 entrou em LTS ativo em 28/10/2026, e o OpenTelemetry JS lançou a linha 3 em 20/10/2026. Sem código escrito, migrar agora não custa nada; depois, cada versão atrasada vira uma migração de código que já roda.
 
@@ -318,6 +296,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 | Guardas dos agentes | Hook `PreToolUse` no `.claude/settings.json`, que identifica o agente pelo `agent_type` e limita as edições de cada papel; regras `ask` para commit, push e escrita no PR, e `deny` para merge, revisão de PR, issue, push forçado e `.env` | Hook no frontmatter de cada agente; regras de Bash como barreira; sandbox | O hook do frontmatter é pulado sem aviso quando a pasta exata não está marcada como confiável, e não roda em `claude -p`; no `settings.json` vale em toda sessão do projeto. Uma regra de Bash compara o texto do comando e não é barreira, então só cobre a forma comum (commit, push, merge). O sandbox isolaria o socket do Docker que o Testcontainers usa |
 | Sessão principal | Opus com `effortLevel: high`, fixos no `.claude/settings.json` do projeto; o `/model` e o `/effort` do mantenedor valem na sessão | `opusplan`; `fable`; `xhigh`; agente orquestrador (`agent` no settings) | O `opusplan` só usa Opus no plan mode, que nenhum passo do fluxo ativa: o planejamento rodou em Sonnet (M1). O padrão vale para quem clona, sem depender da configuração de usuário. O `fable` não é padrão de nenhum plano; o `xhigh` é para tarefas longas, que ficam com os agentes; o agente orquestrador substitui o prompt de sistema |
 | Visualização de traces | Jaeger 2.22.0 all-in-one no compose, em memória, recebendo OTLP da API e do worker | Grafana `otel-lgtm`; OpenTelemetry Collector entre a aplicação e o Jaeger; só o exportador de console | Mostra no navegador o trace da requisição ao banco, sem conta em ferramenta, com os mesmos dados que o Datadog receberia (AD-008). O `otel-lgtm` pede 2 GB e pode valer no M5, para os dashboards; o Jaeger recebe OTLP direto, sem Collector |
+| Mensagens de commit | commitlint 21.2.4 com o `config-conventional` e as regras do `CONVENTIONS.md`, no CI; três cabeçalhos do M1 ficam como exceção no `commitlint.config.mjs` | Script próprio; só a revisão | O limite de 72 caracteres foi violado quatro vezes no M1 sem aviso. O commitlint é o padrão para Conventional Commits, confere também o tipo e deixa a regra num arquivo |
 | Registro de decisões | ADs no `STATE.md`, com o filtro, a estrutura e o ciclo no `.specs/README.md`; as substituídas vão para `STATE-ARCHIVE.md` perto do limite | Um arquivo por decisão | As ADs são curtas e se citam entre si; num arquivo só, o `planner` lê o log inteiro no início de cada marco, e o limite de tamanho força a consolidação |
 
 ## Riscos em aberto
@@ -394,5 +373,4 @@ Além da lista "Adicionais" do roadmap:
 - cancelamento automático com consulta prévia;
 - invalidação de cache entre processos;
 - estoque de um SKU dividido em buckets;
-- testes de mutação;
-- lint de mensagens de commit.
+- testes de mutação.

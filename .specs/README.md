@@ -7,6 +7,7 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | [`project/PROJECT.md`](project/PROJECT.md) | O que é o sistema, as metas, o escopo, as hipóteses e as premissas de carga |
 | [`project/ROADMAP.md`](project/ROADMAP.md) | Como cada marco é feito, a ordem dos marcos e o critério de pronto de cada um |
 | [`project/STATE.md`](project/STATE.md) | As decisões de projeto (`AD-NNN`), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas |
+| [`project/STATE-ARCHIVE.md`](project/STATE-ARCHIVE.md) | As ADs substituídas, com o texto como foi aceito |
 | [`features/casecellshop/spec.md`](features/casecellshop/spec.md) | A lista única de critérios de aceite com ID (`FND`, `CHK`, `ORD`, `CAT`, `OBS`, `DOC`) |
 | [`features/casecellshop/design.md`](features/casecellshop/design.md) | Como construir: componentes, dados, consultas, contrato, observabilidade e parâmetros |
 | [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: commits, pull requests, branches, testes, idioma e instruções da IA |

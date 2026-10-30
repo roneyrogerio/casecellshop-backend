@@ -282,3 +282,10 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
   - a sessão principal leu o "APROVADO" do relatório como uma aprovação proibida; o mantenedor apontou que é a conclusão escrita do `reviewer`, e não a ação de aprovar no GitHub.
 - **Resultado:** todos os achados corrigidos neste PR. O A4 virou o commitlint no CI, configurado com as regras do `CONVENTIONS.md`, e os três commits antigos ficam como exceção registrada; o A8 entrou na conferência de histórico do `reviewer`.
 - **Verificação:** o relatório postado como comentário no PR, e a Revisão 2.
+
+### Revisão 2 e fechamento do M1
+
+- **Pedido:** conferir as correções da Revisão 1 e o que mudou desde ela.
+- **O que a IA fez:** o `reviewer` marcou os oito achados como corrigidos, com a evidência de cada um, e achou o A9: o commitlint entrou sem a linha na tabela de ferramentas. Ele também notou que a `main` local estava defasada, o que pôs na lista do A4 um commit que já estava na base.
+- **Resultado:** o fechamento moveu a AD-007 para o `STATE-ARCHIVE.md` antes de mudar os status, para o `STATE.md` caber no limite; a AD-010 e a AD-011 passaram a "aceita", a AD-008 a "alterada pela AD-011", e o commitlint ganhou a linha "Mensagens de commit" (A9).
+- **Verificação:** `npm run check:specs` e o CI do commit de fechamento.
