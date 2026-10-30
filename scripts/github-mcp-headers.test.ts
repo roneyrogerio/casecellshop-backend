@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 interface HeadersModule {
   GITHUB_TOOLS: readonly string[];
   buildHeaders(token: string): Record<string, string>;
+  headersFor(env: { remote: boolean }, token: string | undefined): Record<string, string> | null;
 }
 
 let mod: HeadersModule;
@@ -64,5 +65,21 @@ describe('AI-08 cabeçalhos do MCP do GitHub (headersHelper)', () => {
 
   it('AI-08 buildHeaders com token vazio lança erro, sem devolver cabeçalho', () => {
     expect(() => mod.buildHeaders('')).toThrow(/./);
+  });
+});
+
+describe('AI-08 headersFor decide o que o headersHelper imprime', () => {
+  it('AI-08 na nuvem devolve o objeto vazio, mesmo com token', () => {
+    expect(mod.headersFor({ remote: true }, 'tok-123')).toEqual({});
+    expect(mod.headersFor({ remote: true }, undefined)).toEqual({});
+  });
+
+  it('AI-08 na máquina, com token, devolve buildHeaders(token)', () => {
+    expect(mod.headersFor({ remote: false }, 'tok-123')).toEqual(mod.buildHeaders('tok-123'));
+  });
+
+  it('AI-08 na máquina, sem token, devolve null: o CLI falha sem imprimir cabeçalho', () => {
+    expect(mod.headersFor({ remote: false }, undefined)).toBeNull();
+    expect(mod.headersFor({ remote: false }, '')).toBeNull();
   });
 });

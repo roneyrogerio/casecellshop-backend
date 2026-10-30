@@ -20,14 +20,20 @@ interface Diagnosis {
   fix?: string;
 }
 
+type GitSetupFacts = Pick<Facts, 'remote' | 'credentialHelperIsBot'> & { tokenPresent: boolean };
+type GitSetupPlan = 'configure' | 'skip' | 'explain';
+
 let diagnose: (facts: Facts) => Diagnosis[];
+let planGitSetup: (facts: GitSetupFacts) => GitSetupPlan;
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
   const mod = (await import(pathToFileURL(join(import.meta.dirname, 'check-env.ts')).href)) as {
     diagnose: typeof diagnose;
+    planGitSetup: typeof planGitSetup;
   };
   diagnose = mod.diagnose;
+  planGitSetup = mod.planGitSetup;
 });
 
 // Máquina local com tudo certo: é o controle negativo de cada teste.
@@ -139,5 +145,25 @@ describe('AI-09 diagnóstico do ambiente, na nuvem', () => {
     expect(failures({ ...REMOTE_OK, depsInstalled: false }).length).toBeGreaterThan(0);
     expect(failures({ ...REMOTE_OK, dockerRunning: false }).length).toBeGreaterThan(0);
     expect(failures({ ...REMOTE_OK, originUrl: 'git@github.com:a/b.git' }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('AI-09 configuração da credencial do git pelo hook', () => {
+  it('AI-09 na nuvem o hook não mexe na credencial, com ou sem token', () => {
+    expect(planGitSetup({ remote: true, tokenPresent: true, credentialHelperIsBot: false })).toBe('skip');
+    expect(planGitSetup({ remote: true, tokenPresent: false, credentialHelperIsBot: false })).toBe('skip');
+  });
+
+  it('AI-09 na máquina, com o helper já do bot, não reconfigura', () => {
+    expect(planGitSetup({ remote: false, tokenPresent: true, credentialHelperIsBot: true })).toBe('skip');
+    expect(planGitSetup({ remote: false, tokenPresent: false, credentialHelperIsBot: true })).toBe('skip');
+  });
+
+  it('AI-09 na máquina, sem helper e com token, configura sozinho', () => {
+    expect(planGitSetup({ remote: false, tokenPresent: true, credentialHelperIsBot: false })).toBe('configure');
+  });
+
+  it('AI-09 na máquina, sem helper e sem token, só explica (guardar o token é de uma pessoa)', () => {
+    expect(planGitSetup({ remote: false, tokenPresent: false, credentialHelperIsBot: false })).toBe('explain');
   });
 });
