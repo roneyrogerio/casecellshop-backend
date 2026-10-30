@@ -354,14 +354,14 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
   - sem push forçado nem deleção;
   - merge só por merge commit.
 - **Os agentes agem como a conta `honeyforge-bot`,** colaboradora com permissão de escrita.
-  - **No GitHub:** o servidor MCP oficial (`https://api.githubcopilot.com/mcp/`), registrado no escopo local de cada clone por `npm run setup:local`.
-  - **O `headersHelper` (`scripts/github-mcp-headers.ts`)** lê o token do bot no chaveiro a cada conexão e envia três cabeçalhos: o `X-MCP-Tools`, que faz o próprio servidor expor só as nove ferramentas do fluxo; o `X-MCP-Lockdown`; e o token.
+  - **No GitHub:** o servidor MCP oficial (`https://api.githubcopilot.com/mcp/`), declarado no `.mcp.json` versionado e liberado por `enabledMcpjsonServers`. Ele carrega sozinho em qualquer sessão aberta na pasta (terminal, VS Code ou nuvem) depois que a pessoa aceita, uma vez, a confiança da pasta: o Claude Code não roda helpers de um projeto não confiável.
+  - **O `X-MCP-Tools`, que faz o próprio servidor expor só as nove ferramentas do fluxo, e o `X-MCP-Lockdown`** ficam fixos no `.mcp.json`. O `headersHelper` (`scripts/github-mcp-headers.ts`) só acrescenta o token do bot, lido do chaveiro a cada conexão. Ele não pode vir de variável de ambiente, porque o Claude Code tira do helper as variáveis com TOKEN ou SECRET no nome.
   - **No push:** o `git push` sai pelo credential helper do bot (`scripts/git-credential-bot.ts`), configurado só neste repositório.
-  - **Na nuvem:** a sessão usa as ferramentas `mcp__github__*` que ela mesma entrega, logada como o bot pelo `/web-setup`.
+  - **Na nuvem:** o helper devolve `{}`, e a autenticação viria de um segredo de rede do ambiente, com o host `api.githubcopilot.com` liberado, porque ele não está na lista de rede padrão. Isso está **a validar** numa sessão real, e a nuvem não é usada antes da entrega.
 - **As permissões valem nos dois ambientes:** liberam as nove ferramentas por nome e negam por nome o merge, a aprovação e a escrita de arquivo. Também negam `gh`, `curl`, `wget` e `security`. O hook `github-guard` exige PR em rascunho e confere que o relatório do `reviewer` chega idêntico ao arquivo salvo.
 - **O merge segue a aprovação do dono:** o workflow `merge-on-approval.yml` liga o auto-merge, e o GitHub só mescla com o ruleset satisfeito. Nenhum agente faz merge.
 - **Os commits saem com a identidade git do dono,** como responsável. Os trailers `Co-Authored-By` e `Assisted-by` dizem qual papel, modelo, esforço e degrau produziu cada commit.
-- **O hook de ambiente (`npm run check:env`, no `SessionStart`)** diz em toda sessão o que falta e como resolver, sem bloquear.
+- **O hook de ambiente (`npm run check:env`, no `SessionStart`)** diz em toda sessão o que falta e como resolver, sem bloquear. Na máquina, ele mesmo configura a credencial do git quando o token existe. O que só uma pessoa faz, guardar o token e aceitar a confiança da pasta, ele explica.
 
 **Alternativas consideradas:**
 - **O token do dono:** é administrador e torna a aprovação impossível.
@@ -373,6 +373,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
   - *Contra:* é um wrapper nosso, que teríamos de manter.
   - *Contra:* não roda igual na nuvem, porque o `gh pr` falha lá.
   - Com a restrição feita no próprio servidor, o MCP oficial entrega a mesma restrição sem código nosso.
+- **Registro do MCP no escopo local de cada máquina:** não é automático e, por ter precedência sobre o projeto, esconderia o `.mcp.json`.
 - **MCP por Docker local, com lançador e hooks de papel e de formato:** a restrição pelo `X-MCP-Tools` e o `headersHelper` eliminam o contêiner, o lançador e o token no ambiente.
 - **GitHub App:** é o que o GitHub recomenda para serviços, com tokens de 1 hora por instalação. Mas exige gerar o JWT a partir de uma chave privada sem expiração, e a nuvem do Claude Code usa a conta conectada pelo `/web-setup`, não um App.
 - **Token fine-grained:** não alcança repositório pessoal de outro dono em que o bot é colaborador.
@@ -380,7 +381,8 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Trade-off.**
 - **O token clássico tem os escopos `repo` e `workflow` e não expira.** O alcance dele fica limitado aos repositórios em que o bot é colaborador e, aqui, ao ruleset.
-- **Na nuvem, o `X-MCP-Tools` não se aplica.** Lá, a restrição fica só nas permissões por nome.
+- **Na nuvem, a autenticação do MCP depende de um segredo de rede ainda não validado.** As permissões por nome valem lá de qualquer forma.
+- **No CI do GitHub Actions não rodam agentes.** Se rodarem, o `.mcp.json` com helper não serve, porque lá não há chaveiro nem confiança persistida, e o MCP vai por `--mcp-config` com um segredo do Actions.
 - **Com MCP, o texto do comentário passa pelo modelo,** e o hook `github-guard` é que garante a fidelidade do relatório.
 - **As regras de Bash comparam texto:** um agente que chamasse o `security` pelo caminho completo ainda leria o chaveiro (R11).
 
