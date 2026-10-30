@@ -2,7 +2,7 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado. Ele serve o catálogo do próprio banco, por um cache em memória; reserva o estoque de forma atômica no checkout; e envia os pedidos ao ERP de forma assíncrona, por uma outbox. O ERP é simulado dentro do processo, atrás da porta `ErpClient`.
 
-**Estado:** marco M1 (Fundação). O esqueleto roda, testa e passa no CI, com o contrato, as migrações, o ERP simulado, a telemetria e o compose. As regras de negócio entram nos marcos seguintes do [`ROADMAP.md`](.specs/project/ROADMAP.md).
+**Estado:** M1 (Fundação) e F1 (Fábrica v2) concluídos; o próximo marco é o M2 (Checkout). O esqueleto roda, testa e passa no CI, com o contrato, as migrações, o ERP simulado, a telemetria e o compose, e o fluxo de IA se verifica sozinho. As regras de negócio entram nos marcos seguintes do [`ROADMAP.md`](.specs/project/ROADMAP.md).
 
 ## Pré-requisitos
 
@@ -35,7 +35,7 @@ npm run test:unit   # só os unitários, sem Docker
 
 Os testes que tocam o banco rodam contra um PostgreSQL real, pelo Testcontainers: o que se prova é o comportamento do banco, como lock, transação e índice único, e um mock não o reproduz.
 
-Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos, no Node do `.nvmrc` e na 24.12.
+Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos, no Node do `.nvmrc` e na 24.12. `npm run verify` roda o mesmo sem os testes de integração, em cerca de um minuto, e é o que o `pre-push` do repositório executa; `npm run verify:full` inclui a integração, com o Docker.
 
 ## Critérios do M1
 
