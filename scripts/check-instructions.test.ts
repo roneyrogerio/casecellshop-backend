@@ -174,35 +174,66 @@ describe('FND-06 limites do Claude Code no que carrega sempre', () => {
   });
 });
 
-// Texto ASCII com exatamente `size` bytes e linhas curtas (80 bytes), bem abaixo de 500 linhas.
-function bytesOf(size: number): string {
-  const line = `${'a'.repeat(79)}\n`;
+// Texto ASCII com exatamente `size` bytes (= caracteres) em linhas de `lineLength`,
+// para ficar abaixo do teto de linhas enquanto passa do teto de tamanho.
+function textOf(size: number, lineLength = 80): string {
+  const line = `${'a'.repeat(lineLength - 1)}\n`;
   const full = Math.floor((size - 1) / line.length);
   const rest = size - full * line.length;
   return line.repeat(full) + 'a'.repeat(rest - 1) + '\n';
 }
 
-describe('FND-06 teto de bytes do SKILL.md e de linhas das regras', () => {
+describe('FND-06 teto de bytes do SKILL.md e de linhas e caracteres das regras', () => {
   it('FND-06 o texto de apoio tem os bytes e as linhas esperados', () => {
-    expect(Buffer.byteLength(bytesOf(15_000))).toBe(15_000);
-    expect(Buffer.byteLength(bytesOf(15_001))).toBe(15_001);
-    expect(bytesOf(15_001).split('\n').length - 1).toBeLessThan(500);
+    expect(Buffer.byteLength(textOf(12_000))).toBe(12_000);
+    expect(Buffer.byteLength(textOf(12_001))).toBe(12_001);
+    expect(textOf(12_001).split('\n').length - 1).toBeLessThan(500);
+    expect(textOf(40_000, 250)).toHaveLength(40_000);
+    expect(textOf(40_001, 250)).toHaveLength(40_001);
+    expect(textOf(40_001, 250).split('\n').length - 1).toBeLessThan(200);
   });
 
-  it('FND-06 acusa um SKILL.md com menos de 500 linhas mas com 15.001 bytes', () => {
+  // Trocado em relação ao commit 88e2097 (15.000/15.001 bytes): o critério passou a 12.000 bytes.
+  it('FND-06 acusa um SKILL.md com menos de 500 linhas mas com 12.001 bytes', () => {
     writeValidTree();
-    write('.claude/skills/x/SKILL.md', bytesOf(15_001));
+    write('.claude/skills/x/SKILL.md', textOf(12_001));
 
     const violations = checkInstructions(tree);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]).toContain(join('skills', 'x', 'SKILL.md'));
-    expect(violations[0]).toMatch(/bytes|15000|15\.000/);
+    expect(violations[0]).toContain('bytes');
   });
 
-  it('FND-06 não acusa um SKILL.md com exatamente 15.000 bytes', () => {
+  it('FND-06 não acusa um SKILL.md com exatamente 12.000 bytes', () => {
     writeValidTree();
-    write('.claude/skills/x/SKILL.md', bytesOf(15_000));
+    write('.claude/skills/x/SKILL.md', textOf(12_000));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 não acusa um arquivo de apoio de 20.000 bytes na pasta da skill', () => {
+    writeValidTree();
+    write('.claude/skills/x/SKILL.md', lines(50));
+    write('.claude/skills/x/process-changes.md', textOf(20_000));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 acusa uma regra de .claude/rules/ com menos de 200 linhas mas com 40.001 caracteres', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', textOf(40_001, 250));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('rules', 'area.md'));
+    expect(violations[0]).toContain('caracteres');
+  });
+
+  it('FND-06 não acusa uma regra de .claude/rules/ com exatamente 40.000 caracteres', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', textOf(40_000, 250));
 
     expect(checkInstructions(tree)).toEqual([]);
   });
