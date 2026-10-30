@@ -1,11 +1,11 @@
 // headersHelper do servidor MCP oficial do GitHub (AI-08). O Claude Code roda
-// este comando a cada conexão e usa a saída como cabeçalhos: o token do bot sai
-// do chaveiro só para a conexão, e o próprio servidor do GitHub passa a expor só
+// este comando a cada conexão e usa a saída como cabeçalhos: o token da
+// identidade configurada no clone (AI-14) sai só para a conexão, e o próprio servidor do GitHub passa a expor só
 // as ferramentas da lista. Merge, aprovação e escrita de arquivo não existem
 // para o agente pelo MCP. O token ainda é legível por quem roda código nesta
 // máquina (R11): a contenção do chaveiro não é desta peça.
-import { pathToFileURL } from 'node:url';
-import { readBotToken } from './lib/bot-token.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readIdentity, readToken } from './lib/identity.ts';
 
 export const GITHUB_TOOLS = [
   'get_me',
@@ -43,9 +43,10 @@ export function headersFor(env: { remote: boolean }, token: string | undefined):
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
-  const headers = headersFor({ remote }, remote ? undefined : readBotToken());
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const headers = headersFor({ remote }, remote ? undefined : readToken(readIdentity(root), root));
   if (!headers) {
-    process.stderr.write('Token do bot não encontrado no chaveiro: veja o diagnóstico de início de sessão (npm run check:env).\n');
+    process.stderr.write('Sem identidade configurada ou sem token: veja o diagnóstico de início de sessão (npm run check:env).\n');
     process.exit(1);
   }
   process.stdout.write(JSON.stringify(headers));

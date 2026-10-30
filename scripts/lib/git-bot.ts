@@ -26,3 +26,9 @@ export function commitHookInstalled(root: string): boolean {
 export function installCommitHook(root: string): void {
   spawnSync('git', ['-C', root, 'config', '--local', 'core.hooksPath', '.githooks'], { encoding: 'utf8' });
 }
+
+// Modo self (AI-14): tira o helper do projeto e o valor vazio que zerava os
+// helpers do sistema, para o push voltar a usar a credencial da máquina.
+export function removeGitBot(root: string): void {
+  spawnSync('git', ['-C', root, 'config', '--local', '--unset-all', 'credential.helper'], { encoding: 'utf8' });
+}
