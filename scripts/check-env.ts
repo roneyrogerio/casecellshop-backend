@@ -161,19 +161,31 @@ async function githubLogin(remote: boolean, token: string | undefined): Promise<
   return tokenLogin(token);
 }
 
-// O login que o token devolve na API do GitHub, ou null sem token, com token
-// recusado ou sem rede.
-export async function tokenLogin(token: string | undefined): Promise<string | null> {
-  if (!token) return null;
+export type TokenCheck = { result: 'missing' } | { result: 'valid'; login: string } | { result: 'refused' } | { result: 'unreachable' };
+
+// Só o 401 prova que o token é ruim. Rede fora, 5xx e 403 (que pode ser limite
+// de taxa) só dizem que não deu para conferir, e o setup não pode apagar um
+// token bom por isso.
+export async function checkToken(token: string | undefined, deps: { fetch?: typeof fetch } = {}): Promise<TokenCheck> {
+  if (!token) return { result: 'missing' };
   try {
-    const response = await fetch('https://api.github.com/user', {
+    const response = await (deps.fetch ?? fetch)('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(8000),
     });
-    return response.ok ? ((await response.json()) as { login?: string }).login ?? null : null;
+    if (response.status === 401) return { result: 'refused' };
+    if (!response.ok) return { result: 'unreachable' };
+    const login = ((await response.json()) as { login?: string }).login;
+    return login ? { result: 'valid', login } : { result: 'unreachable' };
   } catch {
-    return null;
+    return { result: 'unreachable' };
   }
+}
+
+// O login que o token devolve na API do GitHub, ou null em qualquer outro caso.
+export async function tokenLogin(token: string | undefined): Promise<string | null> {
+  const check = await checkToken(token);
+  return check.result === 'valid' ? check.login : null;
 }
 
 export async function collectFacts(root: string): Promise<Facts> {

@@ -7,7 +7,7 @@
 // novo sem efeito colateral, e é assim que se troca um token vencido.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { collectFacts, diagnose, report, tokenLogin } from './check-env.ts';
+import { checkToken, collectFacts, diagnose, report, type TokenCheck } from './check-env.ts';
 import { configureGitBot, installCommitHook, removeGitBot } from './lib/git-bot.ts';
 import {
   defaultKeychainService,
@@ -114,13 +114,15 @@ async function askInTerminal(): Promise<{ identity: Identity } | { error: string
   }
 }
 
-// O chaveiro do sistema pergunta o token direto no terminal, sem eco. Apaga o
-// item antigo antes, para não ficarem dois itens com o mesmo serviço.
-function storeTokenInteractively(identity: Extract<Identity, { mode: 'bot' }>): boolean {
+// O chaveiro do sistema pergunta o token direto no terminal, sem eco. No
+// update, o -U atualiza o item no lugar: se a pessoa cancelar o prompt, o token
+// antigo continua lá. Só o replace (token de outra conta, depois de confirmado)
+// apaga o item antes, porque a conta gravada nele é outra.
+function storeTokenInteractively(identity: Extract<Identity, { mode: 'bot' }>, mode: 'update' | 'replace'): boolean {
   console.log(`Cole o token clássico de ${identity.login} (escopos repo e workflow) quando o chaveiro pedir.`);
   if (process.platform === 'darwin') {
-    spawnSync('security', ['delete-generic-password', '-s', identity.keychainService], { stdio: 'ignore' });
-    const added = spawnSync('security', ['add-generic-password', '-s', identity.keychainService, '-a', identity.login, '-w'], { stdio: 'inherit' });
+    if (mode === 'replace') spawnSync('security', ['delete-generic-password', '-s', identity.keychainService], { stdio: 'ignore' });
+    const added = spawnSync('security', ['add-generic-password', '-U', '-s', identity.keychainService, '-a', identity.login, '-w'], { stdio: 'inherit' });
     return added.status === 0;
   }
   const stored = spawnSync('secret-tool', ['store', `--label=${identity.login}`, 'service', identity.keychainService], { stdio: 'inherit' });
@@ -142,30 +144,75 @@ async function storeTokenInFile(identity: Extract<Identity, { mode: 'bot' }>): P
   return true;
 }
 
-async function setupBot(root: string, identity: Extract<Identity, { mode: 'bot' }>, store: TokenStore): Promise<boolean> {
-  const login = await tokenLogin(readToken(identity, root));
-  if (login !== identity.login) {
-    console.log(login ? `O token guardado é de ${login}, não de ${identity.login}.` : `Não há token válido de ${identity.login} guardado.`);
-    if (store === 'system') {
-      const status = keychainStatus();
-      if (status !== 'ok') {
-        console.error(keychainHelp(status));
-        return false;
-      }
-    }
-    const stored = store === 'file' ? await storeTokenInFile(identity) : storeTokenInteractively(identity);
-    if (!stored) {
-      console.error(store === 'file' ? 'O token não foi gravado. Rode o comando de novo.' : 'O chaveiro não guardou o token. Rode o comando de novo.');
+export interface SetupBotDeps {
+  readToken: () => string | undefined;
+  checkToken: (token: string | undefined) => Promise<TokenCheck>;
+  keychainStatus: () => 'ok' | 'missing-tool' | 'no-service';
+  storeToken: (mode: 'update' | 'replace') => Promise<boolean>;
+  confirm: (message: string) => Promise<boolean>;
+  interactive: boolean;
+  installHelper: () => void;
+  log: (message: string) => void;
+}
+
+// Quatro caminhos, conforme o que o GitHub diz do token guardado: válido da
+// conta, segue sem tocar nele; ausente ou recusado, pede o novo; de outra
+// conta, só troca com confirmação; sem conferência, não mexe em nada. O helper
+// do projeto só entra depois de um token aceito.
+export async function setupBot(
+  _root: string,
+  identity: Extract<Identity, { mode: 'bot' }>,
+  store: TokenStore,
+  deps: SetupBotDeps,
+): Promise<boolean> {
+  const current = await deps.checkToken(deps.readToken());
+  if (current.result === 'unreachable') {
+    deps.log('Não deu para conferir o token no GitHub (sem rede, GitHub fora do ar ou limite de taxa). Nada foi alterado no chaveiro; rode o setup de novo quando a rede voltar.');
+    return false;
+  }
+  if (current.result === 'valid' && current.login === identity.login) {
+    deps.installHelper();
+    return true;
+  }
+  let mode: 'update' | 'replace' = 'update';
+  if (current.result === 'valid') {
+    const question = `O token guardado em ${identity.keychainService} é de ${current.login}, não de ${identity.login}.`;
+    if (!deps.interactive) {
+      deps.log(`${question} Nada foi alterado. Se o item é de outro uso, escolha outro com --keychain.`);
       return false;
     }
-    const confirmed = await tokenLogin(readToken(identity, root));
-    if (confirmed !== identity.login) {
-      console.error(confirmed ? `O token novo é de ${confirmed}, não de ${identity.login}.` : 'O GitHub recusou o token novo (ou não houve rede para conferir).');
+    if (!(await deps.confirm(`${question} Trocar pelo token de ${identity.login}?`))) {
+      deps.log('Nada foi alterado.');
+      return false;
+    }
+    mode = 'replace';
+  } else {
+    deps.log(current.result === 'refused' ? `O token guardado de ${identity.login} foi recusado pelo GitHub (vencido ou revogado).` : `Não há token de ${identity.login} guardado.`);
+  }
+  if (store === 'system') {
+    const status = deps.keychainStatus();
+    if (status !== 'ok') {
+      deps.log(keychainHelp(status));
       return false;
     }
   }
-  configureGitBot(root);
+  if (!(await deps.storeToken(mode))) {
+    deps.log(store === 'file' ? 'O token não foi gravado. Rode o comando de novo.' : 'O chaveiro não guardou o token. Rode o comando de novo.');
+    return false;
+  }
+  const confirmed = await deps.checkToken(deps.readToken());
+  if (confirmed.result !== 'valid' || confirmed.login !== identity.login) {
+    deps.log(confirmed.result === 'valid' ? `O token novo é de ${confirmed.login}, não de ${identity.login}.` : 'O GitHub não aceitou o token novo (ou não deu para conferir).');
+    return false;
+  }
+  deps.installHelper();
   return true;
+}
+
+async function confirmInTerminal(message: string): Promise<boolean> {
+  const { default: select } = await import('@inquirer/select');
+  const answer = await select({ message, choices: [{ value: 'nao', name: 'Não, manter o token guardado' }, { value: 'sim', name: 'Sim, trocar' }] });
+  return answer === 'sim';
 }
 
 async function main(): Promise<number> {
@@ -191,7 +238,18 @@ async function main(): Promise<number> {
     const store = requested ?? readTokenStore(root);
     writeTokenStore(root, store);
     if (store === 'file') console.log(`O token fica em ${tokenFilePath(identity.keychainService)}.`);
-    if (!(await setupBot(root, identity, store))) return 1;
+    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    const ok = await setupBot(root, identity, store, {
+      readToken: () => readToken(identity, root),
+      checkToken: (token) => checkToken(token),
+      keychainStatus: () => keychainStatus(),
+      storeToken: (mode) => (store === 'file' ? storeTokenInFile(identity) : Promise.resolve(storeTokenInteractively(identity, mode))),
+      confirm: confirmInTerminal,
+      interactive,
+      installHelper: () => configureGitBot(root),
+      log: (message) => console.log(message),
+    });
+    if (!ok) return 1;
   } else {
     writeTokenStore(root, 'system');
     removeGitBot(root);
