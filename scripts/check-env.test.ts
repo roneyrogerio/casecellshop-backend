@@ -19,6 +19,8 @@ interface Facts {
   identity: Identity | undefined;
   mcpRegistered: boolean;
   commitHookInstalled: boolean;
+  tokenStore?: 'system' | 'file';
+  keychainStatus?: 'ok' | 'missing-tool' | 'no-service';
 }
 
 interface Diagnosis {
@@ -325,6 +327,92 @@ describe('AI-14 diagnóstico no modo self', () => {
 
     expect(found.some((entry) => entry.notice === true && entry.ok)).toBe(true);
     expect(found.some((entry) => !entry.ok)).toBe(true);
+  });
+});
+
+describe('AI-14 diagnóstico do chaveiro do sistema, no modo bot', () => {
+  const fixes = (facts: Facts): string[] => failures(facts).map((entry) => entry.fix ?? '');
+
+  it.each([
+    ['token ausente (null)', { githubLogin: null }],
+    ['login diferente do configurado', { githubLogin: 'outra-conta' }],
+  ] as [string, Partial<Facts>][])('AI-14 sem o secret-tool (%s) a correção cita libsecret-tools', (_label, change) => {
+    const found = fixes({ ...LOCAL_OK, ...change, tokenStore: 'system', keychainStatus: 'missing-tool' });
+
+    expect(found.some((fix) => fix.includes('libsecret-tools'))).toBe(true);
+  });
+
+  it.each([
+    ['token ausente (null)', { githubLogin: null }],
+    ['login diferente do configurado', { githubLogin: 'outra-conta' }],
+  ] as [string, Partial<Facts>][])(
+    'AI-14 sem Secret Service (%s) a correção cita --identity self e --token-store file',
+    (_label, change) => {
+      const found = fixes({ ...LOCAL_OK, ...change, tokenStore: 'system', keychainStatus: 'no-service' });
+
+      expect(found.some((fix) => fix.includes('--identity self') && fix.includes('--token-store file'))).toBe(true);
+    },
+  );
+
+  it('AI-14 sem tokenStore informado vale o do sistema (a ajuda do chaveiro aparece)', () => {
+    const found = fixes({ ...LOCAL_OK, githubLogin: null, keychainStatus: 'missing-tool' });
+
+    expect(found.some((fix) => fix.includes('libsecret-tools'))).toBe(true);
+  });
+
+  // Controles negativos: com o chaveiro funcionando, ou com o arquivo escolhido, a ajuda do chaveiro não cabe.
+  it('AI-14 com o chaveiro ok, a correção não cita libsecret-tools nem --token-store file', () => {
+    const found = fixes({ ...LOCAL_OK, githubLogin: null, tokenStore: 'system', keychainStatus: 'ok' });
+
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.some((fix) => fix.includes('libsecret-tools') || fix.includes('--token-store file'))).toBe(false);
+  });
+
+  it('AI-14 com o token em arquivo, a falta do secret-tool não importa: a correção não cita libsecret-tools', () => {
+    const found = fixes({ ...LOCAL_OK, githubLogin: null, tokenStore: 'file', keychainStatus: 'missing-tool' });
+
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.some((fix) => fix.includes('libsecret-tools'))).toBe(false);
+  });
+
+  it('AI-14 com tudo certo, o estado do chaveiro não gera falha', () => {
+    expect(failures({ ...LOCAL_OK, tokenStore: 'system', keychainStatus: 'ok' })).toEqual([]);
+  });
+});
+
+describe('AI-14 aviso do token em arquivo, no modo bot', () => {
+  const fileNotices = (facts: Facts): Diagnosis[] =>
+    diagnose(facts).filter((entry) => entry.notice === true && /arquivo/i.test(text(entry)));
+
+  it('AI-14 tokenStore file avisa, sem contar como falha, que o token está em arquivo não cifrado', () => {
+    const facts: Facts = { ...LOCAL_OK, tokenStore: 'file' };
+
+    const notices = fileNotices(facts);
+
+    expect(notices.length).toBeGreaterThan(0);
+    expect(notices.every((entry) => entry.ok)).toBe(true);
+    expect(notices.some((entry) => /não cifrado/i.test(text(entry)))).toBe(true);
+    expect(failures(facts)).toEqual([]);
+  });
+
+  it('AI-14 o aviso do arquivo aparece no relatório, que continua pronto', () => {
+    const out = report(diagnose({ ...LOCAL_OK, tokenStore: 'file' }));
+
+    expect(out.startsWith('Ambiente pronto')).toBe(true);
+    expect(out).toMatch(/não cifrado/i);
+  });
+
+  it('AI-14 o aviso continua aparecendo quando há falhas', () => {
+    const found = diagnose({ ...LOCAL_OK, tokenStore: 'file', dockerRunning: false });
+
+    expect(found.some((entry) => !entry.ok)).toBe(true);
+    expect(fileNotices({ ...LOCAL_OK, tokenStore: 'file', dockerRunning: false }).length).toBeGreaterThan(0);
+  });
+
+  it('AI-14 controle: com tokenStore system ou ausente, nenhum aviso sobre arquivo', () => {
+    expect(fileNotices({ ...LOCAL_OK, tokenStore: 'system' })).toEqual([]);
+    expect(fileNotices(LOCAL_OK)).toEqual([]);
+    expect(report(diagnose({ ...LOCAL_OK, tokenStore: 'system' }))).not.toMatch(/não cifrado/i);
   });
 });
 

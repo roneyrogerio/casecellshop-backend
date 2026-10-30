@@ -6,7 +6,7 @@ import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
 import { isolatedEnv, localConfig, makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
 
 type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
-type Parsed = { identity: Identity } | { error: string };
+type Parsed = { identity: Identity; tokenStore?: 'system' | 'file' } | { error: string };
 
 const scriptPath = join(import.meta.dirname, 'setup-local.ts');
 
@@ -24,6 +24,7 @@ let resolveIdentity: (argv: string[], configured: Identity | undefined, interact
   error: 'módulo não carregado',
 });
 let promptIdentity: (ask: Ask) => Promise<Parsed> = () => Promise.resolve({ error: 'módulo não carregado' });
+let keychainHelp: (status: 'missing-tool' | 'no-service') => string = () => '';
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 // Só importa se a guarda existir: o módulo antigo executava o setup inteiro no import.
@@ -33,11 +34,13 @@ beforeAll(async () => {
     parseSetupArgs: typeof parseSetupArgs;
     resolveIdentity?: typeof resolveIdentity;
     promptIdentity?: typeof promptIdentity;
+    keychainHelp?: typeof keychainHelp;
   };
   parseSetupArgs = mod.parseSetupArgs;
   // Ausentes até a implementação existir: o teste falha na asserção, não na importação.
   if (mod.resolveIdentity) resolveIdentity = mod.resolveIdentity;
   if (mod.promptIdentity) promptIdentity = mod.promptIdentity;
+  if (mod.keychainHelp) keychainHelp = mod.keychainHelp;
 });
 
 afterEach(() => {
@@ -316,4 +319,104 @@ describe('AI-14 o CLI do setup:local', () => {
     expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
     expect(localConfig(dir, 'casecellshop.botLogin')).toBeUndefined();
   }, 30_000);
+});
+
+const USAGE_TOKEN_STORE = '--token-store file';
+
+describe('AI-14 parseSetupArgs, --token-store', () => {
+  const BOT_ARGS = ['--identity', 'bot', '--login', 'minha-conta'];
+  const BOT_IDENTITY: Identity = {
+    mode: 'bot',
+    login: 'minha-conta',
+    keychainService: 'casecellshop-minha-conta',
+  };
+
+  it('AI-14 --token-store file no modo bot devolve tokenStore file', () => {
+    expect(parseSetupArgs([...BOT_ARGS, '--token-store', 'file'])).toEqual({
+      identity: BOT_IDENTITY,
+      tokenStore: 'file',
+    });
+  });
+
+  it('AI-14 --token-store system no modo bot devolve tokenStore system', () => {
+    expect(parseSetupArgs([...BOT_ARGS, '--token-store', 'system'])).toEqual({
+      identity: BOT_IDENTITY,
+      tokenStore: 'system',
+    });
+  });
+
+  it('AI-14 a forma --token-store=file também vale, em qualquer ordem', () => {
+    expect(parseSetupArgs(['--token-store=file', ...BOT_ARGS, '--keychain=item-x'])).toEqual({
+      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'item-x' },
+      tokenStore: 'file',
+    });
+  });
+
+  // Controle: sem o argumento o resultado não ganha a chave, para não mudar o que já valia.
+  it('AI-14 sem --token-store o resultado é exatamente { identity }', () => {
+    const parsed = parseSetupArgs(BOT_ARGS);
+
+    expect(parsed).toEqual({ identity: BOT_IDENTITY });
+    expect('tokenStore' in parsed).toBe(false);
+  });
+
+  it('AI-14 --token-store no modo self devolve erro com o uso', () => {
+    expectUsageError(['--identity', 'self', '--token-store', 'file']);
+    expectUsageError(['--identity', 'self', '--token-store', 'system']);
+  });
+
+  it('AI-14 --token-store com outro valor ou sem valor devolve erro com o uso', () => {
+    expectUsageError([...BOT_ARGS, '--token-store', 'arquivo']);
+    expectUsageError([...BOT_ARGS, '--token-store', '']);
+    expectUsageError([...BOT_ARGS, '--token-store']);
+  });
+
+  it('AI-14 o texto de uso cita --token-store file', () => {
+    const parsed = parseSetupArgs([]);
+
+    expect('error' in parsed ? parsed.error : '').toContain(USAGE_TOKEN_STORE);
+  });
+
+  it('AI-14 resolveIdentity repassa o --token-store do parseSetupArgs', () => {
+    const argv = [...BOT_ARGS, '--token-store', 'file'];
+
+    expect(resolveIdentity(argv, undefined, false)).toEqual({ identity: BOT_IDENTITY, tokenStore: 'file' });
+    expect(resolveIdentity(argv, undefined, false)).toEqual(parseSetupArgs(argv));
+  });
+
+  it('AI-14 o CLI com --identity self e --token-store file mostra o uso, sai com código diferente de 0 e não grava nada', () => {
+    expect(runsOnlyWhenDirect()).toBe(true);
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self', '--token-store', 'file']);
+
+    expect(result.status).not.toBe(0);
+    expect(result.status).not.toBeNull();
+    expect(`${result.stdout}${result.stderr}`).toContain(USAGE_TOKEN_STORE);
+    expect(localConfig(dir, 'casecellshop.identity')).toBeUndefined();
+    expect(localConfig(dir, 'casecellshop.tokenStore')).toBeUndefined();
+  }, 30_000);
+});
+
+describe('AI-14 keychainHelp', () => {
+  it('AI-14 missing-tool cita o pacote libsecret-tools (Debian e Ubuntu)', () => {
+    const help = keychainHelp('missing-tool');
+
+    expect(help).toContain('libsecret-tools');
+    expect(help).toMatch(/Debian/);
+    expect(help).toMatch(/Ubuntu/);
+  });
+
+  it('AI-14 no-service cita o modo self e o arquivo, e avisa que o arquivo não é cifrado', () => {
+    const help = keychainHelp('no-service');
+
+    expect(help).toContain('--identity self');
+    expect(help).toContain('--token-store file');
+    expect(help).toMatch(/não (é|fica|está) cifrad/i);
+  });
+
+  it('AI-14 no-service não manda instalar o pacote (controle: as duas ajudas são diferentes)', () => {
+    expect(keychainHelp('no-service')).not.toBe(keychainHelp('missing-tool'));
+    expect(keychainHelp('missing-tool')).not.toContain('--token-store file');
+  });
 });

@@ -1,19 +1,32 @@
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, git, makeTempDir } from '../../test/helpers/git-sandbox.ts';
 import { isolatedEnv, localConfig, makeRepo, setFakeCredential } from '../../test/helpers/identity-sandbox.ts';
 
 type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
+type TokenStore = 'system' | 'file';
+type Env = Record<string, string | undefined>;
+type KeychainStatus = 'ok' | 'missing-tool' | 'no-service';
+type RunResult = { status: number | null; stderr: string; error?: { code?: string } };
 
 interface IdentityModule {
+  readTokenStore: (root: string) => TokenStore;
+  writeTokenStore: (root: string, store: TokenStore) => void;
+  tokenFilePath: (service: string, env?: Env) => string;
+  writeTokenFile: (service: string, token: string, env?: Env) => string;
+  keychainStatus: (deps?: {
+    platform?: NodeJS.Platform;
+    run?: (cmd: string, args: string[]) => RunResult;
+  }) => KeychainStatus;
   readIdentity: (root: string) => Identity | undefined;
   writeIdentity: (root: string, identity: Identity) => void;
   defaultKeychainService: (login: string) => string;
   readToken: (
     identity: Identity | undefined,
     root: string,
-    deps?: { keychain?: (service: string) => string | undefined },
+    deps?: { keychain?: (service: string) => string | undefined; env?: Env },
   ) => string | undefined;
 }
 
@@ -221,4 +234,234 @@ describe('AI-14 readToken', () => {
 
     expect(mod.readToken({ mode: 'self' }, dir)).toBeUndefined();
   }, 10_000);
+});
+
+describe('AI-14 readTokenStore e writeTokenStore, no --local', () => {
+  it('AI-14 sem a chave o armazenamento é o do sistema', () => {
+    expect(mod.readTokenStore(makeRepo())).toBe('system');
+  });
+
+  it('AI-14 casecellshop.tokenStore=file lê file', () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.tokenStore', 'file');
+
+    expect(mod.readTokenStore(dir)).toBe('file');
+  });
+
+  it.each(['system', 'arquivo', 'FILE', ''])('AI-14 o valor %j da chave vale como o do sistema', (value) => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.tokenStore', value);
+
+    expect(mod.readTokenStore(dir)).toBe('system');
+  });
+
+  it('AI-14 a chave só no global não vale: continua o do sistema', () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--file', process.env.GIT_CONFIG_GLOBAL ?? '', 'casecellshop.tokenStore', 'file');
+
+    expect(mod.readTokenStore(dir)).toBe('system');
+  });
+
+  it('AI-14 writeTokenStore file grava a chave no --local e readTokenStore devolve file', () => {
+    const dir = makeRepo();
+
+    mod.writeTokenStore(dir, 'file');
+
+    expect(localConfig(dir, 'casecellshop.tokenStore')).toBe('file');
+    expect(mod.readTokenStore(dir)).toBe('file');
+  });
+
+  it('AI-14 writeTokenStore system remove a chave', () => {
+    const dir = makeRepo();
+    mod.writeTokenStore(dir, 'file');
+
+    mod.writeTokenStore(dir, 'system');
+
+    expect(localConfig(dir, 'casecellshop.tokenStore')).toBeUndefined();
+    expect(mod.readTokenStore(dir)).toBe('system');
+  });
+
+  it('AI-14 writeTokenStore system, com a chave ausente, não falha', () => {
+    const dir = makeRepo();
+
+    expect(() => {
+      mod.writeTokenStore(dir, 'system');
+    }).not.toThrow();
+    expect(localConfig(dir, 'casecellshop.tokenStore')).toBeUndefined();
+  });
+});
+
+describe('AI-14 tokenFilePath', () => {
+  it('AI-14 com XDG_CONFIG_HOME o arquivo fica em $XDG_CONFIG_HOME/casecellshop/<item>', () => {
+    const xdg = makeTempDir('xdg-');
+
+    expect(mod.tokenFilePath('item-x', { XDG_CONFIG_HOME: xdg, HOME: '/nao/usar' })).toBe(
+      join(xdg, 'casecellshop', 'item-x'),
+    );
+  });
+
+  it('AI-14 sem XDG_CONFIG_HOME o arquivo fica em ~/.config/casecellshop/<item>', () => {
+    const home = makeTempDir('home-');
+
+    expect(mod.tokenFilePath('item-x', { HOME: home })).toBe(join(home, '.config', 'casecellshop', 'item-x'));
+  });
+
+  it('AI-14 XDG_CONFIG_HOME vazio vale como ausente', () => {
+    const home = makeTempDir('home-');
+
+    expect(mod.tokenFilePath('item-x', { XDG_CONFIG_HOME: '', HOME: home })).toBe(
+      join(home, '.config', 'casecellshop', 'item-x'),
+    );
+  });
+
+  it.each(['../x', '..', '../../etc/passwd', 'a/b', 'a\\b', '..\\x'])(
+    'AI-14 o item %j não sai da pasta casecellshop',
+    (service) => {
+      const xdg = makeTempDir('xdg-');
+
+      const path = mod.tokenFilePath(service, { XDG_CONFIG_HOME: xdg });
+
+      expect(dirname(path)).toBe(join(xdg, 'casecellshop'));
+      const name = path.slice(dirname(path).length + 1);
+      expect(name).not.toBe('');
+      expect(name).not.toMatch(/[/\\]/);
+      expect(name).not.toContain('..');
+    },
+  );
+
+  it('AI-14 itens diferentes e comuns dão arquivos diferentes (controle)', () => {
+    const env = { XDG_CONFIG_HOME: makeTempDir('xdg-') };
+
+    expect(mod.tokenFilePath('casecellshop-a', env)).not.toBe(mod.tokenFilePath('casecellshop-b', env));
+    expect(mod.tokenFilePath('casecellshop-a', env)).toBe(join(env.XDG_CONFIG_HOME, 'casecellshop', 'casecellshop-a'));
+  });
+});
+
+describe('AI-14 writeTokenFile', () => {
+  it('AI-14 cria a pasta, grava o token sem quebra de linha a mais e devolve o caminho', () => {
+    const xdg = makeTempDir('xdg-');
+    const env = { XDG_CONFIG_HOME: join(xdg, 'ainda-nao-existe') };
+
+    const path = mod.writeTokenFile('item-x', 'ghp_segredo', env);
+
+    expect(path).toBe(mod.tokenFilePath('item-x', env));
+    expect(readFileSync(path, 'utf8')).toBe('ghp_segredo');
+  });
+
+  // Condição de ambiente: o Windows não tem bits de permissão POSIX, então o modo 600 não é verificável lá.
+  it.skipIf(process.platform === 'win32')('AI-14 o arquivo fica com permissão 600', () => {
+    const env = { XDG_CONFIG_HOME: makeTempDir('xdg-') };
+
+    const path = mod.writeTokenFile('item-x', 'ghp_segredo', env);
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  // Condição de ambiente: o Windows não tem bits de permissão POSIX, então o modo 600 não é verificável lá.
+  it.skipIf(process.platform === 'win32')('AI-14 regravar um arquivo que estava com permissão aberta o deixa em 600', () => {
+    const env = { XDG_CONFIG_HOME: makeTempDir('xdg-') };
+    const path = mod.tokenFilePath('item-x', env);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'velho', { mode: 0o644 });
+
+    mod.writeTokenFile('item-x', 'novo', env);
+
+    expect(readFileSync(path, 'utf8')).toBe('novo');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('AI-14 readToken com o token em arquivo', () => {
+  function fileRepo(): { dir: string; env: Env } {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.tokenStore', 'file');
+    return { dir, env: { XDG_CONFIG_HOME: makeTempDir('xdg-') } };
+  }
+
+  it('AI-14 tokenStore file lê o arquivo do item e não consulta o chaveiro', () => {
+    const { dir, env } = fileRepo();
+    mod.writeTokenFile(BOT.keychainService, 'tok-arquivo', env);
+    const keychain = vi.fn<(service: string) => string | undefined>(() => 'do-chaveiro');
+
+    expect(mod.readToken(BOT, dir, { keychain, env })).toBe('tok-arquivo');
+    expect(keychain).not.toHaveBeenCalled();
+  });
+
+  it('AI-14 tokenStore file apara o conteúdo do arquivo', () => {
+    const { dir, env } = fileRepo();
+    const path = mod.tokenFilePath(BOT.keychainService, env);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '  tok-arquivo\n');
+
+    expect(mod.readToken(BOT, dir, { keychain: () => 'do-chaveiro', env })).toBe('tok-arquivo');
+  });
+
+  it('AI-14 tokenStore file com arquivo ausente devolve undefined, sem cair no chaveiro', () => {
+    const { dir, env } = fileRepo();
+    const keychain = vi.fn<(service: string) => string | undefined>(() => 'do-chaveiro');
+
+    expect(mod.readToken(BOT, dir, { keychain, env })).toBeUndefined();
+    expect(keychain).not.toHaveBeenCalled();
+  });
+
+  it('AI-14 tokenStore file com arquivo vazio devolve undefined', () => {
+    const { dir, env } = fileRepo();
+    const path = mod.tokenFilePath(BOT.keychainService, env);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '\n');
+
+    expect(mod.readToken(BOT, dir, { keychain: () => 'do-chaveiro', env })).toBeUndefined();
+  });
+
+  // Controle negativo: com o armazenamento do sistema, o arquivo existente é ignorado e vale o chaveiro.
+  it('AI-14 tokenStore system ignora o arquivo e usa o chaveiro', () => {
+    const dir = makeRepo();
+    const env = { XDG_CONFIG_HOME: makeTempDir('xdg-') };
+    mod.writeTokenFile(BOT.keychainService, 'tok-arquivo', env);
+    const keychain = vi.fn<(service: string) => string | undefined>(() => 'do-chaveiro');
+
+    expect(mod.readToken(BOT, dir, { keychain, env })).toBe('do-chaveiro');
+    expect(keychain).toHaveBeenCalledWith('casecellshop-minha-conta');
+  });
+
+  it('AI-14 modo self não lê o arquivo mesmo com tokenStore file', () => {
+    const { dir, env } = fileRepo();
+    mod.writeTokenFile(BOT.keychainService, 'tok-arquivo', env);
+    setFakeCredential(dir, 'tok-self');
+
+    expect(mod.readToken({ mode: 'self' }, dir, { env })).toBe('tok-self');
+  });
+});
+
+describe('AI-14 keychainStatus', () => {
+  const run = (result: RunResult) => vi.fn<(cmd: string, args: string[]) => RunResult>(() => result);
+
+  it('AI-14 no macOS o Chaveiro vale e nada é executado', () => {
+    const runner = run({ status: 1, stderr: 'qualquer coisa' });
+
+    expect(mod.keychainStatus({ platform: 'darwin', run: runner })).toBe('ok');
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('AI-14 no Linux sem o secret-tool (ENOENT) devolve missing-tool', () => {
+    const runner = run({ status: null, stderr: '', error: { code: 'ENOENT' } });
+
+    expect(mod.keychainStatus({ platform: 'linux', run: runner })).toBe('missing-tool');
+    expect(runner.mock.calls[0]?.[0]).toBe('secret-tool');
+  });
+
+  it.each([
+    'Cannot autolaunch D-Bus without X11 $DISPLAY',
+    'The name org.freedesktop.secrets was not provided by any .service files',
+  ])('AI-14 no Linux, com o secret-tool dizendo %j, devolve no-service', (stderr) => {
+    expect(mod.keychainStatus({ platform: 'linux', run: run({ status: 1, stderr }) })).toBe('no-service');
+  });
+
+  it('AI-14 no Linux, com o secret-tool respondendo status 0, devolve ok', () => {
+    expect(mod.keychainStatus({ platform: 'linux', run: run({ status: 0, stderr: '' }) })).toBe('ok');
+  });
+
+  it('AI-14 no Linux, status 1 sem erro de D-Bus (nada encontrado) devolve ok', () => {
+    expect(mod.keychainStatus({ platform: 'linux', run: run({ status: 1, stderr: '' }) })).toBe('ok');
+  });
 });
