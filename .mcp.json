@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "X-MCP-Tools": "get_me,pull_request_read,list_pull_requests,create_pull_request,update_pull_request,add_issue_comment,actions_list,actions_get,get_job_logs",
+        "X-MCP-Lockdown": "true"
+      },
+      "headersHelper": "node scripts/github-mcp-headers.ts"
+    }
+  }
+}

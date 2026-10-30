@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BOT_LOGIN, readBotToken } from './lib/bot-token.ts';
+import { configureGitBot, gitHelperIsBot } from './lib/git-bot.ts';
 
 export interface Facts {
   remote: boolean;
@@ -63,12 +64,12 @@ export function diagnose(facts: Facts): Diagnosis[] {
       {
         item: 'Push pelo credential helper do bot',
         ok: facts.credentialHelperIsBot,
-        fix: 'Rode npm run setup:local (configura o credential helper só neste repositório).',
+        fix: 'Rode npm run setup:local (configura o credential helper só neste repositório; o início de sessão faz isso sozinho quando o token existe).',
       },
       {
-        item: 'MCP do GitHub registrado neste clone',
+        item: 'Servidor github declarado no .mcp.json',
         ok: facts.mcpRegistered,
-        fix: 'Rode npm run setup:local (registra o MCP no escopo local, sem gravar o token).',
+        fix: 'O .mcp.json do repositório não declara o servidor github: restaure-o com git checkout -- .mcp.json e rode npm run setup:local. Se o Claude Code perguntar, aceite a confiança da pasta e o servidor github.',
       },
     );
   }
@@ -100,7 +101,9 @@ async function githubLogin(remote: boolean): Promise<string | null> {
 
 export async function collectFacts(root: string): Promise<Facts> {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
-  const helpers = run('git', ['-C', root, 'config', '--local', '--get-all', 'credential.helper']).out;
+  if (!remote && planGitSetup({ remote, tokenPresent: Boolean(readBotToken()), credentialHelperIsBot: gitHelperIsBot(root) }) === 'configure') {
+    configureGitBot(root);
+  }
   return {
     remote,
     nodeVersion: process.version,
@@ -108,10 +111,27 @@ export async function collectFacts(root: string): Promise<Facts> {
     depsInstalled: existsSync(join(root, 'node_modules', '.package-lock.json')),
     dockerRunning: run('docker', ['info'], 5000).ok,
     originUrl: run('git', ['-C', root, 'remote', 'get-url', '--push', 'origin']).out,
-    credentialHelperIsBot: helpers.includes('git-credential-bot'),
+    credentialHelperIsBot: remote || gitHelperIsBot(root),
     botLogin: await githubLogin(remote),
-    mcpRegistered: remote || run('claude', ['mcp', 'get', 'github']).ok,
+    mcpRegistered: declaresGithubServer(root),
   };
+}
+
+// O que o início de sessão pode resolver sozinho: a credencial do git, quando o
+// token existe. O resto (guardar o token, aceitar a confiança da pasta) só uma
+// pessoa faz, e o relatório explica.
+export function planGitSetup(facts: { remote: boolean; tokenPresent: boolean; credentialHelperIsBot: boolean }): 'configure' | 'skip' | 'explain' {
+  if (facts.remote || facts.credentialHelperIsBot) return 'skip';
+  return facts.tokenPresent ? 'configure' : 'explain';
+}
+
+function declaresGithubServer(root: string): boolean {
+  try {
+    const config = JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, unknown> };
+    return Boolean(config.mcpServers?.github);
+  } catch {
+    return false;
+  }
 }
 
 export function report(results: Diagnosis[]): string {
