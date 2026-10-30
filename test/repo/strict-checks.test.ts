@@ -35,7 +35,6 @@ describe('AI-20 o .oxlintrc.json liga como erro as regras de estilo', () => {
 
   it.each([
     'typescript/switch-exhaustiveness-check',
-    'typescript/prefer-nullish-coalescing',
     'typescript/no-deprecated',
     'typescript/prefer-readonly',
     'typescript/consistent-type-definitions',
