@@ -96,7 +96,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - Design de cache e performance da vitrine (`DOC-CAC`).
 - Catálogo com cache e sincronização, conforme o design.
 
-**Pronto quando:** `CAT-*` passam, com relógio controlado.
+**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro).
 
 ## M5 — Observabilidade e operação
 
