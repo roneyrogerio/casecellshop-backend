@@ -236,11 +236,9 @@ function text(entry: Diagnosis): string {
 const SETUP_BOT = 'npm run setup:local -- --identity bot --login';
 
 describe('AI-14 diagnóstico sem identidade', () => {
-  it.each([
-    ['local', LOCAL_OK],
-    ['nuvem', REMOTE_OK],
-  ] as [string, Facts][])('AI-14 sem identidade (%s) falha e a correção mostra os dois comandos', (_label, base) => {
-    const found = failures({ ...base, identity: undefined, githubLogin: null });
+  // Na nuvem a identidade é a conta do ambiente: o caso "nuvem" deste teste mudou de critério e está no bloco de baixo.
+  it('AI-14 sem identidade (local) falha e a correção mostra os dois comandos', () => {
+    const found = failures({ ...LOCAL_OK, identity: undefined, githubLogin: null });
 
     expect(found.some((entry) => (entry.fix ?? '').includes(SETUP_BOT) && (entry.fix ?? '').includes('--identity self'))).toBe(true);
   });
@@ -265,12 +263,6 @@ describe('AI-14 diagnóstico no modo bot', () => {
     const found = failures({ ...LOCAL_OK, githubLogin: null });
 
     expect(found.some((entry) => (entry.fix ?? '').includes(`${SETUP_BOT} minha-conta`))).toBe(true);
-  });
-
-  it('AI-14 na nuvem, login do token diferente do configurado falha e cita /web-setup', () => {
-    const found = failures({ ...REMOTE_OK, githubLogin: 'outra-conta' });
-
-    expect(found.some((entry) => (entry.fix ?? '').includes('/web-setup'))).toBe(true);
   });
 
   it('AI-14 no modo bot não há aviso de autoria', () => {
@@ -310,16 +302,14 @@ describe('AI-14 diagnóstico no modo self', () => {
     expect(failures({ ...SELF_REMOTE_OK, credentialHelperIsBot: true })).toEqual([]);
   });
 
-  it.each([
-    ['local', SELF_OK],
-    ['nuvem', SELF_REMOTE_OK],
-  ] as [string, Facts][])('AI-14 sempre avisa (%s), sem contar como falha, que a pessoa será autora e não poderá aprovar', (_label, base) => {
-    const notices = diagnose(base).filter((entry) => entry.notice === true);
+  // Na nuvem não há modo self: o aviso de autoria deixou de existir lá (bloco da nuvem, abaixo).
+  it('AI-14 sempre avisa (local), sem contar como falha, que a pessoa será autora e não poderá aprovar', () => {
+    const notices = diagnose(SELF_OK).filter((entry) => entry.notice === true);
 
     expect(notices.length).toBeGreaterThan(0);
     expect(notices.every((entry) => entry.ok)).toBe(true);
     expect(notices.some((entry) => /autor/i.test(text(entry)) && /aprov/i.test(text(entry)))).toBe(true);
-    expect(failures(base)).toEqual([]);
+    expect(failures(SELF_OK)).toEqual([]);
   });
 
   it('AI-14 o aviso continua aparecendo quando há falhas', () => {
@@ -327,6 +317,81 @@ describe('AI-14 diagnóstico no modo self', () => {
 
     expect(found.some((entry) => entry.notice === true && entry.ok)).toBe(true);
     expect(found.some((entry) => !entry.ok)).toBe(true);
+  });
+});
+
+describe('AI-14 diagnóstico na nuvem: a identidade é a conta conectada ao ambiente', () => {
+  const identities: [string, Identity | undefined][] = [
+    ['ausente', undefined],
+    ['bot', BOT_IDENTITY],
+    ['self', SELF_IDENTITY],
+  ];
+  const githubEntries = (facts: Facts): Diagnosis[] => diagnose(facts).filter((entry) => /github/i.test(text(entry)));
+
+  it.each(identities)('AI-14 na nuvem, com identidade %s, nenhum item cita setup:local', (_label, identity) => {
+    const scenarios: Facts[] = [
+      { ...REMOTE_OK, identity },
+      { ...REMOTE_OK, identity, githubLogin: null },
+      { ...REMOTE_OK, identity, githubLogin: 'outra-conta' },
+      { ...REMOTE_OK, identity, githubLogin: null, depsInstalled: false, dockerRunning: false, nodeVersion: 'v24.12.0' },
+    ];
+
+    for (const facts of scenarios) {
+      expect(JSON.stringify(diagnose(facts))).not.toContain('setup:local');
+    }
+  });
+
+  it.each(identities)('AI-14 na nuvem, com identidade %s e o GitHub respondendo, nenhum item falha', (_label, identity) => {
+    expect(failures({ ...REMOTE_OK, identity, githubLogin: 'conta-do-ambiente' })).toEqual([]);
+  });
+
+  it.each(identities)(
+    'AI-14 na nuvem, com identidade %s, o GitHub sem resposta é a única falha e a correção cita /web-setup',
+    (_label, identity) => {
+      const found = failures({ ...REMOTE_OK, identity, githubLogin: null });
+
+      expect(found).toHaveLength(1);
+      expect(found[0]?.item).toMatch(/github/i);
+      expect(found[0]?.fix ?? '').toContain('/web-setup');
+    },
+  );
+
+  it('AI-14 na nuvem há um item do GitHub, ok só quando githubLogin não é null', () => {
+    const ok = githubEntries({ ...REMOTE_OK, githubLogin: 'conta-do-ambiente' });
+    const broken = githubEntries({ ...REMOTE_OK, githubLogin: null });
+
+    expect(ok.length).toBeGreaterThan(0);
+    expect(ok.every((entry) => entry.ok)).toBe(true);
+    expect(broken.some((entry) => !entry.ok)).toBe(true);
+  });
+
+  it.each(['outra-conta', 'minha-conta', 'roneyrogerio'])(
+    'AI-14 na nuvem o login %j do GitHub nunca falha: a conta é a do ambiente, não a configurada',
+    (githubLogin) => {
+      for (const identity of [BOT_IDENTITY, SELF_IDENTITY, undefined]) {
+        expect(failures({ ...REMOTE_OK, identity, githubLogin })).toEqual([]);
+      }
+    },
+  );
+
+  it('AI-14 na nuvem não há aviso do modo self nem do token em arquivo', () => {
+    const scenarios: Facts[] = [
+      SELF_REMOTE_OK,
+      { ...REMOTE_OK, identity: SELF_IDENTITY, githubLogin: null },
+      { ...REMOTE_OK, tokenStore: 'file' },
+      { ...REMOTE_OK, identity: undefined },
+    ];
+
+    for (const facts of scenarios) {
+      expect(diagnose(facts).filter((entry) => entry.notice === true)).toEqual([]);
+      expect(report(diagnose(facts))).not.toMatch(/aprov|não cifrado|autora/i);
+    }
+  });
+
+  it('AI-14 controle: fora da nuvem, sem identidade, o diagnóstico continua falhando e citando setup:local', () => {
+    const found = failures({ ...LOCAL_OK, identity: undefined, githubLogin: null });
+
+    expect(found.some((entry) => (entry.fix ?? '').includes('setup:local'))).toBe(true);
   });
 });
 

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -318,6 +319,54 @@ describe('AI-14 o CLI do setup:local', () => {
     expect(`${result.stdout}${result.stderr}`).not.toContain(USAGE_BOT);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
     expect(localConfig(dir, 'casecellshop.botLogin')).toBeUndefined();
+  }, 30_000);
+});
+
+// Na sessão do Claude Code na nuvem a identidade é a conta do ambiente: o setup não se aplica e não grava nada.
+describe('AI-14 o CLI do setup:local na nuvem (CLAUDE_CODE_REMOTE=true)', () => {
+  const cloudEnv = (): Record<string, string> => isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' });
+
+  function savedKeys(dir: string): string {
+    const result = spawnSync('git', ['config', '--local', '--get-regexp', '^casecellshop\\.'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: isolatedEnv(),
+    });
+    return result.status === 0 ? result.stdout.trim() : '';
+  }
+
+  it.each([
+    ['sem argumentos', []],
+    ['com --identity self', ['--identity', 'self']],
+    ['com --identity bot --login', ['--identity', 'bot', '--login', 'minha-conta']],
+  ] as [string, string[]][])(
+    'AI-14 na nuvem, %s, diz que a identidade vem da conta do ambiente, sai com 0 e não grava nenhuma chave casecellshop.*',
+    (_label, args) => {
+      expect(runsOnlyWhenDirect()).toBe(true);
+      const dir = makeScriptsSandbox();
+
+      const result = runScript(dir, 'setup-local.ts', args, { env: cloudEnv() });
+
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toMatch(/nuvem/i);
+      expect(output).toMatch(/\/web-setup|GitHub App/);
+      expect(output).not.toContain(USAGE_BOT);
+      expect(savedKeys(dir)).toBe('');
+      expect(localConfig(dir, 'casecellshop.identity')).toBeUndefined();
+      expect(localConfig(dir, 'casecellshop.botLogin')).toBeUndefined();
+    },
+    30_000,
+  );
+
+  it('AI-14 controle: sem a variável, --identity self continua gravando o modo no clone', () => {
+    expect(runsOnlyWhenDirect()).toBe(true);
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], { env: isolatedEnv() });
+
+    expect(result.status).toBe(0);
+    expect(savedKeys(dir)).toContain('casecellshop.identity self');
   }, 30_000);
 });
 
