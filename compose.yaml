@@ -69,11 +69,12 @@ services:
     restart: unless-stopped
 
   # All-in-one em memória, sem arquivo de configuração: os traces somem ao derrubar o serviço.
+  # O OTLP/HTTP (4318) não tem autenticação e fica só na rede do compose: a API e o worker
+  # chegam nele por http://jaeger:4318, então a porta não é publicada no host.
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
     ports:
       - "${JAEGER_UI_PORT:-16686}:16686"
-      - "4318:4318"
     restart: unless-stopped
 
 volumes:
