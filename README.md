@@ -72,7 +72,7 @@ O código é escrito por agentes do Claude Code, e a confiança vem de verifica�
 
 **Configurar uma máquina** (terminal ou VS Code):
 
-1. Escolha, uma vez por clone, com que conta os agentes agem no GitHub. A escolha fica no `.git/config` do clone, fora do repositório:
+1. Rode `npm run setup:local` e responda às perguntas: com que conta os agentes agem no GitHub e, se for uma conta de máquina, o login e o token. A escolha fica no `.git/config` do clone, fora do repositório, e rodar o comando de novo reaproveita a escolha (é assim que se troca um token vencido). Também dá para passar a escolha direto:
    - **Conta de máquina (recomendado):** `npm run setup:local -- --identity bot --login <conta-do-bot>`. O comando pede o token clássico da conta (escopos `repo` e `workflow`) ao chaveiro do sistema, sem mostrá-lo, e o guarda no item `casecellshop-<conta>` (troque com `--keychain <item>`). Com uma conta separada, você aprova os PRs dos agentes.
    - **A sua própria conta:** `npm run setup:local -- --identity self`. Usa a credencial do GitHub que o git da máquina já tem. Os PRs saem no seu nome, e o GitHub não deixa o autor aprovar o próprio PR: com o ruleset atual, o merge trava.
 2. Abra o Claude Code na pasta do projeto e aceite a confiança da pasta, uma vez.
