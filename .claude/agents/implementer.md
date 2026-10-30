@@ -26,7 +26,9 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 
 ## Run
 
-Every check that `.github/workflows/ci.yml` runs (lint, `tsc`, tests, `openapi.yaml` up to date, spec limits and commit messages). Report done only when all of them pass.
+The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Report done only when all of them pass.
+
+The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:commits`) belong to the main session. If one of them fails, report it; never change its configuration (`commitlint.config.mjs`, `scripts/check-spec-limits.ts`) to make it pass.
 
 ## Never
 
@@ -36,7 +38,7 @@ Every check that `.github/workflows/ci.yml` runs (lint, `tsc`, tests, `openapi.y
 ## Report
 
 1. What changed, by file, and the criteria or findings it covers.
-2. The result of `tsc`, lint and tests.
+2. The result of each check in "Run".
 3. Anything in the tests, the spec or the contract that looks wrong, with the evidence.
 4. Divergences from the spec (`SPEC_DEVIATION`), for the main session to resolve.
 5. Decisions you made that the plan or the spec did not settle, each with the alternative you rejected and why.

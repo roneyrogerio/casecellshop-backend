@@ -289,6 +289,7 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **O que a IA fez:** o `reviewer` marcou os oito achados como corrigidos, com a evidência de cada um, e achou o A9: o commitlint entrou sem a linha na tabela de ferramentas. Ele também notou que a `main` local estava defasada, o que pôs na lista do A4 um commit que já estava na base.
 - **Resultado:** o fechamento moveu a AD-007 para o `STATE-ARCHIVE.md` antes de mudar os status, para o `STATE.md` caber no limite; a AD-010 e a AD-011 passaram a "aceita", a AD-008 a "alterada pela AD-011", e o commitlint ganhou a linha "Mensagens de commit" (A9).
 - **Verificação:** `npm run check:specs` e o CI do commit de fechamento.
+- **Ressalva:** o commit de fechamento (`eace1ca`) se diz o último antes do merge, mas a auditoria de prompts, a regra dos comandos e as correções da Revisão 3 vieram depois. Nenhum deles muda o texto de uma AD; até o merge, uma mudança numa AD vira uma AD nova (A11 da Revisão 3).
 
 ### Auditoria das instruções (`/doctor prompt-audit`)
 
@@ -300,7 +301,15 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 ### Comandos que pedem aprovação
 
 - **Pedido:** o mantenedor achou os pedidos de aprovação difíceis de ler: comandos longos, encadeados, com a mensagem do commit num *heredoc*.
-- **O que a IA fez:** conferiu na documentação do Claude Code o que o pedido mostra (a descrição e o comando inteiro) e achou issues abertas sobre commits com *heredoc*; comparou com o MCP do GitHub, que só cobriria o PR.
+- **O que a IA fez:** conferiu na documentação do Claude Code o que o pedido mostra (a descrição e o comando inteiro) e citou duas issues sobre commits com *heredoc*, sem conferir o estado: a #25441 já estava fechada, e só a #31373, sobre `$(...)`, segue aberta (A13 da Revisão 3); comparou com o MCP do GitHub, que só cobriria o PR.
 - **Corrigido:** a IA guardou a regra só na memória local da sessão; o mantenedor apontou que ela precisa estar no repositório, para valer para quem clonar.
 - **Resultado:** a regra no `AGENTS.md` e a linha "Comandos que pedem aprovação" na tabela de ferramentas.
 - **Verificação:** este commit e o push já seguem a regra.
+
+### Revisão 3
+
+- **Pedido:** o mantenedor perguntou se o PR estava pronto para o merge.
+- **O que a IA fez:** a sessão principal tinha dado o PR como pronto sem notar que três commits entraram depois da Revisão 2; ao conferir, pediu ao `reviewer` uma rodada só sobre eles. O `reviewer` achou o A10 (o `implementer` precisava passar checagens que não pode corrigir, como as mensagens de commit, o que o empurrava a afrouxar o `commitlint.config.mjs`) e três achados de registro (A11 a A13).
+- **Corrigido:** a afirmação de que o PR estava pronto; o mantenedor perguntou de novo, e a conferência achou o intervalo sem revisão.
+- **Resultado:** o `implementer` roda só as checagens que dependem do código e relata as outras sem mexer na configuração delas; a conferência de histórico do `reviewer` passou a cobrir o `commitlint.config.mjs` e o `scripts/check-spec-limits.ts`; o `STATE.md` aponta o M2; as fontes da linha dos comandos foram conferidas com `gh issue view`.
+- **Verificação:** `npm run check:specs`, `npm run test:unit` e a Revisão 4.
