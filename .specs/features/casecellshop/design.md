@@ -27,9 +27,29 @@ O compose roda o PostgreSQL, um serviço de migração, a API e um worker. O wor
 - `idempotency_keys`: a chave (índice único), o hash do payload, o pedido e a data.
 - `outbox`: status (`pending`, `dead`, `done` ou `cancelled`), tentativas, `lease_until`, `claim_token`, `first_sent_at`, `last_call_at`, `next_attempt_at`, `reconciled_at`, `traceparent` e `correlationId`.
 - `sync_state`: `last_completed_at`.
-- Schema `erp_sim`: produtos, preço, estoque e faturas do ERP simulado, acessado só pelo módulo do fake.
+- Schema `erp_sim`: produtos, preço, estoque e faturas do ERP simulado, acessado só pelo módulo do fake. Tem tipos gerados próprios, que só o módulo do fake e os testes importam.
 
 Todo prazo gravado usa o relógio do banco; o relógio injetável controla só os timers do processo.
+
+## Acesso ao banco (AD-017)
+
+- **Fonte única e tipos gerados (`FND-09`):** as migrações `.sql` definem as tabelas. Depois de aplicá-las, o kysely-codegen gera um arquivo de tipos por schema (o da loja e o `erp_sim`), versionado e nunca editado à mão, sem as tabelas de controle do node-pg-migrate e sem enum de runtime. O CI gera de novo com `--verify` e falha se algum arquivo divergir do banco.
+- **Consultas pelo Kysely,** sobre o mesmo pool do `pg`. Os trechos de SQL deste design são o SQL emitido; o código os escreve pelo builder, com `onConflict(…).doNothing()`, `forUpdate().skipLocked()` e `returning(…)`. Todo valor vai como parâmetro, nunca no texto. Zero linhas afetadas é `numUpdatedRows === 0n` no resultado. A reserva, por exemplo:
+
+  ```ts
+  const result = await trx
+    .updateTable('inventory')
+    .set({ reserved: (eb) => eb('reserved', '+', q) })
+    .where('sku', '=', sku)
+    .where((eb) => eb(eb('on_hand', '-', eb.ref('reserved')), '>=', q))
+    .executeTakeFirst();
+  if (result.numUpdatedRows === 0n) { /* desfaz e responde 409 */ }
+  ```
+
+- **Formas proibidas (`AI-19`):** `set`, `values` e `doUpdateSet` com callback no lugar do objeto; coluna citada no texto fixo de um `` sql`…` ``, que fica só com funções e literais (`now()`, `make_interval(...)`); comando inteiro em `` sql`…` ``; `sql.raw`, `sql.ref`, `sql.id`, `sql.table` e `db.dynamic`; e `.query()` do `pg`, `db.transaction()` e `startTransaction()` fora de `src/db/`. Uma conferência no CI reprova cada uma.
+- **Transação (`FND-10`):** o código abre transação só pelo invólucro de `src/db/`. Antes do `COMMIT`, ele roda uma consulta de guarda pelo Kysely: se um erro capturado já abortou a transação, a guarda recebe `25P02`, o invólucro desfaz e rejeita, em vez de o PostgreSQL trocar o `COMMIT` por um `ROLLBACK` sem erro. O invólucro mantém o ouvinte de `error` na conexão retirada do pool, como o `src/db/client.ts` faz hoje.
+- **Erros:** o SQLSTATE chega em `err.code`, direto do `pg`, sem embrulho do Kysely; o mapeamento do contrato lê dali.
+- **O banco continua guardando a regra:** os CHECKs `reserved >= 0` e `on_hand >= 0` ficam como defesa em profundidade, e os prazos usam o `now()` do banco, num fragmento `` sql`now()` ``.
 
 ## Checkout (AD-002, AD-006)
 
@@ -48,7 +68,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
    WHERE sku = :sku AND on_hand - reserved >= :q
    ```
 
-   Zero linhas afetadas: a transação é desfeita e a resposta é `409`. No `READ COMMITTED`, o segundo `UPDATE` concorrente espera o lock da linha e reavalia o `WHERE`.
+   O código escreve este `UPDATE` pelo Kysely (ver "Acesso ao banco"). Zero linhas afetadas: a transação é desfeita e a resposta é `409`. No `READ COMMITTED`, o segundo `UPDATE` concorrente espera o lock da linha e reavalia o `WHERE`.
 
 Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode repetir com a mesma chave. A chave vale por pelo menos 24 h; depois da limpeza, a mesma chave cria outro pedido.
 
@@ -72,13 +92,13 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **`X-Request-Id`:** aceito se for válido, gerado se não. É o `correlationId` dos logs e volta em toda resposta, inclusive no `202`, e no problem+json. Um `traceparent` de entrada continua o trace.
 - **Fluxo assíncrono:** o `202` traz `Location` e `Retry-After`; o `503` também traz `Retry-After`.
 - **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento). Um pedido na DLQ continua `pending`.
-- **Preço:** em centavos, como inteiros. O checkout usa o preço do banco, nunca o da requisição, envia-o ao ERP (H3) e devolve o total no `202`. Sem `expectedUnitPrice`, vale o preço do banco.
+- **Preço:** em centavos, como inteiros. O checkout usa o preço do banco, nunca o da requisição, envia-o ao ERP (H3) e devolve o total no `202`. O `expectedUnitPrice`, o preço que o cliente viu, é obrigatório em cada item (AD-018): igual ao do banco, o pedido segue; diferente, `409` com o preço atual, e o cliente confirma de novo.
 - **Erros por rota:**
   - `POST /checkout`: `400` (entrada inválida, sem chave, SKU repetido); `409` (sem estoque, preço alterado, mesma chave em andamento); `413` (corpo acima do limite); `415` (conteúdo diferente de JSON); `422` (chave com outro corpo, SKU inexistente); `503`;
   - `GET /orders/{orderId}/status`: `400` (identificador inválido), `404` (pedido inexistente), `503`;
   - `GET /products`: `400` (parâmetro inválido), `503` (catálogo não sincronizado, ou sem entrada e com a origem fora);
   - todas: `default` em problem+json (`500`).
-- **Falhas do banco, pelo passo da transação:** `lock_timeout` (`55P03`) no `INSERT` da chave → `409`; qualquer outra (`lock_timeout` em outro passo, `statement_timeout` `57014`, deadlock `40P01`, pool esgotado, falha de conexão) → `503` com `Retry-After`.
+- **Falhas do banco, pelo passo da transação,** com o SQLSTATE lido de `err.code`: `lock_timeout` (`55P03`) no `INSERT` da chave → `409`; qualquer outra (`lock_timeout` em outro passo, `statement_timeout` `57014`, deadlock `40P01`, transação abortada `25P02` na guarda do `COMMIT`, pool esgotado, falha de conexão) → `503` com `Retry-After`.
 - **Erros:** `application/problem+json` (RFC 9457), com `correlationId` e um `type` por causa, que separa os três `409` e os dois `422`. Um middleware único produz todos, sem stack trace.
 - **Listas:** `{ "items": [...], "hasNext": true }`, com `?page=` a partir de 1 e tamanho fixo. Uma página além do fim volta vazia, com `hasNext: false`.
 
@@ -192,10 +212,11 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `src/erp/sim/index.ts`: `createSimulatedErpClient({ pool, clock })` monta a porta: a camada anticorrupção sobre o transporte simulado, como na AD-004. No M1, só há o modo normal; a separação entre as duas entra no M3, com os modos de falha. O estado fica no schema `erp_sim`, com as tabelas `erp_sim.products (sku, name, price_cents, on_hand)` e `erp_sim.invoices (id, reference único, items, total_cents, created_at)`; os testes criam produtos e contam faturas por SQL nelas;
   - `src/clock.ts`: a porta `Clock`, com `now()` em milissegundos e `sleep(ms)`; os testes usam um relógio manual;
   - `src/db/migrate.ts`: `migrate(pool)` aplica as migrações dos dois schemas, e `seed(pool)` grava os dados iniciais do `erp_sim`;
+  - `src/db/database.ts` (M2, AD-017): `createDb(pool)` e `createErpDb(pool)` devolvem o `Kysely` tipado de cada schema, o da loja e o `erp_sim`;
   - `scripts/check-instructions.ts`: `checkInstructions(rootDir)` devolve as violações dos limites do que carrega em toda sessão (`FND-06`), uma frase por arquivo; o script falha se houver alguma, e importar o módulo não roda a conferência.
   - `scripts/generate-openapi.ts`: com `--check`, falha se o arquivo divergir do contrato; `--file <caminho>` troca o `openapi.yaml` da raiz por outro.
 - **Spans do M1:** o da requisição é `SERVER`, com o nome `<método> <rota>` (como `GET /health`) e o atributo `http.route`; o de repositório é `CLIENT`, com o nome `<repositório>.<operação>` (como `health.ping`) e o atributo `db.system.name` igual a `postgresql`.
-- **Migrações:** node-pg-migrate, com arquivos `.sql` em `migrations/store/` e `migrations/erp_sim/`, nome com data e hora, uma transação por arquivo, *advisory lock* e conferência de ordem; cada schema tem a sua tabela de controle. Como a ferramenta não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main`.
+- **Migrações:** node-pg-migrate, com arquivos `.sql` em `migrations/store/` e `migrations/erp_sim/`, nome com data e hora, uma transação por arquivo, *advisory lock* e conferência de ordem; cada schema tem a sua tabela de controle. Como a ferramenta não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main`. Depois das migrações, o kysely-codegen gera os tipos do banco, e o CI confere com `--verify` que eles estão em dia (`FND-09`, a partir do M2).
 - **Dados iniciais:** `seed(pool)` grava o catálogo de exemplo do `erp_sim` com `ON CONFLICT DO NOTHING`, e só o serviço `migrate` do compose o roda, depois das migrações. Os testes não o rodam: cada um cria os dados que usa.
 - **`/health`:** `200` se o banco responde a um `SELECT 1` feito pelo repositório; senão, `503` em problem+json. Fica no contrato; o `/metrics` fica fora dele.
 - **`X-Request-Id`:** aceito com 1 a 128 caracteres ASCII visíveis; fora disso, um UUID novo.

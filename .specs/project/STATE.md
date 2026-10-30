@@ -11,7 +11,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-001 · PostgreSQL como banco próprio da loja
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026). O acesso ao banco por SQL em texto, com ORM e query builder recusados, é substituído pela AD-017.
 
 **Contexto.** O banco do ERP (MySQL) é só leitura e não é compartilhado com a loja. A loja precisa de um banco transacional para a promessa de estoque, os pedidos, as chaves de idempotência e as mensagens de saída, e os testes de concorrência precisam de conexões reais.
 
@@ -422,7 +422,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-015 · A revisão para quando não sobra achado alto nem médio
 
-**Status:** proposta (30/10/2026). Aceita pelo merge do PR de fechamento do F1. Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco.
+**Status:** aceita (30/10/2026, PR #6). Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco.
 
 **Contexto.** O teto fixo da AD-012 contava igual uma rodada que achava um problema de desenho e uma que só confirmava correções. No PR #4, as duas últimas de cinco rodadas só acharam problemas criados pelas correções anteriores. No PR #5, a Revisão 3 achou uma regressão média criada pela correção da Revisão 2, e a Revisão 4, restrita ao delta, fechou sem achado alto ou médio. Parar pelo número deixaria um achado médio aberto; revisar sem regra de parada repete rodadas que não acham nada novo.
 
@@ -447,7 +447,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-016 · Segurança em três camadas, com o `/security-review` antes de o PR sair do rascunho
 
-**Status:** proposta (30/10/2026). Aceita pelo merge do PR de fechamento do F1.
+**Status:** aceita (30/10/2026, PR #6).
 
 **Contexto.** O repositório é público, os agentes agem no GitHub com um token, e o serviço recebe pedidos sem autenticação. O `reviewer` confere segurança em toda rodada, mas lê o delta pelo critério da fatia. Vulnerabilidade conhecida em dependência e segredo vazado não aparecem no diff. Um agente de segurança a cada fatia repetiria a leitura do `reviewer` e gastaria tokens em todo delta.
 
@@ -474,6 +474,62 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Referências:** [Claude Code, comandos](https://code.claude.com/docs/en/commands.md) (`/security-review`); [Claude Code, hooks](https://code.claude.com/docs/en/hooks.md) (`PostToolUse`); [GitHub, code scanning default setup](https://docs.github.com/en/code-security/code-scanning/enabling-code-scanning/configuring-default-setup-for-code-scanning).
 
+### AD-017 · Consultas pelo Kysely, com tipos gerados do banco migrado
+
+**Status:** proposta (30/10/2026). Substitui, na AD-001, o SQL em texto com tipos escritos à mão e a recusa de query builder.
+
+**Contexto.** Com SQL em texto e o tipo de cada linha escrito à mão (`pool.query<{ sku: string; available: number }>(…)`), a tabela fica definida duas vezes, e nada liga as duas: uma migração que apaga ou renomeia uma coluna passa no `tsc`, e a consulta só quebra quando roda. Os testes contra o PostgreSQL real pegam a quebra só nas consultas que algum teste executa. Com várias pessoas, um PR que apaga uma coluna e outro que passa a usá-la ficam verdes separados. O desafio é avaliado justamente no SQL de concorrência (atualização condicional, `FOR UPDATE SKIP LOCKED`, `ON CONFLICT`, o relógio do banco), que precisa continuar legível na revisão e não pode ficar fora da conferência de tipos.
+
+**Decisão.**
+
+- **Fonte única:** as migrações `.sql` do node-pg-migrate continuam definindo as tabelas, imutáveis depois da `main` (AI-01) e com conferência de ordem. Os tipos do banco são gerados do banco migrado pelo kysely-codegen num arquivo versionado, nunca editado à mão, e o CI falha se esse arquivo divergir do banco (`--verify`).
+- **Consultas pelo Kysely,** um query builder tipado sobre o mesmo driver `pg`: o SQL emitido corresponde quase linha a linha ao código, e o `tsc` acusa todo uso de coluna apagada ou renomeada, inclusive na reivindicação com `SKIP LOCKED`, no `ON CONFLICT … RETURNING`, na CTE e na carga em massa com `unnest`. Nenhum comando inteiro fica em SQL cru no código da aplicação; os comandos do runbook, que um operador roda no `psql`, e a limpeza de retenção documentada continuam em SQL.
+- **Regras que fecham o que o `tsc` não pega, com conferência determinística no CI:**
+  - `set`, `values` e `doUpdateSet` na forma de objeto (`set({ coluna: (eb) => … })`); a forma de callback (`set((eb) => ({ … }))`) deixa passar uma coluna desconhecida;
+  - coluna nunca escrita dentro de um fragmento `` sql`…` ``: ela é citada com `eb.ref('coluna')`, e o fragmento cru fica restrito a funções como `now()` e `make_interval(...)`.
+- **Transação:** o invólucro faz uma consulta de guarda antes do `COMMIT`, ou usa savepoint, porque um erro capturado dentro da transação faz o PostgreSQL trocar o `COMMIT` por um `ROLLBACK` sem erro.
+- **O banco continua guardando a regra:** CHECKs como `reserved >= 0` e `on_hand >= 0` ficam como defesa em profundidade, e os prazos usam o relógio do banco (`now()` no SQL).
+- **Erros e traces sem mudança de natureza:** o SQLSTATE chega direto em `err.code` do `pg`, sem embrulho do Kysely, e os spans do repositório continuam manuais (AD-008).
+
+**Alternativas consideradas:**
+- **Manter SQL em texto com tipos à mão:** a quebra de esquema só aparece em execução.
+- **SQL em texto com tipos de tabela gerados (Kanel):** tipa as tabelas, mas não confere o texto de cada consulta.
+- **Script próprio que valida cada SQL no PostgreSQL (`PREPARE`) e gera os tipos:** dá a mesma garantia sem dependência nova, mas usa uma API interna do `pg` e passa a ser ferramenta nossa para manter.
+- **PgTyped e sqlx-ts:** o PgTyped sai com sucesso mesmo com consulta inválida, e o sqlx-ts não gera tipos para a reivindicação com `now()` nem para a carga com `unnest`.
+- **Prisma 7:** a reivindicação com `SKIP LOCKED`, os prazos no relógio do banco, a carga em massa e os timeouts por transação ficam em SQL cru, conferido só pelo TypedSQL, ainda experimental. No teste, o `updateMany` com `limit` reivindicou a mesma linha mais de uma vez, o `@default(now())` gravou o relógio da aplicação, e o código de erro do PostgreSQL só aparece num campo não documentado.
+- **ZenStack 3:** o SQL de concorrência cai no próprio Kysely embutido, com uma camada a mais; no teste, o `updateMany` com `limit` vendeu além do estoque, um campo com `@map` quebrou em execução dentro do `ON CONFLICT`, e a migração depende do Prisma 6.
+- **Drizzle (linha estável):** no teste, o migrador pulou em silêncio a migração de um ramo paralelo, e gerar uma migração com renomeação exige terminal interativo; a correção só existe na versão candidata.
+- **MikroORM, TypeORM, Objection, Slonik e Effect SQL:** a unidade de trabalho esconde o SQL, os decorators não rodam no Node sem build, os tipos são fracos, ou os tipos são escritos à mão e conferidos só em execução.
+
+**Trade-off.** O Kysely ainda é 0.x, com quebra possível entre versões menores, e por isso fica fixado e é atualizado de propósito. A geração dos tipos precisa de um banco migrado no CI. As relações viram `join` escritos no código, sem a camada de alto nível de um ORM. Os erros de tipo do builder podem ser longos.
+
+**Rever quando:** o kysely-codegen parar de ser mantido (aí troca-se só o gerador); o Drizzle 1.0 ou o Prisma 8 saírem estáveis com bloqueio de linha e SQL tipado; ou uma consulta precisar de algo que o builder não expresse sem coluna em fragmento cru.
+
+**Referências:** [Kysely](https://kysely.dev/docs/intro); [kysely-codegen](https://github.com/RobinBlomberg/kysely-codegen); [node-pg-migrate](https://salsita.github.io/node-pg-migrate/); [PostgreSQL 18, isolamento de transações](https://www.postgresql.org/docs/18/transaction-iso.html); [Prisma, TypedSQL](https://www.prisma.io/docs/orm/prisma-client/using-raw-sql/typedsql); [Prisma, issue de `FOR UPDATE`](https://github.com/prisma/prisma/issues/5983); [Prisma, issue do commit silencioso](https://github.com/prisma/orm/issues/20496); [Drizzle, issue do migrador](https://github.com/drizzle-team/drizzle-orm/issues/5769); [ZenStack, migrações](https://zenstack.dev/docs/orm/migration).
+
+### AD-018 · O preço que o cliente viu é obrigatório no checkout
+
+**Status:** proposta (30/10/2026).
+
+**Contexto.** A vitrine pode ficar até cerca de 65 s defasada (AD-005, AD-009). Com o preço que o cliente viu opcional no `POST /checkout`, um pedido feito nessa janela seria cobrado pelo preço atual do banco, que pode ser diferente do que o cliente viu, sem que ele saiba.
+
+**Decisão.**
+
+- Cada item do `POST /checkout` leva o `expectedUnitPrice`, o preço que o cliente viu; sem ele, `400`.
+- O preço cobrado continua sendo o do banco, nunca o da requisição: o `expectedUnitPrice` só confirma que o cliente concordou com ele.
+- Se o preço do banco mudou, `409` (`price-changed`) com o preço atual, nada reservado, e o cliente confirma de novo.
+
+**Alternativas consideradas:**
+- **Campo opcional:** sem ele, o cliente pode ser cobrado por um preço que não viu.
+- **Cobrar o preço da requisição:** abriria a porta para o cliente escolher o preço.
+- **Conferir só a idade da vitrine:** não diz se o preço mudou nesse intervalo.
+
+**Trade-off.** Um cliente que viu um preço que mudou precisa repetir a confirmação, e o cliente da API precisa mandar um campo a mais.
+
+**Rever quando:** o preço passar a ter reserva por tempo (preço garantido por alguns minutos), que dispensaria a confirmação.
+
+**Referências:** [RFC 9110, 409 Conflict](https://www.rfc-editor.org/rfc/rfc9110#name-409-conflict).
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
@@ -481,6 +537,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 | Runtime | Node.js 26.13.0 LTS, fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12 e o CI nas duas linhas (AD-011). ESM, *type stripping* e `erasableSyntaxOnly`. TypeScript 7.0.2 só com `--noEmit` | Node 24 como alvo; build com `tsc`; `tsx` | Sem build, o que roda é o código do repositório. O Node 26 é o LTS ativo, e a 24.12, onde o *type stripping* ficou estável, é o piso para quem clona com o LTS anterior |
 | HTTP | Express 5.3.0 | NestJS; Fastify | O Nest depende de decorators, que o Node não aceita no *type stripping*. A validação pelo contrato em zod (AD-010) é um middleware curto no Express, que já se integra ao pino e aos spans manuais do OpenTelemetry; o Fastify faria o mesmo por plugins, sem ganho aqui, porque o framework não é o gargalo: a vitrine responde do cache, e o checkout é uma transação curta |
 | Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1; unitários ao lado do arquivo testado, integração em `test/integration/<área>/` | Mocks do banco; service container no CI; todos os testes em `test/` (PR #1) | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. O unitário testa um arquivo isolado e muda, move e some com ele; o de integração atravessa HTTP, banco e worker e não pertence a um arquivo. A guarda separa os papéis pelo nome `*.test.ts`, e o `.dockerignore` deixa os testes fora da imagem |
+| Acesso ao banco | Kysely 0.29.7 sobre o `pg`, com os tipos gerados do banco migrado pelo kysely-codegen 0.20.0 e conferidos no CI (`--verify`); `set`/`values` só na forma de objeto e coluna nunca dentro de `` sql`…` `` (AD-017) | SQL em texto com tipos à mão; Kanel; script próprio com `PREPARE`; PgTyped; sqlx-ts; Prisma 7; ZenStack 3; Drizzle 0.45; MikroORM; TypeORM; Slonik | Uma coluna apagada ou renomeada quebra o `tsc` em todo uso, inclusive no SQL de concorrência, que continua legível e sem comando inteiro em SQL cru no código da aplicação; o SQLSTATE segue em `err.code` e os spans do repositório seguem manuais (AD-008); os motivos de cada descarte estão na AD-017 |
 | Migrações | node-pg-migrate 9.0.0, com arquivos `.sql`, *advisory lock* e conferência de ordem; o CI barra a alteração de uma migração que já está na `main` | Runner próprio; Flyway; dbmate; Postgrator; postgres-migrations; graphile-migrate; `@databases/pg-migrations`; umzug | Mantido, roda em Node com o `pg` e mantém as migrações em `.sql` (AD-001); os outros trazem Java, um binário sem API para Node, outro driver, ou não têm lock, transação por arquivo ou versão recente. Não confere o conteúdo do que já rodou; a regra do CI cobre isso no PR |
 | Arranque do ferramental (M1) | O `implementer` cria o `package.json`, o lockfile e as configurações e faz o spike do R8 antes do contrato e dos testes, num commit `build:` sem comportamento | O `test-writer` criar as configurações; a sessão principal fazer o spike | O `test-writer` só edita testes, e o contrato e os testes precisam das dependências; um commit `build:` mantém o teste antes do código |
 | Guardas dos agentes | Hooks no `.claude/settings.json`, pelo `agent_type`: `PreToolUse` limita as edições de cada papel e protege o oráculo do `implementer` (AI-04); `SubagentStop` devolve o `implementer` e o `test-writer` enquanto a verificação falhar (AI-03) e grava a mensagem final do `reviewer` em primeiro plano; o `PostToolUse` do `SubagentHandback` grava o relatório do `reviewer` em segundo plano, e nenhuma sessão edita `.claude/reviews/` nem `.claude/state/` pelas ferramentas (AI-15); o `PostToolUse` do `Skill` registra o `HEAD` em que o `/security-review` abriu, que o `github-guard` exige para tirar o PR do rascunho (AI-16); o `PreToolUse` de Bash (`bash-guard`) deixa os subagentes só ler o git, recusa a eles a escrita de arquivo pelo shell (interpretadores, `sed -i`, `tee`, redirecionamento para arquivo) e aceita o `git push` de qualquer sessão só na forma estreita do fluxo (AI-11); o `SubagentStart` tira um retrato do git que a parada compara, e uma mudança vira exceção (AI-12); o `.githooks/pre-push` recusa push fora de `https://github.com/` (AI-08). Permissões: `git commit`, `git push` (credencial do bot) e as nove ferramentas MCP do GitHub liberados; `gh`, `curl`, `wget`, `security` e `.env` negados; `bypassPermissions` desligado (AI-06) | Hook no frontmatter de cada agente; regras de Bash como única barreira; juiz LLM no loop; para o git dos subagentes, só uma lista de verbos negados; para o SSH, só gravar `remote.origin.pushurl` HTTPS | O hook do frontmatter é pulado sem aviso quando a pasta não está marcada como confiável, e não roda em `claude -p`; no `settings.json` vale em toda sessão. Regra de Bash compara texto, então a barreira real para o `main` é o ruleset (AD-013) e, para a máquina, a sandbox (R11). O hook de parada é determinístico; um juiz LLM muda de veredito (AD-012). O agente em segundo plano entrega o relatório pelo `SubagentHandback`, fora da mensagem final que o hook de parada recebe; ler a transcrição dependeria de um formato interno, e o `PostToolUse` dessa ferramenta é o caminho documentado. Uma guarda de texto sempre tem grafia que escapa (variável, alias, script escrito pelo próprio agente), então ela só dá retorno rápido, e a prova é o retrato do git, que não depende da grafia; a lista do que pode passar fecha por padrão, e a de negados deixava passar `pull`, `cherry-pick` e afins. O `insteadOf` global também reescreve o `pushurl`, por isso a conferência fica no `pre-push`, que recebe a URL já reescrita e roda antes de enviar qualquer ref |
