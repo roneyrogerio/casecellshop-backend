@@ -76,7 +76,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 ## 7. Close (`/marco fechar`)
 
-`git fetch --prune`, `git switch main`, `git pull --ff-only`, `git branch -d <branch>`; confirm `ROADMAP.md` points to the next milestone; print the first step for it.
+`git fetch --prune`, `git switch main`, `git pull --ff-only`, `git branch -d <branch>`; set each AD the merge accepted to `aceita (<data>, PR #<n>)` (from then on it is never edited: a new AD supersedes it); confirm `ROADMAP.md` points to the next milestone; print the first step for it.
 
 ## Commits
 
@@ -97,7 +97,7 @@ Record a decision in the PR that makes it when it changes structure, a quality a
 - Tool or process: a row in the tool table of `STATE.md`.
 - Open risk or a mistake that changed course: the risk table or a new `L-NNN` lesson.
 - AI usage: `PROMPTS.md`, short: the request, what the AI got wrong and how it was corrected, and how it was verified.
-- State the reason in the project's terms; documentation and other projects go only under "Referências".
+- State the decision and its reason in the project's terms (the effect here: "so the setup works without a keychain on WSL"). Research informs the decision and stays out of the repository: no market comparisons, adoption numbers or "project X does it" in `STATE.md`, the README or commit messages. Sources go only under "Referências". The same applies to the reason written in a commit body.
 
 ## Process changes
 

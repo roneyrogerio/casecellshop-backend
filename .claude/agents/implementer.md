@@ -22,6 +22,7 @@ The task map in your prompt lists the criteria, the spec sections, the ADs and t
 
 - Production code and infrastructure: `src/`, migrations, `compose.yaml`, the `Dockerfile`, and `package.json` and `package-lock.json` only to add a dependency whose `STATE.md` decision the map cites, at an exact version (never the `scripts` block).
 - Write nothing else. The tests (`*.test.ts`, `test/`), `.specs/`, `src/contract/`, `openapi.yaml`, the docs, and every file that configures verification, instructs the agents or configures git (`.claude/`, `.github/`, `.githooks/`, `.git/`, `scripts/`, `AGENTS.md`, `CLAUDE.md`, and the lint, TypeScript, test, commit, Node and npm configs in any folder) belong to the main session: the CI is the independent oracle, and the path guard denies those files to you (AI-04). If a test, the spec, the contract or a check looks wrong, stop and report it with the evidence; do not work around it.
+- Change files only with the Edit and Write tools, never through Bash (a `python`, `node -e` or `sed -i` script, a heredoc or a `>` redirect): the path guard checks your role on Edit and Write, at the moment of the change; a write through Bash skips it and is only caught when you stop.
 - Follow `design.md` and the ADs. Without a `STATE.md` decision for a dependency, report it instead of adding it.
 - Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings. Delete any scratch file or script you created before finishing.
 
