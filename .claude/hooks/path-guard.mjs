@@ -1,7 +1,7 @@
 // Guarda de caminho por papel. Roda no PreToolUse de Edit, Write e NotebookEdit
 // (.claude/settings.json) e nega a edição fora do que o agente pode escrever.
 // O agent_type só vem nas chamadas de subagente (ou com --agent); a sessão
-// principal não tem regra aqui e passa direto.
+// principal só encontra aqui a regra das pastas gravadas pelos hooks.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -92,34 +92,49 @@ function deny(reason) {
   process.exit(0);
 }
 
+// Pastas que só os hooks gravam (AI-15): o github-guard confia nos relatórios e
+// nos registros que estão ali, então nenhuma sessão, a principal inclusive, as
+// edita pelas ferramentas.
+export const HOOK_OWNED = ['.claude/reviews', '.claude/state'];
+
+export function hookOwned(rel) {
+  return HOOK_OWNED.some((entry) => isUnder(rel.toLowerCase(), entry));
+}
+
+const HOOK_OWNED_REASON =
+  '.claude/reviews/ e .claude/state/ são gravados só pelos hooks (AI-15): o relatório do reviewer e os registros não se editam à mão.';
+
 function main() {
-let input;
+  let input;
   try {
-  input = JSON.parse(readFileSync(0, 'utf8'));
-} catch {
-  // Sem entrada legível não dá para saber o papel: o código 2 bloqueia a edição.
-  process.stderr.write('path-guard: entrada do hook ilegível\n');
-  process.exit(2);
-}
+    input = JSON.parse(readFileSync(0, 'utf8'));
+  } catch {
+    // Sem entrada legível não dá para saber o papel: o código 2 bloqueia a edição.
+    process.stderr.write('path-guard: entrada do hook ilegível\n');
+    process.exit(2);
+  }
 
-const rule = RULES[input.agent_type];
-if (!rule) process.exit(0);
+  const rule = RULES[input.agent_type];
+  const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+  if (!root || !target) {
+    if (rule) deny(`${rule.reason} Caminho não informado.`);
+    process.exit(0);
+  }
 
-const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
-const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
-if (!root || !target) deny(`${rule.reason} Caminho não informado.`);
-
-// Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
-// maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
-const rel = path
-  .relative(root, path.resolve(root, target))
-  .split(path.sep)
-  .join('/')
-  .toLowerCase();
-if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
-  deny(`${rule.reason} O caminho está fora do repositório.`);
-}
-if (!rule.allows(rel)) deny(`${rule.reason} Caminho: ${rel}`);
+  // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
+  // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+  const rel = path
+    .relative(root, path.resolve(root, target))
+    .split(path.sep)
+    .join('/')
+    .toLowerCase();
+  if (hookOwned(rel)) deny(`${HOOK_OWNED_REASON} Caminho: ${rel}`);
+  if (!rule) process.exit(0);
+  if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+    deny(`${rule.reason} O caminho está fora do repositório.`);
+  }
+  if (!rule.allows(rel)) deny(`${rule.reason} Caminho: ${rel}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();

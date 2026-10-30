@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { compareSnapshots, snapshotFile, takeSnapshot } from './git-snapshot.mjs';
 import { allows } from './path-guard.mjs';
+import { saveReview, takeHandback } from './records.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -141,14 +142,13 @@ function recordException(projectDir, message) {
   process.stdout.write(JSON.stringify({ systemMessage: message }));
 }
 
-// O relatório do reviewer vai para o arquivo direto da mensagem final dele, sem
-// passar pela sessão principal: o github-guard confere o comentário contra isto.
-function saveReview(projectDir, input) {
+// O relatório do reviewer em primeiro plano é a mensagem final dele, gravada sem
+// passar pela sessão principal (AI-15). Se ele já entregou pelo SubagentHandback,
+// a mensagem final é só o encerramento e não substitui o relatório.
+function recordReview(projectDir, input) {
+  if (takeHandback(projectDir, input.agent_id)) return;
   if (typeof input.last_assistant_message !== 'string' || !input.last_assistant_message) return;
-  const dir = join(projectDir, '.claude', 'reviews');
-  mkdirSync(dir, { recursive: true });
-  const name = String(input.agent_id ?? 'reviewer').replaceAll(/[^\w.-]/g, '_').replace(/^\.+/, '_');
-  writeFileSync(join(dir, `${name}.md`), input.last_assistant_message);
+  saveReview(projectDir, input.agent_id, input.last_assistant_message);
 }
 
 async function main() {
@@ -160,7 +160,7 @@ async function main() {
     process.exit(2);
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
-  if (input.agent_type === 'reviewer') saveReview(projectDir, input);
+  if (input.agent_type === 'reviewer') recordReview(projectDir, input);
   const changedScripts = input.agent_type === 'implementer' ? await scriptsChanged(projectDir) : false;
 
   const decision = await decide(input, {
