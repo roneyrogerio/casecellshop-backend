@@ -255,6 +255,24 @@ describe('FND-06 teto de bytes do SKILL.md e de linhas e caracteres das regras',
     expect(checkInstructions(tree)).toEqual([]);
   });
 
+  // O Claude Code carrega as regras também de subpastas de .claude/rules/ (A13).
+  it('FND-06 acusa uma regra em subpasta de .claude/rules/ com 201 linhas, citando o caminho', () => {
+    writeValidTree();
+    write('.claude/rules/area/x.md', lines(201));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('rules', 'area', 'x.md'));
+  });
+
+  it('FND-06 não acusa uma regra em subpasta de .claude/rules/ com 200 linhas', () => {
+    writeValidTree();
+    write('.claude/rules/area/x.md', lines(200));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
   it('FND-06 uma árvore sem .claude/rules/ não quebra nem tem violação', () => {
     writeValidTree();
 

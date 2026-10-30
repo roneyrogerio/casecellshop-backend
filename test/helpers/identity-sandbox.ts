@@ -1,11 +1,21 @@
 import { spawnSync } from 'node:child_process';
 import { cpSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { git, makeTempDir } from './git-sandbox.ts';
 
 // Ambiente de teste da identidade (AI-14): o git não pode enxergar a configuração global nem a do sistema da máquina,
 // senão a credencial real do dono entraria no teste.
 const repoRoot = join(import.meta.dirname, '..', '..');
+
+// Chaveiro falso: `security` (macOS) e `secret-tool` (Linux) que saem com 1 sem imprimir nada, como um item inexistente.
+// Vão no começo do PATH, para o teste nunca ler nem gravar no chaveiro real da máquina.
+function fakeKeychainDir(): string {
+  const dir = makeTempDir('fake-keychain-');
+  for (const tool of ['security', 'secret-tool']) {
+    writeFileSync(join(dir, tool), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  }
+  return dir;
+}
 
 export function isolatedEnv(extra: Record<string, string> = {}): Record<string, string> {
   const dir = makeTempDir('git-global-');
@@ -15,7 +25,8 @@ export function isolatedEnv(extra: Record<string, string> = {}): Record<string, 
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !key.startsWith('GIT_CONFIG_') && key !== 'CLAUDE_CODE_REMOTE') env[key] = value;
   }
-  return { ...env, GIT_CONFIG_GLOBAL: globalFile, GIT_CONFIG_NOSYSTEM: '1', HOME: dir, ...extra };
+  const path = [fakeKeychainDir(), env.PATH ?? ''].filter((part) => part !== '').join(delimiter);
+  return { ...env, GIT_CONFIG_GLOBAL: globalFile, GIT_CONFIG_NOSYSTEM: '1', HOME: dir, PATH: path, ...extra };
 }
 
 export function makeRepo(prefix = 'identity-'): string {

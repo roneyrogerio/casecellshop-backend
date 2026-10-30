@@ -30,7 +30,7 @@ interface Diagnosis {
   notice?: boolean;
 }
 
-type GitSetupFacts = Pick<Facts, 'remote' | 'credentialHelperIsBot' | 'identity'> & { tokenPresent: boolean };
+type GitSetupFacts = Pick<Facts, 'remote' | 'credentialHelperIsBot' | 'identity' | 'githubLogin'>;
 type GitSetupPlan = 'configure' | 'unconfigure' | 'skip' | 'explain';
 
 let diagnose: (facts: Facts) => Diagnosis[];
@@ -187,13 +187,15 @@ describe('AI-09 diagnóstico do ambiente, na nuvem', () => {
 });
 
 describe('AI-09 configuração da credencial do git pelo hook', () => {
+  // Trocado em relação ao commit anterior: o critério passou a exigir que o token seja da conta configurada (A11).
+  // O fato `tokenPresent` saiu e entrou `githubLogin`, o login que o GitHub devolveu para o token lido.
   const plan = (change: Partial<GitSetupFacts>): GitSetupPlan =>
-    planGitSetup({ remote: false, identity: BOT_IDENTITY, tokenPresent: true, credentialHelperIsBot: false, ...change });
+    planGitSetup({ remote: false, identity: BOT_IDENTITY, githubLogin: 'minha-conta', credentialHelperIsBot: false, ...change });
 
   it('AI-09 na nuvem o hook não mexe na credencial, com ou sem token, em qualquer modo', () => {
     for (const identity of [BOT_IDENTITY, SELF_IDENTITY, undefined]) {
-      expect(plan({ remote: true, identity, tokenPresent: true })).toBe('skip');
-      expect(plan({ remote: true, identity, tokenPresent: false, credentialHelperIsBot: true })).toBe('skip');
+      expect(plan({ remote: true, identity, githubLogin: 'minha-conta' })).toBe('skip');
+      expect(plan({ remote: true, identity, githubLogin: null, credentialHelperIsBot: true })).toBe('skip');
     }
   });
 
@@ -203,26 +205,31 @@ describe('AI-09 configuração da credencial do git pelo hook', () => {
   });
 
   it('AI-09 modo bot, com o helper já do projeto, não reconfigura', () => {
-    expect(plan({ credentialHelperIsBot: true, tokenPresent: true })).toBe('skip');
-    expect(plan({ credentialHelperIsBot: true, tokenPresent: false })).toBe('skip');
+    expect(plan({ credentialHelperIsBot: true, githubLogin: 'minha-conta' })).toBe('skip');
+    expect(plan({ credentialHelperIsBot: true, githubLogin: null })).toBe('skip');
   });
 
-  it('AI-09 modo bot, sem helper e com token, configura sozinho', () => {
-    expect(plan({ tokenPresent: true, credentialHelperIsBot: false })).toBe('configure');
+  it('AI-09 modo bot, sem helper e com o token da conta configurada, configura sozinho', () => {
+    expect(plan({ githubLogin: 'minha-conta', credentialHelperIsBot: false })).toBe('configure');
   });
 
-  it('AI-09 modo bot, sem helper e sem token, só explica (guardar o token é de uma pessoa)', () => {
-    expect(plan({ tokenPresent: false, credentialHelperIsBot: false })).toBe('explain');
+  it('AI-09 modo bot, sem helper e sem token (login nulo), só explica (guardar o token é de uma pessoa)', () => {
+    expect(plan({ githubLogin: null, credentialHelperIsBot: false })).toBe('explain');
+  });
+
+  it('AI-14 modo bot, sem helper e com o token de outra conta, só explica e não instala o helper', () => {
+    expect(plan({ githubLogin: 'outra-conta', credentialHelperIsBot: false })).toBe('explain');
+    expect(plan({ githubLogin: 'roneyrogerio', credentialHelperIsBot: false })).toBe('explain');
   });
 
   it('AI-14 modo self, com o helper do projeto instalado, tira o helper', () => {
     expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: true })).toBe('unconfigure');
-    expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: true, tokenPresent: false })).toBe('unconfigure');
+    expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: true, githubLogin: null })).toBe('unconfigure');
   });
 
   it('AI-14 modo self, sem o helper do projeto, não faz nada', () => {
     expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: false })).toBe('skip');
-    expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: false, tokenPresent: false })).toBe('skip');
+    expect(plan({ identity: SELF_IDENTITY, credentialHelperIsBot: false, githubLogin: null })).toBe('skip');
   });
 });
 

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
-import { isolatedEnv, localConfig, makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
+import { isolatedEnv, localConfig, makeRepo, makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
 
 type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
 type Parsed = { identity: Identity; tokenStore?: 'system' | 'file' } | { error: string };
@@ -50,6 +50,12 @@ let setupBot: (
   store: 'system' | 'file',
   deps: SetupBotDeps,
 ) => Promise<boolean> = () => Promise.resolve(undefined as unknown as boolean);
+let configureIdentity: (
+  root: string,
+  identity: Identity,
+  store: 'system' | 'file',
+  deps: { setupBot: () => Promise<boolean> },
+) => Promise<boolean> = () => Promise.resolve(undefined as unknown as boolean);
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 // Só importa se a guarda existir: o módulo antigo executava o setup inteiro no import.
@@ -61,6 +67,7 @@ beforeAll(async () => {
     promptIdentity?: typeof promptIdentity;
     keychainHelp?: typeof keychainHelp;
     setupBot?: typeof setupBot;
+    configureIdentity?: typeof configureIdentity;
   };
   parseSetupArgs = mod.parseSetupArgs;
   // Ausentes até a implementação existir: o teste falha na asserção, não na importação.
@@ -68,6 +75,7 @@ beforeAll(async () => {
   if (mod.promptIdentity) promptIdentity = mod.promptIdentity;
   if (mod.keychainHelp) keychainHelp = mod.keychainHelp;
   if (mod.setupBot) setupBot = mod.setupBot;
+  if (mod.configureIdentity) configureIdentity = mod.configureIdentity;
 });
 
 afterEach(() => {
@@ -753,4 +761,117 @@ describe('AI-14 setupBot, chaveiro do sistema', () => {
     expect(await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps)).toBe(true);
     expect(run.storeToken).toHaveBeenCalledWith('update');
   });
+});
+
+// O setup não pode deixar o clone apontando para um item do chaveiro que o setupBot recusou (A11):
+// a identidade e o armazenamento só valem se o setup do bot deu certo, senão volta o que havia, inclusive o que faltava.
+describe('AI-14 configureIdentity, a configuração só fica se o setup do bot deu certo', () => {
+  const botOf = (login: string, keychainService: string): Identity => ({ mode: 'bot', login, keychainService });
+  const setupBotResult = (result: boolean) => ({ setupBot: () => Promise.resolve(result) });
+  const keys = ['identity', 'botLogin', 'keychainService', 'tokenStore'] as const;
+  const saved = (dir: string): Record<string, string | undefined> =>
+    Object.fromEntries(keys.map((key) => [key, localConfig(dir, `casecellshop.${key}`)]));
+
+  it('AI-14 setupBot que devolve false mantém o modo self que já estava no clone e devolve false', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+
+    const ok = await configureIdentity(dir, botOf('outra-conta', 'item-da-outra'), 'system', setupBotResult(false));
+
+    expect(ok).toBe(false);
+    expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
+    expect(localConfig(dir, 'casecellshop.botLogin')).toBeUndefined();
+    expect(localConfig(dir, 'casecellshop.keychainService')).toBeUndefined();
+  });
+
+  it('AI-14 setupBot que devolve false mantém o bot e o item anteriores', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'bot');
+    git(dir, 'config', '--local', 'casecellshop.botLogin', 'a');
+    git(dir, 'config', '--local', 'casecellshop.keychainService', 'item-a');
+
+    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'system', setupBotResult(false));
+
+    expect(ok).toBe(false);
+    expect(localConfig(dir, 'casecellshop.identity')).toBe('bot');
+    expect(localConfig(dir, 'casecellshop.botLogin')).toBe('a');
+    expect(localConfig(dir, 'casecellshop.keychainService')).toBe('item-a');
+  });
+
+  it('AI-14 setupBot que devolve true troca para o bot e o item novos e devolve true', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'bot');
+    git(dir, 'config', '--local', 'casecellshop.botLogin', 'a');
+    git(dir, 'config', '--local', 'casecellshop.keychainService', 'item-a');
+
+    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'system', setupBotResult(true));
+
+    expect(ok).toBe(true);
+    expect(localConfig(dir, 'casecellshop.identity')).toBe('bot');
+    expect(localConfig(dir, 'casecellshop.botLogin')).toBe('b');
+    expect(localConfig(dir, 'casecellshop.keychainService')).toBe('item-b');
+  });
+
+  it('AI-14 sem configuração antes e com setupBot false não sobra nenhuma chave casecellshop.*', async () => {
+    const dir = makeRepo();
+
+    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(false));
+
+    expect(ok).toBe(false);
+    expect(saved(dir)).toEqual({ identity: undefined, botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+  });
+
+  it('AI-14 o armazenamento do token também volta ao que era quando o setupBot devolve false', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+
+    await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(false));
+
+    expect(saved(dir)).toEqual({ identity: 'self', botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+  });
+
+  it('AI-14 setupBot true com armazenamento em arquivo grava o tokenStore file', async () => {
+    const dir = makeRepo();
+
+    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(true));
+
+    expect(ok).toBe(true);
+    expect(saved(dir)).toEqual({ identity: 'bot', botLogin: 'b', keychainService: 'item-b', tokenStore: 'file' });
+  });
+
+  // O setupBot lê o token pela configuração do clone (readToken): quando ele roda, a identidade nova já precisa estar gravada.
+  it('AI-14 quando o setupBot roda, a identidade e o armazenamento novos já estão no git config', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+    let during: Record<string, string | undefined> = {};
+
+    await configureIdentity(dir, botOf('b', 'item-b'), 'file', {
+      setupBot: () => {
+        during = saved(dir);
+        return Promise.resolve(false);
+      },
+    });
+
+    expect(during).toEqual({ identity: 'bot', botLogin: 'b', keychainService: 'item-b', tokenStore: 'file' });
+  });
+});
+
+// O CLI de verdade, numa cópia dos scripts: o modo self tira do clone o helper do projeto (A3), os dois valores.
+describe('AI-14 o CLI do setup:local no modo self com o helper do projeto instalado', () => {
+  it('AI-14 --identity self remove o valor vazio e o helper do projeto do credential.helper local e grava self', () => {
+    expect(runsOnlyWhenDirect()).toBe(true);
+    const dir = makeScriptsSandbox();
+    git(dir, 'config', '--local', '--add', 'credential.helper', '');
+    git(dir, 'config', '--local', '--add', 'credential.helper', `!node "${join(dir, 'scripts', 'git-credential-bot.ts')}"`);
+    const helpers = () =>
+      spawnSync('git', ['config', '--local', '--get-all', 'credential.helper'], { cwd: dir, encoding: 'utf8', env: isolatedEnv() });
+    expect(helpers().stdout).toContain('git-credential-bot');
+
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], { env: isolatedEnv() });
+
+    expect(result.status).toBe(0);
+    expect(helpers().stdout.trim()).toBe('');
+    expect(helpers().status).not.toBe(0);
+    expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
+  }, 30_000);
 });

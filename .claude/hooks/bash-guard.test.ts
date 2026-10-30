@@ -359,6 +359,15 @@ const SUBAGENT_FILE_WRITE_DENIED = [
   'npm test 2> err.log',
   'npm test &> all.log',
   'echo x 1>f.ts',
+  // alvo entre aspas, `>|` e interpretadores com invólucro ou versão (A10, A14)
+  'echo x > "f.ts"',
+  "echo x > 'f.ts'",
+  `cat > "$F" <<EOF\nx\nEOF`,
+  'echo x >| f.ts',
+  'echo x >>"f.ts"',
+  'timeout 5 python3 x.py',
+  'python3.12 x.py',
+  '"python3" x.py',
 ];
 
 const SUBAGENT_FILE_WRITE_ALLOWED = [
@@ -377,6 +386,13 @@ const SUBAGENT_FILE_WRITE_ALLOWED = [
   'echo "a > b"',
   'test 1 -gt 0',
   '[ -f a ] && echo ok',
+  // texto entre aspas que é argumento de um comando não divide o comando nem é redirecionamento (A12, A10)
+  'grep -rnE "python3|perl" .claude/agents',
+  "grep -n '`tee`' a.md",
+  "grep -E 'a;sed -i' f.ts",
+  "echo 'x >| y'",
+  'npm test >"/dev/null" 2>&1',
+  'node --input-type=module -e "console.log(1 > 0)"',
 ];
 
 describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
