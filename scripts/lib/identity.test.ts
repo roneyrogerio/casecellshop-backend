@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -464,4 +465,79 @@ describe('AI-14 keychainStatus', () => {
   it('AI-14 no Linux, status 1 sem erro de D-Bus (nada encontrado) devolve ok', () => {
     expect(mod.keychainStatus({ platform: 'linux', run: run({ status: 1, stderr: '' }) })).toBe('ok');
   });
+});
+
+// O ambiente de teste acima já define GIT_TERMINAL_PROMPT=0, o que esconderia a regressão: aqui ele fica de fora.
+// No terminal do VS Code, o GIT_ASKPASS vem definido, e o git chama o askpass antes de olhar o GIT_TERMINAL_PROMPT.
+// Só os controles do próprio readToken (credential.interactive=false, core.askPass vazio, GIT_ASKPASS vazio) o impedem.
+describe('AI-14 modo self nunca pergunta, sem a proteção do ambiente de teste', () => {
+  const secret = 'senha-do-askpass';
+
+  // Script que grava o marcador e imprime uma senha: se o git o chamar, o marcador aparece.
+  function askpassScript(): { script: string; marker: string } {
+    const dir = makeTempDir('askpass-');
+    const marker = join(dir, 'askpass-chamado');
+    const script = join(dir, 'askpass.sh');
+    writeFileSync(script, `#!/bin/sh\necho chamado > "${marker}"\necho ${secret}\n`);
+    chmodSync(script, 0o755);
+    return { script, marker };
+  }
+
+  // Repositório sem nenhum helper que responda: o único jeito de o git obter a senha é perguntar.
+  function bareRepo(): string {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'credential.helper', '');
+    return dir;
+  }
+
+  beforeEach(() => {
+    // Desfaz o GIT_TERMINAL_PROMPT=0 do beforeEach de cima e reaplica só o isolamento do git global e do system.
+    vi.unstubAllEnvs();
+    for (const [key, value] of Object.entries(isolatedEnv())) {
+      if (key.startsWith('GIT_CONFIG_') || key === 'HOME') vi.stubEnv(key, value);
+    }
+    vi.stubEnv('GIT_TERMINAL_PROMPT', undefined);
+  });
+
+  // Condição de ambiente: o askpass é um script sh executável, que o Windows não roda.
+  it.skipIf(process.platform === 'win32')(
+    'AI-14 modo self com GIT_ASKPASS definido e sem GIT_TERMINAL_PROMPT devolve undefined e não chama o askpass',
+    () => {
+      const { script, marker } = askpassScript();
+      vi.stubEnv('GIT_ASKPASS', script);
+      const dir = bareRepo();
+
+      expect(process.env.GIT_TERMINAL_PROMPT).toBeUndefined();
+      expect(mod.readToken({ mode: 'self' }, dir)).toBeUndefined();
+      expect(existsSync(marker)).toBe(false);
+    },
+    15_000,
+  );
+
+  // Controle negativo: o mesmo credential fill do git, sem as proteções, chama o askpass. Prova que o teste acima pegaria a regressão.
+  // Condição de ambiente: o askpass é um script sh executável, que o Windows não roda.
+  it.skipIf(process.platform === 'win32')(
+    'AI-14 controle: credential fill sem as proteções chama o askpass e obtém a senha',
+    () => {
+      const { script, marker } = askpassScript();
+      const dir = bareRepo();
+      const env: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined && key !== 'GIT_TERMINAL_PROMPT') env[key] = value;
+      }
+      env.GIT_ASKPASS = script;
+
+      const result = spawnSync('git', ['credential', 'fill'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env,
+        input: 'protocol=https\nhost=github.com\n\n',
+        timeout: 10_000,
+      });
+
+      expect(existsSync(marker)).toBe(true);
+      expect(result.stdout).toContain(`password=${secret}`);
+    },
+    15_000,
+  );
 });

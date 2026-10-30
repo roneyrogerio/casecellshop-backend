@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
 import { isolatedEnv, localConfig, makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
 
@@ -27,6 +27,30 @@ let resolveIdentity: (argv: string[], configured: Identity | undefined, interact
 let promptIdentity: (ask: Ask) => Promise<Parsed> = () => Promise.resolve({ error: 'módulo não carregado' });
 let keychainHelp: (status: 'missing-tool' | 'no-service') => string = () => '';
 
+type BotIdentity = Extract<Identity, { mode: 'bot' }>;
+type TokenCheck =
+  | { result: 'missing' }
+  | { result: 'valid'; login: string }
+  | { result: 'refused' }
+  | { result: 'unreachable' };
+interface SetupBotDeps {
+  readToken: () => string | undefined;
+  checkToken: (token: string | undefined) => Promise<TokenCheck>;
+  keychainStatus: () => 'ok' | 'missing-tool' | 'no-service';
+  storeToken: (mode: 'update' | 'replace') => Promise<boolean>;
+  confirm: (message: string) => Promise<boolean>;
+  interactive: boolean;
+  installHelper: () => void;
+  log: (message: string) => void;
+}
+// Sentinela: sem a função exportada, o teste falha na asserção do retorno, não na importação.
+let setupBot: (
+  root: string,
+  identity: BotIdentity,
+  store: 'system' | 'file',
+  deps: SetupBotDeps,
+) => Promise<boolean> = () => Promise.resolve(undefined as unknown as boolean);
+
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 // Só importa se a guarda existir: o módulo antigo executava o setup inteiro no import.
 beforeAll(async () => {
@@ -36,12 +60,14 @@ beforeAll(async () => {
     resolveIdentity?: typeof resolveIdentity;
     promptIdentity?: typeof promptIdentity;
     keychainHelp?: typeof keychainHelp;
+    setupBot?: typeof setupBot;
   };
   parseSetupArgs = mod.parseSetupArgs;
   // Ausentes até a implementação existir: o teste falha na asserção, não na importação.
   if (mod.resolveIdentity) resolveIdentity = mod.resolveIdentity;
   if (mod.promptIdentity) promptIdentity = mod.promptIdentity;
   if (mod.keychainHelp) keychainHelp = mod.keychainHelp;
+  if (mod.setupBot) setupBot = mod.setupBot;
 });
 
 afterEach(() => {
@@ -467,5 +493,264 @@ describe('AI-14 keychainHelp', () => {
   it('AI-14 no-service não manda instalar o pacote (controle: as duas ajudas são diferentes)', () => {
     expect(keychainHelp('no-service')).not.toBe(keychainHelp('missing-tool'));
     expect(keychainHelp('missing-tool')).not.toContain('--token-store file');
+  });
+});
+
+// O setup do modo bot, com todas as dependências injetadas: nada aqui toca o chaveiro, a rede ou o terminal.
+// Os quatro casos da conferência do token (AI-14): válido da conta, ausente ou recusado, de outra conta, sem conferência.
+const BOT_SETUP: BotIdentity = { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' };
+const VALID_OWN: TokenCheck = { result: 'valid', login: 'minha-conta' };
+const VALID_OTHER: TokenCheck = { result: 'valid', login: 'outra-conta' };
+const MISSING: TokenCheck = { result: 'missing' };
+const REFUSED: TokenCheck = { result: 'refused' };
+const UNREACHABLE: TokenCheck = { result: 'unreachable' };
+
+interface BotRun {
+  deps: SetupBotDeps;
+  checkToken: ReturnType<typeof vi.fn<SetupBotDeps['checkToken']>>;
+  storeToken: ReturnType<typeof vi.fn<SetupBotDeps['storeToken']>>;
+  confirm: ReturnType<typeof vi.fn<SetupBotDeps['confirm']>>;
+  installHelper: ReturnType<typeof vi.fn<SetupBotDeps['installHelper']>>;
+  keychainStatus: ReturnType<typeof vi.fn<SetupBotDeps['keychainStatus']>>;
+  order: string[];
+  output: () => string;
+}
+
+// checks: respostas da conferência, na ordem (a primeira é a conferência inicial, a segunda é a reconferência).
+// Antes do storeToken, o token guardado é `stored`; depois, vale 'token-novo', para provar que a reconferência relê o token.
+function botSetup(
+  checks: TokenCheck[],
+  options: {
+    stored?: string;
+    storeResult?: boolean;
+    confirmResult?: boolean;
+    interactive?: boolean;
+    keychain?: 'ok' | 'missing-tool' | 'no-service';
+  } = {},
+): BotRun {
+  const order: string[] = [];
+  const logs: string[] = [];
+  const queue = [...checks];
+  let replaced = false;
+  const checkToken = vi.fn<SetupBotDeps['checkToken']>(() => {
+    const next = queue.shift();
+    return next ? Promise.resolve(next) : Promise.reject(new Error('conferência inesperada'));
+  });
+  const storeToken = vi.fn<SetupBotDeps['storeToken']>((mode) => {
+    order.push(`storeToken:${mode}`);
+    replaced = options.storeResult ?? true;
+    return Promise.resolve(options.storeResult ?? true);
+  });
+  const confirm = vi.fn<SetupBotDeps['confirm']>(() => Promise.resolve(options.confirmResult ?? false));
+  const installHelper = vi.fn<SetupBotDeps['installHelper']>(() => {
+    order.push('installHelper');
+  });
+  const keychainStatus = vi.fn<SetupBotDeps['keychainStatus']>(() => options.keychain ?? 'ok');
+  const deps: SetupBotDeps = {
+    readToken: () => (replaced ? 'token-novo' : options.stored),
+    checkToken,
+    keychainStatus,
+    storeToken,
+    confirm,
+    interactive: options.interactive ?? true,
+    installHelper,
+    log: (message) => logs.push(message),
+  };
+  return { deps, checkToken, storeToken, confirm, installHelper, keychainStatus, order, output: () => logs.join('\n') };
+}
+
+describe('AI-14 setupBot, token válido da conta configurada', () => {
+  it('AI-14 token válido da conta configurada instala o helper sem tocar no token', async () => {
+    const run = botSetup([VALID_OWN], { stored: 'token-bom' });
+
+    const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+    expect(ok).toBe(true);
+    expect(run.checkToken).toHaveBeenCalledWith('token-bom');
+    expect(run.storeToken).not.toHaveBeenCalled();
+    expect(run.confirm).not.toHaveBeenCalled();
+    expect(run.installHelper).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AI-14 setupBot, token ausente ou recusado', () => {
+  it.each([
+    ['ausente', MISSING, undefined],
+    ['recusado (401)', REFUSED, 'token-vencido'],
+  ] as [string, TokenCheck, string | undefined][])(
+    'AI-14 token %s: atualiza no lugar (update), reconfere com o token novo e só então instala o helper',
+    async (_label, first, stored) => {
+      const run = botSetup([first, VALID_OWN], { stored });
+
+      const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+      expect(ok).toBe(true);
+      expect(run.storeToken).toHaveBeenCalledTimes(1);
+      expect(run.storeToken).toHaveBeenCalledWith('update');
+      expect(run.confirm).not.toHaveBeenCalled();
+      expect(run.checkToken).toHaveBeenCalledTimes(2);
+      expect(run.checkToken).toHaveBeenNthCalledWith(1, stored);
+      expect(run.checkToken).toHaveBeenNthCalledWith(2, 'token-novo');
+      expect(run.installHelper).toHaveBeenCalledTimes(1);
+      expect(run.order).toEqual(['storeToken:update', 'installHelper']);
+    },
+  );
+
+  it.each([
+    ['ausente', MISSING],
+    ['recusado (401)', REFUSED],
+  ] as [string, TokenCheck][])(
+    'AI-14 token %s: se o storeToken falha (prompt cancelado), devolve false e não instala o helper',
+    async (_label, first) => {
+      const run = botSetup([first], { storeResult: false });
+
+      const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+      expect(ok).toBe(false);
+      expect(run.storeToken).toHaveBeenCalledWith('update');
+      expect(run.installHelper).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['ausente', 'recusada (401)', MISSING, REFUSED],
+    ['recusado (401)', 'recusada (401)', REFUSED, REFUSED],
+    ['ausente', 'ausente', MISSING, MISSING],
+    ['recusado (401)', 'sem conferência', REFUSED, UNREACHABLE],
+    ['ausente', 'de outra conta', MISSING, VALID_OTHER],
+  ] as [string, string, TokenCheck, TokenCheck][])(
+    'AI-14 token %s: se a reconferência dá %s, devolve false e não instala o helper',
+    async (_label, _secondLabel, first, second) => {
+      const run = botSetup([first, second]);
+
+      const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+      expect(ok).toBe(false);
+      expect(run.storeToken).toHaveBeenCalledWith('update');
+      expect(run.checkToken).toHaveBeenCalledTimes(2);
+      expect(run.installHelper).not.toHaveBeenCalled();
+    },
+  );
+
+  it('AI-14 token recusado: a mensagem diz que o token foi recusado', async () => {
+    const run = botSetup([REFUSED, VALID_OWN], { stored: 'token-vencido' });
+
+    await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+    expect(run.output()).toMatch(/recusad/i);
+  });
+});
+
+describe('AI-14 setupBot, token de outra conta', () => {
+  it('AI-14 token de outra conta com terminal: pergunta citando as duas contas e, se a resposta é não, sai sem trocar nada', async () => {
+    const run = botSetup([VALID_OTHER], { stored: 'token-de-outra', interactive: true, confirmResult: false });
+
+    const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+    expect(ok).toBe(false);
+    expect(run.confirm).toHaveBeenCalledTimes(1);
+    const question = run.confirm.mock.calls[0]?.[0] ?? '';
+    expect(question).toContain('outra-conta');
+    expect(question).toContain('minha-conta');
+    expect(run.storeToken).not.toHaveBeenCalled();
+    expect(run.installHelper).not.toHaveBeenCalled();
+  });
+
+  it('AI-14 token de outra conta com terminal: se a resposta é sim, troca (replace), reconfere e só então instala o helper', async () => {
+    const run = botSetup([VALID_OTHER, VALID_OWN], {
+      stored: 'token-de-outra',
+      interactive: true,
+      confirmResult: true,
+    });
+
+    const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+    expect(ok).toBe(true);
+    expect(run.confirm).toHaveBeenCalledTimes(1);
+    expect(run.storeToken).toHaveBeenCalledTimes(1);
+    expect(run.storeToken).toHaveBeenCalledWith('replace');
+    expect(run.checkToken).toHaveBeenNthCalledWith(2, 'token-novo');
+    expect(run.order).toEqual(['storeToken:replace', 'installHelper']);
+  });
+
+  it('AI-14 token de outra conta, confirmado: se o storeToken falha ou a reconferência não é da conta, devolve false sem instalar o helper', async () => {
+    const storeFails = botSetup([VALID_OTHER], { interactive: true, confirmResult: true, storeResult: false });
+    const stillOther = botSetup([VALID_OTHER, VALID_OTHER], { interactive: true, confirmResult: true });
+
+    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', storeFails.deps)).toBe(false);
+    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', stillOther.deps)).toBe(false);
+
+    expect(storeFails.storeToken).toHaveBeenCalledWith('replace');
+    expect(storeFails.installHelper).not.toHaveBeenCalled();
+    expect(stillOther.installHelper).not.toHaveBeenCalled();
+  });
+
+  it('AI-14 token de outra conta sem terminal: devolve false sem perguntar nem trocar, e a mensagem sugere --keychain', async () => {
+    const run = botSetup([VALID_OTHER], { stored: 'token-de-outra', interactive: false, confirmResult: true });
+
+    const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+    expect(ok).toBe(false);
+    expect(run.confirm).not.toHaveBeenCalled();
+    expect(run.storeToken).not.toHaveBeenCalled();
+    expect(run.installHelper).not.toHaveBeenCalled();
+    expect(run.output()).toContain('--keychain');
+  });
+});
+
+describe('AI-14 setupBot, sem conferência possível', () => {
+  it.each([true, false])(
+    'AI-14 sem rede ou com erro da API (interactive=%s): não mexe no chaveiro, não instala o helper e diz que não deu para conferir',
+    async (interactive) => {
+      const run = botSetup([UNREACHABLE], { stored: 'token-talvez-bom', interactive, confirmResult: true });
+
+      const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+      expect(ok).toBe(false);
+      expect(run.storeToken).not.toHaveBeenCalled();
+      expect(run.confirm).not.toHaveBeenCalled();
+      expect(run.installHelper).not.toHaveBeenCalled();
+      expect(run.checkToken).toHaveBeenCalledTimes(1);
+      expect(run.output()).toContain('conferir');
+    },
+  );
+});
+
+describe('AI-14 setupBot, chaveiro do sistema', () => {
+  it.each([
+    ['missing-tool', 'libsecret-tools'],
+    ['no-service', '--token-store file'],
+  ] as ['missing-tool' | 'no-service', string][])(
+    'AI-14 armazenamento do sistema com o chaveiro %s e token ausente: devolve false sem pedir o token e mostra a ajuda',
+    async (keychain, expected) => {
+      const run = botSetup([MISSING], { keychain });
+
+      const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
+
+      expect(ok).toBe(false);
+      expect(run.keychainStatus).toHaveBeenCalled();
+      expect(run.storeToken).not.toHaveBeenCalled();
+      expect(run.installHelper).not.toHaveBeenCalled();
+      expect(run.output()).toContain(expected);
+    },
+  );
+
+  it('AI-14 armazenamento em arquivo nem consulta o chaveiro: o token ausente é pedido mesmo com o chaveiro quebrado', async () => {
+    const run = botSetup([MISSING, VALID_OWN], { keychain: 'no-service' });
+
+    const ok = await setupBot('/nao/usado', BOT_SETUP, 'file', run.deps);
+
+    expect(ok).toBe(true);
+    expect(run.keychainStatus).not.toHaveBeenCalled();
+    expect(run.storeToken).toHaveBeenCalledWith('update');
+    expect(run.order).toEqual(['storeToken:update', 'installHelper']);
+  });
+
+  // Controle: com o chaveiro funcionando, o mesmo token ausente chega ao storeToken.
+  it('AI-14 armazenamento do sistema com o chaveiro ok e token ausente chega ao storeToken (controle)', async () => {
+    const run = botSetup([MISSING, VALID_OWN], { keychain: 'ok' });
+
+    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps)).toBe(true);
+    expect(run.storeToken).toHaveBeenCalledWith('update');
   });
 });
