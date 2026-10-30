@@ -54,3 +54,25 @@ jobs:
             echo "$changed"
             exit 1
           fi
+
+  # CONVENTIONS.md, "Commits": confere o cabeçalho de cada commit do PR, como no guia de CI
+  # do commitlint. Job à parte para rodar uma vez, e não por versão do Node.
+  commits:
+    name: Commits do PR
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - name: Valida os commits do PR com o commitlint
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose

@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
     "lint:openapi": "redocly lint openapi.yaml",
-    "check:specs": "node scripts/check-spec-limits.ts"
+    "check:specs": "node scripts/check-spec-limits.ts",
+    "lint:commits": "commitlint --from origin/main --to HEAD"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "9.1.0",
@@ -33,6 +34,8 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@redocly/cli": "2.72.1",
     "@testcontainers/postgresql": "12.2.1",
     "@types/express": "5.0.6",
