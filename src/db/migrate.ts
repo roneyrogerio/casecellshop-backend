@@ -25,7 +25,7 @@ export async function migrate(pool: Pool): Promise<void> {
         singleTransaction: false,
         advisoryLockMode: 'wait',
         // Silencia o console do runner; quem chama registra o resultado.
-        logger: { debug: undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
       });
     });
   }

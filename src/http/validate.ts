@@ -24,6 +24,13 @@ function messageFor(issue: z.core.$ZodIssue): string {
       return 'Valor não permitido';
     case 'unrecognized_keys':
       return 'Parâmetro desconhecido';
+    // Códigos sem mensagem própria: listados para a verificação de
+    // exaustividade, todos caem na mensagem genérica de sempre.
+    case 'not_multiple_of':
+    case 'invalid_union':
+    case 'invalid_key':
+    case 'invalid_element':
+    case 'custom':
     default:
       return 'Valor inválido';
   }
