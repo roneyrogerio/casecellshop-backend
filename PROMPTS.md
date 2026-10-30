@@ -296,3 +296,11 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **O que a IA fez:** auditou o `CLAUDE.md`, o `AGENTS.md`, os quatro agentes, a skill de usuário `prototype` e o plugin `impeccable` contra o Claude Opus 5.5 (sessão principal, `planner`, `reviewer`) e o Claude Sonnet 5.5 (`test-writer`, `implementer`). Não achou texto escrito para modelo antigo; achou cinco fatos que o M1 deixou para trás.
 - **Resultado:** o `reviewer` compara com a `origin/main`, e não com a `main` local, que estava defasada; o `AGENTS.md` diz que a guarda cobre `Edit`, `Write` e `NotebookEdit`, e não o Bash (R10); o `implementer` só reporta pronto com todas as checagens do CI; a lista de comandos do `AGENTS.md` ficou completa; e saiu a referência ao `opusplan`. Dois pontos ficaram só sinalizados: a lista de comandos do `reviewer` e a exceção do `FND-07` e do `FND-08` à regra de nascer falhando.
 - **Verificação:** `npm run check:specs`, os testes unitários e o CI.
+
+### Comandos que pedem aprovação
+
+- **Pedido:** o mantenedor achou os pedidos de aprovação difíceis de ler: comandos longos, encadeados, com a mensagem do commit num *heredoc*.
+- **O que a IA fez:** conferiu na documentação do Claude Code o que o pedido mostra (a descrição e o comando inteiro) e achou issues abertas sobre commits com *heredoc*; comparou com o MCP do GitHub, que só cobriria o PR.
+- **Corrigido:** a IA guardou a regra só na memória local da sessão; o mantenedor apontou que ela precisa estar no repositório, para valer para quem clonar.
+- **Resultado:** a regra no `AGENTS.md` e a linha "Comandos que pedem aprovação" na tabela de ferramentas.
+- **Verificação:** este commit e o push já seguem a regra.

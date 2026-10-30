@@ -44,6 +44,7 @@ The main session orchestrates. It runs on `opus` with `effortLevel: high` (set i
 - Run `/security-review` on the M2 PR and before delivery.
 - Record decisions and AI usage in the same PR, as "Decision records" describes.
 - Never commit or push without the maintainer's approval.
+- A command that asks for approval (`git commit`, `git push`, a `gh pr` write) runs alone, on one line, never chained or with a heredoc: write the commit message to a file and run `git commit -F <file>`, and describe the command in Portuguese. The maintainer reads the whole command before approving it.
 
 ## GitHub
 
