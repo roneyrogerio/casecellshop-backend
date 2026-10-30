@@ -15,6 +15,7 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 let environment: StartedDockerComposeEnvironment;
 let projectName: string;
 let apiPort: number;
+let jaegerUiPort: number;
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -51,11 +52,12 @@ async function inspectOneShot(service: string) {
 
 beforeAll(async () => {
   apiPort = await freePort();
+  jaegerUiPort = await freePort();
   projectName = `ccs-fnd01-${randomBytes(4).toString('hex')}`;
-  // Nome de projeto próprio e porta livre: não conflita com o compose de desenvolvimento.
+  // Nome de projeto próprio e portas livres (API e interface do Jaeger): não conflita com o compose de desenvolvimento.
   environment = await new DockerComposeEnvironment(root, 'compose.yaml')
     .withProjectName(projectName)
-    .withEnvironment({ API_PORT: String(apiPort) })
+    .withEnvironment({ API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) })
     .withBuild()
     .withStartupTimeout(240_000)
     .up();

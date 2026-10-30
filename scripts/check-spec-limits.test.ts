@@ -138,6 +138,50 @@ describe('FND-06 limites de tamanho das specs e das instruções da IA', () => {
     expect(violations.some((violation) => violation.includes('planner.md'))).toBe(true);
   });
 
+  it('FND-06 acusa a tabela do README com uma coluna a mais, que não é reconhecida', () => {
+    writeValidTree();
+    write(
+      '.specs/README.md',
+      [
+        '# Specs',
+        '',
+        '| Arquivo | Limite | Observação |',
+        '| --- | --- | --- |',
+        ...WORD_LIMITS.map(([name, , limit]) => `| \`${name}\` | ${limit.toLocaleString('pt-BR')} | ok |`),
+        '',
+      ].join('\n'),
+    );
+
+    const violations = checkSpecLimits(tree);
+
+    expect(violations.length).toBeGreaterThan(0);
+    for (const [name] of WORD_LIMITS) {
+      expect(violations.some((violation) => violation.includes(name)), `sem violação citando ${name}`).toBe(true);
+    }
+  });
+
+  it.each(WORD_LIMITS)('FND-06 acusa a tabela do README sem a linha do %s, citando o arquivo', (name) => {
+    writeValidTree();
+    write(
+      '.specs/README.md',
+      [
+        '# Specs',
+        '',
+        '| Arquivo | Limite |',
+        '| --- | --- |',
+        ...WORD_LIMITS.filter(([other]) => other !== name).map(
+          ([other, , limit]) => `| \`${other}\` | ${limit.toLocaleString('pt-BR')} |`,
+        ),
+        '',
+      ].join('\n'),
+    );
+
+    const violations = checkSpecLimits(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(name);
+  });
+
   it('FND-06 não acusa nada no repositório real', () => {
     expect(checkSpecLimits(root)).toEqual([]);
   });
