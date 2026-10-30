@@ -4,6 +4,11 @@
 # global que troca https por ssh, o push sairia com a chave SSH do dono, que é
 # administrador. O git passa aqui a URL já reescrita e roda este hook antes de
 # enviar qualquer ref.
+
+# O git escreve no stdin uma linha por ref enviada. Ler tudo antes de decidir
+# evita que quem escreve receba EPIPE quando o hook sai cedo.
+cat >/dev/null
+
 case "$2" in
   https://github.com/*) exit 0 ;;
 esac
