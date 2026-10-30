@@ -1,9 +1,19 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 interface CheckResult {
   ok: boolean;
@@ -262,6 +272,7 @@ describe('AI-03 hook de parada devolve o agente ao trabalho enquanto a verifica�
 });
 
 const IMPLEMENTER_FORBIDDEN_CHANGES = [
+  'src/novo.test.ts',
   'src/checkout/reserve.test.ts',
   'scripts/check-env.test.ts',
   'test/integration/checkout/foo.test.ts',
@@ -316,6 +327,12 @@ describe('AI-03 o implementer é devolvido quando o git status mostra arquivo fo
 
     expect(decision.action).toBe('allow');
     expect(writes).toContainEqual([KEY, 0]);
+  });
+
+  it('AI-03 o implementer com o npm passando e só src/ alterado é liberado', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/app.ts'] });
+
+    expect((await decide(stop('implementer'), deps)).action).toBe('allow');
   });
 
   it('AI-03 o implementer sem arquivo alterado é liberado', async () => {
@@ -413,6 +430,21 @@ describe('AI-03 o test-writer é devolvido quando altera arquivo fora dos testes
     },
   );
 
+  it('AI-03 o test-writer que alterou código de produção é devolvido e a mensagem cita o caminho', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/app.ts'] });
+
+    const decision = await decide(stop('test-writer', { agent_id: 'a1', session_id: 's1' }), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('src/app.ts');
+  });
+
+  it('AI-03 o test-writer que só alterou test/helpers/ e *.test.ts em src/ é liberado', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['test/helpers/clock.ts', 'src/app.test.ts'] });
+
+    expect((await decide(stop('test-writer'), deps)).action).toBe('allow');
+  });
+
   it('AI-03 o test-writer que só alterou *.test.ts e test/ é liberado', async () => {
     const { deps } = makeDeps(
       {},
@@ -503,7 +535,9 @@ describe('AI-12 o hook de parada deixa terminar e registra a exceção quando o 
   });
 });
 
-// Processo de verdade: o hook é um script, e o que o Claude Code vê é o código de saída, o stderr e os arquivos.
+// Processo de verdade, só onde o teste prova a fiação ou depende de git e de arquivos de verdade: o hook é um
+// script, e o que o Claude Code vê é o código de saída, o stderr e os arquivos. A decisão (devolver, liberar,
+// exceção) está nos testes acima, dentro do processo, com dependências falsas.
 const hookFile = join(import.meta.dirname, 'subagent-stop.mjs');
 
 interface Sandbox {
@@ -572,13 +606,17 @@ function runHook(sandbox: Sandbox, input: unknown, raw?: string) {
   return runStopOnly(sandbox, input, raw);
 }
 
-function git(sandbox: Sandbox, ...args: string[]): void {
+function gitIn(cwd: string, ...args: string[]): void {
   const result = spawnSync(
     'git',
     ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args],
-    { cwd: sandbox.project, encoding: 'utf8' },
+    { cwd, encoding: 'utf8' },
   );
   expect(result.status, result.stderr).toBe(0);
+}
+
+function git(sandbox: Sandbox, ...args: string[]): void {
+  gitIn(sandbox.project, ...args);
 }
 
 function writeIn(sandbox: Sandbox, relative: string, content: string): void {
@@ -589,14 +627,34 @@ function writeIn(sandbox: Sandbox, relative: string, content: string): void {
 
 const IMPLEMENTER_STOP = { agent_type: 'implementer', agent_id: 'a1', session_id: 's1' };
 
-// Repositório com um commit inicial que já tem src/ e test/ e um package.json com scripts.
+// Repositório com um commit inicial que já tem src/ e test/ e um package.json com scripts. Montado uma vez por
+// arquivo (init, add e commit são cinco processos do git) e copiado para cada teste: o teste que muda refs, config ou
+// worktree altera a própria cópia, então nenhum teste enxerga o que outro fez.
+let templateBase: string;
+let templateRepo: string;
+
+beforeAll(() => {
+  templateBase = mkdtempSync(join(tmpdir(), 'ai03-template-'));
+  templateRepo = join(templateBase, 'repo');
+  mkdirSync(join(templateRepo, 'src'), { recursive: true });
+  mkdirSync(join(templateRepo, 'test', 'helpers'), { recursive: true });
+  gitIn(templateRepo, 'init', '-q');
+  writeFileSync(
+    join(templateRepo, 'package.json'),
+    JSON.stringify({ name: 'x', scripts: { lint: 'oxlint' }, dependencies: {} }, null, 2),
+  );
+  writeFileSync(join(templateRepo, 'src', 'app.ts'), 'export {};\n');
+  writeFileSync(join(templateRepo, 'test', 'helpers', 'clock.ts'), 'export {};\n');
+  gitIn(templateRepo, 'add', '-A');
+  gitIn(templateRepo, 'commit', '-q', '-m', 'base');
+});
+
+afterAll(() => {
+  rmSync(templateBase, { recursive: true, force: true });
+});
+
 function makeRepo(sandbox: Sandbox): void {
-  git(sandbox, 'init', '-q');
-  writeIn(sandbox, 'package.json', JSON.stringify({ name: 'x', scripts: { lint: 'oxlint' }, dependencies: {} }, null, 2));
-  writeIn(sandbox, 'src/app.ts', 'export {};\n');
-  writeIn(sandbox, 'test/helpers/clock.ts', 'export {};\n');
-  git(sandbox, 'add', '-A');
-  git(sandbox, 'commit', '-q', '-m', 'base');
+  cpSync(templateRepo, sandbox.project, { recursive: true });
 }
 
 describe('AI-03 o hook de parada como processo', () => {
@@ -618,14 +676,6 @@ describe('AI-03 o hook de parada como processo', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('AI-03 o implementer com o npm passando e só src/ alterado num repositório git sai com código 0', () => {
-    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
-    makeRepo(sandbox);
-    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
-
-    expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
-  });
-
   it('AI-03 o implementer que alterou um teste rastreado sai com código 2 e o stderr cita o caminho, com o npm passando', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
@@ -635,17 +685,6 @@ describe('AI-03 o hook de parada como processo', () => {
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('test/helpers/clock.ts');
-  });
-
-  it('AI-03 o implementer que criou um teste novo numa pasta que já existe sai com código 2', () => {
-    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
-    makeRepo(sandbox);
-    writeIn(sandbox, 'src/novo.test.ts', 'export {};\n');
-
-    const result = runHook(sandbox, IMPLEMENTER_STOP);
-
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain('src/novo.test.ts');
   });
 
   // O git status esconde os arquivos de uma pasta nova atrás do nome da pasta, a menos que liste todos.
@@ -683,24 +722,15 @@ describe('AI-03 o hook de parada como processo', () => {
     expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
   });
 
-  it('AI-03 o test-writer que alterou código de produção sai com código 2 e o stderr cita o caminho', () => {
+  it('AI-03 a entrada ilegível sai com código 2 e o stderr avisa', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
-    makeRepo(sandbox);
-    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
 
-    const result = runHook(sandbox, { agent_type: 'test-writer', agent_id: 'a1', session_id: 's1' });
+    for (const raw of ['isto não é json', '', '{"agent_type": "implementer", "agent_id": ']) {
+      const result = runStopOnly(sandbox, undefined, raw);
 
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain('src/app.ts');
-  });
-
-  it('AI-03 o test-writer que só alterou testes sai com código 0', () => {
-    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
-    makeRepo(sandbox);
-    writeIn(sandbox, 'test/helpers/clock.ts', 'export const a = 1;\n');
-    writeIn(sandbox, 'src/app.test.ts', 'export {};\n');
-
-    expect(runHook(sandbox, { agent_type: 'test-writer', agent_id: 'a1', session_id: 's1' }).code).toBe(0);
+      expect(result.code).toBe(2);
+      expect(result.stderr).not.toBe('');
+    }
   });
 });
 
@@ -770,6 +800,128 @@ describe('AI-03 o hook de parada grava o relatório do reviewer', () => {
 
     expect(result.code).toBe(0);
     expect(existsSync(join(sandbox.project, '.claude', 'reviews', 'r2.md'))).toBe(false);
+  });
+});
+
+const postToolFile = join(import.meta.dirname, 'post-tool.mjs');
+
+// O revisor em segundo plano entrega o relatório pela ferramenta SubagentHandback; o PostToolUse grava e,
+// depois, a parada dele traz só o texto de encerramento (AI-15).
+function runHandback(sandbox: Sandbox, agentId: string, message: string) {
+  const result = spawnSync(process.execPath, [postToolFile], {
+    input: JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      session_id: 's1',
+      cwd: sandbox.project,
+      agent_type: 'reviewer',
+      agent_id: agentId,
+      tool_name: 'SubagentHandback',
+      tool_input: { message },
+    }),
+    encoding: 'utf8',
+    cwd: sandbox.project,
+    env: hookEnv(sandbox),
+  });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function reviewerStop(agentId: string, lastMessage: string) {
+  return { agent_type: 'reviewer', agent_id: agentId, session_id: 's1', last_assistant_message: lastMessage };
+}
+
+function savedReport(sandbox: Sandbox, agentId: string): string {
+  return readFileSync(join(sandbox.project, '.claude', 'reviews', `${agentId}.md`), 'utf8');
+}
+
+describe('AI-15 o hook de parada não sobrescreve o relatório entregue pelo SubagentHandback', () => {
+  it('AI-15 depois do SubagentHandback com "A", a parada do mesmo reviewer com "B" deixa o relatório em "A"', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    expect(runHandback(sandbox, 'R1', 'A').code).toBe(0);
+
+    const result = runStopOnly(sandbox, reviewerStop('R1', 'B'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  it('AI-15 numa retomada sem SubagentHandback, a segunda parada de R1 com "C" volta a gravar a mensagem final', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+
+    // A retomada dispara o SubagentStart de novo e o revisor encerra sem entregar nada pela ferramenta.
+    const result = runHook(sandbox, reviewerStop('R1', 'C'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('C');
+  });
+
+  it('AI-15 a segunda parada de R1 com "C" também grava quando o SubagentStart da retomada não rodou', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+
+    runStopOnly(sandbox, reviewerStop('R1', 'C'));
+
+    expect(savedReport(sandbox, 'R1')).toBe('C');
+  });
+
+  it('AI-15 uma nova entrega pelo SubagentHandback depois da retomada vale de novo contra a parada seguinte', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+    runStopOnly(sandbox, reviewerStop('R1', 'C'));
+
+    runHandback(sandbox, 'R1', 'D');
+    runStopOnly(sandbox, reviewerStop('R1', 'E'));
+
+    expect(savedReport(sandbox, 'R1')).toBe('D');
+  });
+
+  it('AI-15 a parada de R1 sem texto final, depois do SubagentHandback, também deixa o relatório intacto', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+
+    const result = runStopOnly(sandbox, { agent_type: 'reviewer', agent_id: 'R1', session_id: 's1' });
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  // Controle negativo: o SubagentHandback de um revisor não protege o relatório de outro.
+  it('AI-15 controle: o SubagentHandback de R1 não impede a parada de R2 de gravar a mensagem final dele', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runHandback(sandbox, 'R1', 'A');
+
+    runHook(sandbox, reviewerStop('R2', 'B'));
+
+    expect(savedReport(sandbox, 'R2')).toBe('B');
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  // Controle negativo: o revisor em primeiro plano não usa a ferramenta, e a mensagem final continua sendo o relatório.
+  it('AI-15 controle: o revisor em primeiro plano, sem SubagentHandback, tem a mensagem final gravada', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    const result = runHook(sandbox, reviewerStop('R3', '## Revisão 1\ntexto\n'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R3')).toBe('## Revisão 1\ntexto\n');
+  });
+
+  it('AI-15 controle: duas paradas seguidas do revisor em primeiro plano gravam sempre a última mensagem', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    runHook(sandbox, reviewerStop('R3', 'primeira'));
+    runHook(sandbox, reviewerStop('R3', 'segunda'));
+
+    expect(savedReport(sandbox, 'R3')).toBe('segunda');
   });
 });
 

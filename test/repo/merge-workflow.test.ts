@@ -26,7 +26,7 @@ const EXPECTED_PERMISSIONS = {
 } as const;
 
 function loadWorkflow(): Workflow {
-  const path = join(import.meta.dirname, '..', '.github', 'workflows', 'merge-on-approval.yml');
+  const path = join(import.meta.dirname, '..', '..', '.github', 'workflows', 'merge-on-approval.yml');
   return parse(readFileSync(path, 'utf8')) as Workflow;
 }
 

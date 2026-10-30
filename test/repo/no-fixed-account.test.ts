@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const root = join(import.meta.dirname, '..');
+const root = join(import.meta.dirname, '..', '..');
 const FIXED_ACCOUNT = /honeyforge/i;
 
 // Código de produção dos trilhos: scripts e hooks, fora os testes.

@@ -1,19 +1,21 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
-const fixturesDir = path.join(root, 'test', 'fixtures');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 
 describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   let tree: string;
 
-  // Dentro do repositório, para o oxlint aplicar a configuração e o tsconfig do projeto.
+  // Na pasta temporária do sistema, e não dentro do repositório: um lint paralelo ou uma execução interrompida
+  // esbarraria no arquivo de amostra. A configuração do projeto entra por caminho absoluto.
   beforeEach(() => {
-    mkdirSync(fixturesDir, { recursive: true });
-    tree = mkdtempSync(path.join(fixturesDir, 'lint-'));
+    tree = mkdtempSync(path.join(tmpdir(), 'ai02-lint-'));
+    // As regras com tipos resolvem o `vitest` importado pela amostra a partir da pasta dela.
+    symlinkSync(path.join(root, 'node_modules'), path.join(tree, 'node_modules'), 'dir');
   });
 
   afterEach(() => {
@@ -25,7 +27,7 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
     // Importa só o que o corpo usa, para o no-unused-vars não reprovar o arquivo por outro motivo.
     const imports = body.includes('describe') ? 'describe, expect, it' : 'expect, it';
     writeFileSync(file, `import { ${imports} } from 'vitest';\n\n${body}\n`);
-    const result = spawnSync('npx', ['oxlint', '-c', '.oxlintrc.json', file], {
+    const result = spawnSync('npx', ['oxlint', '-c', path.join(root, '.oxlintrc.json'), file], {
       cwd: root,
       encoding: 'utf8',
     });
@@ -91,9 +93,12 @@ describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', 
     expect(vitestFiles('integration')).toEqual(all.filter((file) => file.startsWith('test/integration/')));
   }, 60_000);
 
+  // O arquivo de scripts/ do controle é um teste que fica ao lado do script que testa; este próprio
+  // arquivo agora mora em test/repo/.
   it('AI-02 controle: a conferência enxerga os testes de .claude/, de scripts/ e de test/integration/', () => {
     expect(outsideIntegration).toContain('.claude/hooks/path-guard.test.ts');
-    expect(outsideIntegration).toContain('scripts/test-layout.test.ts');
+    expect(outsideIntegration).toContain('scripts/check-env.test.ts');
+    expect(outsideIntegration).toContain('test/repo/test-layout.test.ts');
     expect(all.some((file) => file.startsWith('test/integration/'))).toBe(true);
     expect(vitestFiles('unit')).not.toContain('test/integration/foundation/compose.test.ts');
   }, 60_000);

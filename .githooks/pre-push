@@ -10,7 +10,17 @@
 cat >/dev/null
 
 case "$2" in
-  https://github.com/*) exit 0 ;;
+  https://github.com/*) ;;
+  *)
+    echo "pre-push: recusado. O push deste repositório só sai por https://github.com/ com a credencial do bot; a URL recebida foi \"$2\". Confira o origin e os url.*.insteadOf do git config (AI-08)." >&2
+    exit 1
+    ;;
 esac
-echo "pre-push: recusado. O push deste repositório só sai por https://github.com/ com a credencial do bot; a URL recebida foi \"$2\". Confira o origin e os url.*.insteadOf do git config (AI-08)." >&2
-exit 1
+
+# AI-17: o mesmo que o CI confere, sem os testes de integração, antes de o código
+# sair da máquina; um vermelho aqui custa um minuto, no CI custa um ciclo inteiro.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if ! npm run verify; then
+  echo "pre-push: recusado. O npm run verify falhou; corrija antes de enviar (AI-17)." >&2
+  exit 1
+fi

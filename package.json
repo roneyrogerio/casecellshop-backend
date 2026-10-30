@@ -16,6 +16,8 @@
     "lint:commits": "commitlint --from origin/main --to HEAD",
     "test:changed": "vitest run --changed",
     "verify:fast": "npm run lint && npm run typecheck && npm run test:changed",
+    "verify": "npm run lint && npm run typecheck && npm run test:unit && npm run openapi -- --check && npm run lint:openapi && npm run check:instructions && npm run check:migrations && npm run check:scripts",
+    "verify:full": "npm run lint && npm run typecheck && npm test && npm run openapi -- --check && npm run lint:openapi && npm run check:instructions && npm run check:migrations && npm run check:scripts",
     "check:instructions": "node scripts/check-instructions.ts",
     "check:migrations": "node scripts/check-migrations.ts",
     "setup:local": "node scripts/setup-local.ts",

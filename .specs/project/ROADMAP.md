@@ -52,18 +52,18 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - `package.json` com versões exatas e `engines`, `.nvmrc`, `tsconfig` e lint.
 - Compose com PostgreSQL (com healthcheck), serviço de migração, API e worker, estes só depois das migrações (`depends_on` com `service_completed_successfully`); `node` como comando de cada contêiner; `stop_grace_period: 30s` e `restart: unless-stopped` na API e no worker.
 - Migrações da loja e do `erp_sim`, e os dados iniciais do ERP simulado num *seed* que só o compose roda; até o M4, cada teste cria os dados que usa.
-- CI: `npm ci` → lint → `tsc --noEmit` → testes → `openapi.yaml` em dia → limite de tamanho das specs e das instruções da IA, no Node do `.nvmrc` e na 24.12.
+- CI: `npm ci` → lint → `tsc --noEmit` → testes → `openapi.yaml` em dia → limite de tamanho das instruções da IA (o das specs saiu com a AD-012), no Node do `.nvmrc` e na 24.12.
 - Contrato base (schema de erro RFC 9457 e resposta `default`), telemetria, `/health`, encerramento gracioso e o ERP simulado.
 - README inicial: pré-requisitos (Docker e Node a partir da 24.12), um comando para subir e outro para testar, a tabela requisito → arquivo → teste e um `requests.http`.
 
 **Pronto quando:** `FND-*` passam.
 
-## F1 — Fábrica v2 · EM ANDAMENTO
+## F1 — Fábrica v2 · CONCLUÍDO
 
-**Meta:** o fluxo de IA passa a se verificar sozinho e a deixar o humano só onde ele decide, antes do M2, num PR de processo com teto de uma janela de 5 h (AD-012, AD-013).
+**Meta:** o fluxo de IA passa a se verificar sozinho e a deixar o humano só onde ele decide, antes do M2, em PRs de processo com teto de tempo (AD-012 a AD-016). Entrou pelos PRs #4, #5 e o de fechamento.
 
 **Pronto quando:**
-- os critérios `AI-01` a `AI-10`, menos o `AI-05` (que entra antes do M2, no endurecimento do CI), estão verdes, cada trilho com um controle negativo;
+- os critérios `AI-01` a `AI-18` estão verdes, cada trilho com um controle negativo;
 - o CI está verde;
 - o ruleset protege a `main`;
 - o PR registra o tempo gasto.

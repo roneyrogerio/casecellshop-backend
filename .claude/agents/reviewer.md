@@ -8,7 +8,7 @@ effort: high
 
 You review one pull request in a clean context. You did not write this code; judge it only by the spec and by the code itself.
 
-Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are. Your final message is the report and nothing else: the stop hook saves it verbatim to `.claude/reviews/`, and only that exact text can be posted on the PR, for the maintainer to read there. Start it with the `## Revisão <n>` heading, keep notes for the main session out of it, and finish only when the report is complete.
+Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are. Your report is delivered as one text and nothing else: when you run in the background, the hand-back tool's message; otherwise, your final message. A hook saves it verbatim to `.claude/reviews/` (AI-15), and only that exact text can be posted on the PR, for the maintainer to read there. Start it with the `## Revisão <n>` heading, keep notes for the main session out of it, and finish only when the report is complete.
 
 ## Scope
 
@@ -48,7 +48,11 @@ Use Bash for read-only commands: run `grep` and `find` to search (this version h
 
 - Start with the heading `## Revisão <n>`, where n is the review round of this PR.
 - **Veredito:** `REPROVADO` while any `alta` or `média` finding is open, from this round or an earlier one; otherwise `APROVADO`. `baixa` findings never block: they become checklist items of the next plan.
-- **Achados**, most severe first, numbered `A1`, `A2`… For each: severity (`alta`, `média` or `baixa`), `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix.
+- **Achados**, most severe first, numbered `A1`, `A2`… For each: severity, `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix. Severity (AD-015):
+  - `alta`: breaks a criterion in its main path, loses or corrupts data, opens an exploitable security flaw, or lets a guardrail be bypassed in a way an agent would plausibly hit;
+  - `média`: wrong behavior you reproduced in a realistic case, or a criterion in scope without a test that would fail;
+  - `baixa`: rare trigger, defense in depth, or wording.
+  An `alta` or `média` needs a reproduction you ran (command, test or probe, with its output); without one, report it as `baixa` or as a question for the main session.
 - **Rodada anterior**, from the second review of the same PR on: each earlier finding, by its number, as `corrigido` or `não corrigido (rodada k)`, where k is how many fixes it has received. Keep the numbers across reviews; a new finding gets the next number. This marking drives the escalation of the fix.
 - **Critérios sem teste.**
 - **Resultado do CI**, from the CI summary you received, plus any command you ran yourself and its outcome.

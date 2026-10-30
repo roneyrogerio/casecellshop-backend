@@ -69,7 +69,7 @@
         ]
       },
       {
-        "matcher": "mcp__github__create_pull_request|mcp__github__add_issue_comment",
+        "matcher": "mcp__github__create_pull_request|mcp__github__add_issue_comment|mcp__github__update_pull_request",
         "hooks": [
           {
             "type": "command",
@@ -83,6 +83,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/bash-guard.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "SubagentHandback|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool.mjs\""
           }
         ]
       }

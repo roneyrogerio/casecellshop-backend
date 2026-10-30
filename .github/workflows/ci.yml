@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# AI-17: um push novo no PR torna a execução anterior inútil, então ela é
+# cancelada; na main nunca, para cada merge ter o seu resultado.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     name: Node ${{ matrix.node }}
@@ -40,7 +46,14 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       # Os testes de integração usam o Docker do runner (Testcontainers e compose).
-      - run: npm test
+      # O relatório JSON alimenta a tabela critério × teste do resumo (AI-18).
+      - run: npm test -- --reporter=default --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json
+
+      # AI-18: a tabela que o dono lê antes de aprovar; informa e não reprova. Roda
+      # também com teste vermelho, que é quando ela mais ajuda, e uma vez só.
+      - name: Tabela critério × teste
+        if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
+        run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
 
       # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
       - run: npm run openapi -- --check
