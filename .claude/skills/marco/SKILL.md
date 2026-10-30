@@ -43,6 +43,7 @@ Tocar: <arquivos ou pastas>
 Stubs já criados: <arquivos e rotas>
 Testes que devem passar: <arquivos>
 Estimativa: ~<linhas> linhas de produção
+Achados e CI (correções): <texto do achado ou .claude/reviews/<arquivo>.md>; <cauda do log do CI>
 Se faltar algo: buscar com grep e listar no relatório o que leu além do mapa.
 ```
 
@@ -57,7 +58,7 @@ Update `spec.md`, `design.md`, the contract in `src/contract/` (then `npm run op
 1. `test-writer` with the map: failing tests for the slice criteria. Its stop hook requires lint and typecheck green. Check `git status` against the role, then commit `test(<escopo>): …`. The tests must fail by assertion; a collection error goes back to it.
 2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Read `.claude/state/stop-exceptions.log` (a stop-hook exception is an escalation; a git-state change listed there is undone by you before anything else); check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
 3. Read the CI with `mcp__github__pull_request_read` (`method: get_check_runs`) and, on a failure, `mcp__github__get_job_logs` (`failed_only: true`, `return_content: true`, `tail_lines: 200`), so only the failing tail enters the context. Route it: code → `implementer` (escalation step for that problem); a test that looks wrong → `implementer` reports with evidence and `test-writer` fixes it; oracle, spec or contract → you; infrastructure → one re-run, then treat as a code problem.
-4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan and the CI summary. Its stop hook saves its final message to `.claude/reviews/<agent_id>.md`; post that file's text unchanged with `mcp__github__add_issue_comment`: a hook refuses a `## Revisão` comment that differs from a saved report, so the PR shows the report exactly as written. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta.
+4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan, the CI summary, the round number and, from the second round on, the path of the previous report in `.claude/reviews/`. Before a whole-PR round, run `git fetch origin` yourself: the reviewer only reads git (AI-11), and a ref change in its run is logged as an exception (AI-12). Its stop hook saves its final message to `.claude/reviews/<agent_id>.md`; post that file's text unchanged with `mcp__github__add_issue_comment`: a hook refuses a `## Revisão` comment that differs from a saved report, so the PR shows the report exactly as written. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta.
 
 The free list (commits that need no new round): the status line of `ROADMAP.md`, the PR description and its checklist. `README.md` and `PROMPTS.md` are not free: the challenge evaluates them.
 
@@ -79,7 +80,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 ## Commits
 
-Conventional Commits, type in English and description in Portuguese, lowercase start (start with a verb, never with a proper noun), header up to 100 characters, body with the motivation; a local `commit-msg` hook runs commitlint. Commit messages go in a file (`git commit -F <file>`). Trailers, after a blank line:
+Conventional Commits, type in English and description in Portuguese, lowercase start (start with a verb, never with a proper noun), header up to 100 characters, body with the motivation; a local `commit-msg` hook runs commitlint. Commit messages go in a file (`git commit -F <file>`), written with the Write tool: the Bash guard reads a heredoc's text as part of the command. Trailers, after a blank line:
 
 ```text
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>
