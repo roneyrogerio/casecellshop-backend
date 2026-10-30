@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const MAX_INSTRUCTION_LINES = 200;
 
+// Os seis arquivos da tabela do .specs/README.md. Se a tabela mudar de formato e
+// o leitor não reconhecer uma linha, o arquivo ficaria sem conferência e o CI
+// passaria verde; por isso a ausência do limite também é violação.
+const SPEC_FILES = ['PROJECT.md', 'ROADMAP.md', 'STATE.md', 'spec.md', 'design.md', 'CONVENTIONS.md'];
+
 // Como o `wc -w`: sequências separadas por espaço em branco.
 function countWords(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
@@ -46,7 +51,14 @@ export function checkSpecLimits(rootDir: string): string[] {
   const readmePath = join(specsDir, 'README.md');
   if (!existsSync(readmePath)) return [`.specs/README.md não existe em ${rootDir}`];
 
-  for (const { name, limit } of readLimits(readFileSync(readmePath, 'utf8'))) {
+  const limits = readLimits(readFileSync(readmePath, 'utf8'));
+  for (const name of SPEC_FILES) {
+    if (!limits.some((entry) => entry.name === name)) {
+      violations.push(`${name} não tem limite lido na tabela do .specs/README.md`);
+    }
+  }
+
+  for (const { name, limit } of limits) {
     const path = findSpecFile(specsDir, name);
     if (!path) {
       violations.push(`${name} está na tabela do .specs/README.md, mas não foi encontrado`);
