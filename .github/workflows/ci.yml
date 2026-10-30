@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# AI-05: o token do CI só lê. O repositório é público, e um job que roda código
+# do PR não pode ter permissão de escrita nem credencial guardada no checkout.
+permissions:
+  contents: read
+
 jobs:
   verify:
     name: Node ${{ matrix.node }}
@@ -17,12 +22,13 @@ jobs:
     env:
       REDOCLY_TELEMETRY: 'off'
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A conferência das migrações compara com a base do PR, então precisa do histórico.
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Se os dois inputs vierem preenchidos, o setup-node usa só o node-version
           # e avisa; por isso um deles fica sempre vazio.
@@ -32,7 +38,7 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
-      - run: npx tsc --noEmit
+      - run: npm run typecheck
       # Os testes de integração usam o Docker do runner (Testcontainers e compose).
       - run: npm test
 
@@ -40,20 +46,27 @@ jobs:
       - run: npm run openapi -- --check
       - run: npm run lint:openapi
 
-      # FND-06: limite das specs e das instruções da IA.
-      - run: npm run check:specs
+      # FND-06: o que carrega em toda sessão do Claude Code fica nos limites dele.
+      - run: npm run check:instructions
 
-      # Migração já na base não pode ser alterada nem apagada: o node-pg-migrate
-      # não confere o conteúdo do que já rodou. Só arquivos novos (A) passam.
+      # As duas conferências abaixo rodam com node, e não por npm run: o package.json
+      # é do próprio PR, que poderia redefinir o script que o confere (AI-05).
+      # AI-01: migração .sql já na base não pode ser alterada nem apagada. A base
+      # entra pelo ambiente, e não interpolada no script, para o nome da branch
+      # nunca virar código no shell.
       - name: Migrações da base ficam intactas
         if: github.event_name == 'pull_request'
-        run: |
-          changed=$(git diff --name-status --no-renames "origin/${{ github.base_ref }}...HEAD" -- migrations | grep -v '^A' || true)
-          if [ -n "$changed" ]; then
-            echo "Este PR altera ou apaga migrações que já estão em ${{ github.base_ref }}:"
-            echo "$changed"
-            exit 1
-          fi
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-migrations.ts
+
+      # AI-05: os scripts do package.json definem o que este CI e o hook de parada
+      # rodam; só um commit ci: ou build: da sessão principal pode mudá-los.
+      - name: Scripts do package.json intactos
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-scripts.ts
 
   # CONVENTIONS.md, "Commits": confere o cabeçalho de cada commit do PR, como no guia de CI
   # do commitlint. Job à parte para rodar uma vez, e não por versão do Node.
@@ -64,11 +77,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm

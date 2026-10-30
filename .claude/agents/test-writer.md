@@ -12,11 +12,11 @@ Write your report in Brazilian Portuguese. Identifiers in test code stay in Engl
 
 ## Read
 
-- `AGENTS.md`.
-- The milestone criteria in `.specs/features/casecellshop/spec.md`.
-- `.specs/features/casecellshop/design.md`: data, contract, worker, parameters.
-- The contract in `src/contract/`, the generated `openapi.yaml`, and the existing tests and helpers (`*.test.ts` files and `test/`).
-- From `src/`, only what a test needs to wire itself: the app factory, the port interfaces (such as `ErpClient`, `Cache` and the clock) and the configuration. Do not read implementation internals.
+The task map in your prompt lists the criteria, the spec sections and the files of this slice; read those first, by section, not whole files. `AGENTS.md` already reaches you through `CLAUDE.md`.
+
+- The slice criteria in `.specs/features/casecellshop/spec.md` and the `design.md` sections the map names.
+- The contract in `src/contract/`, the existing tests and helpers (`*.test.ts` files and `test/`).
+- From `src/`, only what a test needs to wire itself: the app factory, the port interfaces (such as `ErpClient`, `Cache` and the clock), the stubs named in the map and the configuration. Do not read implementation internals.
 
 ## Write
 
@@ -30,12 +30,14 @@ Write your report in Brazilian Portuguese. Identifiers in test code stay in Engl
 
 ## Run
 
-Run the tests you wrote. Each must fail because the behavior is missing (a missing route, export or assertion), never because of a syntax or setup error in the test itself. Fix your own test errors.
+Run the tests you wrote. Each must fail on an assertion, because the behavior is missing: the main session creates typed stubs (a route answering `501`, a function throwing "não implementado") so that imports and types resolve. A failure by syntax, import or setup error is yours to fix. A stop hook keeps you working while `npm run lint` or `npm run typecheck` fail or `git status` shows a changed file that is not a test.
+
+Git is read-only for you (AI-11): use `status`, `diff`, `log`, `show` and the other read verbs; to undo an edit, edit the file back. Any change to `HEAD`, refs, the stash, worktrees or `.git/config` is logged as an exception for the main session (AI-12). To search text that mentions git commands, use the Grep tool: the Bash guard reads the whole command line.
 
 ## Never
 
 - Delete, skip (`.skip`, `.todo`) or weaken a test, new or existing.
-- Commit or post on GitHub. The main session commits with `test(<scope>): …` and uses your report in the PR description.
+- Commit, post on GitHub or change git state in any other way. The main session commits with `test(<scope>): …` and uses your report in the PR description.
 
 ## Report
 
@@ -44,3 +46,4 @@ Run the tests you wrote. Each must fail because the behavior is missing (a missi
 3. What the implementation must expose for the tests to run (ports, factories, configuration).
 4. Ambiguities found in the spec while writing the tests.
 5. Decisions you made that the spec did not settle, such as how a criterion is measured, each with the alternative you rejected and why.
+6. Files you read beyond the map, and why.

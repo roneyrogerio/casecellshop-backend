@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // Sem globalSetup: cada teste de integração sobe o próprio contêiner,
 // para que as pastas rodem isoladas e em qualquer ordem.
@@ -8,8 +8,13 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          // Unitários ficam ao lado do arquivo que testam (CONVENTIONS.md, "Testes").
-          include: ['src/**/*.test.ts', 'scripts/**/*.test.ts', '.claude/hooks/**/*.test.ts'],
+          // Todo *.test.ts fora da integração é unitário, onde quer que esteja: um
+          // teste fora das pastas listadas não rodaria e o CI ficaria verde sem
+          // ele (AI-02). Os unitários ficam ao lado do arquivo que testam.
+          // A varredura com ** não entra em pastas que começam com ponto, então os
+          // testes dos hooks e das permissões, em .claude/, entram pelo próprio padrão.
+          include: ['**/*.test.ts', '.claude/**/*.test.ts'],
+          exclude: [...configDefaults.exclude, 'test/integration/**'],
         },
       },
       {

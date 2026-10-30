@@ -35,7 +35,7 @@ npm run test:unit   # só os unitários, sem Docker
 
 Os testes que tocam o banco rodam contra um PostgreSQL real, pelo Testcontainers: o que se prova é o comportamento do banco, como lock, transação e índice único, e um mock não o reproduz.
 
-Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:specs`. O CI roda todos, no Node do `.nvmrc` e na 24.12.
+Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos, no Node do `.nvmrc` e na 24.12.
 
 ## Critérios do M1
 
@@ -46,7 +46,7 @@ Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o 
 | `FND-03` | Requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` | [`src/http/`](src/http/) | [`contract-validation.test.ts`](test/integration/foundation/contract-validation.test.ts) |
 | `FND-04` | A fatura do ERP simulado continua lá depois de o worker reiniciar | [`src/erp/sim/`](src/erp/sim/) | [`erp-sim.test.ts`](test/integration/foundation/erp-sim.test.ts) |
 | `FND-05` | O span do repositório sai como filho do span da requisição | [`src/telemetry.ts`](src/telemetry.ts), [`src/health/repository.ts`](src/health/repository.ts) | [`tracing.test.ts`](test/integration/foundation/tracing.test.ts) |
-| `FND-06` | O CI falha se uma spec ou uma instrução da IA passar do limite de tamanho | [`scripts/check-spec-limits.ts`](scripts/check-spec-limits.ts) | [`check-spec-limits.test.ts`](scripts/check-spec-limits.test.ts) |
+| `FND-06` | O CI falha se uma instrução que o Claude Code carrega em toda sessão passar do limite dele | [`scripts/check-instructions.ts`](scripts/check-instructions.ts) | [`check-instructions.test.ts`](scripts/check-instructions.test.ts) |
 | `FND-07` | O CI falha se o `openapi.yaml` divergir do contrato ou não passar no lint | [`src/contract/`](src/contract/), [`scripts/generate-openapi.ts`](scripts/generate-openapi.ts) | [`generate-openapi.test.ts`](scripts/generate-openapi.test.ts) |
 | `FND-08` | A guarda de caminho limita o que cada agente de IA edita | [`.claude/hooks/path-guard.mjs`](.claude/hooks/path-guard.mjs) | [`path-guard.test.ts`](.claude/hooks/path-guard.test.ts) |
 
@@ -58,7 +58,26 @@ Os testes unitários ficam ao lado do arquivo que testam; os de integração, em
 - [`openapi.yaml`](openapi.yaml): o contrato HTTP em OpenAPI 3.1, gerado do zod em [`src/contract/`](src/contract/).
 - [`.specs/`](.specs/README.md): visão, marcos, decisões (`AD-NNN`), critérios de aceite e design.
 - [`PROMPTS.md`](PROMPTS.md): o uso de IA, com o que foi aceito, corrigido ou rejeitado.
-- [`AGENTS.md`](AGENTS.md): o fluxo de agentes de IA que constrói o projeto.
+- [`AGENTS.md`](AGENTS.md): as regras que todo agente de IA segue; o passo a passo de cada marco está na skill [`/marco`](.claude/skills/marco/SKILL.md).
+
+## Como o projeto é feito com IA
+
+O código é escrito por agentes do Claude Code, e a confiança vem de verificação automática e independente, não de revisão humana linha a linha (AD-012 e AD-013 em [`STATE.md`](.specs/project/STATE.md)):
+
+- **Testes antes do código.** Um agente escreve os testes a partir dos critérios, sem ler a implementação. Outro implementa, sem poder alterar os testes, o CI nem as configurações que decidem se o trabalho está certo.
+- **O agente não termina com checagem vermelha.** Um hook o devolve ao trabalho enquanto o lint, os tipos ou os testes falharem.
+- **Revisão independente.** Um terceiro agente, só leitura, revisa cada fatia, e o relatório vai ao PR como foi escrito.
+- **Os agentes agem no GitHub como a conta `honeyforge-bot`,** pelo servidor MCP oficial, restrito às ferramentas do fluxo: sem merge, sem aprovação, sem escrita de arquivo.
+- **A `main` só muda por PR,** com os checks verdes e a aprovação do mantenedor, impostos por um ruleset do GitHub. A aprovação liga o auto-merge.
+
+**Configurar uma máquina** (terminal ou VS Code):
+
+1. Guarde, uma vez, o token clássico da conta do bot no chaveiro. No macOS: `security add-generic-password -s loja-honeyforge-bot -a honeyforge-bot -w`; no Linux: `secret-tool store --label="honeyforge-bot" service loja-honeyforge-bot`.
+2. Abra o Claude Code na pasta do projeto e aceite a confiança da pasta, uma vez.
+
+Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão configura o push como o bot e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
+
+Na sessão do Claude Code na nuvem, o diagnóstico também roda. A autenticação do MCP lá ainda está a validar (AD-013).
 
 ## Licença
 

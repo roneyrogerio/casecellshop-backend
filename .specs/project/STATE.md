@@ -284,6 +284,113 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 **Rever quando:** o projeto precisar de uma API que só exista no Node 26 (o piso sobe para a 26), ou o oxlint deixar de cobrir uma regra com tipos de que o projeto dependa.
 
+### AD-012 · Fábrica v2: quatro nós, oráculo fora do alcance de quem implementa e humano só onde decide
+
+**Status:** proposta (30/10/2026). Aceita pelo merge do PR do F1.
+
+**Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
+- **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
+- **Leitura por chamada:** cada agente relia de 65 KB a 147 KB, e o `AGENTS.md` entrava duas vezes, pelo `CLAUDE.md` e pela instrução de lê-lo.
+- **Aprovações:** cada commit, push e comentário pedia aprovação humana.
+- **Revisão:** o PR teve cinco rodadas. As duas últimas só acharam problemas criados pelas correções anteriores.
+- **Limites de palavras:** herdados da skill `tlc-spec-driven`, forçaram commits de compressão.
+- **Oráculo exposto:** o `implementer` podia editar o CI e as configurações que decidem se o trabalho dele está certo.
+
+A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, METR) converge em verificação determinística e independente, com o humano na intenção e no merge.
+
+**Decisão.**
+
+- **Workflow fixo de quatro nós,** conduzido pela sessão principal com a skill `/marco`:
+  1. Plano, em plan mode, aprovado pelo mantenedor.
+  2. Testes, pelo `test-writer`.
+  3. Código, pelo `implementer`, com a escada até Opus e no máximo duas chamadas no degrau 2.
+  4. Revisão, pelo `reviewer`, só leitura.
+- **O `planner` sai:** ele relia as specs para propor o plano que a sessão principal, também Opus, refazia, e não verificava nada de forma independente.
+- **O oráculo é da sessão principal:** CI, scripts, configurações de verificação e `.claude/`. A guarda nega esses arquivos ao `implementer` (AI-04).
+- **Um hook de parada devolve o agente ao trabalho** enquanto lint, typecheck ou os testes ligados às mudanças falharem (AI-03).
+- **Revisão:** uma rodada por fatia e uma nova só por commit fora da lista livre. Achado `baixa` vira item do próximo plano. O teto é de 3 rodadas por fatia e 5 por marco.
+- **O `AGENTS.md` traz só o que toda tarefa usa,** e o roteiro vai para a skill, carregada sob demanda. Os agentes leem as specs por trecho, guiados por um mapa da tarefa em cada delegação.
+- **Onde cada regra fica,** pelo que a documentação do Claude Code recomenda:
+  - **specs:** o quê e o porquê do produto (critérios, design, decisões);
+  - **`AGENTS.md`:** fatos que toda tarefa usa;
+  - **regra por caminho em `.claude/rules/`:** a convenção de uma área, que só carrega quando um arquivo dela é lido ou escrito, como a de testes em `.claude/rules/tests.md`;
+  - **skill:** um procedimento de vários passos, carregado sob demanda, como o `/marco`;
+  - **hook, `deny` ou ruleset:** o que não admite exceção.
+
+  As invariantes de persistência ficam no `AGENTS.md`, e não numa regra por caminho, porque o plano e a revisão por `git diff` não leem os arquivos que carregariam a regra.
+- **As specs ficam sem teto de palavras.** O `FND-06` passa a conferir só o que carrega em toda sessão, com os limites do Claude Code: 200 linhas por instrução e 500 por skill.
+- **O humano age em quatro pontos:**
+  1. aprova o plano;
+  2. decide as exceções;
+  3. lê a matriz critério × teste e o texto das respostas do desafio, uns 10 minutos por marco;
+  4. aprova e faz o merge.
+
+**Alternativas consideradas:**
+- **Manter o `planner`:** sai pelo custo sem independência. Volta como um agente só leitura de baixo custo se um desvio que o plano deveria ver escapar.
+- **Agente único com CI forte:** perde a independência entre quem testa e quem implementa. Testes escritos olhando o código tendem a reafirmar o comportamento.
+- **Vários agentes em paralelo ou agent teams:** custam cerca de 15x mais tokens, para pouco trabalho paralelizável.
+- **Pipeline por `claude -p`:** não aceita a aprovação humana no meio da execução.
+- **Juiz LLM no loop do `implementer`:** é instável. O hook determinístico cumpre o papel.
+- **Specs com teto menor:** o teto não mede qualidade e força apagar raciocínio.
+
+**Trade-off.** O plano perde um contexto separado do orquestrador. A revisão por fatia pode somar mais rodadas que uma revisão por marco. As regras novas são texto da skill, e a medição do M2 confirma ou corrige.
+
+**Rever quando:** um desvio que o plano deveria ter visto escapar para a implementação; o degrau 2 da escada for usado em mais de um problema de concorrência num marco; ou as rodadas por marco passarem de 5.
+
+**Referências:** [Claude Code, sub-agents](https://code.claude.com/docs/en/sub-agents) (o subagente carrega o `CLAUDE.md`); [Claude Code, memory](https://code.claude.com/docs/en/memory) (até 200 linhas; o roteiro vai para uma skill); [Claude Code, skills](https://code.claude.com/docs/en/skills) (até 500 linhas); [METR, reward hacking](https://metr.org/blog/2025-06-05-recent-reward-hacking); [Spotify, verificadores](https://engineering.atspotify.com/2025/12/feedback-loops-background-coding-agents-part-3).
+
+### AD-013 · O GitHub pelo MCP oficial, como a conta de máquina do bot, e a main guardada por ruleset
+
+**Status:** proposta (30/10/2026). Aceita pelo merge do PR do F1.
+
+**Contexto.** Os agentes agiam no GitHub com o token do dono, que é administrador e poderia editar ou apagar qualquer controle do próprio repositório. Como o dono era também o autor do PR, a aprovação do GitHub era impossível, porque o autor não aprova o próprio PR. O desafio exige o repositório público, e no plano gratuito o ruleset só existe em repositório público. O fluxo precisa funcionar igual na sessão local e na nuvem, onde o Claude Code já entrega o GitHub como ferramentas MCP e o proxy bloqueia o GraphQL que o `gh pr` usa.
+
+**Decisão.**
+
+- **Repositório público,** depois da varredura do histórico com o gitleaks, sem achados.
+- **Ruleset `main protegida`:**
+  - PR obrigatório, com uma aprovação sobre o último push, descartada a cada commit novo;
+  - checks obrigatórios (`Node nvmrc`, `Node 24.12.0`, `Commits do PR`);
+  - sem push forçado nem deleção;
+  - merge só por merge commit.
+- **Ruleset `sem push forçado`,** em todas as branches. A remoção de branch fora da `main` continua permitida no servidor: a guarda do Bash já a nega aos agentes (AI-11), e restringi-la no ruleset faria o dono apagar à mão cada branch depois do merge.
+- **Os agentes agem como a conta `honeyforge-bot`,** colaboradora com permissão de escrita.
+  - **No GitHub:** o servidor MCP oficial (`https://api.githubcopilot.com/mcp/`), declarado no `.mcp.json` versionado e liberado por `enabledMcpjsonServers`. Ele carrega sozinho em qualquer sessão aberta na pasta (terminal, VS Code ou nuvem) depois que a pessoa aceita, uma vez, a confiança da pasta: o Claude Code não roda helpers de um projeto não confiável.
+  - **O `X-MCP-Tools`, que faz o próprio servidor expor só as nove ferramentas do fluxo, e o `X-MCP-Lockdown`** ficam fixos no `.mcp.json`. O `headersHelper` (`scripts/github-mcp-headers.ts`) só acrescenta o token do bot, lido do chaveiro a cada conexão. Ele não pode vir de variável de ambiente, porque o Claude Code tira do helper as variáveis com TOKEN ou SECRET no nome.
+  - **No push:** o `git push` sai pelo credential helper do bot (`scripts/git-credential-bot.ts`), configurado só neste repositório.
+  - **Na nuvem:** o helper devolve `{}`, e a autenticação viria de um segredo de rede do ambiente, com o host `api.githubcopilot.com` liberado, porque ele não está na lista de rede padrão. Isso está **a validar** numa sessão real, e a nuvem não é usada antes da entrega.
+- **As permissões valem nos dois ambientes:** liberam as nove ferramentas por nome e negam por nome o merge, a aprovação e a escrita de arquivo. Também negam `gh`, `curl`, `wget` e `security`. O hook `github-guard` exige PR em rascunho e confere que o relatório do `reviewer` chega idêntico ao arquivo salvo.
+- **O merge segue a aprovação do dono:** o workflow `merge-on-approval.yml` liga o auto-merge, e o GitHub só mescla com o ruleset satisfeito. Nenhum agente faz merge.
+- **Os commits saem com a identidade git do dono,** como responsável. Os trailers `Co-Authored-By` e `Assisted-by` dizem qual papel, modelo, esforço e degrau produziu cada commit.
+- **O hook de ambiente (`npm run check:env`, no `SessionStart`)** diz em toda sessão o que falta e como resolver, sem bloquear. Na máquina, ele mesmo configura a credencial do git quando o token existe. O que só uma pessoa faz, guardar o token e aceitar a confiança da pasta, ele explica.
+
+**Alternativas consideradas:**
+- **O token do dono:** é administrador e torna a aprovação impossível.
+- **O `gh` pelo terminal, com regras de permissão:**
+  - *Contra:* todo subcomando fica disponível, e o bloqueio depende de regras que comparam texto.
+  - *Contra:* na nuvem, o `gh pr` falha porque o proxy bloqueia o GraphQL.
+- **Um script próprio com verbos fixos:**
+  - *A favor:* é restrito e mantém o texto do comentário byte a byte.
+  - *Contra:* é um wrapper nosso, que teríamos de manter.
+  - *Contra:* não roda igual na nuvem, porque o `gh pr` falha lá.
+  - Com a restrição feita no próprio servidor, o MCP oficial entrega a mesma restrição sem código nosso.
+- **Registro do MCP no escopo local de cada máquina:** não é automático e, por ter precedência sobre o projeto, esconderia o `.mcp.json`.
+- **MCP por Docker local, com lançador e hooks de papel e de formato:** a restrição pelo `X-MCP-Tools` e o `headersHelper` eliminam o contêiner, o lançador e o token no ambiente.
+- **GitHub App:** é o que o GitHub recomenda para serviços, com tokens de 1 hora por instalação. Mas exige gerar o JWT a partir de uma chave privada sem expiração, e a nuvem do Claude Code usa a conta conectada pelo `/web-setup`, não um App.
+- **Token fine-grained:** não alcança repositório pessoal de outro dono em que o bot é colaborador.
+- **Merge manual pelo dono:** funciona, com um clique a mais depois da decisão. O auto-merge não reduz a garantia, porque o GitHub só mescla com o ruleset satisfeito.
+
+**Trade-off.**
+- **O token clássico tem os escopos `repo` e `workflow`.** A documentação do GitHub recomenda validade e prefere GitHub App para automação; aqui a conta de máquina é o que funciona igual na máquina e na nuvem, e o token deve ser recriado com validade (90 dias). O `workflow` é necessário porque o bot envia commits que mudam `.github/workflows/`.
+- **Na nuvem, a autenticação do MCP depende de um segredo de rede ainda não validado.** As permissões por nome valem lá de qualquer forma.
+- **No CI do GitHub Actions não rodam agentes.** Se rodarem, o `.mcp.json` com helper não serve, porque lá não há chaveiro nem confiança persistida, e o MCP vai por `--mcp-config` com um segredo do Actions.
+- **Com MCP, o texto do comentário passa pelo modelo,** e o hook `github-guard` é que garante a fidelidade do relatório.
+- **As regras de Bash comparam texto:** um agente que chamasse o `security` pelo caminho completo ainda leria o chaveiro (R11).
+
+**Rever quando:** o token do bot vazar ou precisar de rotação frequente (o GitHub App entra); o GitHub passar a aceitar o token fine-grained para colaborador de repositório pessoal; ou a nuvem mudar o nome das ferramentas do GitHub.
+
+**Referências:** [Claude Code, MCP](https://code.claude.com/docs/en/mcp) (`headersHelper`, escopos); [GitHub MCP Server, servidor remoto](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md) (`X-MCP-Tools`, `X-MCP-Lockdown`); [GitHub, available rules for rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets); [GitHub, auto-merge](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request); [kernel Linux, coding assistants](https://docs.kernel.org/process/coding-assistants.html) (`Assisted-by`). As nove ferramentas e a recusa das demais foram conferidas ao vivo no servidor com o token do bot, em 30/10/2026.
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
@@ -293,12 +400,13 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 | Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1; unitários ao lado do arquivo testado, integração em `test/integration/<área>/` | Mocks do banco; service container no CI; todos os testes em `test/` (PR #1) | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. O unitário testa um arquivo isolado e muda, move e some com ele; o de integração atravessa HTTP, banco e worker e não pertence a um arquivo. A guarda separa os papéis pelo nome `*.test.ts`, e o `.dockerignore` deixa os testes fora da imagem |
 | Migrações | node-pg-migrate 9.0.0, com arquivos `.sql`, *advisory lock* e conferência de ordem; o CI barra a alteração de uma migração que já está na `main` | Runner próprio; Flyway; dbmate; Postgrator; postgres-migrations; graphile-migrate; `@databases/pg-migrations`; umzug | Mantido, roda em Node com o `pg` e mantém as migrações em `.sql` (AD-001); os outros trazem Java, um binário sem API para Node, outro driver, ou não têm lock, transação por arquivo ou versão recente. Não confere o conteúdo do que já rodou; a regra do CI cobre isso no PR |
 | Arranque do ferramental (M1) | O `implementer` cria o `package.json`, o lockfile e as configurações e faz o spike do R8 antes do contrato e dos testes, num commit `build:` sem comportamento | O `test-writer` criar as configurações; a sessão principal fazer o spike | O `test-writer` só edita testes, e o contrato e os testes precisam das dependências; um commit `build:` mantém o teste antes do código |
-| Guardas dos agentes | Hook `PreToolUse` no `.claude/settings.json`, que identifica o agente pelo `agent_type` e limita as edições de cada papel; regras `ask` para commit, push e escrita no PR, e `deny` para merge, revisão de PR, issue, push forçado e `.env` | Hook no frontmatter de cada agente; regras de Bash como barreira; sandbox | O hook do frontmatter é pulado sem aviso quando a pasta exata não está marcada como confiável, e não roda em `claude -p`; no `settings.json` vale em toda sessão do projeto. Uma regra de Bash compara o texto do comando e não é barreira, então só cobre a forma comum (commit, push, merge). O sandbox isolaria o socket do Docker que o Testcontainers usa |
+| Guardas dos agentes | Hooks no `.claude/settings.json`, pelo `agent_type`: `PreToolUse` limita as edições de cada papel e protege o oráculo do `implementer` (AI-04); `SubagentStop` devolve o `implementer` e o `test-writer` enquanto a verificação falhar (AI-03) e grava o relatório do `reviewer`; o `PreToolUse` de Bash (`bash-guard`) deixa os subagentes só ler o git e aceita o `git push` de qualquer sessão só na forma `[-u] [origin [HEAD|<branch>]]` (AI-11); o `SubagentStart` tira um retrato do git que a parada compara, e uma mudança vira exceção (AI-12); o `.githooks/pre-push` recusa push fora de `https://github.com/` (AI-08). Permissões: `git commit`, `git push` (credencial do bot) e as nove ferramentas MCP do GitHub liberados; `gh`, `curl`, `wget`, `security` e `.env` negados; `bypassPermissions` desligado (AI-06) | Hook no frontmatter de cada agente; regras de Bash como única barreira; juiz LLM no loop; para o git dos subagentes, só uma lista de verbos negados; para o SSH, só gravar `remote.origin.pushurl` HTTPS | O hook do frontmatter é pulado sem aviso quando a pasta não está marcada como confiável, e não roda em `claude -p`; no `settings.json` vale em toda sessão. Regra de Bash compara texto, então a barreira real para o `main` é o ruleset (AD-013) e, para a máquina, a sandbox (R11). O hook de parada é determinístico; um juiz LLM muda de veredito (AD-012). Uma guarda de texto sempre tem grafia que escapa (variável, alias, script escrito pelo próprio agente), então ela só dá retorno rápido, e a prova é o retrato do git, que não depende da grafia; a lista do que pode passar fecha por padrão, e a de negados deixava passar `pull`, `cherry-pick` e afins. O `insteadOf` global também reescreve o `pushurl`, por isso a conferência fica no `pre-push`, que recebe a URL já reescrita e roda antes de enviar qualquer ref |
+| Validação das instruções da IA | Testes determinísticos no CI: o `check:instructions` (limites de linhas) e o `AI-13`, que abre o frontmatter dos agentes e da skill com o `yaml` do projeto e só aceita os campos da referência do Claude Code. Auditoria do texto dos agentes por um agente independente, com fonte e linha por achado, quando as instruções mudam muito | `/doctor` ou `/doctor prompt-audit` no CI ou num hook do git; `claude doctor`; `claude plugin validate`; linter de terceiros (agnix 0.x); validar o `settings.json` contra o schema com `ajv-cli` | O Claude Code ignora campo desconhecido e pula sem avisar o agente cujo YAML não abre, então a checagem precisa ser automática. O `/doctor` é interativo, usa o modelo e não tem código de saída documentado; o `claude doctor` saiu com 0 diante de um `settings.json` quebrado; o `plugin validate` não acusou YAML quebrado na 2.1.314. O agnix é jovem e seria dependência nova. O schema do `settings.json` fica para quando houver uma decisão sobre o `ajv-cli`, que é dependência nova |
 | Sessão principal | Opus com `effortLevel: high`, fixos no `.claude/settings.json` do projeto; o `/model` e o `/effort` do mantenedor valem na sessão | `opusplan`; `fable`; `xhigh`; agente orquestrador (`agent` no settings) | O `opusplan` só usa Opus no plan mode, que nenhum passo do fluxo ativa: o planejamento rodou em Sonnet (M1). O padrão vale para quem clona, sem depender da configuração de usuário. O `fable` não é padrão de nenhum plano; o `xhigh` é para tarefas longas, que ficam com os agentes; o agente orquestrador substitui o prompt de sistema |
 | Visualização de traces | Jaeger 2.22.0 all-in-one no compose, em memória, recebendo OTLP da API e do worker | Grafana `otel-lgtm`; OpenTelemetry Collector entre a aplicação e o Jaeger; só o exportador de console | Mostra no navegador o trace da requisição ao banco, sem conta em ferramenta, com os mesmos dados que o Datadog receberia (AD-008). O `otel-lgtm` pede 2 GB e pode valer no M5, para os dashboards; o Jaeger recebe OTLP direto, sem Collector |
-| Comandos que pedem aprovação | Um por chamada, numa linha, sem encadear nem *heredoc*; a mensagem do commit num arquivo, com `git commit -F` | Comandos encadeados; o MCP do GitHub para as escritas no PR | O mantenedor lê o comando inteiro antes de aprovar, e o bloco encadeado era difícil de ler. O commit com `$(cat <<'EOF' …)` ainda pede aprovação mesmo com regra `allow` ([anthropics/claude-code#31373](https://github.com/anthropics/claude-code/issues/31373), ainda aberta em 30/10/2026; a #25441, sobre *heredoc* nas regras, foi fechada em 06/03/2026). O MCP só cobriria o PR, e o commit e o push seguiriam como comandos |
-| Mensagens de commit | commitlint 21.2.4 com o `config-conventional` e as regras do `CONVENTIONS.md`, no CI; três cabeçalhos do M1 ficam como exceção no `commitlint.config.mjs` | Script próprio; só a revisão | O limite de 72 caracteres foi violado quatro vezes no M1 sem aviso. O commitlint confere também o tipo e deixa a regra num arquivo, sem script próprio para manter |
-| Registro de decisões | ADs no `STATE.md`, com o filtro, a estrutura e o ciclo no `.specs/README.md`; as substituídas vão para `STATE-ARCHIVE.md` perto do limite | Um arquivo por decisão | As ADs são curtas e se citam entre si; num arquivo só, o `planner` lê o log inteiro no início de cada marco, e o limite de tamanho força a consolidação |
+| Comandos e aprovação | Commit, push e as ferramentas MCP do GitHub sem aprovação; a mensagem do commit num arquivo, com `git commit -F`; a aprovação humana fica no plano e no PR, imposta pelo ruleset (AD-013) | Aprovar cada commit, push e comentário (M1) | Aprovar cada comando não verificava nada: a Anthropic mediu que pedidos constantes levam a aprovar sem ler. A `main` só muda por PR com checks verdes e a aprovação do dono, o que nenhum agente consegue contornar |
+| Mensagens de commit | Conventional Commits pelo `@commitlint/config-conventional`, sem regras próprias (cabeçalho até 100 caracteres, descrição em minúscula e sem ponto final); conferido por um hook `commit-msg` local (`.githooks/`, instalado pelo início de sessão) e de novo no CI; trailers `Co-Authored-By` e `Assisted-by: <papel>:<modelo> effort=<nível> step=<degrau>` | Regras próprias (72 caracteres, tipos restritos); conferir só no CI; script próprio | É o padrão da comunidade, e o tipo do commit é o que o CI usa para conferir o papel. Conferir só no CI deixou quatro mensagens erradas chegarem ao PR, e a reescrita custou uma branch nova, porque o push forçado é bloqueado. O `Assisted-by` adapta a convenção do kernel Linux (`Assisted-by: AGENT_NAME:MODEL_VERSION`), acrescentando o esforço e o degrau da escada |
+| Registro de decisões | ADs no `STATE.md`, aceitas pelo merge do PR que as propõe; os agentes leem só os blocos `### AD-NNN` citados; o `STATE-ARCHIVE.md` guarda a AD-007 e não recebe mais nada | Um arquivo por decisão | As ADs são curtas e se citam entre si; a leitura por trecho (AD-012) resolve o custo de ler o log inteiro, que era o motivo do arquivo e do limite de tamanho |
 
 ## Riscos em aberto
 
@@ -310,10 +418,11 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 | R4 | O teste de concorrência pode passar sem provar nada | Controle negativo com janela forçada, que precisa vender além do estoque (CHK-02); várias conexões; repetição em laço |
 | R5 | Testes intermitentes no CI | Relógio injetável, sem `sleep`, horários semeados no banco, pool fixo |
 | R6 | A H1b (deduplicação) ou a H4 (tempo de processamento) podem não valer para um ERP real | Marcador de envio gravado antes da chamada; consulta pela referência depois do primeiro envio, sempre após o atraso mínimo; provada com o fake sem a H1b e com o modo "fatura depois do timeout". **Resíduo:** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP, ou falho com uma fatura que aparece depois, e a loja não detecta esses casos; um teste acima da H4 os demonstra (ORD-06), e o README os declara. Se nem a H1a valer, a consulta por referência lê o MySQL do ERP, isolada atrás da porta `ErpClient`: é a única exceção à regra de falar com o ERP só pela API |
-| R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, sem ter visto a escrita, num modelo mais forte; o `test-writer` escreve os testes a partir dos critérios, sem ler a implementação, e um hook impede o `implementer` de alterá-los; cada PR é aprovado por uma pessoa |
-| R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TS 6, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers. **Resultado (29/10/2026):** os dez pontos passaram no Node 26.13.0 e na 24.12.0, sem plano B |
+| R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, num modelo mais forte; o `test-writer` escreve os testes antes, sem ler a implementação, e a guarda impede o `implementer` de alterá-los e de alterar o CI; o PR sai da conta do bot e só entra na `main` com a aprovação do dono, imposta pelo ruleset (AD-013). Resta: o dono pede e aprova, e o relatório do `reviewer` chega ao PR pela sessão principal, então é informação, nunca aprovação |
+| R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TypeScript 7, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers. **Resultado (29/10/2026):** os dez pontos passaram no Node 26.13.0 e na 24.12.0, sem plano B |
 | R9 | A H2 pode não valer: o ERP fatura sem estoque e fica negativo | A sincronização grava zero, registra o caso em log, e a loja para de vender o SKU |
-| R10 | A guarda de caminho só cobre `Edit`, `Write` e `NotebookEdit`; um agente pode escrever pelo Bash | A sessão principal confere o `git status` contra o papel de cada agente depois de cada chamada, e o `reviewer` confere o histórico de `test/` |
+| R10 | A guarda de caminho só cobre `Edit`, `Write` e `NotebookEdit`; um agente pode escrever pelo Bash | O hook de parada roda a verificação a cada fim de agente; a sessão principal confere o `git status` contra o papel antes de cada commit; o CI confere migrações e instruções. A sandbox (R11) restringiria a escrita ao repositório. Commit, push e qualquer mudança de estado do git pelos subagentes são negados pelo `bash-guard` (AI-11) e, se escaparem dele, aparecem no retrato do git comparado na parada (AI-12). Fica o push feito por um script que o próprio agente escreva, para uma URL sem `refs/remotes`: o retrato não o vê, mas os rulesets barram push forçado em toda branch e qualquer mudança na `main` sem PR aprovado |
+| R11 | Um agente com Bash roda com o usuário do macOS: lê o que o dono lê (`~/.ssh`, o token do `gh` do dono, o chaveiro com o token do bot), e as regras `deny` comparam texto (`/usr/bin/security` passa por `Bash(security *)`) | Sandbox do Bash do Claude Code com leitura de `~/` negada e rede restrita, a validar com o Testcontainers no F1; até lá, as negações de texto e o ruleset, que protege a `main` mesmo com o token do bot vazado. Os hooks também rodam fora da sandbox: o hook de parada executa os testes do código que o `implementer` acabou de escrever, e um módulo que leia o chaveiro ao ser importado leria o token do bot. Contenção: a revisão do diff de `src/` e o escopo do token (só este repositório, com o ruleset); dar validade ao token reduz o dano de um vazamento |
 
 ## Lições
 
@@ -358,6 +467,13 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 **Problema.** O `Edit` inválido para na validação da ferramenta e não chega ao hook: nenhuma sonda foi barrada, e a guarda pareceu quebrada.
 **Solução.** Sondar com `Write` de um arquivo novo, que chega ao hook; o arquivo do controle positivo é apagado depois.
 **Previne.** Concluir algo sobre uma guarda a partir de uma sonda que nunca a exercitou.
+
+### L-007 · Revisar a correção da correção vira loop, e processo antes do produto custa o prazo
+
+**Contexto.** No M1, três commits entraram depois da última revisão, e cada correção deles ganhou uma rodada nova do `reviewer`.
+**Problema.** As Revisões 4 e 5 só acharam problemas criados pela correção anterior; o M1 levou cerca de 19,5 h sem nenhuma regra de negócio, e a primeira proposta de melhoria repetiu o padrão, com 45 itens antes do M2.
+**Solução.** Regra de parada (uma rodada por fatia, `baixa` vai para o próximo plano, teto de rodadas) e PR de processo com teto de tempo (AD-012).
+**Previne.** Gastar o prazo do produto com o fluxo, e um revisor "que sempre acha alguma coisa" segurar o merge.
 
 ## Ideias adiadas
 

@@ -313,3 +313,32 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Corrigido:** a afirmação de que o PR estava pronto; o mantenedor perguntou de novo, e a conferência achou o intervalo sem revisão.
 - **Resultado:** o `implementer` roda só as checagens que dependem do código e relata as outras sem mexer na configuração delas; a conferência de histórico do `reviewer` passou a cobrir o `commitlint.config.mjs` e o `scripts/check-spec-limits.ts`; o `STATE.md` aponta o M2; as fontes da linha dos comandos foram conferidas com `gh issue view`.
 - **Verificação:** `npm run check:specs`, `npm run test:unit` e a Revisão 4, que achou o A14: a lista fechada do `implementer` deixou de fora a conferência do CI que barra a alteração de migrações já na `main`; a lista passou a incluí-la.
+
+## F1 — Fábrica v2
+
+### Redesenho do fluxo a partir da palestra e da pesquisa
+
+- **Pedido:** o mantenedor pediu um fluxo mais automatizado, com o humano só onde ele decide, revisão quase toda automática, histórico mínimo mas auditável, navegação da IA econômica e o mesmo comportamento na sessão local e na nuvem. A base é a palestra de Tariq Shaukat (Sonar) sobre confiança em código gerado por agentes e uma pesquisa de mercado.
+- **O que a IA fez:**
+  - pesquisou em doze frentes, com agentes em Sonnet e Opus;
+  - montou uma proposta e a submeteu a uma revisão adversarial independente;
+  - implementou o F1 pelo fluxo: critérios, testes do `test-writer` antes do código, e depois a implementação.
+- **Corrigido:**
+  - **O primeiro plano repetia o erro do M1:** tinha 45 itens antes do produto. A revisão o cortou para um F1 com teto de 5 h.
+  - **O portão de merge não era independente:** dependia de um "APROVADO" postado pelo próprio orquestrador. Ele saiu.
+  - **O TDD era impossível em código novo:** entraram stubs tipados antes dos testes.
+  - **A remoção dos limites de palavras estava para "depois",** mas a própria AD-012 estouraria o `STATE.md`. Ela entrou no F1.
+  - **O GitHub ia por um script próprio de verbos fixos.** O mantenedor pediu MCP. A pesquisa e um teste ao vivo mostraram que o servidor oficial aceita o `X-MCP-Tools`, que restringe as ferramentas no próprio servidor, e o script saiu.
+  - **O merge** passou a seguir a aprovação do dono, por auto-merge, em vez de ser um passo do bot.
+  - **O MCP passou a vir do `.mcp.json` versionado.** O registro por máquina não era automático e esconderia a configuração do projeto. O `.mcp.json` liga sozinho em qualquer sessão aberta na pasta.
+  - **A Revisão 1 reprovou o PR (A1, alta).** A guarda do oráculo deixava o `implementer` mudar os scripts do `package.json` ou criar um `.oxlintrc.json` em `src/`. Sem token, o push caía na conta do dono pelo askpass do VS Code. E o relatório salvo era gravado pela própria sessão principal. Os achados foram tratados com testes e controle negativo, e o `bash-guard` (AI-11) entrou depois que uma conferência de padrão mostrou que o `reviewer`, que deveria só ler, podia commitar.
+  - **A Revisão 2 mostrou que duas correções eram parciais.** O push ainda podia apagar branch ou forçar com a flag depois dos argumentos (A2), e com o `origin` em SSH saía com a chave do dono (A3). Ela achou também três médios novos: o `bash-guard` caía com `(git push)`, `env git` ou aspas (A12); a pasta `.githooks/` ficava ao alcance do `implementer` (A13); e o CI chamava a conferência dos scripts por `npm run`, que o próprio PR podia redefinir (A14). As correções mudaram de abordagem: a guarda passou de lista de negados para lista do que passa, e a prova passou a ser um retrato do git comparado na parada (AI-12), que não depende da grafia do comando. A IA testou antes que o `insteadOf` também reescreve o `pushurl` e que o `pre-push` recebe a URL já reescrita, e por isso a conferência do SSH foi para o `pre-push`.
+  - **Quatro mensagens de commit começavam com maiúscula** e reprovaram o commitlint no CI. A convenção foi conferida contra o padrão da comunidade: ficou o `config-conventional`, sem regras próprias. Um hook `commit-msg` local passou a recusar a mensagem na hora. As quatro mensagens foram reescritas, com autorização do mantenedor, numa branch nova, porque o ruleset `sem push forçado`, criado pelo dono, bloqueia o push forçado em todas as branches.
+  - **O classificador do modo automático barrou a escrita do `.claude/settings.json`.** A alteração entrou depois, com a autorização explícita do mantenedor.
+  - **O mantenedor perguntou se os agentes seguiam as melhores práticas** e se valia rodar o `/doctor` a cada mudança. Uma pesquisa na documentação mostrou que o `/doctor` é interativo, usa o modelo e não tem código de saída, e que o Claude Code pula sem avisar um agente com YAML quebrado. Entrou um teste determinístico do frontmatter (AI-13). Uma auditoria independente dos agentes, com fonte e linha por achado, trouxe 17 achados, como o `reviewer`, que só reprovava por achado alta enquanto a skill segura o PR também por média, e o `implementer`, mandado ler comentários do PR sem acesso ao GitHub. Todos foram aplicados; o modelo e o esforço de cada agente ficaram, porque a documentação não indicava mudança.
+  - **O CI pegou uma corrida que o macOS não mostrou:** o `pre-push` recusava e saía sem ler o stdin, e o teste recebia `EPIPE` no Linux. O hook passou a ler a entrada antes de decidir.
+- **Verificação:**
+  - os critérios `AI-01` a `AI-13` têm testes com controle negativo, e a suíte completa roda verde no CI;
+  - ao vivo, nesta sessão: o retrato do git foi gravado no início do `test-writer` e comparado sem exceção na parada; o `pre-push` deixou passar o push por HTTPS; e a guarda negou à própria sessão principal um comando cujo texto continha um push forçado;
+  - o servidor MCP foi conferido com o token do bot: com o `X-MCP-Tools`, só as nove ferramentas aparecem, e o `merge_pull_request` some;
+  - o histórico foi varrido com o gitleaks antes de o repositório ficar público.

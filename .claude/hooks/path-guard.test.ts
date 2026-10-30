@@ -158,7 +158,6 @@ describe('FND-08 guarda de caminho do implementer', () => {
     ['em src/', 'src/app.ts'],
     ['em src/ por caminho absoluto', join(root, 'src/db/migrate.ts')],
     ['em migrations/', 'migrations/store/20260101000000_init.sql'],
-    ['em scripts/', 'scripts/check-spec-limits.ts'],
     ['no compose', 'compose.yaml'],
     ['em pasta com o prefixo src/contract', 'src/contractual/foo.ts'],
     ['em pasta com o prefixo test', 'testing/foo.ts'],
@@ -175,6 +174,150 @@ describe('FND-08 guarda de caminho do implementer', () => {
     ['com .. acima da raiz', `${root}/src/../../fora/app.ts`],
   ])('FND-08 o implementer não pode editar caminho fora do repositório (%s)', (_label, path) => {
     expectDenied(edit('implementer', path));
+  });
+});
+
+// O que configura a verificação (AI-04): o implementer não pode afrouxar o próprio lint, CI ou testes.
+const IMPLEMENTER_VERIFICATION_CONFIG = [
+  '.github/workflows/ci.yml',
+  'scripts/check-migrations.ts',
+  'vitest.config.ts',
+  'tsconfig.json',
+  '.oxlintrc.json',
+  'commitlint.config.mjs',
+  'redocly.yaml',
+  '.npmrc',
+  '.claude/settings.json',
+];
+
+describe('AI-04 guarda de caminho nega ao implementer o que configura a verificação', () => {
+  it.each(IMPLEMENTER_VERIFICATION_CONFIG)('AI-04 o implementer não pode editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  });
+
+  it.each(['src/checkout/reserve.ts', 'migrations/store/001_x.sql', 'package.json'])(
+    'AI-04 o implementer continua podendo editar %s',
+    (path) => {
+      for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+    },
+  );
+
+  it.each(['.github/workflows/ci.yml', 'scripts/check-migrations.ts', '.oxlintrc.json'])(
+    'AI-04 a sessão principal, sem agent_type, pode editar %s',
+    (path) => {
+      expectAllowed(edit(undefined, path));
+    },
+  );
+});
+
+// Pelo nome do arquivo, em qualquer pasta (AI-04): o implementer não pode afrouxar a verificação
+// escondendo a configuração dentro de src/ ou criando uma variante do arquivo.
+const IMPLEMENTER_PROTECTED_BY_NAME = [
+  'src/.oxlintrc.json',
+  'src/a/.oxlintrc.jsonc',
+  'oxlint.config.ts',
+  'src/tsconfig.json',
+  'tsconfig.build.json',
+  'src/vitest.config.ts',
+  'vite.config.ts',
+  'vitest.workspace.ts',
+  'commitlint.config.cjs',
+  'redocly.yaml',
+  '.npmrc',
+  '.nvmrc',
+  '.gitignore',
+  '.mcp.json',
+  'src/CLAUDE.md',
+  'src/CLAUDE.local.md',
+  'CLAUDE.local.md',
+  'src/x/AGENTS.md',
+];
+
+describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer não pode editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
+    expectDenied(
+      runHook(
+        JSON.stringify({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Write',
+          cwd: root,
+          agent_type: 'implementer',
+          tool_input: { file_path: join(root, path), content: 'x' },
+        }),
+      ),
+    );
+  });
+
+  // Controle negativo: nomes que só lembram os protegidos, e o código de produção, continuam liberados.
+  it.each([
+    'src/checkout/reserve.ts',
+    'migrations/store/001_x.sql',
+    'package.json',
+    'src/oxlintrc.ts',
+    'src/tsconfigs/loader.ts',
+    'src/vitest-helpers.ts',
+    'src/claude.ts',
+    'src/agents.ts',
+    'src/agents/list.ts',
+    'src/gitignore-parser.ts',
+    'src/mcp/server.ts',
+  ])('AI-04 o implementer continua podendo editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
+  });
+});
+
+// Os hooks do git rodam nos commits e pushes da sessão principal, fora dos deny e do bash-guard (A13):
+// quem os escreve executa código lá. A configuração do clone (.git/) tem o mesmo efeito.
+const IMPLEMENTER_PROTECTED_GIT_HOOKS = [
+  '.githooks/pre-push',
+  '.githooks/commit-msg',
+  '.githooks/post-commit',
+  '.githooks/novo/arquivo',
+  '.git/config',
+  '.git/hooks/pre-commit',
+];
+
+describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a configuração do clone', () => {
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer não pode editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
+    expectDenied(
+      runHook(
+        JSON.stringify({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Write',
+          cwd: root,
+          agent_type: 'implementer',
+          tool_input: { file_path: join(root, path), content: 'exit 0' },
+        }),
+      ),
+    );
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o test-writer também não pode editar %s', (path) => {
+    expectDenied(edit('test-writer', path));
+  });
+
+  // Controle negativo: nomes que só lembram as pastas protegidas seguem liberados.
+  it.each(['src/githooks.ts', 'migrations/store/.gitkeep', 'src/git/x.ts'])(
+    'AI-04 o implementer continua podendo editar %s',
+    (path) => {
+      for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+    },
+  );
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
   });
 });
 

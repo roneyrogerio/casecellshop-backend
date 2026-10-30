@@ -12,28 +12,33 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 
 ## Read
 
-- `AGENTS.md`, especially the code rules.
-- The plan or the findings you received. On a fix, also the PR comment of each finding, the previous commit and the CI log.
-- `.specs/features/casecellshop/design.md`, the ADs in `.specs/project/STATE.md` and the milestone criteria in `.specs/features/casecellshop/spec.md`.
-- The contract in `src/contract/`, the generated `openapi.yaml` and the milestone tests (`*.test.ts` files and `test/`).
+The task map in your prompt lists the criteria, the spec sections, the ADs and the files of this slice; read those, by section, not whole files. `AGENTS.md` (with the code rules) already reaches you through `CLAUDE.md`.
+
+- The map, or the findings you received. On a fix, the main session gives you each finding (its text, or the path of the saved review in `.claude/reviews/`) and the failing tail of the CI log; read the previous commit with `git show`. You have no GitHub access: if something is missing, say so in the report instead of searching for it.
+- The `design.md` sections and the `### AD-NNN` blocks of `STATE.md` the map names, and the slice criteria in `spec.md`.
+- The contract in `src/contract/` and the slice tests.
 
 ## Write
 
-- Production code and infrastructure: `src/`, migrations, `package.json`, compose, CI and configuration.
-- Never touch `*.test.ts` files, `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
-- Follow `design.md` and the ADs. A new dependency needs a decision in `STATE.md`: report it instead of adding it.
-- Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings.
+- Production code and infrastructure: `src/`, migrations, `compose.yaml`, the `Dockerfile`, and `package.json` and `package-lock.json` only to add a dependency whose `STATE.md` decision the map cites, at an exact version (never the `scripts` block).
+- Write nothing else. The tests (`*.test.ts`, `test/`), `.specs/`, `src/contract/`, `openapi.yaml`, the docs, and every file that configures verification, instructs the agents or configures git (`.claude/`, `.github/`, `.githooks/`, `.git/`, `scripts/`, `AGENTS.md`, `CLAUDE.md`, and the lint, TypeScript, test, commit, Node and npm configs in any folder) belong to the main session: the CI is the independent oracle, and the path guard denies those files to you (AI-04). If a test, the spec, the contract or a check looks wrong, stop and report it with the evidence; do not work around it.
+- Follow `design.md` and the ADs. Without a `STATE.md` decision for a dependency, report it instead of adding it.
+- Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings. Delete any scratch file or script you created before finishing.
 
 ## Run
 
-The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Also, never change or delete a migration already in `origin/main`; add a new one instead: `git diff --name-status --no-renames origin/main -- migrations` lists only `A` lines. Report done only when all of them pass.
+`npm run verify:fast` (lint, typecheck and the tests related to your changes) while you work; a stop hook runs the same checks, also compares `git status` with your role and the `scripts` block of `package.json` with `HEAD`, and sends you back while any of them fails. Before reporting done, also run the slice tests named in the map, `npm run openapi -- --check` and `npm run lint:openapi`. Never change or delete a migration already in `origin/main`; add a new one.
 
-The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:commits`) belong to the main session. If one of them fails, report it; never change its configuration (`commitlint.config.mjs`, `scripts/check-spec-limits.ts`) to make it pass.
+Keep working until every test named in the map passes and the checks above are green. Stop earlier only when something outside your role blocks you (a test, the spec, the contract or a check that looks wrong), and say what blocks you: you cannot ask questions mid-task, so stopping ends your turn with the report.
+
+Git is read-only for you: `status`, `diff`, `log`, `show`, `blame`, `grep` and the other read verbs pass, and the Bash guard denies every other verb (AI-11). To undo one of your edits, edit the file back instead of using `git checkout`, `restore` or `stash`. A change to `HEAD`, refs, the stash, worktrees or `.git/config` is caught when you stop and logged as an exception for the main session (AI-12), because you could not undo it yourself. To search text that mentions git commands, use the Grep tool: the Bash guard reads the whole command line.
+
+The instruction limits and the commit messages belong to the main session. If a check you cannot fix fails, report it with the output; never change its configuration to make it pass.
 
 ## Never
 
 - Edit, skip or delete a test to make it pass.
-- Commit, push or post on GitHub. The main session commits with `feat(<scope>): …` or `fix(<scope>): …` and uses your report in the PR description.
+- Commit, push, post on GitHub or change git state in any other way. The main session commits with `feat(<scope>): …` or `fix(<scope>): …` and uses your report in the PR description.
 
 ## Report
 
@@ -42,3 +47,4 @@ The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:c
 3. Anything in the tests, the spec or the contract that looks wrong, with the evidence.
 4. Divergences from the spec (`SPEC_DEVIATION`), for the main session to resolve.
 5. Decisions you made that the plan or the spec did not settle, each with the alternative you rejected and why.
+6. Files you read beyond the map, and why.
