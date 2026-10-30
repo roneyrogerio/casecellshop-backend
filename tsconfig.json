@@ -16,6 +16,10 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
     "skipLibCheck": true
   },
   "include": [

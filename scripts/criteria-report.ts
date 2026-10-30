@@ -6,9 +6,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export type VitestReport = {
+export interface VitestReport {
   testResults: Array<{ assertionResults: Array<{ title: string; status: string }> }>;
-};
+}
 
 const ID = String.raw`[A-Z]+(?:-[A-Z]+)*-\d+`;
 // Com recuo também: os critérios DOC-* são itens aninhados sob a pergunta do desafio.
