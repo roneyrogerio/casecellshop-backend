@@ -6,7 +6,6 @@
 // ele nunca passa pela linha de comando nem por este processo. Pode rodar de
 // novo sem efeito colateral, e é assim que se troca um token vencido.
 import { spawnSync } from 'node:child_process';
-import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collectFacts, diagnose, report, tokenLogin } from './check-env.ts';
 import { configureGitBot, installCommitHook, removeGitBot } from './lib/git-bot.ts';
@@ -60,25 +59,37 @@ export function resolveIdentity(
   return interactive ? { ask: true } : { error: `Este clone ainda não tem identidade configurada.\n\n${USAGE}` };
 }
 
-export async function promptIdentity(ask: (question: string) => Promise<string>): Promise<{ identity: Identity } | { error: string }> {
-  const mode = (await ask('Com que conta os agentes vão agir no GitHub?\n  1) uma conta de máquina, separada da sua (recomendado: você aprova os PRs dela)\n  2) a sua própria conta (os PRs saem no seu nome, e você não poderá aprová-los)\nEscolha [1]: '))
-    .trim()
-    .toLowerCase();
+// Uma pergunta pode trazer opções: no terminal, elas viram um menu com setas;
+// sem elas, um campo de texto. A lógica fica aqui, fora do terminal, para ser
+// testada com respostas prontas.
+export type Ask = (question: string, options?: { choices: { value: string; name: string; description?: string }[] }) => Promise<string>;
+
+const MODE_CHOICES = [
+  { value: '1', name: 'Uma conta de máquina, separada da sua (recomendado)', description: 'Os agentes abrem os PRs com essa conta, e você os aprova com a sua.' },
+  { value: '2', name: 'A sua própria conta', description: 'Os PRs saem no seu nome, e o GitHub não deixa o autor aprová-los.' },
+];
+
+export async function promptIdentity(ask: Ask): Promise<{ identity: Identity } | { error: string }> {
+  const mode = (await ask('Com que conta os agentes vão agir no GitHub?', { choices: MODE_CHOICES })).trim().toLowerCase();
   if (mode === '2' || mode === 'self') return { identity: { mode: 'self' } };
   if (mode !== '' && mode !== '1' && mode !== 'bot') return { error: `Resposta não reconhecida: ${mode}. Responda 1 ou 2.` };
-  const login = (await ask('Login da conta de máquina no GitHub: ')).trim();
+  const login = (await ask('Login da conta de máquina no GitHub:')).trim();
   if (!GITHUB_LOGIN.test(login)) return { error: `Login inválido no GitHub: "${login}".` };
   const fallback = defaultKeychainService(login);
-  const keychain = (await ask(`Item do chaveiro onde o token fica [${fallback}]: `)).trim();
+  const keychain = (await ask(`Item do chaveiro onde o token fica (Enter para ${fallback}):`)).trim();
   return { identity: { mode: 'bot', login, keychainService: keychain || fallback } };
 }
 
+// O @inquirer só carrega quando há terminal para perguntar: os testes rodam o
+// setup sem node_modules, e o caminho sem perguntas não precisa dele.
 async function askInTerminal(): Promise<{ identity: Identity } | { error: string }> {
-  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  const [{ default: select }, { default: input }] = await Promise.all([import('@inquirer/select'), import('@inquirer/input')]);
   try {
-    return await promptIdentity((question) => terminal.question(question));
-  } finally {
-    terminal.close();
+    return await promptIdentity((message, options) => (options ? select({ message, choices: options.choices }) : input({ message })));
+  } catch (error) {
+    // Ctrl+C no meio das perguntas: sai sem gravar nada.
+    if (error instanceof Error && error.name === 'ExitPromptError') return { error: 'Configuração cancelada; nada foi gravado.' };
+    throw error;
   }
 }
 
