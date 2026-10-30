@@ -17,7 +17,7 @@
 Cada meta é provada pelos critérios de [`spec.md`](../features/casecellshop/spec.md).
 
 1. **Nenhum overselling sob concorrência,** com um teste que tem controle negativo (`CHK-01`, `CHK-02`).
-2. **A vitrine não depende do ERP e não fica parada no tempo.** Cache com single-flight e *stale-if-error*. Com o ERP respondendo, uma mudança de preço ou de estoque chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização. Quando o cliente informa o preço que viu, ele é o cobrado (`CAT-*`, `CHK-06`).
+2. **A vitrine não depende do ERP e não fica parada no tempo.** Cache com single-flight e *stale-if-error*. Com o ERP respondendo, uma mudança de preço ou de estoque chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização. O cliente envia o preço que viu, e, se ele divergir do banco, recebe `409` com o preço atual em vez de ser cobrado por outro valor (`CAT-*`, `CHK-06`).
 3. **O checkout não espera o ERP:** `202` com `Location` e `Retry-After`, e o pedido acompanhado em `GET /orders/{orderId}/status` (`CHK-*`).
 4. **Nenhum pedido fantasma, nenhuma mensagem fantasma e nenhuma fatura duplicada, nas condições das hipóteses.** Outbox na mesma transação, consulta pela referência antes de criar, DLQ, reconciliação e reprocessamento em lote. O limite sem a H1b está no R6 (`ORD-*`).
 5. **Todo pedido é rastreável:** um `orderId` leva aos logs e a um trace da requisição ao ERP (`OBS-05`).

@@ -20,7 +20,7 @@ Uma mudança de processo vai num PR próprio, com teto de tempo, antes do marco 
 | Requisito | Marco | Comprovado por |
 | --- | --- | --- |
 | `POST /checkout` → `202` com `orderId` e `status` | M2 | `CHK-*` |
-| `GET /orders/{orderId}/status` | M2 | `CHK-*` |
+| `GET /orders/{orderId}/status` | M2, M3 | `CHK-*`, `ORD-19` |
 | Sem venda além do estoque | M2 | `CHK-01`, `CHK-02` (controle negativo) |
 | Idempotência para retry e duplo clique | M2 | `CHK-*` |
 | Worker simulando o envio ao ERP; retry, DLQ e reconciliação | M3 | `ORD-*` |
@@ -29,7 +29,7 @@ Uma mudança de processo vai num PR próprio, com teto de tempo, antes do marco 
 | OpenAPI com schemas de sucesso e erro | M1 a M4 | validação de requisição e resposta em todos os testes; `FND-07` |
 | Logs com `correlationId` e `orderId`; métricas de cache, checkout e fila; trace ligando requisição, cache, repositório e worker | M1 a M5 | `OBS-*`, `FND-05`, `CAT-12`, `ORD-18` |
 | Dashboard, alertas e runbook | M5 | README e `OBS-03` |
-| Garantias do sistema; modos de falha com mitigação e instrumentação | M5, M6 | README, cada linha ligada a um teste |
+| Garantias do sistema; modos de falha com mitigação e instrumentação | M5, M6 | `DOC-OPS-01`: README, cada linha ligada a um teste |
 | Testes de regra de negócio, cache e concorrência | M2 a M4 | todos os critérios |
 | Design conceitual por tema | M1 a M6 | `ARCHITECTURE.md` e `DOC-*` |
 | README, `PROMPTS.md`, repositório público e executável | M6 | clone limpo pela URL pública, sem credenciais |
@@ -78,7 +78,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - Transação do checkout, respostas, status do pedido e contrato das duas rotas, conforme o design.
 - `/security-review` no PR, porque é o marco que recebe dados do cliente.
 
-**Pronto quando:** `CHK-*`, `FND-09`, `FND-10` e `AI-19` passam.
+**Pronto quando:** `CHK-*`, `FND-09`, `FND-10` e `AI-19` passam, junto com as cláusulas novas do M2 nos critérios que já existiam: o `.kysely-codegenrc*` no `AI-04`, as duas conferências no `AI-05` e no `AI-17`, e os schemas de sucesso e de erro do `POST /checkout` e do `GET /orders/{orderId}/status` no `FND-07`.
 
 ## M3 — Processamento assíncrono
 
@@ -116,7 +116,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** quem chega ao repositório entende, executa e confere tudo sem precisar perguntar.
 
 - Design de diagnóstico e arquitetura alvo, versão final (`DOC-DIA`), e a revisão do `ARCHITECTURE.md` pelos critérios `DOC-*` e contra o código.
-- README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese e o teste que a prova; decisões em uma linha, cada uma com o trade-off aceito e o link para a ADR; riscos residuais e como são detectados; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com o link para o `PROMPTS.md`.
+- README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese e o teste que a prova, e a tabela de modos de falha (`DOC-OPS-01`); decisões em uma linha, cada uma com o trade-off aceito e o link para a ADR; riscos residuais e como são detectados; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com o link para o `PROMPTS.md`.
 - O README de entrada começa por subir, testar e conferir, sem exigir a configuração da fábrica; a configuração de máquina dos agentes vai para um documento próprio, com link.
 - Índice das cinco perguntas no README e no topo do `ARCHITECTURE.md` (`DOC-IDX-01`).
 - O texto de resposta às cinco perguntas, entregue fora do repositório, com o link do repositório público no fim, como o desafio pede, e uma cópia versionada no repositório (`DOC-ENT-01`).
@@ -135,7 +135,6 @@ Se for preciso reduzir, os cortes vêm nesta ordem, sem tirar nenhum requisito d
 2. A operação no README fica com um dashboard, os alertas e o runbook de DLQ.
 3. A tabela de modos de falha fica só com as linhas que têm teste.
 4. As fases de 30 e 90 dias viram um parágrafo, que ainda cita cache, fila, banco próprio da loja, workers, sincronização, observabilidade e reconciliação com o ERP (`DOC-DIA-04`).
-5. O zeramento de SKU ausente do ERP; um SKU removido segue à venda até o ERP recusar o pedido (H2), o pedido termina `failed` com a reserva liberada, e o README declara a limitação.
 
 ## Adicionais
 

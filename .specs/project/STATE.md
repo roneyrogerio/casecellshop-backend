@@ -483,7 +483,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Decisão.**
 
 - **Fonte única:** as migrações `.sql` do node-pg-migrate continuam definindo as tabelas, imutáveis depois da `main` (AI-01) e com conferência de ordem. Os tipos do banco são gerados do banco migrado pelo kysely-codegen num arquivo versionado, nunca editado à mão, e o CI falha se esse arquivo divergir do banco (`--verify`).
-- **Consultas pelo Kysely,** um query builder tipado sobre o mesmo driver `pg`: o SQL emitido corresponde quase linha a linha ao código, e o `tsc` acusa todo uso de coluna apagada ou renomeada, inclusive na reivindicação com `SKIP LOCKED`, no `ON CONFLICT … RETURNING`, na CTE e na carga em massa com `unnest`. Nenhum comando inteiro fica em SQL cru no código da aplicação; os comandos do runbook, que um operador roda no `psql`, e a limpeza de retenção documentada continuam em SQL.
+- **Consultas pelo Kysely,** um query builder tipado sobre o mesmo driver `pg`: o SQL emitido corresponde quase linha a linha ao código, e o `tsc` acusa todo uso de coluna apagada ou renomeada, inclusive na reserva condicional, na reivindicação com `SKIP LOCKED` e no `ON CONFLICT … RETURNING`. Nenhum comando inteiro fica em SQL cru no código da aplicação; os comandos do runbook, que um operador roda no `psql`, e a limpeza de retenção documentada continuam em SQL.
 - **Regras que fecham o que o `tsc` não pega, com conferência determinística no CI:**
   - `set`, `values` e `doUpdateSet` na forma de objeto (`set({ coluna: (eb) => … })`); a forma de callback (`set((eb) => ({ … }))`) deixa passar uma coluna desconhecida;
   - coluna nunca escrita dentro de um fragmento `` sql`…` ``: ela é citada com `eb.ref('coluna')`, e o fragmento cru fica restrito a funções como `now()` e `make_interval(...)`.
@@ -495,7 +495,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 - **Manter SQL em texto com tipos à mão:** a quebra de esquema só aparece em execução.
 - **SQL em texto com tipos de tabela gerados (Kanel):** tipa as tabelas, mas não confere o texto de cada consulta.
 - **Script próprio que valida cada SQL no PostgreSQL (`PREPARE`) e gera os tipos:** dá a mesma garantia sem dependência nova, mas usa uma API interna do `pg` e passa a ser ferramenta nossa para manter.
-- **PgTyped e sqlx-ts:** o PgTyped sai com sucesso mesmo com consulta inválida, e o sqlx-ts não gera tipos para a reivindicação com `now()` nem para a carga com `unnest`.
+- **PgTyped e sqlx-ts:** o PgTyped sai com sucesso mesmo com consulta inválida, e o sqlx-ts não gera tipos para a reivindicação que usa o `now()` do banco.
 - **Prisma 7:** a reivindicação com `SKIP LOCKED`, os prazos no relógio do banco, a carga em massa e os timeouts por transação ficam em SQL cru, conferido só pelo TypedSQL, ainda experimental. No teste, o `updateMany` com `limit` reivindicou a mesma linha mais de uma vez, o `@default(now())` gravou o relógio da aplicação, e o código de erro do PostgreSQL só aparece num campo não documentado.
 - **ZenStack 3:** o SQL de concorrência cai no próprio Kysely embutido, com uma camada a mais; no teste, o `updateMany` com `limit` vendeu além do estoque, um campo com `@map` quebrou em execução dentro do `ON CONFLICT`, e a migração depende do Prisma 6.
 - **Drizzle (linha estável):** no teste, o migrador pulou em silêncio a migração de um ramo paralelo, e gerar uma migração com renomeação exige terminal interativo; a correção só existe na versão candidata.

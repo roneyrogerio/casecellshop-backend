@@ -47,7 +47,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
   ```
 
 - **Formas proibidas (`AI-19`):** `set`, `values` e `doUpdateSet` com callback no lugar do objeto; coluna citada no texto fixo de um `` sql`…` ``, que fica só com funções e literais (`now()`, `make_interval(...)`); comando inteiro em `` sql`…` ``; `sql.raw`, `sql.ref`, `sql.id`, `sql.table` e `db.dynamic`; e `.query()` do `pg`, `db.transaction()` e `startTransaction()` fora de `src/db/`. Uma conferência no CI reprova cada uma.
-- **Transação (`FND-10`):** o código abre transação só pelo invólucro de `src/db/`. Antes do `COMMIT`, ele roda uma consulta de guarda pelo Kysely: se um erro capturado já abortou a transação, a guarda recebe `25P02`, o invólucro desfaz e rejeita, em vez de o PostgreSQL trocar o `COMMIT` por um `ROLLBACK` sem erro. O invólucro mantém o ouvinte de `error` na conexão retirada do pool, como o `src/db/client.ts` faz hoje.
+- **Transação (`FND-10`):** o código abre transação só pelo invólucro de `src/db/`. Antes do `COMMIT`, ele roda uma consulta de guarda pelo Kysely: se um erro capturado já abortou a transação, a guarda recebe `25P02`, o invólucro desfaz e rejeita, em vez de o PostgreSQL trocar o `COMMIT` por um `ROLLBACK` sem erro. Um adaptador do pool, passado ao dialeto do Kysely, põe o ouvinte de `error` em toda conexão retirada, dentro ou fora de transação, como o `src/db/client.ts` faz hoje, e descarta a conexão cujo `ROLLBACK` falhou. A guarda que recebe `25P02` vira `500` (defeito do código).
 - **Erros:** o SQLSTATE chega em `err.code`, direto do `pg`, sem embrulho do Kysely; o mapeamento do contrato lê dali.
 - **O banco continua guardando a regra:** os CHECKs `reserved >= 0` e `on_hand >= 0` ficam como defesa em profundidade, e os prazos usam o `now()` do banco, num fragmento `` sql`now()` ``.
 
@@ -59,7 +59,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
    - O hash é do payload validado e normalizado, serializado com as chaves em ordem: o mesmo pedido escrito de outro jeito não vira `422`.
    - Mesma chave e mesmo corpo: `202` com o mesmo `orderId`, a mesma `Location` e o status atual. Outro corpo: `422`. Sem a chave: `400`. Espera além do `lock_timeout` no passo da chave: `409`.
    - Um SKU repetido no mesmo pedido recebe `400`.
-2. **Pedido,** com o preço lido do banco e gravado em cada item. SKU inexistente: `422`. Preço diferente do `expectedUnitPrice` informado: `409` (`price-changed`), com o preço atual e sem reservar.
+2. **Pedido,** com o preço lido do banco e gravado em cada item. SKU inexistente: `422`. Preço diferente do `expectedUnitPrice`: `409` (`price-changed`), com o preço atual e sem reservar.
 3. **Mensagem de saída,** com `traceparent` e `correlationId`.
 4. **Reserva, por último,** com um `UPDATE` por SKU, em ordem de SKU:
 
@@ -98,7 +98,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `GET /orders/{orderId}/status`: `400` (identificador inválido), `404` (pedido inexistente), `503`;
   - `GET /products`: `400` (parâmetro inválido), `503` (catálogo não sincronizado, ou sem entrada e com a origem fora);
   - todas: `default` em problem+json (`500`).
-- **Falhas do banco, pelo passo da transação,** com o SQLSTATE lido de `err.code`: `lock_timeout` (`55P03`) no `INSERT` da chave → `409`; qualquer outra (`lock_timeout` em outro passo, `statement_timeout` `57014`, deadlock `40P01`, transação abortada `25P02` na guarda do `COMMIT`, pool esgotado, falha de conexão) → `503` com `Retry-After`.
+- **Falhas do banco, pelo passo da transação,** com o SQLSTATE lido de `err.code`: `lock_timeout` (`55P03`) no `INSERT` da chave → `409`; qualquer outra (`lock_timeout` em outro passo, `statement_timeout` `57014`, deadlock `40P01`, pool esgotado, falha de conexão) → `503` com `Retry-After`. A transação abortada (`25P02` na guarda do `COMMIT`, `FND-10`) é defeito do código: `500`, com um evento de log `error` próprio.
 - **Erros:** `application/problem+json` (RFC 9457), com `correlationId` e um `type` por causa, que separa os três `409` e os dois `422`. Um middleware único produz todos, sem stack trace.
 - **Listas:** `{ "items": [...], "hasNext": true }`, com `?page=` a partir de 1 e tamanho fixo. Uma página além do fim volta vazia, com `hasNext: false`.
 

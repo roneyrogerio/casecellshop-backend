@@ -24,7 +24,7 @@ O `ARCHITECTURE.md` da raiz é a resposta conceitual do desafio, escrita para qu
 
 **Mudanças.**
 
-- Toda mudança na spec entra pelo PR do marco que a causou.
+- Toda mudança na spec entra pelo PR do marco que a causou, ou por um PR de decisão que o mantenedor aprova (como a troca da camada de dados e o alinhamento ao PDF); uma cláusula nova num critério que já passava leva o marco que a entrega.
 - Um desvio entre a spec e o código, achado no plano ou na implementação, fica marcado `SPEC_DEVIATION` no critério até ser resolvido no mesmo PR.
 - Um assunto repetido em dois arquivos é consolidado num só, e o outro aponta para ele.
 
