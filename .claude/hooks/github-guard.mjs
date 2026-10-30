@@ -19,7 +19,9 @@ export function check(input, deps) {
     return { allow: false, reason: 'O PR nasce em rascunho: chame create_pull_request com draft: true.' };
   }
 
-  if (tool.endsWith('__update_pull_request') && args.draft === false) {
+  // Todo draft que não seja true tira do rascunho para o portão: um "false" ou um
+  // 0 não pode passar por fora só por não ser o booleano.
+  if (tool.endsWith('__update_pull_request') && 'draft' in args && args.draft !== true) {
     // O dono lê o que está no GitHub: o HEAD local precisa estar publicado, e o
     // registro do post-tool prova que o /security-review abriu nesse commit.
     const git = deps.git();
@@ -39,7 +41,9 @@ export function check(input, deps) {
   }
 
   if (tool.endsWith('__add_issue_comment')) {
-    const body = typeof args.body === 'string' ? args.body.trimStart() : '';
+    // Espaço no início e no fim não muda o relatório, e o caminho até a ferramenta
+    // pode acrescentar uma quebra de linha final que o arquivo salvo não tem.
+    const body = typeof args.body === 'string' ? args.body.trim() : '';
     // O relatório de segurança é escrito pela sessão principal; ele só vai ao PR
     // quando o /security-review abriu no HEAD atual (AI-16).
     if (body.startsWith(SECURITY_REPORT)) {
@@ -52,8 +56,8 @@ export function check(input, deps) {
     }
     // O outro comentário do fluxo é o relatório do reviewer, gravado por hook
     // (AI-15): qualquer corpo que não seja idêntico a um relatório salvo é
-    // recusado. Só o espaço inicial é ignorado, porque não muda o relatório.
-    const saved = deps.reviewBodies().map((review) => review.trimStart());
+    // recusado.
+    const saved = deps.reviewBodies().map((review) => review.trim());
     if (!body || !saved.includes(body)) {
       return {
         allow: false,
