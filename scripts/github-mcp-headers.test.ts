@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
+import { isolatedEnv, makeScriptsSandbox, runScript, setFakeCredential } from '../test/helpers/identity-sandbox.ts';
 
 interface HeadersModule {
   GITHUB_TOOLS: readonly string[];
@@ -82,4 +84,56 @@ describe('AI-08 headersFor decide o que o headersHelper imprime', () => {
     expect(mod.headersFor({ remote: false }, undefined)).toBeNull();
     expect(mod.headersFor({ remote: false }, '')).toBeNull();
   });
+});
+
+// O CLI de verdade, numa cópia dos scripts em um repositório temporário: nunca no clone real, nunca no chaveiro.
+describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone', () => {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+
+  it('AI-08 sem identidade configurada falha sem imprimir cabeçalho', () => {
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'github-mcp-headers.ts', []);
+
+    expect(result.status).not.toBe(0);
+    // Mede o tamanho, sem imprimir a saída: se um token real vazasse, a mensagem de falha não o mostraria.
+    expect(result.stdout.length).toBe(0);
+  }, 30_000);
+
+  it('AI-08 no modo self, com a credencial do git guardada, imprime o cabeçalho com esse token', () => {
+    const dir = makeScriptsSandbox();
+    setFakeCredential(dir, 'tok-self');
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+
+    const result = runScript(dir, 'github-mcp-headers.ts', []);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      Authorization: 'Bearer tok-self',
+      'X-MCP-Tools': EXPECTED_TOOLS.join(','),
+      'X-MCP-Lockdown': 'true',
+    });
+  }, 30_000);
+
+  it('AI-08 no modo self, sem credencial guardada, falha sem imprimir cabeçalho', () => {
+    const dir = makeScriptsSandbox();
+    git(dir, 'config', '--local', 'credential.helper', '');
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+
+    const result = runScript(dir, 'github-mcp-headers.ts', []);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe('');
+  }, 30_000);
+
+  it('AI-08 na nuvem devolve {} mesmo sem identidade', () => {
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'github-mcp-headers.ts', [], { env: isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' }) });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({});
+  }, 30_000);
 });
