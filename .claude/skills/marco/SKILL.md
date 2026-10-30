@@ -28,10 +28,10 @@ You are the main session: you orchestrate one milestone (`$ARGUMENTS`). You plan
 Read only the sections you need: the milestone criteria in `spec.md`, the matching `design.md` sections, the ADs they cite, the contract and the code they touch. Produce, in Portuguese:
 
 - the criteria in scope, with any `SPEC_DEVIATION` found (criterion, evidence, proposed fix);
-- slices by area, each of at most ~400 lines of production code (`src/`, `migrations/`); if the milestone estimate passes ~800 lines, split it into two PRs;
+- slices by area, each of at most ~400 lines of production code (`src/`, `migrations/`), checked after each `feat:` with `git diff --shortstat <base>..HEAD -- src migrations`; if the milestone estimate passes ~800 lines, split it into two PRs;
 - for each slice, the task map below;
 - the ADs to propose, the stubs to create, and the pending items inherited from the previous milestone as checklist items;
-- the answers to the challenge questions (Q1–Q5 of the PDF) this milestone touches, drafted in `ARCHITECTURE.md` in this same PR.
+- the `DOC-*` criteria this milestone touches (the answers to the challenge questions), drafted in `ARCHITECTURE.md` in this same PR.
 
 Task map, sent in every delegation prompt (a subagent does not see this conversation):
 
@@ -71,7 +71,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 - write the milestone record in the PR description: rounds and findings by severity, findings the `reviewer` got wrong, escalation steps used, red CI runs by cause, approvals asked, lessons (1–3), and the pending items for the next plan;
 - update `PROMPTS.md` and the `ROADMAP.md` status line;
-- `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer), and tell the maintainer, in a few lines, what to read: the criteria × test names table of the CI summary and the Q1–Q5 text this milestone touched (maintainer point 3, ~10 min). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, set `draft: true` again.
+- `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer), and tell the maintainer, in a few lines, what to read: the criteria × test names table of the CI summary and the `ARCHITECTURE.md` sections of the `DOC-*` criteria this milestone touched (maintainer point 3, ~10 min). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, set `draft: true` again.
 
 ## 7. Close (`/marco fechar`)
 

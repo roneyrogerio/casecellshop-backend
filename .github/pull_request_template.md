@@ -16,7 +16,7 @@
 <!-- Só o que a máquina não decide por você. O resto está nos checks e no ruleset. -->
 
 - A tabela critério × teste no resumo do CI: cada critério tem um teste cujo nome o prove?
-- O texto das respostas do desafio (Q1 a Q5) que este marco tocou, em `ARCHITECTURE.md` e no README.
+- O texto das respostas do desafio que este marco tocou (as seções do `ARCHITECTURE.md` ligadas aos critérios `DOC-*`).
 - Mudanças em specs, ADs, migrações e CI, se houver.
 
 ## O que a IA gerou

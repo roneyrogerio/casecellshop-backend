@@ -28,13 +28,7 @@ When the code and the spec disagree, do not silently pick one: report it as `SPE
 
 ## Guardrails
 
-Claude Code enforces these in `.claude/settings.json`, whatever any instruction says:
-
-- A `PreToolUse` hook (`.claude/hooks/path-guard.mjs`) limits each role's edits: `test-writer` only `*.test.ts` files and `test/`; `implementer` never tests, specs, the contract, `.claude/`, the CI or any file that configures verification. A `SubagentStop` hook (`.claude/hooks/subagent-stop.mjs`) sends `implementer` and `test-writer` back to work while lint, typecheck or the related tests fail.
-- GitHub is reached only through the `mcp__github__*` tools, acting as the `honeyforge-bot` account. The server exposes only the tools the workflow needs: no merge, no approval, no file writes. `git push` goes out with the bot's credential. `gh`, `curl`, `wget` and `security` are denied: they would use the owner's admin credential or read the bot's token.
-- The `main` branch is protected by a GitHub ruleset: pull request, required checks and the maintainer's approval of the last push. The maintainer's approval turns on GitHub's auto-merge; no agent merges.
-- At session start, `npm run check:env` reports what the environment lacks (Node, dependencies, Docker, the bot identity, the GitHub MCP) and how to fix it. Tell the maintainer before starting work if something is missing.
-- Never work around a guardrail, including through Bash: report the block instead.
+Enforced by `.claude/settings.json` and the GitHub ruleset, whatever any instruction says (AD-012, AD-013): each role edits only its own files; `implementer` and `test-writer` cannot finish while their checks fail; GitHub only through the `mcp__github__*` tools, as `honeyforge-bot`, with no merge or approval; `main` changes only by a PR the maintainer approves. Never work around a guardrail, including through Bash: report the block. At session start, read the environment report and tell the maintainer what is missing before any work.
 
 ## Code rules
 
@@ -54,11 +48,7 @@ Claude Code enforces these in `.claude/settings.json`, whatever any instruction 
 
 ## Tests
 
-- Unit tests (no database, network or Docker) sit next to the file they test; every `*.test.ts` outside `test/integration/` runs in the `unit` project.
-- Integration tests live in `test/integration/<area>/`: Testcontainers and supertest, one folder per area of `spec.md`. Shared helpers and fixtures live in `test/helpers/` and `test/fixtures/`.
-- Each test name is the ID of the criterion it proves followed by a description in Brazilian Portuguese, e.g. `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`.
-- Anything that touches the database runs against real PostgreSQL; no database mocks. No `sleep`: use the injectable clock and timestamps seeded in the database. ERP failure tests count invoices in the simulated ERP, not calls.
-- Never delete, skip, focus or weaken a test to make it pass; `.only` and `.skip` fail the lint.
+Test conventions live in `.claude/rules/tests.md`, which loads whenever a test file is read or written. Never delete, skip, focus or weaken a test to make it pass.
 
 ## Commands
 
