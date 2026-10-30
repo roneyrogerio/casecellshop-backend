@@ -313,3 +313,26 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Corrigido:** a afirmação de que o PR estava pronto; o mantenedor perguntou de novo, e a conferência achou o intervalo sem revisão.
 - **Resultado:** o `implementer` roda só as checagens que dependem do código e relata as outras sem mexer na configuração delas; a conferência de histórico do `reviewer` passou a cobrir o `commitlint.config.mjs` e o `scripts/check-spec-limits.ts`; o `STATE.md` aponta o M2; as fontes da linha dos comandos foram conferidas com `gh issue view`.
 - **Verificação:** `npm run check:specs`, `npm run test:unit` e a Revisão 4, que achou o A14: a lista fechada do `implementer` deixou de fora a conferência do CI que barra a alteração de migrações já na `main`; a lista passou a incluí-la.
+
+## F1 — Fábrica v2
+
+### Redesenho do fluxo a partir da palestra e da pesquisa
+
+- **Pedido:** o mantenedor pediu um fluxo mais automatizado, com o humano só onde ele decide, revisão quase toda automática, histórico mínimo mas auditável, navegação da IA econômica e o mesmo comportamento na sessão local e na nuvem. A base é a palestra de Tariq Shaukat (Sonar) sobre confiança em código gerado por agentes e uma pesquisa de mercado.
+- **O que a IA fez:**
+  - pesquisou em doze frentes, com agentes em Sonnet e Opus;
+  - montou uma proposta e a submeteu a uma revisão adversarial independente;
+  - implementou o F1 pelo fluxo: critérios, testes do `test-writer` antes do código, e depois a implementação.
+- **Corrigido:**
+  - **O primeiro plano repetia o erro do M1:** tinha 45 itens antes do produto. A revisão o cortou para um F1 com teto de 5 h.
+  - **O portão de merge não era independente:** dependia de um "APROVADO" postado pelo próprio orquestrador. Ele saiu.
+  - **O TDD era impossível em código novo:** entraram stubs tipados antes dos testes.
+  - **A remoção dos limites de palavras estava para "depois",** mas a própria AD-012 estouraria o `STATE.md`. Ela entrou no F1.
+  - **O GitHub ia por um script próprio de verbos fixos.** O mantenedor pediu MCP. A pesquisa e um teste ao vivo mostraram que o servidor oficial aceita o `X-MCP-Tools`, que restringe as ferramentas no próprio servidor, e o script saiu.
+  - **O merge** passou a seguir a aprovação do dono, por auto-merge, em vez de ser um passo do bot.
+  - **O classificador do modo automático barrou a escrita do `.claude/settings.json`.** A alteração ficou para a autorização explícita do mantenedor.
+- **Verificação:**
+  - os critérios `AI-01` a `AI-10` têm testes com controle negativo;
+  - a suíte completa roda verde, menos o `AI-06`, que espera o `settings.json`;
+  - o servidor MCP foi conferido com o token do bot: com o `X-MCP-Tools`, só as nove ferramentas aparecem, e o `merge_pull_request` some;
+  - o histórico foi varrido com o gitleaks antes de o repositório ficar público.
