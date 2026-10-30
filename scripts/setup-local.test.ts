@@ -812,6 +812,46 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
     expect(localConfig(dir, 'casecellshop.keychainService')).toBe('item-b');
   });
 
+  // O setupBot rejeita quando a pessoa cancela com Ctrl+C no prompt ou o arquivo do token não grava (A11).
+  // A função pode rejeitar ou devolver false; nos dois casos o clone volta ao que era.
+  const failed = async (dir: string, identity: Identity, store: 'system' | 'file'): Promise<void> => {
+    const outcome = await configureIdentity(dir, identity, store, {
+      setupBot: () => Promise.reject(new Error('x')),
+    }).then(
+      (ok) => ({ rejected: false, ok }),
+      () => ({ rejected: true, ok: undefined }),
+    );
+    expect(outcome.rejected || outcome.ok === false).toBe(true);
+  };
+
+  it('AI-14 setupBot que rejeita restaura o modo self que já estava no clone', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'self');
+
+    await failed(dir, botOf('outra-conta', 'item-da-outra'), 'system');
+
+    expect(saved(dir)).toEqual({ identity: 'self', botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+  });
+
+  it('AI-14 setupBot que rejeita mantém o bot a e o item-a anteriores', async () => {
+    const dir = makeRepo();
+    git(dir, 'config', '--local', 'casecellshop.identity', 'bot');
+    git(dir, 'config', '--local', 'casecellshop.botLogin', 'a');
+    git(dir, 'config', '--local', 'casecellshop.keychainService', 'item-a');
+
+    await failed(dir, botOf('b', 'item-b'), 'file');
+
+    expect(saved(dir)).toEqual({ identity: 'bot', botLogin: 'a', keychainService: 'item-a', tokenStore: undefined });
+  });
+
+  it('AI-14 setupBot que rejeita, sem configuração antes, não deixa nenhuma chave casecellshop.*', async () => {
+    const dir = makeRepo();
+
+    await failed(dir, botOf('b', 'item-b'), 'system');
+
+    expect(saved(dir)).toEqual({ identity: undefined, botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+  });
+
   it('AI-14 sem configuração antes e com setupBot false não sobra nenhuma chave casecellshop.*', async () => {
     const dir = makeRepo();
 

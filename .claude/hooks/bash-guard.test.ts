@@ -437,6 +437,63 @@ describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
   );
 });
 
+// Dentro de aspas duplas o shell executa `$(…)` e crase e lê `\"` como escape; invólucros com opção e `>&arquivo` também escrevem (A16, A17).
+const SUBAGENT_QUOTED_AND_WRAPPED_WRITE_DENIED = [
+  // substituição de comando e crase dentro de aspas duplas
+  'echo "$(python3 x.py)"',
+  'x="$(sed -i s/a/b/ f.ts)"',
+  'echo "`tee f.ts`"',
+  'echo "$(echo x > f.ts)"',
+  // `\"` dentro de aspas duplas não fecha o trecho: o redirecionamento depois dele continua valendo
+  'echo "{\\"a\\": 1}" > f.json',
+  // invólucros com opção e valor, e `-c` combinado com outras letras
+  'timeout -s KILL 5 python3 x.py',
+  'nice -n 10 python3 x.py',
+  'sudo -u x python3 a.py',
+  'bash -lc "python3 x.py"',
+  // `>&` seguido de palavra que não é número nem `-` grava num arquivo
+  'echo x >&f.ts',
+  'echo x >& f.ts',
+];
+
+const SUBAGENT_QUOTED_AND_WRAPPED_ALLOWED = [
+  'node --input-type=module -e "import(\\"./a.mjs\\").then(m=>console.log(m))"',
+  'echo "preço: \\$5"',
+  // aspas simples são literais: nada dentro delas executa
+  "echo 'literal $(python3) e `tee`'",
+  'npm test 2>&1 | tail -5',
+  'echo x >&2',
+  'ls >&-',
+  'grep -rnE "python3|perl" .claude',
+  // substituição de comando que só lê
+  'echo "$(git status --short)"',
+  'echo "a > b"',
+];
+
+describe('AI-11 os subagentes não escrevem arquivo por dentro de aspas duplas nem por invólucro com opção', () => {
+  beforeAll(loadCheck);
+
+  it.each(SUBAGENT_QUOTED_AND_WRAPPED_WRITE_DENIED)(
+    'AI-11 nega "%s" aos três subagentes e manda usar Edit e Write',
+    (command) => {
+      for (const agentType of SUBAGENTS) {
+        const verdict = check(bash(agentType, command));
+        expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
+        expect(verdict.reason, `${agentType}: ${command}`).toContain('Edit');
+        expect(verdict.reason, `${agentType}: ${command}`).toContain('Write');
+      }
+    },
+  );
+
+  // Controle negativo: o que só lê, descarta a saída ou é literal segue liberado.
+  it.each(SUBAGENT_QUOTED_AND_WRAPPED_ALLOWED)('AI-11 libera "%s" aos três subagentes', (command) => {
+    for (const agentType of SUBAGENTS) {
+      const verdict = check(bash(agentType, command));
+      expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
+    }
+  });
+});
+
 describe('AI-11 o bash-guard como processo', () => {
   const hook = join(import.meta.dirname, 'bash-guard.mjs');
 
