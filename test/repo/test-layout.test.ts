@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 
 describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   let tree: string;
@@ -93,9 +93,12 @@ describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', 
     expect(vitestFiles('integration')).toEqual(all.filter((file) => file.startsWith('test/integration/')));
   }, 60_000);
 
+  // O arquivo de scripts/ do controle é um teste que fica ao lado do script que testa; este próprio
+  // arquivo agora mora em test/repo/.
   it('AI-02 controle: a conferência enxerga os testes de .claude/, de scripts/ e de test/integration/', () => {
     expect(outsideIntegration).toContain('.claude/hooks/path-guard.test.ts');
-    expect(outsideIntegration).toContain('scripts/test-layout.test.ts');
+    expect(outsideIntegration).toContain('scripts/check-env.test.ts');
+    expect(outsideIntegration).toContain('test/repo/test-layout.test.ts');
     expect(all.some((file) => file.startsWith('test/integration/'))).toBe(true);
     expect(vitestFiles('unit')).not.toContain('test/integration/foundation/compose.test.ts');
   }, 60_000);

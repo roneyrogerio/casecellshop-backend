@@ -14,18 +14,20 @@ interface McpConfig {
   mcpServers?: { github?: GithubServer };
 }
 
+const root = join(import.meta.dirname, '..', '..');
+
 let tools: readonly string[];
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
-  const mod = (await import(pathToFileURL(join(import.meta.dirname, 'github-mcp-headers.ts')).href)) as {
+  const mod = (await import(pathToFileURL(join(root, 'scripts', 'github-mcp-headers.ts')).href)) as {
     GITHUB_TOOLS: readonly string[];
   };
   tools = mod.GITHUB_TOOLS;
 });
 
 function loadConfig(): McpConfig {
-  return JSON.parse(readFileSync(join(import.meta.dirname, '..', '.mcp.json'), 'utf8')) as McpConfig;
+  return JSON.parse(readFileSync(join(root, '.mcp.json'), 'utf8')) as McpConfig;
 }
 
 // Devolve os problemas do servidor github do .mcp.json (AI-08); lista vazia é conformidade.

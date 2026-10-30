@@ -24,7 +24,7 @@ interface Workflow {
   jobs?: Record<string, Job>;
 }
 
-const root = join(import.meta.dirname, '..');
+const root = join(import.meta.dirname, '..', '..');
 
 function stepsOf(workflow: Workflow): Step[] {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);

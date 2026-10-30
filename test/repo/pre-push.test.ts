@@ -2,10 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, git, initRepo, makeTempDir } from '../test/helpers/git-sandbox.ts';
+import { cleanupTempDirs, git, initRepo, makeTempDir } from '../helpers/git-sandbox.ts';
 
-// O hook fica em .githooks/ (AI-08): `**/*.test.ts` não entra em pastas com ponto, então o teste mora em scripts/.
-const root = join(import.meta.dirname, '..');
+// O hook fica em .githooks/ (AI-08) e não tem arquivo de origem ao lado: o teste mora em test/repo/,
+// onde ficam os testes de configuração do repositório.
+const root = join(import.meta.dirname, '..', '..');
 const hook = join(root, '.githooks', 'pre-push');
 
 afterEach(cleanupTempDirs);

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // AI-17: `npm run verify` espelha o CI sem os testes de integração; `npm run verify:full` troca os testes
 // unitários por todos os testes. Os dois são listas de `npm run` ligadas por `&&`.
-const root = join(import.meta.dirname, '..');
+const root = join(import.meta.dirname, '..', '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 
 // Cada passo vira o nome do script, com os argumentos depois de `--` quando há: `openapi -- --check`.
