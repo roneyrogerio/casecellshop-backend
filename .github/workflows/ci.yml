@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# AI-17: um push novo no PR torna a execução anterior inútil, então ela é
+# cancelada; na main nunca, para cada merge ter o seu resultado.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     name: Node ${{ matrix.node }}
