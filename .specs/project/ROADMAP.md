@@ -63,7 +63,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** o fluxo de IA passa a se verificar sozinho e a deixar o humano só onde ele decide, antes do M2, em PRs de processo com teto de tempo (AD-012 a AD-016). Entrou pelos PRs #4, #5 e o de fechamento.
 
 **Pronto quando:**
-- os critérios `AI-01` a `AI-17` estão verdes, cada trilho com um controle negativo;
+- os critérios `AI-01` a `AI-18` estão verdes, cada trilho com um controle negativo;
 - o CI está verde;
 - o ruleset protege a `main`;
 - o PR registra o tempo gasto.
