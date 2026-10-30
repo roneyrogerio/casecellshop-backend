@@ -330,6 +330,9 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
   - **A remoção dos limites de palavras estava para "depois",** mas a própria AD-012 estouraria o `STATE.md`. Ela entrou no F1.
   - **O GitHub ia por um script próprio de verbos fixos.** O mantenedor pediu MCP. A pesquisa e um teste ao vivo mostraram que o servidor oficial aceita o `X-MCP-Tools`, que restringe as ferramentas no próprio servidor, e o script saiu.
   - **O merge** passou a seguir a aprovação do dono, por auto-merge, em vez de ser um passo do bot.
+  - **O MCP passou a vir do `.mcp.json` versionado.** O registro por máquina não era automático e esconderia a configuração do projeto. O `.mcp.json` liga sozinho em qualquer sessão aberta na pasta.
+  - **A Revisão 1 reprovou o PR (A1, alta).** A guarda do oráculo deixava o `implementer` mudar os scripts do `package.json` ou criar um `.oxlintrc.json` em `src/`. Sem token, o push caía na conta do dono pelo askpass do VS Code. E o relatório salvo era gravado pela própria sessão principal. Tudo foi corrigido com testes e controle negativo, e o `bash-guard` (AI-11) entrou depois que uma conferência de padrão mostrou que o `reviewer`, que deveria só ler, podia commitar.
+  - **Quatro mensagens de commit começavam com maiúscula** e reprovaram o commitlint no CI. A convenção foi conferida contra o padrão da comunidade: ficou o `config-conventional`, sem regras próprias. Um hook `commit-msg` local passou a recusar a mensagem na hora. As quatro mensagens foram reescritas, com autorização do mantenedor, numa branch nova, porque o push forçado agora é bloqueado.
   - **O classificador do modo automático barrou a escrita do `.claude/settings.json`.** A alteração ficou para a autorização explícita do mantenedor.
 - **Verificação:**
   - os critérios `AI-01` a `AI-10` têm testes com controle negativo;
