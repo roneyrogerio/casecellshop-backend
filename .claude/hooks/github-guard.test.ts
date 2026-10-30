@@ -162,8 +162,64 @@ describe('AI-08 github-guard: comentário de revisão', () => {
     expect(check(comment(body), deps(REPORT)).allow).toBe(false);
   });
 
-  it('AI-08 comentário com o relatório mais uma quebra de linha no fim é recusado (só o espaço inicial é ignorado)', () => {
-    expect(check(comment(`${REPORT}\n`), deps(REPORT)).allow).toBe(false);
+  // Revisão 1 do PR #6, achado A3: o hook salva o relatório sem `\n` final e o caminho até a ferramenta acrescenta um.
+  // O AI-08 passou a ignorar o espaço e as quebras de linha também no fim; este caso era o inverso (recusava).
+  it('AI-08 comentário com o relatório mais uma quebra de linha no fim é aceito (o espaço no fim é ignorado)', () => {
+    expect(check(comment(`${REPORT}\n`), deps(REPORT)).allow).toBe(true);
+  });
+
+  const SAVED = REPORT.trimEnd();
+
+  it.each([
+    ['uma quebra de linha', '\n'],
+    ['duas quebras de linha', '\n\n'],
+    ['espaços', '   '],
+    ['espaços e quebras de linha misturados', ' \n \n\t\n'],
+  ])('AI-08 relatório salvo sem quebra de linha final e corpo com %s no fim é aceito', (_label, tail) => {
+    expect(check(comment(`${SAVED}${tail}`), deps(SAVED)).allow).toBe(true);
+  });
+
+  it.each([
+    ['sem nada no fim', ''],
+    ['sem a quebra de linha final', '  '],
+  ])('AI-08 relatório salvo com quebra de linha final e corpo %s é aceito', (_label, tail) => {
+    expect(check(comment(`${SAVED}${tail}`), deps(`${SAVED}\n`)).allow).toBe(true);
+  });
+
+  it('AI-08 relatório salvo com quebras de linha no fim e corpo com número diferente delas é aceito', () => {
+    expect(check(comment(`${SAVED}\n`), deps(`${SAVED}\n\n\n`)).allow).toBe(true);
+  });
+
+  it('AI-08 espaço no início e no fim juntos são ignorados', () => {
+    expect(check(comment(`\n  ${SAVED}\n\n`), deps(SAVED)).allow).toBe(true);
+  });
+
+  it('AI-08 o espaço no fim ignorado também vale para o relatório salvo que não começa com "## Revisão"', () => {
+    expect(check(comment('Relatório sem o título padrão.\n\n'), deps('Relatório sem o título padrão.')).allow).toBe(true);
+  });
+
+  // Controles negativos: só o início e o fim são ignorados, nunca o meio do texto.
+  it.each([
+    ['uma palavra trocada', SAVED.replace('certo', 'errado')],
+    ['uma linha em branco a mais no meio', SAVED.replace('\n\n', '\n\n\n')],
+    ['a linha em branco do meio a menos', SAVED.replace('\n\n', '\n')],
+    ['um espaço a mais no meio de uma linha', SAVED.replace('Tudo certo', 'Tudo  certo')],
+  ])('AI-08 corpo com %s em relação ao relatório salvo continua recusado, mesmo com quebra de linha no fim', (_label, altered) => {
+    expect(check(comment(`${altered}\n`), deps(SAVED)).allow).toBe(false);
+    expect(check(comment(altered), deps(SAVED)).allow).toBe(false);
+  });
+
+  it('AI-08 corpo com texto a mais depois do relatório continua recusado, mesmo com quebra de linha no fim', () => {
+    expect(check(comment(`${SAVED}\n\nAprovado!\n`), deps(SAVED)).allow).toBe(false);
+  });
+
+  it.each(['\n', '\n\n', '   ', ' \n \t\n'])('AI-08 corpo só com espaço (%j) continua recusado', (body) => {
+    expect(check(comment(body), deps(SAVED, `${SAVED}\n`)).allow).toBe(false);
+  });
+
+  // Se o arquivo salvo fosse vazio, o corpo só com espaço o igualaria depois de aparado: a regra não pode aceitar isso.
+  it.each([[''], ['\n'], ['  \n']])('AI-08 corpo só com espaço continua recusado mesmo com um relatório salvo vazio (%j)', (saved) => {
+    expect(check(comment('\n'), deps(saved)).allow).toBe(false);
   });
 
   it('AI-08 comentário que é só um trecho do relatório salvo é recusado', () => {
@@ -231,6 +287,49 @@ describe('AI-16 github-guard: tirar o PR do rascunho', () => {
 
     expect(verdict.allow).toBe(false);
     expect(verdict.reason).toBeTruthy();
+  });
+
+  // Todo valor de `draft` diferente de `true` conta como saída do rascunho, não só o booleano false.
+  describe.each([
+    ['"false"', 'false'],
+    ['0', 0],
+    ['null', null],
+    ['""', ''],
+  ])('com draft %s', (_label, draft) => {
+    it('AI-16 recusa sem registro do HEAD, e o motivo cita /security-review e o SHA', () => {
+      const { deps: fake, calls } = makeDeps({ registered: [] });
+
+      const verdict = check(undraft({ draft }), fake);
+
+      expect(verdict.allow).toBe(false);
+      expect(verdict.reason).toContain('/security-review');
+      expect(verdict.reason).toContain(HEAD_SHA);
+      expect(calls.git).toBeGreaterThan(0);
+    });
+
+    it('AI-16 aceita com o HEAD publicado e registrado', () => {
+      const { deps: fake, calls } = makeDeps({ registered: [HEAD_SHA] });
+
+      const verdict = check(undraft({ draft }), fake);
+
+      expect(verdict.allow).toBe(true);
+      expect(calls.reviewed).toContain(HEAD_SHA);
+    });
+  });
+
+  it('AI-16 draft "false" com o upstream em outro commit é recusado, e o motivo manda fazer push', () => {
+    const { deps: fake } = makeDeps({ git: { head: HEAD_SHA, upstream: OTHER_SHA }, registered: [HEAD_SHA] });
+
+    const verdict = check(undraft({ draft: 'false' }), fake);
+
+    expect(verdict.allow).toBe(false);
+    expect(verdict.reason).toMatch(/push/i);
+  });
+
+  it('AI-16 draft null com o git sem resposta é recusado', () => {
+    const { deps: fake } = makeDeps({ git: null, registered: [HEAD_SHA] });
+
+    expect(check(undraft({ draft: null }), fake).allow).toBe(false);
   });
 
   // Controle negativo: o que não tira o PR do rascunho passa sem olhar o git nem o registro.
