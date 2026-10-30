@@ -15,7 +15,7 @@ You are the main session: you orchestrate one milestone (`$ARGUMENTS`). You plan
 - The CI is the oracle. A slice is done when its `feat:` commit is green and a review round covers it. Never report done on a red or unrun check.
 - One review round per slice; a new round only when a commit outside the free list lands after it. `baixa` findings never block: they become checklist items of the next plan. Ceiling: 3 rounds per slice, 5 per milestone; past it, the maintainer decides.
 - `implementer` escalation: step 0 frontmatter (Sonnet, `medium`); step 1 `model: sonnet`, `effort: high`; step 2 `model: opus`, `effort: high`, at most two calls per problem; past it, the maintainer decides.
-- Never `--force`, never push to `main`, never merge, never approve. GitHub only through the `mcp__github__*` tools (owner `roneyrogerio`, repo `casecellshop-backend`), acting as `honeyforge-bot`; `git push` uses the bot's credential.
+- Never `--force`, never push to `main`, never merge, never approve. GitHub only through the `mcp__github__*` tools (owner `roneyrogerio`, repo `casecellshop-backend`), acting as the identity configured for the clone (`git config casecellshop.identity`, AI-14); in `bot` mode `git push` uses the machine account's credential.
 - Start by reading the `SessionStart` environment report; if something is missing, tell the maintainer the fix before any work.
 
 ## 1. Start

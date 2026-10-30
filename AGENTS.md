@@ -28,7 +28,7 @@ When the code and the spec disagree, do not silently pick one: report it as `SPE
 
 ## Guardrails
 
-Enforced by `.claude/settings.json` and the GitHub ruleset, whatever any instruction says (AD-012, AD-013): each role edits only its own files; `implementer` and `test-writer` cannot finish while their checks fail; GitHub only through the `mcp__github__*` tools, as `honeyforge-bot`, with no merge or approval; `main` changes only by a PR the maintainer approves. Never work around a guardrail, including through Bash: report the block. At session start, read the environment report and tell the maintainer what is missing before any work.
+Enforced by `.claude/settings.json` and the GitHub ruleset, whatever any instruction says (AD-012, AD-013): each role edits only its own files; `implementer` and `test-writer` cannot finish while their checks fail; GitHub only through the `mcp__github__*` tools, as the identity configured for the clone (AI-14; a machine account by default), with no merge or approval; `main` changes only by a PR the maintainer approves. Never work around a guardrail, including through Bash: report the block. At session start, read the environment report and tell the maintainer what is missing before any work.
 
 ## Code rules
 

@@ -67,15 +67,17 @@ O código é escrito por agentes do Claude Code, e a confiança vem de verifica�
 - **Testes antes do código.** Um agente escreve os testes a partir dos critérios, sem ler a implementação. Outro implementa, sem poder alterar os testes, o CI nem as configurações que decidem se o trabalho está certo.
 - **O agente não termina com checagem vermelha.** Um hook o devolve ao trabalho enquanto o lint, os tipos ou os testes falharem.
 - **Revisão independente.** Um terceiro agente, só leitura, revisa cada fatia, e o relatório vai ao PR como foi escrito.
-- **Os agentes agem no GitHub como a conta `honeyforge-bot`,** pelo servidor MCP oficial, restrito às ferramentas do fluxo: sem merge, sem aprovação, sem escrita de arquivo.
+- **Os agentes agem no GitHub com a identidade escolhida em cada clone,** de preferência uma conta de máquina separada da sua, pelo servidor MCP oficial, restrito às ferramentas do fluxo: sem merge, sem aprovação, sem escrita de arquivo.
 - **A `main` só muda por PR,** com os checks verdes e a aprovação do mantenedor, impostos por um ruleset do GitHub. A aprovação liga o auto-merge.
 
 **Configurar uma máquina** (terminal ou VS Code):
 
-1. Guarde, uma vez, o token clássico da conta do bot no chaveiro. No macOS: `security add-generic-password -s loja-honeyforge-bot -a honeyforge-bot -w`; no Linux: `secret-tool store --label="honeyforge-bot" service loja-honeyforge-bot`.
+1. Escolha, uma vez por clone, com que conta os agentes agem no GitHub. A escolha fica no `.git/config` do clone, fora do repositório:
+   - **Conta de máquina (recomendado):** `npm run setup:local -- --identity bot --login <conta-do-bot>`. O comando pede o token clássico da conta (escopos `repo` e `workflow`) ao chaveiro do sistema, sem mostrá-lo, e o guarda no item `casecellshop-<conta>` (troque com `--keychain <item>`). Com uma conta separada, você aprova os PRs dos agentes.
+   - **A sua própria conta:** `npm run setup:local -- --identity self`. Usa a credencial do GitHub que o git da máquina já tem. Os PRs saem no seu nome, e o GitHub não deixa o autor aprovar o próprio PR: com o ruleset atual, o merge trava.
 2. Abra o Claude Code na pasta do projeto e aceite a confiança da pasta, uma vez.
 
-Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão configura o push como o bot e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
+Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão ajusta o push à identidade escolhida e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
 
 Na sessão do Claude Code na nuvem, o diagnóstico também roda. A autenticação do MCP lá ainda está a validar (AD-013).
 
