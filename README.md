@@ -79,18 +79,18 @@ O código é escrito por agentes do Claude Code, e a confiança vem de verifica�
 
 Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão ajusta o push à identidade escolhida e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
 
-Onde cada modo funciona hoje:
+Onde cada modo funciona:
 
 | Ambiente | Conta de máquina (`bot`) | A sua própria conta (`self`) |
 | --- | --- | --- |
-| macOS | Sim, pelo Chaveiro (`security`) | Sim |
-| Linux com ambiente gráfico | Sim, pelo chaveiro do desktop (`secret-tool`); ainda não testado | Sim |
-| Linux sem chaveiro, WSL, servidor | Não: o token do bot precisa de um serviço de chaveiro rodando | Sim |
-| Windows | Não: o setup não lê o Gerenciador de Credenciais | Sim, com o Git for Windows |
+| macOS | Token no Chaveiro (`security`) | Sim |
+| Linux com ambiente gráfico | Token no chaveiro do desktop (Secret Service, pelo `secret-tool` do pacote `libsecret-tools`) | Sim, com um credential helper do git |
+| Linux sem chaveiro, contêiner, WSL | Com `--token-store file`: o token fica em `~/.config/casecellshop/`, com permissão 600 e sem cifra | Sim; no WSL, com o Git Credential Manager do Git for Windows |
+| Windows nativo | Não; use o WSL | Sim, com o Git for Windows |
 
-O modo `self` usa a credencial que o git da máquina já guarda, por isso funciona em qualquer sistema.
+O setup diz o que falta em cada caso (o pacote a instalar, ou que não há chaveiro e quais são as saídas). Foi conferido num contêiner Debian sem chaveiro, nos dois modos.
 
-Na sessão do Claude Code na nuvem, o diagnóstico também roda, mas o ambiente ainda não está preparado: a imagem traz o Node 22 (o projeto pede o 26), o Docker precisa ser iniciado a cada sessão, e o servidor MCP do GitHub não está na lista de rede padrão nem tem como receber o token lá (AD-013).
+Na sessão do Claude Code na nuvem, o GitHub é a conta conectada ao ambiente (GitHub App do Claude ou `/web-setup`), e o `setup:local` não se aplica. O diagnóstico também roda lá, mas o ambiente ainda não está preparado: a imagem traz o Node 22 (o projeto pede o 26), o Docker precisa ser iniciado a cada sessão, e o servidor MCP do GitHub não está na lista de rede padrão nem tem como receber o token lá (AD-013).
 
 ## Licença
 

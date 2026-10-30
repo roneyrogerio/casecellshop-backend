@@ -81,7 +81,7 @@ function identityItems(facts: Facts): Diagnosis[] {
     {
       item: 'GitHub com a credencial desta máquina (modo self)',
       ok: facts.githubLogin !== null,
-      fix: 'O git desta máquina não tem credencial do GitHub guardada: configure um credential helper (no WSL, o Git Credential Manager do Git for Windows), faça um push manual por HTTPS para o git guardá-la, ou troque para o modo bot.',
+      fix: 'O git desta máquina não tem uma credencial válida do GitHub: ela falta ou o GitHub a recusou (vencida ou revogada). Configure um credential helper (no WSL, o Git Credential Manager do Git for Windows) e faça um push manual por HTTPS para o git guardá-la de novo, ou troque para o modo bot.',
     },
     {
       item: `Modo self${facts.githubLogin ? ` (${facts.githubLogin})` : ''}: você será autor dos PRs que os agentes abrirem`,
