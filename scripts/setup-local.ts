@@ -1,14 +1,12 @@
 // Configura a máquina para o fluxo agir como o bot (AI-09), uma vez por clone.
 // Não grava o token em lugar nenhum: o git e o MCP chamam helpers que o leem do
 // chaveiro a cada uso. Pode rodar de novo sem efeito colateral.
-import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOT_KEYCHAIN_SERVICE, BOT_LOGIN, readBotToken } from './lib/bot-token.ts';
 import { collectFacts, diagnose, report } from './check-env.ts';
+import { configureGitBot } from './lib/git-bot.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const git = (...args: string[]) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
 
 if (!readBotToken()) {
   const add =
@@ -21,28 +19,9 @@ if (!readBotToken()) {
   process.exit(1);
 }
 
-// Credential helper só neste repositório. O valor vazio antes zera os helpers do
-// sistema e do usuário (como o osxkeychain), para o push nunca cair na conta do dono.
-git('config', '--local', '--unset-all', 'credential.helper');
-git('config', '--local', '--add', 'credential.helper', '');
-git('config', '--local', '--add', 'credential.helper', `!node "${join(root, 'scripts', 'git-credential-bot.ts')}"`);
-
-// MCP no escopo local: fica no ~/.claude.json só para este clone, não vai para a
-// nuvem (que tem o próprio GitHub) e guarda só o comando do helper, nunca o token.
-spawnSync('claude', ['mcp', 'remove', '--scope', 'local', 'github'], { stdio: 'ignore' });
-const server = {
-  type: 'http',
-  url: 'https://api.githubcopilot.com/mcp/',
-  headersHelper: `node "${join(root, 'scripts', 'github-mcp-headers.ts')}"`,
-};
-const added = spawnSync('claude', ['mcp', 'add-json', '--scope', 'local', 'github', JSON.stringify(server)], {
-  cwd: root,
-  encoding: 'utf8',
-});
-if (added.status !== 0) {
-  console.error(`Não consegui registrar o MCP: ${added.stderr.trim()}`);
-  process.exit(1);
-}
+// O push sai como o bot. O MCP do GitHub não precisa de registro: o .mcp.json
+// versionado o declara, e o Claude Code o carrega ao abrir a pasta.
+configureGitBot(root);
 
 const results = diagnose(await collectFacts(root));
 console.log(report(results));

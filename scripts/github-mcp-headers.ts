@@ -29,12 +29,22 @@ export function buildHeaders(token: string): Record<string, string> {
   };
 }
 
+// O .mcp.json já fixa a lista de ferramentas e o lockdown; o helper só soma o
+// token. Na nuvem não há chaveiro, e o token não pode vir de variável de
+// ambiente (o Claude Code as tira do helper): devolve {} e a autenticação fica
+// com o ambiente da nuvem. Na máquina, sem token, devolve null e o CLI falha
+// sem imprimir nada, para a conexão nunca cair em outra credencial.
+export function headersFor(env: { remote: boolean }, token: string | undefined): Record<string, string> | null {
+  if (env.remote) return {};
+  return token ? buildHeaders(token) : null;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const token = readBotToken();
-  if (!token) {
-    // Sem cabeçalho, o servidor recusa a conexão: nunca cai para outra credencial.
-    process.stderr.write('Token do bot não encontrado no chaveiro: rode npm run setup:local.\n');
+  const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
+  const headers = headersFor({ remote }, remote ? undefined : readBotToken());
+  if (!headers) {
+    process.stderr.write('Token do bot não encontrado no chaveiro: veja o diagnóstico de início de sessão (npm run check:env).\n');
     process.exit(1);
   }
-  process.stdout.write(JSON.stringify(buildHeaders(token)));
+  process.stdout.write(JSON.stringify(headers));
 }
