@@ -115,7 +115,7 @@ O que B entrega:
 - **Workers:** um worker para o envio ao ERP e para a sincronização **[M3, M4]**.
 - **Sincronização:** preço e estoque a cada 60 s, sem devolver unidade já vendida **[M4]**.
 - **Cache:** em processo, na vitrine **[M4]**.
-- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` já está em `src/contract/` **[M1, `FND-03`, `FND-07`]**; logs, métricas e traces **[M1 a M5]**.
+- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` **[implementado: `src/contract/`, `src/http/problem.ts`, `FND-03`, `FND-07`]**; os traces da requisição ao banco, vistos no Jaeger local **[implementado: `src/telemetry.ts`, `FND-05`]**; os demais logs, métricas e traces **[M2 a M5]**.
 
 **Dias 30 a 60: operar com segurança.**
 

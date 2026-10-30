@@ -272,3 +272,13 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **Corrigido:** a IA recomendou esperar o TypeScript 7.1; o mantenedor escolheu o 7.0.2 com o oxlint. A spec dizia que faltavam 2 de 61 regras com tipos; o `implementer` conferiu que as 43 do `recommendedTypeChecked`, que o projeto usava, existem todas no oxlint.
 - **Resultado:** TypeScript 7.0.2 com o oxlint 1.90.0 e o tsgolint 7.0.2005 (AD-011 e R1); Node 26 em produção e no desenvolvimento, com o piso na 24.12, que sobe para a 26 se o projeto precisar de uma API só dela.
 - **Verificação:** o lint acusou uma promessa não tratada e um `any` inseguro num arquivo descartável; `npm test`, `tsc`, lint, OpenAPI e limites verdes.
+
+### Revisão 1 do M1
+
+- **Pedido:** a revisão do PR pelo `reviewer`, contra a spec, as decisões e as convenções.
+- **O que a IA fez:** oito achados, nenhum de severidade alta: as portas do Jaeger fixas no host (A1); a queda de conexão do banco que derruba o processo (A2); o verificador de limites que passa em silêncio se a tabela mudar (A3); quatro cabeçalhos de commit acima de 72 caracteres (A4); o `service` dos logs diferente do dos traces (A5); o `design.md` em contradição sobre o ERP simulado (A6); uma marca errada no `ARCHITECTURE.md` (A7); e o `implementer` podendo desligar testes pelo `vitest.config.ts` ou pelo CI (A8).
+- **Corrigido:**
+  - o A6 veio de uma linha que a sessão principal escreveu ao definir as interfaces do M1: ela dizia que o simulado implementa a porta, contra a AD-004 e o PDF, que pedem a camada anticorrupção sobre um transporte que falha como uma API REST;
+  - a sessão principal leu o "APROVADO" do relatório como uma aprovação proibida; o mantenedor apontou que é a conclusão escrita do `reviewer`, e não a ação de aprovar no GitHub.
+- **Resultado:** todos os achados corrigidos neste PR. O A4 virou o commitlint no CI, configurado com as regras do `CONVENTIONS.md`, e os três commits antigos ficam como exceção registrada; o A8 entrou na conferência de histórico do `reviewer`.
+- **Verificação:** o relatório postado como comentário no PR, e a Revisão 2.
