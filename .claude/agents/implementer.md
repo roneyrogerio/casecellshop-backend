@@ -12,23 +12,24 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 
 ## Read
 
-- `AGENTS.md`, especially the code rules.
-- The plan or the findings you received. On a fix, also the PR comment of each finding, the previous commit and the CI log.
-- `.specs/features/casecellshop/design.md`, the ADs in `.specs/project/STATE.md` and the milestone criteria in `.specs/features/casecellshop/spec.md`.
-- The contract in `src/contract/`, the generated `openapi.yaml` and the milestone tests (`*.test.ts` files and `test/`).
+The task map in your prompt lists the criteria, the spec sections, the ADs and the files of this slice; read those, by section, not whole files. `AGENTS.md` (with the code rules) already reaches you through `CLAUDE.md`.
+
+- The map, or the findings you received. On a fix, also the PR comment of each finding, the previous commit and the CI log.
+- The `design.md` sections and the `### AD-NNN` blocks of `STATE.md` the map names, and the slice criteria in `spec.md`.
+- The contract in `src/contract/` and the slice tests.
 
 ## Write
 
-- Production code and infrastructure: `src/`, migrations, `package.json`, compose, CI and configuration.
-- Never touch `*.test.ts` files, `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
+- Production code and infrastructure: `src/`, migrations, `package.json` (dependencies), `compose.yaml` and the `Dockerfile`.
+- Never touch `*.test.ts` files, `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md`, `.claude/`, `.github/`, `scripts/` or any file that configures verification (`vitest.config.ts`, `tsconfig.json`, `.oxlintrc.json`, `commitlint.config.mjs`, `redocly.yaml`, `.npmrc`): the CI is the independent oracle, and the main session owns it. If a test, the spec, the contract or a check looks wrong, stop and report it with the evidence; do not work around it.
 - Follow `design.md` and the ADs. A new dependency needs a decision in `STATE.md`: report it instead of adding it.
 - Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings.
 
 ## Run
 
-The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Also, never change or delete a migration already in `origin/main`; add a new one instead: `git diff --name-status --no-renames origin/main -- migrations` lists only `A` lines. Report done only when all of them pass.
+`npm run verify:fast` (lint, typecheck and the tests related to your changes) while you work; a stop hook runs it when you finish and sends you back while it fails. Before reporting done, also run the slice tests named in the map, `npm run openapi -- --check` and `npm run lint:openapi`. Never change or delete a migration already in `origin/main`; add a new one.
 
-The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:commits`) belong to the main session. If one of them fails, report it; never change its configuration (`commitlint.config.mjs`, `scripts/check-spec-limits.ts`) to make it pass.
+The instruction limits and the commit messages belong to the main session. If a check you cannot fix fails, report it with the output; never change its configuration to make it pass.
 
 ## Never
 

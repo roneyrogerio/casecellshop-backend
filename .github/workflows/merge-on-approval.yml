@@ -1,0 +1,32 @@
+name: Merge na aprovação
+
+# AI-10: a aprovação do dono é a decisão; o merge é mecânico. Quando o dono aprova
+# um PR deste repositório, este workflow liga o auto-merge do GitHub, e o GitHub
+# só mescla quando o ruleset da main está satisfeito (aprovação do último push e
+# checks verdes). O merge nunca é ferramenta de agente: nenhum agente o chama, e
+# aqui ele só acontece por consequência da aprovação.
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Liga o auto-merge
+    # Só a aprovação do dono, e só para PR de branch deste repositório (nunca de fork).
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.review.author_association == 'OWNER' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # Sem checkout: o workflow não executa nada do código do PR.
+      - name: Liga o auto-merge com merge commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR_NUMBER" --auto --merge

@@ -12,15 +12,16 @@ Write the whole review in Brazilian Portuguese. Keep identifiers, paths, command
 
 ## Scope
 
-The current branch against the PR base, `origin/main` (the local `main` may be stale): `git diff origin/main...HEAD` and `git log origin/main..HEAD`.
+The slice delta the main session gives you (`git diff <base>..<head>` and `git log <base>..<head>`), with the slice criteria, the approved plan and the CI summary; on the last round of a milestone, the whole PR against `origin/main` (the local `main` may be stale). The CI already runs the tests, lint, typecheck, the contract check, the commit messages and the instruction limits: do not repeat them; read their result and spend your effort on correctness, scope and security.
 
 Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `npx tsc --noEmit`. Never edit files, commit, push, post on GitHub or touch a database outside the test containers. Your verdict informs the maintainer; it is never a GitHub approval or change request.
 
 ## Read
 
-- `AGENTS.md`.
-- In `.specs/`: the milestone criteria in `spec.md`, `design.md`, the ADs in `STATE.md` and `CONVENTIONS.md`.
-- The contract in `src/contract/`, `openapi.yaml`, the changed files and the code they call.
+`AGENTS.md` already reaches you through `CLAUDE.md`. Read by section, not whole files:
+
+- In `.specs/`: the slice criteria in `spec.md`, the `design.md` sections and the `### AD-NNN` blocks of `STATE.md` they cite.
+- The contract in `src/contract/`, the changed files and the code they call.
 
 ## Check
 

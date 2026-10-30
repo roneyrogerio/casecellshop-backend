@@ -13,8 +13,13 @@
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
     "lint:openapi": "redocly lint openapi.yaml",
-    "check:specs": "node scripts/check-spec-limits.ts",
-    "lint:commits": "commitlint --from origin/main --to HEAD"
+    "lint:commits": "commitlint --from origin/main --to HEAD",
+    "test:changed": "vitest run --changed",
+    "verify:fast": "npm run lint && npm run typecheck && npm run test:changed",
+    "check:instructions": "node scripts/check-instructions.ts",
+    "check:migrations": "node scripts/check-migrations.ts",
+    "setup:local": "node scripts/setup-local.ts",
+    "check:env": "node scripts/check-env.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "9.1.0",

@@ -1,8 +1,10 @@
 node_modules/
 coverage/
 dist/
-spike/
 *.log
 .env
 .env.*
 .DS_Store
+.vitest/
+.claude/state/
+.claude/reviews/
