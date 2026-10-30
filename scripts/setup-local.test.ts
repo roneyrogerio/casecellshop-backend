@@ -588,7 +588,8 @@ describe('AI-14 setupBot, token ausente ou recusado', () => {
   ] as [string, TokenCheck, string | undefined][])(
     'AI-14 token %s: atualiza no lugar (update), reconfere com o token novo e só então instala o helper',
     async (_label, first, stored) => {
-      const run = botSetup([first, VALID_OWN], { stored });
+      // Com exactOptionalPropertyTypes, ausente é a chave faltando, e não `stored: undefined`.
+      const run = botSetup([first, VALID_OWN], stored === undefined ? {} : { stored });
 
       const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
 
