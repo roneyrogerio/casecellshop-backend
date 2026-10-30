@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import type { Clock } from '../../clock.ts';
+import { withTransaction } from '../../db/client.ts';
 import {
   ErpRejectedError,
   type ErpCatalogItem,
@@ -47,9 +48,7 @@ export function createSimulatedErpClient({ pool }: SimulatedErpOptions): ErpClie
     },
 
     async createOrder(request: ErpOrderRequest) {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
+      return withTransaction(pool, async (client) => {
         const totalCents = request.items.reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
         // H1b: a unicidade da referência decide; quem perde a corrida lê a fatura que já existe.
         const inserted = await client.query<InvoiceRow>(
@@ -61,7 +60,7 @@ export function createSimulatedErpClient({ pool }: SimulatedErpOptions): ErpClie
         );
         const created = inserted.rows[0];
         if (!created) {
-          await client.query('COMMIT');
+          // O ON CONFLICT espera a outra transação terminar, então a fatura já está visível aqui.
           const existing = await client.query<InvoiceRow>(
             'SELECT id::text AS id, reference FROM erp_sim.invoices WHERE reference = $1',
             [request.reference],
@@ -78,19 +77,12 @@ export function createSimulatedErpClient({ pool }: SimulatedErpOptions): ErpClie
           );
           if (updated.rowCount === 0) {
             const known = await client.query('SELECT 1 FROM erp_sim.products WHERE sku = $1', [item.sku]);
-            await client.query('ROLLBACK');
+            // O withTransaction desfaz a fatura e devolve a conexão sã ao pool.
             throw new ErpRejectedError(known.rowCount === 0 ? 'unknown_product' : 'out_of_stock', item.sku);
           }
         }
-        await client.query('COMMIT');
         return toOrder(created);
-      } catch (error) {
-        // Falha fora do ROLLBACK acima (conexão, timeout): desfaz o que sobrou aberto.
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw error;
-      } finally {
-        client.release();
-      }
+      });
     },
 
     async findOrderByReference(reference) {

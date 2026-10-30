@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { runner } from 'node-pg-migrate';
 import type { Pool } from 'pg';
+import { withClient } from './client.ts';
 
 const MIGRATIONS = [
   { dir: 'store', schema: 'public' },
@@ -12,8 +13,7 @@ const MIGRATIONS = [
 // arquivo roda numa transação própria.
 export async function migrate(pool: Pool): Promise<void> {
   for (const { dir, schema } of MIGRATIONS) {
-    const client = await pool.connect();
-    try {
+    await withClient(pool, async (client) => {
       await runner({
         dbClient: client,
         dir: fileURLToPath(new URL(`../../migrations/${dir}`, import.meta.url)),
@@ -27,9 +27,7 @@ export async function migrate(pool: Pool): Promise<void> {
         // Silencia o console do runner; quem chama registra o resultado.
         logger: { debug: undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
       });
-    } finally {
-      client.release();
-    }
+    });
   }
 }
 
