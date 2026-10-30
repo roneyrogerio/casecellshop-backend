@@ -331,6 +331,96 @@ describe('AI-11 o git push da sessão principal só passa na forma estreita (A2)
   });
 });
 
+// Escrita de arquivo pelo shell: a guarda de caminho só confere Edit e Write, então o Bash não pode ser o atalho.
+const SUBAGENT_FILE_WRITE_DENIED = [
+  // interpretadores
+  "python3 - <<'EOF'\nprint(1)\nEOF",
+  'python3 script.py',
+  `python -c "open('a','w')"`,
+  '/usr/bin/python3 x.py',
+  'env python3 x.py',
+  "perl -pi -e 's/a/b/' f.ts",
+  "ruby -e 'File.write(1)'",
+  // sed no lugar
+  "sed -i 's/a/b/' f.ts",
+  "sed -i'' -e 's/a/b/' f.ts",
+  "sed --in-place 's/a/b/' f.ts",
+  "sed -E -i 's/a/b/' f.ts",
+  // tee
+  'echo x | tee f.ts',
+  'tee -a f.ts < x',
+  // redirecionamento de saída para arquivo
+  "cat > f.ts <<'EOF'\nx\nEOF",
+  "cat >> f.ts <<'EOF'\nx\nEOF",
+  'echo x > f.ts',
+  'echo x >> f.ts',
+  'printf x>f.ts',
+  'npm test > out.log',
+  'npm test 2> err.log',
+  'npm test &> all.log',
+  'echo x 1>f.ts',
+];
+
+const SUBAGENT_FILE_WRITE_ALLOWED = [
+  'npm test 2>&1 | tail -20',
+  'npm test > /dev/null 2>&1',
+  'npm run lint 2>/dev/null',
+  'ls >/dev/null',
+  'node scripts/check-env.ts',
+  'node --input-type=module -e "console.log(1)"',
+  "sed -n '1,20p' f.ts",
+  "grep -rn 'x' src",
+  'cat src/a.ts',
+  "find . -name '*.test.ts'",
+  'git diff HEAD~1 -- src',
+  'npx vitest run src/a.test.ts',
+  'echo "a > b"',
+  'test 1 -gt 0',
+  '[ -f a ] && echo ok',
+];
+
+describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
+  beforeAll(loadCheck);
+
+  it.each(SUBAGENT_FILE_WRITE_DENIED)('AI-11 nega "%s" aos três subagentes e manda usar Edit e Write', (command) => {
+    for (const agentType of SUBAGENTS) {
+      const verdict = check(bash(agentType, command));
+      expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
+      expect(verdict.reason, `${agentType}: ${command}`).toContain('Edit');
+      expect(verdict.reason, `${agentType}: ${command}`).toContain('Write');
+    }
+  });
+
+  it.each(['python3 x.py', "sed -i 's/a/b/' f.ts", 'echo x > f.ts'])(
+    'AI-11 nega a escrita de arquivo "%s" em qualquer posição',
+    (command) => {
+      for (const agentType of SUBAGENTS) {
+        for (const [label, positioned] of positions(command)) {
+          const verdict = check(bash(agentType, positioned));
+          expect(verdict.allow, `${agentType} ${label}: ${positioned}`).toBe(false);
+          expect(verdict.reason, `${agentType} ${label}`).toBeTruthy();
+        }
+      }
+    },
+  );
+
+  // Controle negativo: ler, testar e descartar a saída seguem liberados.
+  it.each(SUBAGENT_FILE_WRITE_ALLOWED)('AI-11 libera "%s" aos três subagentes', (command) => {
+    for (const agentType of SUBAGENTS) {
+      const verdict = check(bash(agentType, command));
+      expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
+    }
+  });
+
+  // Controle negativo: a negação é só dos subagentes.
+  it.each(['python3 x.py', "sed -i 's/a/b/' f.ts", 'echo x > f.ts', "cat > f.ts <<'EOF'\nx\nEOF"])(
+    'AI-11 a sessão principal segue livre para "%s"',
+    (command) => {
+      expect(check(bash(undefined, command)).allow, command).toBe(true);
+    },
+  );
+});
+
 describe('AI-11 o bash-guard como processo', () => {
   const hook = join(import.meta.dirname, 'bash-guard.mjs');
 
@@ -418,5 +508,21 @@ describe('AI-11 o bash-guard como processo', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
+  });
+
+  it("AI-11 o test-writer com python3 - <<'EOF' é recusado com código 2 e o motivo no stderr", () => {
+    const result = run(payload('test-writer', "python3 - <<'EOF'\nprint(1)\nEOF"));
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('Edit');
+    expect(result.stderr).toContain('Write');
+  });
+
+  it('AI-11 controle: o test-writer com npm test 2>&1 | tail -5 passa, sem saída', () => {
+    const result = run(payload('test-writer', 'npm test 2>&1 | tail -5'));
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
   });
 });
