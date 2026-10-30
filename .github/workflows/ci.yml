@@ -49,6 +49,8 @@ jobs:
       # FND-06: o que carrega em toda sessão do Claude Code fica nos limites dele.
       - run: npm run check:instructions
 
+      # As duas conferências abaixo rodam com node, e não por npm run: o package.json
+      # é do próprio PR, que poderia redefinir o script que o confere (AI-05).
       # AI-01: migração .sql já na base não pode ser alterada nem apagada. A base
       # entra pelo ambiente, e não interpolada no script, para o nome da branch
       # nunca virar código no shell.
@@ -56,7 +58,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: npm run check:migrations
+        run: node scripts/check-migrations.ts
 
       # AI-05: os scripts do package.json definem o que este CI e o hook de parada
       # rodam; só um commit ci: ou build: da sessão principal pode mudá-los.
@@ -64,7 +66,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: npm run check:scripts
+        run: node scripts/check-scripts.ts
 
   # CONVENTIONS.md, "Commits": confere o cabeçalho de cada commit do PR, como no guia de CI
   # do commitlint. Job à parte para rodar uma vez, e não por versão do Node.

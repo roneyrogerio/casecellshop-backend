@@ -1,0 +1,11 @@
+#!/bin/sh
+# Hook pre-push (AI-08): o push deste clone só sai por HTTPS para o GitHub, onde
+# o credential helper do bot responde. Com o origin em SSH, ou com um insteadOf
+# global que troca https por ssh, o push sairia com a chave SSH do dono, que é
+# administrador. O git passa aqui a URL já reescrita e roda este hook antes de
+# enviar qualquer ref.
+case "$2" in
+  https://github.com/*) exit 0 ;;
+esac
+echo "pre-push: recusado. O push deste repositório só sai por https://github.com/ com a credencial do bot; a URL recebida foi \"$2\". Confira o origin e os url.*.insteadOf do git config (AI-08)." >&2
+exit 1

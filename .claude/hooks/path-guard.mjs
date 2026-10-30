@@ -20,6 +20,10 @@ export const PROTECTED_FROM_IMPLEMENTER = [
   'src/contract',
   'openapi.yaml',
   'architecture.md',
+  // Os hooks do git rodam nos commits e pushes da sessão principal, fora das
+  // guardas dos agentes; a configuração do clone decide quais hooks rodam.
+  '.githooks',
+  '.git',
 ];
 
 // Configurações valem em qualquer pasta (o oxlint aplica um .oxlintrc.json

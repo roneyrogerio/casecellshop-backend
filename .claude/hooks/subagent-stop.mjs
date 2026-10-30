@@ -1,4 +1,5 @@
-// Hook de parada (SubagentStop) do implementer e do test-writer (AI-03). O
+// Hook de parada (SubagentStop) do implementer, do test-writer e do reviewer
+// (AI-03, AI-12). O
 // "terminei" do agente deixa de ser uma afirmação e passa a ser uma checagem:
 // enquanto o lint, o typecheck ou os testes ligados às mudanças falharem, ele
 // volta ao trabalho com a saída da falha. O test-writer não roda testes, porque
@@ -9,6 +10,7 @@
 // ele deixa terminar e a falha vira exceção para a sessão principal decidir.
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { compareSnapshots, snapshotFile, takeSnapshot } from './git-snapshot.mjs';
 import { allows } from './path-guard.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,11 +23,26 @@ const CHECKS = {
 
 const MAX_BLOCKS = 3;
 
+const GIT_WATCHED = new Set(['implementer', 'test-writer', 'reviewer']);
+
 // Só o fim da saída volta ao agente: é onde o erro aparece, e a saída inteira de
 // um teste custaria contexto a cada devolução.
 const MAX_OUTPUT_CHARS = 4000;
 
 export async function decide(input, deps) {
+  // Uma mudança no git (AI-12) não volta ao agente: ele não pode desfazê-la,
+  // porque o bash-guard lhe nega reset e restore. Vira exceção já na primeira
+  // parada, para a sessão principal desfazer antes de qualquer outra coisa.
+  if (GIT_WATCHED.has(input.agent_type)) {
+    const gitChanges = deps.gitChanges();
+    if (gitChanges.length > 0) {
+      return {
+        action: 'exception',
+        message: `${input.agent_type} mudou o estado do git, o que só a sessão principal faz (AI-11, AI-12). Desfaça antes de seguir:\n${gitChanges.map((change) => `- ${change}`).join('\n')}`,
+      };
+    }
+  }
+
   const checks = CHECKS[input.agent_type];
   if (!checks) return { action: 'allow' };
 
@@ -100,6 +117,30 @@ async function scriptsChanged(projectDir) {
   }
 }
 
+// Sem retrato não há como provar que o git ficou igual: falha fechada, como
+// mudança.
+function gitChanges(projectDir, input) {
+  let before;
+  try {
+    before = JSON.parse(readFileSync(snapshotFile(input.session_id, input.agent_id), 'utf8'));
+  } catch {
+    return ['retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual'];
+  }
+  try {
+    return compareSnapshots(before, takeSnapshot(projectDir));
+  } catch (error) {
+    return [`estado do git ilegível na parada (${error.message})`];
+  }
+}
+
+function recordException(projectDir, message) {
+  // Fora do git: a sessão principal lê este registro depois de cada delegação.
+  const stateDir = join(projectDir, '.claude', 'state');
+  mkdirSync(stateDir, { recursive: true });
+  appendFileSync(join(stateDir, 'stop-exceptions.log'), `${new Date().toISOString()} ${message}\n\n`);
+  process.stdout.write(JSON.stringify({ systemMessage: message }));
+}
+
 // O relatório do reviewer vai para o arquivo direto da mensagem final dele, sem
 // passar pela sessão principal: o github-guard confere o comentário contra isto.
 function saveReview(projectDir, input) {
@@ -119,11 +160,8 @@ async function main() {
     process.exit(2);
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
-  if (input.agent_type === 'reviewer') {
-    saveReview(projectDir, input);
-    return;
-  }
-  const changedScripts = await scriptsChanged(projectDir);
+  if (input.agent_type === 'reviewer') saveReview(projectDir, input);
+  const changedScripts = input.agent_type === 'implementer' ? await scriptsChanged(projectDir) : false;
 
   const decision = await decide(input, {
     runCheck: (name) => {
@@ -141,19 +179,14 @@ async function main() {
     writeCount: (key, n) => writeFileSync(counterFile(key), String(n)),
     changedFiles: () => changedFiles(projectDir),
     scriptsChanged: () => changedScripts,
+    gitChanges: () => gitChanges(projectDir, input),
   });
 
   if (decision.action === 'block') {
     process.stderr.write(decision.message);
     process.exit(2);
   }
-  if (decision.action === 'exception') {
-    // Fora do git: a sessão principal lê este registro depois de cada delegação.
-    const stateDir = join(projectDir, '.claude', 'state');
-    mkdirSync(stateDir, { recursive: true });
-    appendFileSync(join(stateDir, 'stop-exceptions.log'), `${new Date().toISOString()} ${decision.message}\n\n`);
-    process.stdout.write(JSON.stringify({ systemMessage: decision.message }));
-  }
+  if (decision.action === 'exception') recordException(projectDir, decision.message);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main();
