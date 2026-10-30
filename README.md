@@ -79,7 +79,18 @@ O código é escrito por agentes do Claude Code, e a confiança vem de verifica�
 
 Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão ajusta o push à identidade escolhida e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
 
-Na sessão do Claude Code na nuvem, o diagnóstico também roda. A autenticação do MCP lá ainda está a validar (AD-013).
+Onde cada modo funciona hoje:
+
+| Ambiente | Conta de máquina (`bot`) | A sua própria conta (`self`) |
+| --- | --- | --- |
+| macOS | Sim, pelo Chaveiro (`security`) | Sim |
+| Linux com ambiente gráfico | Sim, pelo chaveiro do desktop (`secret-tool`); ainda não testado | Sim |
+| Linux sem chaveiro, WSL, servidor | Não: o token do bot precisa de um serviço de chaveiro rodando | Sim |
+| Windows | Não: o setup não lê o Gerenciador de Credenciais | Sim, com o Git for Windows |
+
+O modo `self` usa a credencial que o git da máquina já guarda, por isso funciona em qualquer sistema.
+
+Na sessão do Claude Code na nuvem, o diagnóstico também roda, mas o ambiente ainda não está preparado: a imagem traz o Node 22 (o projeto pede o 26), o Docker precisa ser iniciado a cada sessão, e o servidor MCP do GitHub não está na lista de rede padrão nem tem como receber o token lá (AD-013).
 
 ## Licença
 
