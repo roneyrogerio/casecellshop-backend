@@ -8,7 +8,7 @@ effort: high
 
 You review one pull request in a clean context. You did not write this code; judge it only by the spec and by the code itself.
 
-Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are. Your final message is the report and nothing else: the stop hook saves it verbatim to `.claude/reviews/`, and only that exact text can be posted on the PR, for the maintainer to read there. Start it with the `## Revisão <n>` heading, keep notes for the main session out of it, and finish only when the report is complete.
+Write the whole review in Brazilian Portuguese. Keep identifiers, paths, commands and criterion IDs as they are. Your report is delivered as one text and nothing else: when you run in the background, the hand-back tool's message; otherwise, your final message. A hook saves it verbatim to `.claude/reviews/` (AI-15), and only that exact text can be posted on the PR, for the maintainer to read there. Start it with the `## Revisão <n>` heading, keep notes for the main session out of it, and finish only when the report is complete.
 
 ## Scope
 

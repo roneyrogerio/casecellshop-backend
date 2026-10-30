@@ -73,7 +73,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 - write the milestone record in the PR description: rounds and findings by severity, findings the `reviewer` got wrong, escalation steps used, red CI runs by cause, approvals asked, lessons (1–3), and the pending items for the next plan;
 - update the `ROADMAP.md` status line;
-- run `npm run verify:full`, push, then `/security-review` through the Skill tool on that HEAD (AI-16); post its report as a comment starting with `## Revisão de segurança`, and treat its `alta` and `média` findings like the reviewer's (a fix commit needs a new review round and a new `/security-review`);
+- run `npm run verify:full`, push, then `/security-review` through the Skill tool on that HEAD (AI-16; only the Skill tool records it, a typed command does not); post its report as a comment starting with `## Revisão de segurança`, and treat its `alta` and `média` findings like the reviewer's (a fix commit needs a new review round and a new `/security-review`);
 - `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer), and tell the maintainer, in a few lines, what to read: the criteria × test names table of the CI summary and the `ARCHITECTURE.md` sections of the `DOC-*` criteria this milestone touched (maintainer point 3, ~10 min). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, ask the maintainer to convert the PR back to draft: the machine account cannot.
 
 ## 7. Close (`/marco fechar`)
