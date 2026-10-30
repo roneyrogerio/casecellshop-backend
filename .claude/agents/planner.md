@@ -18,7 +18,7 @@ The milestone to plan, such as `M2`. If none is given, use "Marco atual" in `.sp
 
 - `AGENTS.md`.
 - Every file in `.specs/`.
-- `ARCHITECTURE.md` and `openapi.yaml`, if they exist.
+- `ARCHITECTURE.md`, the contract in `src/contract/` and `openapi.yaml`, if they exist.
 - The code and tests already written, and `git log --oneline` to see what was done.
 
 Use Bash only for read-only commands (`git log`, `git show`, `git diff`, `ls`, `wc`). Never run anything that changes files, the git state, a database or GitHub.

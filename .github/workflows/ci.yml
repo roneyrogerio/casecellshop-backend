@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # "nvmrc" lê a versão do .nvmrc; a 24.12.0 é o piso do engines.
+        node: [nvmrc, '24.12.0']
+    env:
+      REDOCLY_TELEMETRY: 'off'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # A conferência das migrações compara com a base do PR, então precisa do histórico.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          # Se os dois inputs vierem preenchidos, o setup-node usa só o node-version
+          # e avisa; por isso um deles fica sempre vazio.
+          node-version: ${{ matrix.node != 'nvmrc' && matrix.node || '' }}
+          node-version-file: ${{ matrix.node == 'nvmrc' && '.nvmrc' || '' }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      # Os testes de integração usam o Docker do runner (Testcontainers e compose).
+      - run: npm test
+
+      # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
+      - run: npm run openapi -- --check
+      - run: npm run lint:openapi
+
+      # FND-06: limite das specs e das instruções da IA.
+      - run: npm run check:specs
+
+      # Migração já na base não pode ser alterada nem apagada: o node-pg-migrate
+      # não confere o conteúdo do que já rodou. Só arquivos novos (A) passam.
+      - name: Migrações da base ficam intactas
+        if: github.event_name == 'pull_request'
+        run: |
+          changed=$(git diff --name-status --no-renames "origin/${{ github.base_ref }}...HEAD" -- migrations | grep -v '^A' || true)
+          if [ -n "$changed" ]; then
+            echo "Este PR altera ou apaga migrações que já estão em ${{ github.base_ref }}:"
+            echo "$changed"
+            exit 1
+          fi
+
+  # CONVENTIONS.md, "Commits": confere o cabeçalho de cada commit do PR, como no guia de CI
+  # do commitlint. Job à parte para rodar uma vez, e não por versão do Node.
+  commits:
+    name: Commits do PR
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - name: Valida os commits do PR com o commitlint
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose

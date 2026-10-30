@@ -12,7 +12,7 @@ Write the whole review in Brazilian Portuguese. Keep identifiers, paths, command
 
 ## Scope
 
-The current branch against `main`: `git diff main...HEAD` and `git log main..HEAD`.
+The current branch against the PR base, `origin/main` (the local `main` may be stale): `git diff origin/main...HEAD` and `git log origin/main..HEAD`.
 
 Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `npx tsc --noEmit`. Never edit files, commit, push, post on GitHub or touch a database outside the test containers. Your verdict informs the maintainer; it is never a GitHub approval or change request.
 
@@ -20,7 +20,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 
 - `AGENTS.md`.
 - In `.specs/`: the milestone criteria in `spec.md`, `design.md`, the ADs in `STATE.md` and `CONVENTIONS.md`.
-- `openapi.yaml`, the changed files and the code they call.
+- The contract in `src/contract/`, `openapi.yaml`, the changed files and the code they call.
 
 ## Check
 
@@ -28,9 +28,9 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 2. **Spec and decisions:** the code does what `design.md` and the ADs say. A divergence not marked `SPEC_DEVIATION` is a finding.
 3. **Concurrency and consistency:** lock order; conditional `UPDATE`s and compare-and-set; the idempotency key with `ON CONFLICT`; the outbox written in the same transaction as the order; no ERP call inside a transaction; the claim token on every outbox transition; the database clock for stored deadlines.
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
-5. **Contract:** routes, statuses, headers and bodies match `openapi.yaml`; errors in `application/problem+json`.
+5. **Contract:** routes, statuses, headers and bodies match the contract in `src/contract/`; handlers take their types from it; the committed `openapi.yaml` is the generated one; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
-7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; `test/` changes only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/`); spec files within their word limits; accepted ADs not edited.
+7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p origin/main..HEAD -- test/ '*.test.ts'`); no change to `vitest.config.ts`, `.github/workflows/`, the scripts in `package.json`, `commitlint.config.mjs` or `scripts/check-spec-limits.ts` narrows which tests run, loosens a CI check or drops one (check `git log -p origin/main..HEAD -- vitest.config.ts .github/workflows package.json commitlint.config.mjs scripts/check-spec-limits.ts`); spec files within their word limits; accepted ADs not edited.
 
 ## Security checklist
 

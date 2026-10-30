@@ -62,10 +62,13 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **rejeição permanente:** `reserved` baixa na transação que marca `failed`;
 - **pedido na DLQ:** a reserva fica, porque o pedido ainda pode ser faturado.
 
-## Contrato (AD-007)
+<a id="contrato-ad-007"></a>
 
-- **Validação:** o `express-openapi-validator` valida toda requisição e, nos testes, o corpo de toda resposta. `Location`, `Retry-After`, `X-Request-Id` e `Cache-Control` têm asserção própria.
-- **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, `additionalProperties: false`.
+## Contrato (AD-010)
+
+- **Validação:** o contrato em `src/contract/` (zod) valida toda requisição (parâmetros, query, cabeçalhos e corpo) num middleware que responde `400` em problem+json; o `415` e o `413` vêm do parser de JSON. Nos testes, um helper valida o corpo e os cabeçalhos de toda resposta pelo schema da rota. `Location`, `Retry-After`, `X-Request-Id` e `Cache-Control` têm asserção própria.
+- **Geração:** `npm run openapi` gera o `openapi.yaml` (OpenAPI 3.1) a partir do registro de rotas; o CI gera de novo, compara com o commitado e passa o lint (`FND-07`).
+- **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, objetos estritos (`.strict()`, que vira `additionalProperties: false` no OpenAPI).
 - **`X-Request-Id`:** aceito se for válido, gerado se não. É o `correlationId` dos logs e volta em toda resposta, inclusive no `202`, e no problem+json. Um `traceparent` de entrada continua o trace.
 - **Fluxo assíncrono:** o `202` traz `Location` e `Retry-After`; o `503` também traz `Retry-After`.
 - **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento). Um pedido na DLQ continua `pending`.
@@ -166,8 +169,8 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `info`: checkout aceito, pedido faturado, rodada de sincronização;
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização.
-- **Pacotes:** `@opentelemetry/api` 1.9.1 (o SDK 2.12 exige a API abaixo da 1.10); SDK 2.12.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`, deprecated), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.223.0 (`exporter-prometheus`, `exporter-trace-otlp-http`).
-- **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. Console em desenvolvimento; OTLP/HTTP para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version`.
+- **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`). No SDK 3, o provider é o `TracerProvider` do `sdk-trace`, e os processadores recebem `{ exporter }`; nos testes, `forceFlush()` vem antes de ler o `InMemorySpanExporter`.
+- **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. O exportador vem de `OTEL_TRACES_EXPORTER`: nenhum por padrão, para o healthcheck do compose não encher o log a cada 2 s; `console` para ver os traces em desenvolvimento; `otlp` (OTLP/HTTP) para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version` nos traces e nos logs, com os mesmos valores, porque o Datadog só liga log e trace com a marcação unificada de serviço. O log leva no topo do JSON o `trace_id` (32 caracteres hexadecimais), o `span_id` (16) e o `trace_flags`, os nomes que o OpenTelemetry recomenda.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
   - **HTTP:** duração por rota (histogram), base dos SLOs de latência;
   - **cache:** `hit`, `miss`, `stale` e consultas à origem (counters); cargas em andamento (gauge); latência da vitrine por resultado, idade da entrada servida e idade do dado desde a leitura do ERP (histograms);
@@ -178,6 +181,28 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - **sincronização:** idade da última rodada completa (gauge), correções por campo e SKUs ausentes zerados (counters).
 - **Gauges e counters lidos do banco** saem da API, que não é o processo monitorado; os alertas de fila e de sincronização também disparam sem dados. Um counter derivado do banco só sobe quando um `UPDATE … RETURNING` marca a linha.
 - **Alertas e dashboard:** em PromQL, com os nomes de `/metrics`; um teste confere cada nome usado. No Datadog, o Agent coleta o mesmo endpoint pela integração OpenMetrics, que acrescenta um namespace.
+
+## Fundação (M1)
+
+- **Pontos de injeção,** que os testes usam sem ler o resto de `src/`:
+  - `src/app.ts`: `createApp({ pool, logger, telemetry })` devolve o app do Express, sem abrir porta;
+  - `src/telemetry.ts`: `createTelemetry({ spanExporter? })` devolve, além do que a API e o worker usam, `forceFlush()` e `shutdown()`; os testes passam o `InMemorySpanExporter` do `sdk-trace`;
+  - `src/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`;
+  - `src/erp/erp-client.ts`: a porta `ErpClient`, com `listCatalog(page)`, que devolve `{ items: [{ sku, name, priceCents, onHand }], hasNext }`; `createOrder({ reference, items: [{ sku, quantity, unitPriceCents }] })`, que devolve `{ erpOrderId, reference }`; e `findOrderByReference(reference)`, que devolve o mesmo objeto ou `null`;
+  - `src/erp/sim/index.ts`: `createSimulatedErpClient({ pool, clock })` monta a porta: a camada anticorrupção sobre o transporte simulado, como na AD-004. No M1, só há o modo normal; a separação entre as duas entra no M3, com os modos de falha. O estado fica no schema `erp_sim`, com as tabelas `erp_sim.products (sku, name, price_cents, on_hand)` e `erp_sim.invoices (id, reference único, items, total_cents, created_at)`; os testes criam produtos e contam faturas por SQL nelas;
+  - `src/clock.ts`: a porta `Clock`, com `now()` em milissegundos e `sleep(ms)`; os testes usam um relógio manual;
+  - `src/db/migrate.ts`: `migrate(pool)` aplica as migrações dos dois schemas, e `seed(pool)` grava os dados iniciais do `erp_sim`;
+  - `scripts/check-spec-limits.ts`: `checkSpecLimits(rootDir)` lê os limites da tabela do `.specs/README.md` e devolve as violações, uma frase com o nome de cada arquivo; o script falha se houver alguma, e importar o módulo não roda a verificação;
+  - `scripts/generate-openapi.ts`: com `--check`, falha se o arquivo divergir do contrato; `--file <caminho>` troca o `openapi.yaml` da raiz por outro.
+- **Spans do M1:** o da requisição é `SERVER`, com o nome `<método> <rota>` (como `GET /health`) e o atributo `http.route`; o de repositório é `CLIENT`, com o nome `<repositório>.<operação>` (como `health.ping`) e o atributo `db.system.name` igual a `postgresql`.
+- **Migrações:** node-pg-migrate, com arquivos `.sql` em `migrations/store/` e `migrations/erp_sim/`, nome com data e hora, uma transação por arquivo, *advisory lock* e conferência de ordem; cada schema tem a sua tabela de controle. Como a ferramenta não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main`.
+- **Dados iniciais:** `seed(pool)` grava o catálogo de exemplo do `erp_sim` com `ON CONFLICT DO NOTHING`, e só o serviço `migrate` do compose o roda, depois das migrações. Os testes não o rodam: cada um cria os dados que usa.
+- **`/health`:** `200` se o banco responde a um `SELECT 1` feito pelo repositório; senão, `503` em problem+json. Fica no contrato; o `/metrics` fica fora dele.
+- **`X-Request-Id`:** aceito com 1 a 128 caracteres ASCII visíveis; fora disso, um UUID novo.
+- **`type` dos erros:** `/problems/<causa>`, como `/problems/invalid-request`.
+- **Compose:** `postgres`, `migrate`, `api`, `worker` e `jaeger` (interface em `${JAEGER_UI_PORT:-16686}`; o OTLP/HTTP, na 4318, fica só na rede do compose, sem autenticação exposta; a API e o worker usam `OTEL_TRACES_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT` e `OTEL_SERVICE_NAME`), com as credenciais locais como padrão no `compose.yaml`, sem `.env`, que os agentes não leem. O `.dockerignore` deixa de fora `test/` e `**/*.test.ts`. A API publica a porta `${API_PORT:-3000}`. O teste do `FND-01` sobe esse arquivo pelo `DockerComposeEnvironment` do Testcontainers, com nome de projeto próprio e a `API_PORT` e a `JAEGER_UI_PORT` livres, sem conflitar com o compose de desenvolvimento.
+- **Lint do OpenAPI:** Redocly com `recommended-strict`, em que aviso também reprova. O contrato declara `servers: [{ url: '/' }]` e `security: []` nas rotas públicas. Uma regra que não se aplica a uma rota é desligada só para ela, no `redocly.yaml`, com o motivo num comentário.
+- **Limite das specs (`FND-06`):** palavras contadas como no `wc -w`, pela tabela do `.specs/README.md`; `scripts/check-spec-limits.ts` falha acima dela, ou acima de 200 linhas no `AGENTS.md` ou num agente.
 
 ## Parâmetros
 

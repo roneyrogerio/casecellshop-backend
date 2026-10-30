@@ -1,0 +1,161 @@
+# Gerado por `npm run openapi` a partir de src/contract/. Não edite à mão.
+openapi: 3.1.0
+info:
+  title: CaseCellShop API
+  version: 0.1.0
+  description: Catálogo com cache, checkout assíncrono e status do pedido, entre a loja e o ERP.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: /
+tags:
+  - name: system
+    description: Operação do serviço.
+components:
+  schemas:
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          pattern: ^\/problems\/[a-z0-9-]+$
+          description: Uma URI por causa de erro, para o cliente decidir pela causa e não pelo texto.
+          example: /problems/invalid-request
+        title:
+          type: string
+          description: Resumo curto da causa, igual para toda ocorrência dela.
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Explicação desta ocorrência, sem detalhe interno.
+        instance:
+          type: string
+        correlationId:
+          type: string
+          pattern: ^[\x21-\x7E]{1,128}$
+          description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+                description: Onde está o problema, como query.page ou body.items.0.sku.
+              message:
+                type: string
+            required:
+              - path
+              - message
+            additionalProperties: false
+          description: Cada violação do contrato, só no invalid-request.
+      required:
+        - type
+        - title
+        - status
+        - correlationId
+      additionalProperties: false
+      description: Erro em application/problem+json (RFC 9457).
+      example:
+        type: /problems/invalid-request
+        title: Requisição fora do contrato
+        status: 400
+        correlationId: 6f1c2b0e-3d4a-4b7e-9f10-2a5c8d9e7b31
+        errors:
+          - path: query.verbose
+            message: Parâmetro desconhecido
+  parameters: {}
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Confere se a API e o banco respondem
+      description: Usada pelo healthcheck do compose. Responde 200 só se o banco responde a um SELECT 1.
+      tags:
+        - system
+      security: []
+      parameters:
+        - schema:
+            type: string
+            description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          required: false
+          description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          name: x-request-id
+          in: header
+      responses:
+        "200":
+          description: A API e o banco respondem.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+                required:
+                  - status
+                additionalProperties: false
+        "400":
+          description: Requisição fora do contrato, como um parâmetro desconhecido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: O banco não respondeu.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            retry-after:
+              schema:
+                type: string
+                pattern: ^\d+$
+                description: Segundos até tentar de novo.
+              required: true
+              description: Segundos até tentar de novo.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        default:
+          description: Erro inesperado (500), sem detalhe interno.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+webhooks: {}

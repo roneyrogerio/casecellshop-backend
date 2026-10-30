@@ -16,11 +16,13 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 ## Fundação
 
 - **FND-01** `docker compose up` sobe tudo, com as migrações aplicadas antes da API e do worker.
-- **FND-02** `npm test` passa local e no CI.
+- **FND-02** `npm test` passa local e no CI. O CI verde nas duas versões do Node prova o critério em todo PR; a execução local é registrada uma vez, no PR do M1. Não tem teste próprio.
 - **FND-03** Uma requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` no corpo e no `X-Request-Id`.
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
 - **FND-05** O span do repositório sai como filho do span da requisição.
 - **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md), ou se o `AGENTS.md` ou um agente de `.claude/agents/` passar de 200 linhas ([`CONVENTIONS.md`](../../codebase/CONVENTIONS.md)).
+- **FND-07** O CI falha se o `openapi.yaml` commitado divergir do gerado pelo contrato em `src/contract/`, ou se não passar no lint de OpenAPI 3.1.
+- **FND-08** A guarda de caminho (`.claude/hooks/path-guard.mjs`) nega ao `test-writer` editar fora de `test/` e dos arquivos `*.test.ts`, e ao `implementer` editar os arquivos `*.test.ts`, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` e `CLAUDE.md`, com o caminho relativo, absoluto, com `..` ou em outra caixa; nega também um caminho fora do repositório e uma entrada ilegível, e deixa passar a sessão principal.
 
 ## Checkout
 

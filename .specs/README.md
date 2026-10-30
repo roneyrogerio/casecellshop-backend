@@ -7,10 +7,11 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | [`project/PROJECT.md`](project/PROJECT.md) | O que é o sistema, as metas, o escopo, as hipóteses e as premissas de carga |
 | [`project/ROADMAP.md`](project/ROADMAP.md) | Como cada marco é feito, a ordem dos marcos e o critério de pronto de cada um |
 | [`project/STATE.md`](project/STATE.md) | As decisões de projeto (`AD-NNN`), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas |
+| [`project/STATE-ARCHIVE.md`](project/STATE-ARCHIVE.md) | As ADs substituídas, com o texto como foi aceito |
 | [`features/casecellshop/spec.md`](features/casecellshop/spec.md) | A lista única de critérios de aceite com ID (`FND`, `CHK`, `ORD`, `CAT`, `OBS`, `DOC`) |
 | [`features/casecellshop/design.md`](features/casecellshop/design.md) | Como construir: componentes, dados, consultas, contrato, observabilidade e parâmetros |
 | [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: commits, pull requests, branches, testes, idioma e instruções da IA |
-| `openapi.yaml` (raiz, criado no M1) | O contrato HTTP. Os testes validam requisições e respostas contra ele |
+| `src/contract/` e `openapi.yaml` (criados no M1) | O contrato HTTP em zod e o OpenAPI 3.1 gerado dele. A validação e os testes usam os mesmos schemas |
 | `ARCHITECTURE.md` (raiz, criado no M1) | O diagnóstico, a arquitetura alvo e o porquê de cada bloco, por tema |
 
 ## Como manter as specs
@@ -27,6 +28,8 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | `spec.md` | 3.000 |
 | `design.md` | 4.800 |
 | `CONVENTIONS.md` | 1.800 |
+
+Dois arquivos ficam fora da tabela. O `project/STATE-ARCHIVE.md` guarda só ADs substituídas e nenhum agente o carrega, como na `tlc-spec-driven`. O `ARCHITECTURE.md` da raiz é a resposta conceitual do desafio, escrita para quem avalia, e não um documento que os agentes carregam em todo trabalho.
 
 **Mudanças.**
 
@@ -68,8 +71,8 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 - referências, se houver.
 
 **Ciclo:**
-- a AD nasce "proposta" no PR do marco e passa a "aceita" no merge;
-- aceita, não é editada: uma nova AD a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN");
+- a AD nasce "proposta" no PR do marco e passa a "aceita" no último commit antes do merge, quando a substituída também é marcada;
+- aceita, não é editada: uma nova AD a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN"); quando a nova muda só uma parte, "alterada pela AD-NNN" / "altera a AD-NNN";
 - perto do limite do `STATE.md`, as ADs substituídas vão para `project/STATE-ARCHIVE.md`.
 
 **Fontes.** O motivo é escrito nos termos do projeto (requisitos, restrições e trade-offs) e se sustenta sozinho. Documentação, normas e exemplos de outros projetos entram só em "Referências", como evidência verificável, nunca como o motivo.
@@ -79,7 +82,7 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 ```markdown
 ### AD-NNN · <a decisão em poucas palavras>
 
-**Status:** proposta (DD/MM/AAAA); no merge, aceita (DD/MM/AAAA)
+**Status:** proposta (DD/MM/AAAA); no último commit antes do merge, aceita (DD/MM/AAAA)
 
 **Contexto.** <o problema e as restrições do projeto>
 
@@ -102,12 +105,18 @@ Linha da tabela de ferramentas: `| Tema | Escolha | Descartado | Por quê |`.
 
 Entrada do `PROMPTS.md`:
 
-```markdown
+~~~markdown
 ### <assunto>
 
 - **Pedido:** <o que foi pedido>
+- **Prompt** (opcional): o texto literal, no idioma original:
+
+  ```text
+  <prompt>
+  ```
+
 - **O que a IA fez:** <o que ela produziu>
 - **Corrigido** ou **Rejeitado:** <o que mudou e por quê, se mudou>
 - **Resultado:** <o que ficou>
 - **Verificação:** <teste, comando ou fonte que confirmou>
-```
+~~~

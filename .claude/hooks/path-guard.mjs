@@ -6,22 +6,28 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const PROTECTED_FROM_IMPLEMENTER = [
-  'test',
   '.specs',
   '.claude',
+  'src/contract',
   'openapi.yaml',
   'architecture.md',
   'agents.md',
   'claude.md',
 ];
 
+// Testes unitários ficam ao lado do arquivo testado (CONVENTIONS.md, "Testes"),
+// então o papel se decide também pelo nome do arquivo, e não só pela pasta.
+function isTestFile(rel) {
+  return isUnder(rel, 'test') || rel.endsWith('.test.ts');
+}
+
 const RULES = {
   'test-writer': {
-    allows: (rel) => isUnder(rel, 'test'),
-    reason: 'O test-writer só edita arquivos em test/ (AGENTS.md, "Guardrails").',
+    allows: (rel) => isTestFile(rel),
+    reason: 'O test-writer só edita testes: arquivos *.test.ts e test/ (AGENTS.md, "Guardrails").',
   },
   implementer: {
-    allows: (rel) => !PROTECTED_FROM_IMPLEMENTER.some((entry) => isUnder(rel, entry)),
+    allows: (rel) => !isTestFile(rel) && !PROTECTED_FROM_IMPLEMENTER.some((entry) => isUnder(rel, entry)),
     reason:
       'O implementer não edita testes, specs, o contrato nem as instruções da IA (AGENTS.md, "Guardrails").',
   },

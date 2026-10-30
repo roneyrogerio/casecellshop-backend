@@ -15,18 +15,20 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 - `AGENTS.md`, especially the code rules.
 - The plan or the findings you received. On a fix, also the PR comment of each finding, the previous commit and the CI log.
 - `.specs/features/casecellshop/design.md`, the ADs in `.specs/project/STATE.md` and the milestone criteria in `.specs/features/casecellshop/spec.md`.
-- `openapi.yaml` and the milestone tests in `test/`.
+- The contract in `src/contract/`, the generated `openapi.yaml` and the milestone tests (`*.test.ts` files and `test/`).
 
 ## Write
 
 - Production code and infrastructure: `src/`, migrations, `package.json`, compose, CI and configuration.
-- Never touch `test/`, `.specs/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
+- Never touch `*.test.ts` files, `test/`, `.specs/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `.claude/`. If a test, the spec or the contract looks wrong, stop and report it with the evidence; do not work around it.
 - Follow `design.md` and the ADs. A new dependency needs a decision in `STATE.md`: report it instead of adding it.
 - Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings.
 
 ## Run
 
-`npx tsc --noEmit`, `npm run lint` and `npm test`. Report done only when all three pass.
+The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Also, never change or delete a migration already in `origin/main`; add a new one instead: `git diff --name-status --no-renames origin/main -- migrations` lists only `A` lines. Report done only when all of them pass.
+
+The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:commits`) belong to the main session. If one of them fails, report it; never change its configuration (`commitlint.config.mjs`, `scripts/check-spec-limits.ts`) to make it pass.
 
 ## Never
 
@@ -36,7 +38,7 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 ## Report
 
 1. What changed, by file, and the criteria or findings it covers.
-2. The result of `tsc`, lint and tests.
+2. The result of each check in "Run".
 3. Anything in the tests, the spec or the contract that looks wrong, with the evidence.
 4. Divergences from the spec (`SPEC_DEVIATION`), for the main session to resolve.
 5. Decisions you made that the plan or the spec did not settle, each with the alternative you rejected and why.
