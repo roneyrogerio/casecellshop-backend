@@ -169,6 +169,12 @@ async function setupBot(root: string, identity: Extract<Identity, { mode: 'bot' 
 }
 
 async function main(): Promise<number> {
+  // Na nuvem, o GitHub é a conta conectada ao ambiente, pelo proxy da nuvem,
+  // e não há chaveiro: não há o que configurar no clone.
+  if (process.env.CLAUDE_CODE_REMOTE === 'true') {
+    console.log('Na sessão do Claude Code na nuvem, o GitHub é a conta conectada ao ambiente (GitHub App do Claude ou /web-setup). O setup:local não se aplica aqui, e nada foi gravado.');
+    return 0;
+  }
   const root = fileURLToPath(new URL('..', import.meta.url));
   const resolved = resolveIdentity(process.argv.slice(2), readIdentity(root), Boolean(process.stdin.isTTY && process.stdout.isTTY));
   const parsed = 'ask' in resolved ? await askInTerminal() : resolved;

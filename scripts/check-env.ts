@@ -41,8 +41,16 @@ export interface Diagnosis {
 const SETUP_USAGE =
   'npm run setup:local -- --identity bot --login <conta-de-máquina> (recomendado: os PRs saem numa conta separada da sua, e você os aprova) ou npm run setup:local -- --identity self (a sua própria credencial do GitHub)';
 
+const CLOUD_GITHUB_FIX =
+  'A sessão na nuvem não tem GitHub: conecte a conta ao ambiente pelo GitHub App do Claude ou rode /web-setup num terminal com o gh autenticado.';
+
 function identityItems(facts: Facts): Diagnosis[] {
   const { identity } = facts;
+  // Na nuvem, o GitHub é a conta conectada ao ambiente, pelo proxy da nuvem; a
+  // identidade do git config e o setup não se aplicam lá.
+  if (facts.remote) {
+    return [{ item: 'GitHub pela conta conectada ao ambiente da nuvem', ok: facts.githubLogin !== null, fix: CLOUD_GITHUB_FIX }];
+  }
   if (!identity) {
     return [{ item: 'Identidade do GitHub configurada neste clone (git config casecellshop.identity)', ok: false, fix: `Escolha com que conta os agentes agem no GitHub: ${SETUP_USAGE}.` }];
   }
@@ -51,8 +59,7 @@ function identityItems(facts: Facts): Diagnosis[] {
     const status = facts.keychainStatus ?? 'ok';
     const setup = `npm run setup:local -- --identity bot --login ${identity.login}`;
     let fix = `O token de ${identity.login} falta, foi recusado ou é de outra conta: rode ${setup}, que pede o token novo.`;
-    if (facts.remote) fix = `A sessão na nuvem não está como ${identity.login}: rode /web-setup num terminal com o GH_TOKEN dessa conta.`;
-    else if (!inFile && status !== 'ok') fix = `${keychainHelp(status)} Depois, rode ${setup}.`;
+    if (!inFile && status !== 'ok') fix = `${keychainHelp(status)} Depois, rode ${setup}.`;
     const items: Diagnosis[] = [
       {
         item: `GitHub como ${identity.login} (modo bot, ${inFile ? `token em arquivo: ${tokenFilePath(identity.keychainService)}` : `chaveiro: ${identity.keychainService}`})`,
@@ -74,9 +81,7 @@ function identityItems(facts: Facts): Diagnosis[] {
     {
       item: 'GitHub com a credencial desta máquina (modo self)',
       ok: facts.githubLogin !== null,
-      fix: facts.remote
-        ? 'A sessão na nuvem não tem credencial do GitHub: rode /web-setup.'
-        : 'O git desta máquina não tem credencial do GitHub guardada: faça um push manual por HTTPS para o git guardá-la, ou troque para o modo bot.',
+      fix: 'O git desta máquina não tem credencial do GitHub guardada: configure um credential helper (no WSL, o Git Credential Manager do Git for Windows), faça um push manual por HTTPS para o git guardá-la, ou troque para o modo bot.',
     },
     {
       item: `Modo self${facts.githubLogin ? ` (${facts.githubLogin})` : ''}: você será autor dos PRs que os agentes abrirem`,
