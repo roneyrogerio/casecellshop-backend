@@ -120,6 +120,35 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     expect(matches(entry?.matcher, 'Explore')).toBe(false);
   });
 
+  it('AI-06 o hook SubagentStart do implementer, do test-writer e do reviewer chama o subagent-start.mjs', () => {
+    const entries = settings.hooks?.SubagentStart ?? [];
+
+    const entry = entries.find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/subagent-start.mjs')),
+    );
+
+    expect(entry).toBeDefined();
+    expect(commandsOf(entry ? [entry] : [])).toContain(
+      'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-start.mjs"',
+    );
+    for (const agent of ['implementer', 'test-writer', 'reviewer']) expect(matches(entry?.matcher, agent)).toBe(true);
+    expect(matches(entry?.matcher, 'general-purpose')).toBe(false);
+    expect(matches(entry?.matcher, 'Explore')).toBe(false);
+  });
+
+  // Controle: o retrato e a parada cobrem os mesmos três papéis, senão um papel teria parada sem retrato.
+  it('AI-06 o SubagentStart e o SubagentStop cobrem exatamente os mesmos agentes', () => {
+    const startEntry = (settings.hooks?.SubagentStart ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('subagent-start.mjs')),
+    );
+    const stopEntry = (settings.hooks?.SubagentStop ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('subagent-stop.mjs')),
+    );
+
+    expect(startEntry?.matcher).toBeDefined();
+    expect(startEntry?.matcher).toBe(stopEntry?.matcher);
+  });
+
   it('AI-06 um hook SessionStart chama o scripts/check-env.ts', () => {
     const commands = commandsOf(settings.hooks?.SessionStart ?? []);
 

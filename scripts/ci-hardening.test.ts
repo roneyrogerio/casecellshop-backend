@@ -46,8 +46,26 @@ function checkoutsWithCredentials(workflow: Workflow): Step[] {
   );
 }
 
+// O PR pode redefinir um script do próprio package.json; por isso as conferências rodam o arquivo de scripts/,
+// que o implementer não escreve (AI-04), e nunca por `npm run`.
+function runsNode(workflow: Workflow, file: string): boolean {
+  const escaped = file.replace(/[.]/g, '\\.');
+  return stepsOf(workflow).some((step) => new RegExp(`(^|\\s)node ${escaped}(\\s|$)`).test(step.run ?? ''));
+}
+
 function hasScriptsCheck(workflow: Workflow): boolean {
-  return stepsOf(workflow).some((step) => /(^|\s)npm run check:scripts(\s|$)/.test(step.run ?? ''));
+  return runsNode(workflow, 'scripts/check-scripts.ts');
+}
+
+function hasMigrationsCheck(workflow: Workflow): boolean {
+  return runsNode(workflow, 'scripts/check-migrations.ts');
+}
+
+// Os run: que chamam as conferências pelo package.json do PR.
+function weakCheckRuns(workflow: Workflow): string[] {
+  return stepsOf(workflow)
+    .map((step) => step.run ?? '')
+    .filter((run) => /npm\s+run\s+(?:-\S+\s+)*check:(?:scripts|migrations)/.test(run));
 }
 
 function topPermissionsAreReadOnly(workflow: Workflow): boolean {
@@ -71,6 +89,8 @@ jobs:
       - run: echo \${{ github.base_ref }}
       - run: git fetch origin \${{ github.head_ref }}
       - run: npm test
+      - run: npm run check:scripts
+      - run: npm run check:migrations
 `) as Workflow;
 
 const GOOD = parse(`
@@ -82,7 +102,8 @@ jobs:
       - uses: actions/checkout@${GOOD_SHA} # v7.0.1
         with:
           persist-credentials: false
-      - run: npm run check:scripts
+      - run: node scripts/check-scripts.ts
+      - run: node scripts/check-migrations.ts
       - run: echo "$BASE_REF"
         env:
           BASE_REF: \${{ github.base_ref }}
@@ -115,9 +136,23 @@ describe('AI-05 as conferências do ci.yml enxergam o que procuram (controle neg
     expect(checkoutsWithCredentials(GOOD)).toEqual([]);
   });
 
-  it('AI-05 a conferência do passo check:scripts reprova a falta dele', () => {
+  it('AI-05 a conferência do passo check:scripts reprova a falta dele e a forma por npm run', () => {
     expect(hasScriptsCheck(BAD)).toBe(false);
     expect(hasScriptsCheck(GOOD)).toBe(true);
+    expect(hasScriptsCheck({ jobs: { j: { steps: [{ run: 'npm run check:scripts' }] } } })).toBe(false);
+  });
+
+  it('AI-05 a conferência do passo check:migrations reprova a falta dele e a forma por npm run', () => {
+    expect(hasMigrationsCheck(BAD)).toBe(false);
+    expect(hasMigrationsCheck(GOOD)).toBe(true);
+    expect(hasMigrationsCheck({ jobs: { j: { steps: [{ run: 'npm run check:migrations' }] } } })).toBe(false);
+  });
+
+  it('AI-05 a conferência das formas fracas enxerga npm run check:scripts e check:migrations, e só elas', () => {
+    expect(weakCheckRuns(BAD)).toEqual(['npm run check:scripts', 'npm run check:migrations']);
+    expect(weakCheckRuns({ jobs: { j: { steps: [{ run: 'npm run --silent check:scripts' }] } } })).toHaveLength(1);
+    expect(weakCheckRuns(GOOD)).toEqual([]);
+    expect(weakCheckRuns({ jobs: { j: { steps: [{ run: 'npm run lint' }] } } })).toEqual([]);
   });
 });
 
@@ -140,8 +175,16 @@ describe('AI-05 o ci.yml é endurecido', () => {
     expect(checkoutsWithCredentials(ci)).toEqual([]);
   });
 
-  it('AI-05 tem um passo que roda npm run check:scripts', () => {
+  it('AI-05 o passo de scripts roda node scripts/check-scripts.ts, e não npm run check:scripts', () => {
     expect(hasScriptsCheck(ci)).toBe(true);
+  });
+
+  it('AI-05 o passo de migrações roda node scripts/check-migrations.ts, e não npm run check:migrations', () => {
+    expect(hasMigrationsCheck(ci)).toBe(true);
+  });
+
+  it('AI-05 nenhum run: do ci.yml chama check:scripts nem check:migrations por npm run', () => {
+    expect(weakCheckRuns(ci)).toEqual([]);
   });
 
   it('AI-05 o package.json tem o script check:scripts', () => {

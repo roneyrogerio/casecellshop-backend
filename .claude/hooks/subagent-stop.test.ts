@@ -16,6 +16,7 @@ interface Deps {
   writeCount(key: string, n: number): void;
   changedFiles(): string[];
   scriptsChanged(): boolean;
+  gitChanges(): string[];
 }
 
 interface StopInput {
@@ -44,7 +45,7 @@ beforeAll(async () => {
 function makeDeps(
   failing: Record<string, string> = {},
   counts: Record<string, number> = {},
-  git: { changed?: string[]; scriptsChanged?: boolean } = {},
+  git: { changed?: string[]; scriptsChanged?: boolean; gitChanges?: string[] } = {},
 ) {
   const ran: string[] = [];
   const reads: string[] = [];
@@ -65,6 +66,8 @@ function makeDeps(
     },
     changedFiles: () => git.changed ?? [],
     scriptsChanged: () => git.scriptsChanged ?? false,
+    // O que mudou no HEAD, nos refs, nas worktrees e no .git/config desde o início do agente (AI-12).
+    gitChanges: () => git.gitChanges ?? [],
   };
   return { deps, ran, reads, writes, counts };
 }
@@ -280,6 +283,11 @@ const IMPLEMENTER_FORBIDDEN_CHANGES = [
   '.mcp.json',
   'CLAUDE.md',
   'src/x/AGENTS.md',
+  '.githooks/pre-push',
+  '.githooks/commit-msg',
+  '.githooks/post-commit',
+  '.git/config',
+  '.git/hooks/pre-commit',
 ];
 
 describe('AI-03 o implementer é devolvido quando o git status mostra arquivo fora do papel dele', () => {
@@ -440,6 +448,61 @@ describe('AI-03 o test-writer é devolvido quando altera arquivo fora dos testes
   });
 });
 
+const GIT_CHANGES = ['HEAD: de aaa111 para bbb222', 'refs: refs/heads/feature/x adicionado'];
+
+describe('AI-12 o hook de parada deixa terminar e registra a exceção quando o estado do git mudou', () => {
+  it.each(['implementer', 'test-writer', 'reviewer'])(
+    'AI-12 o %s com o estado do git alterado vira exceção já na primeira parada, com cada mudança na mensagem',
+    async (agentType) => {
+      const { deps, writes } = makeDeps({}, {}, { gitChanges: GIT_CHANGES });
+
+      const decision = await decide(stop(agentType), deps);
+
+      expect(decision.action).toBe('exception');
+      expect(decision.message).toContain('estado do git');
+      for (const change of GIT_CHANGES) expect(decision.message).toContain(change);
+      expect(writes.filter(([, n]) => n > 0)).toEqual([]);
+    },
+  );
+
+  it('AI-12 o implementer com o estado do git alterado não é devolvido, mesmo com o lint falhando', async () => {
+    const { deps } = makeDeps({ lint: 'src/x.ts: no-unused-vars' }, {}, { gitChanges: GIT_CHANGES });
+
+    const decision = await decide(stop('implementer'), deps);
+
+    expect(decision.action).toBe('exception');
+    expect(decision.message).toContain('refs/heads/feature/x');
+  });
+
+  it('AI-12 o reviewer com uma única mudança também vira exceção, e ela aparece na mensagem', async () => {
+    const { deps } = makeDeps({}, {}, { gitChanges: ['config: .git/config alterado'] });
+
+    const decision = await decide(stop('reviewer'), deps);
+
+    expect(decision.action).toBe('exception');
+    expect(decision.message).toContain('config: .git/config alterado');
+  });
+
+  // Controle negativo: sem mudança, o comportamento anterior continua.
+  it.each(['implementer', 'test-writer', 'reviewer'])(
+    'AI-12 o %s sem mudança no estado do git e com as checagens ok é liberado',
+    async (agentType) => {
+      const { deps } = makeDeps({}, {}, { gitChanges: [] });
+
+      const decision = await decide(stop(agentType), deps);
+
+      expect(decision.action).toBe('allow');
+      expect(decision.message ?? '').not.toContain('estado do git');
+    },
+  );
+
+  it('AI-12 o implementer sem mudança no estado do git e com o lint falhando continua sendo devolvido', async () => {
+    const { deps } = makeDeps({ lint: 'erro de lint' }, {}, { gitChanges: [] });
+
+    expect((await decide(stop('implementer'), deps)).action).toBe('block');
+  });
+});
+
 // Processo de verdade: o hook é um script, e o que o Claude Code vê é o código de saída, o stderr e os arquivos.
 const hookFile = join(import.meta.dirname, 'subagent-stop.mjs');
 
@@ -469,20 +532,44 @@ function makeSandbox(npm: { exit: number; print: string }): Sandbox {
   return { project, bin, tmp };
 }
 
-function runHook(sandbox: Sandbox, input: unknown, raw?: string) {
+function hookEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: `${sandbox.bin}:${process.env.PATH ?? ''}`,
+    // O contador de devoluções fica em os.tmpdir(): isolado, para uma execução não afetar a outra.
+    TMPDIR: sandbox.tmp,
+    CLAUDE_PROJECT_DIR: sandbox.project,
+  };
+}
+
+// Só a parada, sem o retrato do início do agente (AI-12): o caso do retrato ausente.
+function runStopOnly(sandbox: Sandbox, input: unknown, raw?: string) {
   const result = spawnSync(process.execPath, [hookFile], {
     input: raw ?? JSON.stringify(input),
     encoding: 'utf8',
     cwd: sandbox.project,
-    env: {
-      ...process.env,
-      PATH: `${sandbox.bin}:${process.env.PATH ?? ''}`,
-      // O contador de devoluções fica em os.tmpdir(): isolado, para uma execução não afetar a outra.
-      TMPDIR: sandbox.tmp,
-      CLAUDE_PROJECT_DIR: sandbox.project,
-    },
+    env: hookEnv(sandbox),
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+const startFile = join(import.meta.dirname, 'subagent-start.mjs');
+
+// O Claude Code dispara o SubagentStart antes do agente trabalhar e o SubagentStop depois: os testes de processo
+// fazem o mesmo, para que o retrato do git (AI-12) exista e o resultado dependa só do que o teste mudou.
+function runStart(sandbox: Sandbox, input: unknown) {
+  const result = spawnSync(process.execPath, [startFile], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    cwd: sandbox.project,
+    env: hookEnv(sandbox),
+  });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function runHook(sandbox: Sandbox, input: unknown, raw?: string) {
+  if (raw === undefined) runStart(sandbox, { ...(input as object), cwd: sandbox.project });
+  return runStopOnly(sandbox, input, raw);
 }
 
 function git(sandbox: Sandbox, ...args: string[]): void {
@@ -683,5 +770,156 @@ describe('AI-03 o hook de parada grava o relatório do reviewer', () => {
 
     expect(result.code).toBe(0);
     expect(existsSync(join(sandbox.project, '.claude', 'reviews', 'r2.md'))).toBe(false);
+  });
+});
+
+// AI-12 com git de verdade: o retrato do SubagentStart contra o estado na parada, sem depender de como o comando foi escrito.
+function exceptionLog(sandbox: Sandbox): string | undefined {
+  const file = join(sandbox.project, '.claude', 'state', 'stop-exceptions.log');
+  return existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+}
+
+function systemMessageOf(stdout: string): string | undefined {
+  if (stdout.trim() === '') return undefined;
+  return (JSON.parse(stdout) as { systemMessage?: string }).systemMessage;
+}
+
+async function snapshotPath(sandbox: Sandbox, sessionId: string, agentId: string): Promise<string> {
+  const module = (await import(pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href)) as {
+    snapshotFile(session: string, agent: string): string;
+  };
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = sandbox.tmp;
+  try {
+    return module.snapshotFile(sessionId, agentId);
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+  }
+}
+
+const REVIEWER = { agent_type: 'reviewer', agent_id: 'r1', session_id: 's1', last_assistant_message: '## Revisão\ntexto' };
+
+describe('AI-12 o hook de parada como processo compara o retrato do git', () => {
+  it('AI-12 o reviewer que commitou entre o início e a parada termina com código 0, avisa e registra o estado do git', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    git(sandbox, 'commit', '-q', '--allow-empty', '-m', 'escondido');
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(systemMessageOf(result.stdout)).toContain('estado do git');
+    expect(systemMessageOf(result.stdout)).toContain('HEAD');
+    expect(exceptionLog(sandbox)).toContain('estado do git');
+    expect(readFileSync(join(sandbox.project, '.claude', 'reviews', 'r1.md'), 'utf8')).toBe(REVIEWER.last_assistant_message);
+  });
+
+  // Controle negativo: sem mudança, nenhum aviso e nenhum registro.
+  it('AI-12 controle: o reviewer sem mudança no git termina sem systemMessage e sem registro', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(systemMessageOf(result.stdout)).toBeUndefined();
+    expect(exceptionLog(sandbox)).toBeUndefined();
+    expect(readFileSync(join(sandbox.project, '.claude', 'reviews', 'r1.md'), 'utf8')).toBe(REVIEWER.last_assistant_message);
+  });
+
+  it('AI-12 o reviewer sem retrato (o início não rodou) vira exceção com retrato do git ausente', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(systemMessageOf(result.stdout)).toContain('retrato do git ausente');
+    expect(exceptionLog(sandbox)).toContain('retrato do git ausente');
+  });
+
+  it('AI-12 o reviewer com o retrato ilegível vira exceção com retrato do git ausente', async () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    writeFileSync(await snapshotPath(sandbox, 's1', 'r1'), 'isto não é json');
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain('retrato do git ausente');
+  });
+
+  it.each([
+    ['uma branch nova', ['branch', 'nova'], 'refs/heads/nova'],
+    ['uma tag', ['tag', 'v1'], 'refs/tags/v1'],
+    ['um ref de remoto', ['update-ref', 'refs/remotes/origin/x', 'HEAD'], 'refs/remotes/origin/x'],
+    ['uma worktree', ['worktree', 'add', '-q', '../wt-ai12', '-b', 'wt-branch'], 'worktrees'],
+    ['uma alteração no .git/config', ['config', 'alias.p', 'push'], 'config'],
+  ])('AI-12 o test-writer que criou %s termina com código 0 e a exceção cita o que mudou', (_label, args, expected) => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+    const input = { agent_type: 'test-writer', agent_id: 'tw1', session_id: 's1' };
+    runStart(sandbox, { ...input, cwd: sandbox.project });
+    git(sandbox, ...args);
+
+    const result = runStopOnly(sandbox, input);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain('estado do git');
+    expect(exceptionLog(sandbox)).toContain(expected);
+  });
+
+  it('AI-12 o implementer que commitou o que não devia termina com código 0 e registra a exceção, sem devolução', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
+    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
+    git(sandbox, 'commit', '-q', '-am', 'ci: x');
+
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain('estado do git');
+  });
+
+  it('AI-12 o implementer sem retrato (o início não rodou) termina com código 0 e registra retrato do git ausente', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain('retrato do git ausente');
+  });
+
+  // Controle negativo: o mesmo implementer sem mudança no git não gera registro.
+  it('AI-12 controle: o implementer que só editou src/ não gera registro', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
+    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
+
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toBeUndefined();
+  });
+
+  it('AI-12 a retomada regrava o retrato: o que mudou antes dela não vira exceção', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    git(sandbox, 'commit', '-q', '--allow-empty', '-m', 'antes da retomada');
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(systemMessageOf(result.stdout)).toBeUndefined();
+    expect(exceptionLog(sandbox)).toBeUndefined();
   });
 });

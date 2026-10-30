@@ -274,6 +274,53 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
   });
 });
 
+// Os hooks do git rodam nos commits e pushes da sessão principal, fora dos deny e do bash-guard (A13):
+// quem os escreve executa código lá. A configuração do clone (.git/) tem o mesmo efeito.
+const IMPLEMENTER_PROTECTED_GIT_HOOKS = [
+  '.githooks/pre-push',
+  '.githooks/commit-msg',
+  '.githooks/post-commit',
+  '.githooks/novo/arquivo',
+  '.git/config',
+  '.git/hooks/pre-commit',
+];
+
+describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a configuração do clone', () => {
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer não pode editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
+    expectDenied(
+      runHook(
+        JSON.stringify({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Write',
+          cwd: root,
+          agent_type: 'implementer',
+          tool_input: { file_path: join(root, path), content: 'exit 0' },
+        }),
+      ),
+    );
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o test-writer também não pode editar %s', (path) => {
+    expectDenied(edit('test-writer', path));
+  });
+
+  // Controle negativo: nomes que só lembram as pastas protegidas seguem liberados.
+  it.each(['src/githooks.ts', 'migrations/store/.gitkeep', 'src/git/x.ts'])(
+    'AI-04 o implementer continua podendo editar %s',
+    (path) => {
+      for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+    },
+  );
+
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
+  });
+});
+
 describe('FND-08 entrada ilegível e sessão principal', () => {
   it.each([
     ['texto que não é JSON', 'isto não é json'],
