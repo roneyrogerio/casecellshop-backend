@@ -91,13 +91,39 @@ function pushProblem({ globals, args }) {
 // conteúdo de um sh -c é lido de novo, como comando.
 const INTERPRETER = /^(?:python[\d.]*|perl[\d.]*|ruby[\d.]*)$/;
 const WRAPPERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'xargs', 'sudo', 'timeout', 'nice']);
+// Opções dos invólucros que levam o valor na palavra seguinte (timeout -s KILL,
+// nice -n 10, sudo -u x, env -u NOME).
+const WRAPPER_VALUE_OPTIONS = new Set(['-s', '--signal', '-k', '--kill-after', '-n', '--adjustment', '-u', '--user', '-g', '--group', '-C', '--chdir']);
 const SHELLS = new Set(['sh', 'bash', 'zsh']);
 
+// Fecha uma substituição de comando que abre em start (logo depois do "$(" ou
+// da crase): devolve a posição do fechamento, contando parênteses aninhados e
+// pulando aspas simples.
+function closingOf(text, start, opener) {
+  if (opener === '`') {
+    let i = start;
+    while (i < text.length && text[i] !== '`') i += text[i] === '\\' ? 2 : 1;
+    return i;
+  }
+  let depth = 1;
+  for (let i = start; i < text.length; i += 1) {
+    if (text[i] === "'") i = text.indexOf("'", i + 1) === -1 ? text.length : text.indexOf("'", i + 1);
+    else if (text[i] === '\\') i += 1;
+    else if (text[i] === '(') depth += 1;
+    else if (text[i] === ')' && (depth -= 1) === 0) return i;
+  }
+  return text.length;
+}
+
 // Segmentos (separados por ; & | ( ) { } crase e quebra de linha fora de
-// aspas) e os alvos de redirecionamento de saída. O >| é operador, e não pipe.
+// aspas), os alvos de redirecionamento de saída e as substituições de comando
+// que estão entre aspas duplas, que o shell executa e por isso são lidas de
+// novo como comando. Aspas simples são literais; dentro das duplas, \" \\ \$ e
+// a crase escapada são escapes. O >| é operador, e não pipe.
 function readShell(text) {
   const segments = [];
   const targets = [];
+  const substitutions = [];
   let words = [];
   let word = null;
   let pendingRedirect = false;
@@ -116,11 +142,31 @@ function readShell(text) {
   };
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    if (ch === "'" || ch === '"') {
-      const close = text.indexOf(ch, i + 1);
+    if (ch === "'") {
+      const close = text.indexOf("'", i + 1);
       const end = close === -1 ? text.length : close;
       word = (word ?? '') + text.slice(i + 1, end);
       i = end;
+    } else if (ch === '"') {
+      let j = i + 1;
+      let quoted = '';
+      while (j < text.length && text[j] !== '"') {
+        if (text[j] === '\\' && /["\\$`]/.test(text[j + 1] ?? '')) {
+          quoted += text[j + 1];
+          j += 2;
+        } else if ((text[j] === '$' && text[j + 1] === '(') || text[j] === '`') {
+          const start = text[j] === '`' ? j + 1 : j + 2;
+          const end = closingOf(text, start, text[j] === '`' ? '`' : '(');
+          substitutions.push(text.slice(start, end));
+          quoted += '$SUB';
+          j = end + 1;
+        } else {
+          quoted += text[j];
+          j += 1;
+        }
+      }
+      word = (word ?? '') + quoted;
+      i = j;
     } else if (ch === '\\') {
       word = (word ?? '') + (text[i + 1] ?? '');
       i += 1;
@@ -131,10 +177,14 @@ function readShell(text) {
       let j = ch === '&' ? i + 2 : i + 1;
       if (text[j] === '>' || text[j] === '|') j += 1;
       if (text[j] === '&') {
-        // 2>&1, >&2 e >&-: junção de descritores, não arquivo.
-        i = j;
-        while (/[\d-]/.test(text[i + 1] ?? '')) i += 1;
-        continue;
+        // 2>&1, >&2 e >&-: junção de descritores, não arquivo. Já >&arquivo
+        // (ou >& arquivo) grava a saída e os erros num arquivo.
+        const dup = /^[\d-]+(?![^\s;&|()<>])/.exec(text.slice(j + 1));
+        if (dup) {
+          i = j + dup[0].length;
+          continue;
+        }
+        j += 1;
       }
       pendingRedirect = true;
       i = j - 1;
@@ -147,7 +197,7 @@ function readShell(text) {
     }
   }
   endSegment();
-  return { segments, targets };
+  return { segments, targets, substitutions };
 }
 
 function stripHeredocBodies(command) {
@@ -170,12 +220,16 @@ function commandWords(words) {
     const word = words[i];
     const name = word.slice(word.lastIndexOf('/') + 1);
     if (expectCommand) {
-      if (/^\w+=/.test(word) || (word.startsWith('-') && i > 0)) continue;
+      if (/^\w+=/.test(word)) continue;
+      if (word.startsWith('-') && i > 0) {
+        if (WRAPPER_VALUE_OPTIONS.has(word)) i += 1;
+        continue;
+      }
       // O timeout recebe a duração antes do comando.
       if (/^\d+(?:\.\d+)?[smhd]?$/.test(word) && found.at(-1)?.name === 'timeout') continue;
       found.push({ name, args: words.slice(i + 1) });
       expectCommand = WRAPPERS.has(name);
-      if (SHELLS.has(name) && words[i + 1] === '-c') {
+      if (SHELLS.has(name) && /^-[A-Za-z]*c[A-Za-z]*$/.test(words[i + 1] ?? '')) {
         found.push({ name: '-c', args: [words[i + 2] ?? ''] });
         break;
       }
@@ -185,9 +239,13 @@ function commandWords(words) {
 }
 
 function shellWriteProblem(command) {
-  const { segments, targets } = readShell(stripHeredocBodies(command));
+  const { segments, targets, substitutions } = readShell(stripHeredocBodies(command));
   const target = targets.find((path) => path !== '/dev/null');
   if (target !== undefined) return `o redirecionamento para ${target}`;
+  for (const inner of substitutions) {
+    const problem = shellWriteProblem(inner);
+    if (problem) return problem;
+  }
   for (const words of segments) {
     for (const { name, args } of commandWords(words)) {
       if (name === '-c') {

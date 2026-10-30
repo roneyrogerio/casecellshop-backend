@@ -229,11 +229,19 @@ export async function configureIdentity(
   const before = new Map(IDENTITY_KEYS.map((key) => [key, localValue(root, key)]));
   writeIdentity(root, identity);
   writeTokenStore(root, store);
-  if (await deps.setupBot()) return true;
-  for (const [key, value] of before) {
-    spawnSync('git', ['-C', root, 'config', '--local', ...(value === undefined ? ['--unset-all', key] : [key, value])], { encoding: 'utf8' });
+  let ok = false;
+  try {
+    ok = await deps.setupBot();
+    return ok;
+  } finally {
+    // Também numa exceção (Ctrl+C num prompt, erro ao gravar o token): o clone
+    // nunca fica apontando para a identidade que não se confirmou.
+    if (!ok) {
+      for (const [key, value] of before) {
+        spawnSync('git', ['-C', root, 'config', '--local', ...(value === undefined ? ['--unset-all', key] : [key, value])], { encoding: 'utf8' });
+      }
+    }
   }
-  return false;
 }
 
 async function confirmInTerminal(message: string): Promise<boolean> {
