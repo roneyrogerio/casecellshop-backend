@@ -5,14 +5,26 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const PROTECTED_FROM_IMPLEMENTER = [
+// O implementer não toca no que decide se o trabalho dele está certo (AI-04): os
+// testes, a spec, o contrato e tudo que configura a verificação (CI, scripts de
+// conferência, lint, typecheck, Vitest). Um agente que pode editar o próprio
+// avaliador consegue passar sem acertar; o METR registrou exatamente isso.
+export const PROTECTED_FROM_IMPLEMENTER = [
   '.specs',
   '.claude',
+  '.github',
+  'scripts',
   'src/contract',
   'openapi.yaml',
   'architecture.md',
   'agents.md',
   'claude.md',
+  'vitest.config.ts',
+  'tsconfig.json',
+  '.oxlintrc.json',
+  'commitlint.config.mjs',
+  'redocly.yaml',
+  '.npmrc',
 ];
 
 // Testes unitários ficam ao lado do arquivo testado (CONVENTIONS.md, "Testes"),

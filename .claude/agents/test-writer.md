@@ -12,11 +12,11 @@ Write your report in Brazilian Portuguese. Identifiers in test code stay in Engl
 
 ## Read
 
-- `AGENTS.md`.
-- The milestone criteria in `.specs/features/casecellshop/spec.md`.
-- `.specs/features/casecellshop/design.md`: data, contract, worker, parameters.
-- The contract in `src/contract/`, the generated `openapi.yaml`, and the existing tests and helpers (`*.test.ts` files and `test/`).
-- From `src/`, only what a test needs to wire itself: the app factory, the port interfaces (such as `ErpClient`, `Cache` and the clock) and the configuration. Do not read implementation internals.
+The task map in your prompt lists the criteria, the spec sections and the files of this slice; read those first, by section, not whole files. `AGENTS.md` already reaches you through `CLAUDE.md`.
+
+- The slice criteria in `.specs/features/casecellshop/spec.md` and the `design.md` sections the map names.
+- The contract in `src/contract/`, the existing tests and helpers (`*.test.ts` files and `test/`).
+- From `src/`, only what a test needs to wire itself: the app factory, the port interfaces (such as `ErpClient`, `Cache` and the clock), the stubs named in the map and the configuration. Do not read implementation internals.
 
 ## Write
 
@@ -30,7 +30,7 @@ Write your report in Brazilian Portuguese. Identifiers in test code stay in Engl
 
 ## Run
 
-Run the tests you wrote. Each must fail because the behavior is missing (a missing route, export or assertion), never because of a syntax or setup error in the test itself. Fix your own test errors.
+Run the tests you wrote. Each must fail on an assertion, because the behavior is missing: the main session creates typed stubs (a route answering `501`, a function throwing "não implementado") so that imports and types resolve. A failure by syntax, import or setup error is yours to fix. A stop hook keeps you working while `npm run lint` or `npm run typecheck` fail.
 
 ## Never
 

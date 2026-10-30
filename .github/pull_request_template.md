@@ -7,25 +7,30 @@
 
 ## Plano
 
-<!-- O plano aprovado do marco, uma linha por item, marcada quando a parte entra. -->
+<!-- O plano aprovado, uma linha por fatia, marcada quando o feat: dela fica verde e uma rodada de revisão a cobre. -->
 
 - [ ] 
 
+## Para o mantenedor ler (~10 min)
+
+<!-- Só o que a máquina não decide por você. O resto está nos checks e no ruleset. -->
+
+- A tabela critério × teste no resumo do CI: cada critério tem um teste cujo nome o prove?
+- O texto das respostas do desafio (Q1 a Q5) que este marco tocou, em `ARCHITECTURE.md` e no README.
+- Mudanças em specs, ADs, migrações e CI, se houver.
+
 ## O que a IA gerou
 
-<!-- O que veio de cada agente (planner, test-writer, implementer, reviewer) e, em cada correção, o degrau do escalonamento usado. Os prompts principais entram no PROMPTS.md. -->
+<!-- O que veio de cada agente (sessão principal, test-writer, implementer, reviewer), com o modelo, o esforço e o degrau de escalonamento de cada correção; os trailers Assisted-by dos commits mostram o mesmo. -->
 
-## O que foi mudado
+## Registro do marco
 
-<!-- O que foi corrigido, rejeitado ou reescrito depois da geração, e por quê. -->
+<!-- Rodadas de revisão e achados por severidade; achados errados do reviewer; degraus usados; CI vermelho por causa; aprovações pedidas; 1 a 3 lições; pendências para o próximo plano. -->
 
 ## Como foi verificado
 
-- [ ] Os testes vieram antes do código (commit `test:` antes do `feat:`)
-- [ ] CI verde: lint, tipos, testes e limite de tamanho das specs
-- [ ] `reviewer` sem achado de severidade alta pendente
-- [ ] Specs atualizadas neste PR, sem editar ADR aceita
-- [ ] `/security-review`, quando o marco pede (M2 e entrega)
-- [ ] `/doctor prompt-audit`, quando o PR muda o `AGENTS.md`, o `CLAUDE.md` ou o `.claude/`
+<!-- O que o CI e o ruleset garantem não se repete aqui: testes, lint, tipos, contrato, commits, limites das instruções e migrações são checks obrigatórios. Aqui fica só o que não é check. -->
 
-<!-- Comandos rodados e resultados relevantes. -->
+- [ ] Os testes vieram antes do código (commit `test:` antes do `feat:` de cada fatia)
+- [ ] A última rodada do `reviewer` cobre o HEAD, sem achado `alta` ou `média` aberto
+- [ ] `/security-review`, quando o marco pede (M2 e entrega)

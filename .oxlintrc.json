@@ -3,7 +3,8 @@
   "plugins": [
     "typescript",
     "oxc",
-    "unicorn"
+    "unicorn",
+    "vitest"
   ],
   "categories": {
     "correctness": "error"
@@ -13,7 +14,6 @@
   },
   "ignorePatterns": [
     "node_modules/",
-    "spike/",
     "coverage/",
     "dist/"
   ],
@@ -60,7 +60,24 @@
     "typescript/prefer-namespace-keyword": "error",
     "typescript/triple-slash-reference": "error",
     "no-unused-expressions": "error",
-    "no-unused-vars": "error"
+    "no-unused-vars": "error",
+    "vitest/no-focused-tests": "error",
+    "vitest/no-disabled-tests": "error",
+    "vitest/expect-expect": [
+      "error",
+      {
+        "assertFunctionNames": [
+          "expect",
+          "expect*"
+        ]
+      }
+    ],
+    "vitest/valid-expect": [
+      "error",
+      {
+        "maxArgs": 2
+      }
+    ]
   },
   "overrides": [
     {
