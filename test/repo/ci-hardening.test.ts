@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 interface Step {
+  name?: string;
+  if?: string;
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -231,6 +233,152 @@ describe('AI-17 o ci.yml cancela a execução anterior do mesmo PR e nunca a da 
     const triggers = (ci as { on?: { push?: { branches?: string[] } } }).on;
 
     expect(triggers?.push?.branches).toContain('main');
+  });
+});
+
+// AI-18: o npm test grava o relatório JSON do Vitest, e um passo à parte, só no Node do .nvmrc e mesmo com teste
+// falhando, roda o criteria-report.ts sobre esse arquivo e anexa a saída ao resumo da execução.
+function testStep(workflow: Workflow): Step | undefined {
+  return stepsOf(workflow).find((step) => /(^|\s)npm\s+(?:run\s+)?test(\s|$)/.test(step.run ?? ''));
+}
+
+// O arquivo do relatório, quando o passo do npm test pede o reporter json e um arquivo de saída.
+function reportFileOf(workflow: Workflow): string | null {
+  const run = testStep(workflow)?.run ?? '';
+  if (!/--reporter[= ]json(\s|$)/.test(run)) return null;
+  return /--outputFile(?:\.json)?[= ](\S+)/.exec(run)?.[1] ?? null;
+}
+
+const REPORT_SCRIPT = 'scripts/criteria-report.ts';
+
+function summaryStep(workflow: Workflow): Step | undefined {
+  return stepsOf(workflow).find((step) => runsNode({ jobs: { j: { steps: [step] } } }, REPORT_SCRIPT));
+}
+
+// O passo lê o mesmo arquivo que o npm test grava.
+function summaryReadsTheTestReport(workflow: Workflow): boolean {
+  const file = reportFileOf(workflow);
+  const run = summaryStep(workflow)?.run ?? '';
+  if (file === null) return false;
+  return run.includes(`node ${REPORT_SCRIPT} ${file}`);
+}
+
+function appendsToStepSummary(step: Step | undefined): boolean {
+  return />>\s*"?\$\{?GITHUB_STEP_SUMMARY\}?"?/.test(step?.run ?? '');
+}
+
+function runsOnlyOnNvmrcNode(step: Step | undefined): boolean {
+  return /matrix\.node\s*==\s*'nvmrc'/.test(step?.if ?? '');
+}
+
+function runsEvenWhenTestsFail(step: Step | undefined): boolean {
+  return /(?:always\(\)|!\s*cancelled\(\))/.test(step?.if ?? '');
+}
+
+function summaryAfterTests(workflow: Workflow): boolean {
+  const steps = stepsOf(workflow);
+  const test = testStep(workflow);
+  const summary = summaryStep(workflow);
+  return test !== undefined && summary !== undefined && steps.indexOf(summary) > steps.indexOf(test);
+}
+
+function reportByNpmRun(workflow: Workflow): string[] {
+  return stepsOf(workflow)
+    .map((step) => step.run ?? '')
+    .filter((run) => /npm\s+run\s+(?:-\S+\s+)*\S*criteria-report/.test(run));
+}
+
+describe('AI-18 as conferências do resumo da execução enxergam o que procuram (controle negativo)', () => {
+  const GOOD_SUMMARY = parse(`
+jobs:
+  j:
+    steps:
+      - run: npm test -- --reporter=default --reporter=json --outputFile.json=vitest-report.json
+      - name: Tabela critério × teste
+        if: \${{ always() && matrix.node == 'nvmrc' }}
+        run: node scripts/criteria-report.ts vitest-report.json >> "$GITHUB_STEP_SUMMARY"
+`) as Workflow;
+
+  const BAD_SUMMARY = parse(`
+jobs:
+  j:
+    steps:
+      - run: node scripts/criteria-report.ts other.json
+      - run: npm test
+      - name: Tabela
+        if: success()
+        run: npm run criteria-report vitest-report.json
+`) as Workflow;
+
+  it('AI-18 o relatório JSON só vale com o reporter json e o arquivo de saída', () => {
+    expect(reportFileOf(GOOD_SUMMARY)).toBe('vitest-report.json');
+    expect(reportFileOf(BAD_SUMMARY)).toBeNull();
+    expect(reportFileOf({ jobs: { j: { steps: [{ run: 'npm test -- --reporter=json' }] } } })).toBeNull();
+    expect(reportFileOf({ jobs: { j: { steps: [{ run: 'npm test -- --outputFile.json=r.json' }] } } })).toBeNull();
+    expect(reportFileOf({ jobs: { j: { steps: [{ run: 'npm test -- --reporter=json --outputFile=r.json' }] } } })).toBe(
+      'r.json',
+    );
+  });
+
+  it('AI-18 o passo do resumo só vale com node, o mesmo arquivo do npm test e depois dele', () => {
+    expect(summaryReadsTheTestReport(GOOD_SUMMARY)).toBe(true);
+    expect(summaryAfterTests(GOOD_SUMMARY)).toBe(true);
+    expect(summaryReadsTheTestReport(BAD_SUMMARY)).toBe(false);
+    expect(summaryAfterTests(BAD_SUMMARY)).toBe(false);
+    expect(summaryStep({ jobs: { j: { steps: [{ run: 'npm run criteria-report x.json' }] } } })).toBeUndefined();
+  });
+
+  it('AI-18 anexar ao resumo exige >> $GITHUB_STEP_SUMMARY', () => {
+    expect(appendsToStepSummary(summaryStep(GOOD_SUMMARY))).toBe(true);
+    expect(appendsToStepSummary(summaryStep(BAD_SUMMARY))).toBe(false);
+    expect(appendsToStepSummary({ run: 'node scripts/criteria-report.ts r.json' })).toBe(false);
+    expect(appendsToStepSummary({ run: 'node scripts/criteria-report.ts r.json >> $GITHUB_STEP_SUMMARY' })).toBe(true);
+  });
+
+  it('AI-18 a condição exige o Node do .nvmrc e rodar também com teste falhando', () => {
+    const good = summaryStep(GOOD_SUMMARY);
+    expect(runsOnlyOnNvmrcNode(good)).toBe(true);
+    expect(runsEvenWhenTestsFail(good)).toBe(true);
+    expect(runsOnlyOnNvmrcNode({ if: 'always()' })).toBe(false);
+    expect(runsEvenWhenTestsFail({ if: "matrix.node == 'nvmrc'" })).toBe(false);
+    expect(runsEvenWhenTestsFail({ if: "success() && matrix.node == 'nvmrc'" })).toBe(false);
+    expect(runsEvenWhenTestsFail({ if: "${{ !cancelled() && matrix.node == 'nvmrc' }}" })).toBe(true);
+    expect(runsOnlyOnNvmrcNode(undefined)).toBe(false);
+  });
+
+  it('AI-18 a forma por npm run para o criteria-report é enxergada', () => {
+    expect(reportByNpmRun(BAD_SUMMARY)).toHaveLength(1);
+    expect(reportByNpmRun(GOOD_SUMMARY)).toEqual([]);
+  });
+});
+
+describe('AI-18 o ci.yml publica a tabela critério × teste no resumo da execução', () => {
+  it('AI-18 o passo do npm test grava o relatório JSON do Vitest num arquivo', () => {
+    expect(testStep(ci)).toBeDefined();
+    expect(reportFileOf(ci)).not.toBeNull();
+  });
+
+  it('AI-18 há um passo node scripts/criteria-report.ts sobre o mesmo arquivo do relatório', () => {
+    expect(summaryStep(ci)).toBeDefined();
+    expect(summaryReadsTheTestReport(ci)).toBe(true);
+  });
+
+  it('AI-18 o passo roda depois do npm test e anexa a saída ao $GITHUB_STEP_SUMMARY', () => {
+    expect(summaryAfterTests(ci)).toBe(true);
+    expect(appendsToStepSummary(summaryStep(ci))).toBe(true);
+  });
+
+  it('AI-18 o passo só roda no Node do .nvmrc (matrix.node == nvmrc)', () => {
+    expect(runsOnlyOnNvmrcNode(summaryStep(ci))).toBe(true);
+  });
+
+  it('AI-18 o passo roda também quando os testes falham (always() ou !cancelled())', () => {
+    expect(runsEvenWhenTestsFail(summaryStep(ci))).toBe(true);
+  });
+
+  it('AI-18 o criteria-report roda com node, e não por npm run (AI-05)', () => {
+    expect(runsNode(ci, REPORT_SCRIPT)).toBe(true);
+    expect(reportByNpmRun(ci)).toEqual([]);
   });
 });
 
