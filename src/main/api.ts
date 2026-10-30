@@ -5,7 +5,7 @@ import { installGracefulShutdown } from '../lifecycle.ts';
 import { createLogger } from '../logging.ts';
 import { createTelemetry } from '../telemetry.ts';
 
-const logger = createLogger({ service: 'api' });
+const logger = createLogger({ serviceName: 'casecellshop-api' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-api' });
 const pool = createPool(requireEnv('DATABASE_URL'), logger);
 const app = createApp({ pool, logger, telemetry });

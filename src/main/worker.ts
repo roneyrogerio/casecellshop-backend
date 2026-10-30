@@ -7,7 +7,7 @@ import { createLogger } from '../logging.ts';
 import { createTelemetry } from '../telemetry.ts';
 import { createWorker } from '../worker.ts';
 
-const logger = createLogger({ service: 'worker' });
+const logger = createLogger({ serviceName: 'casecellshop-worker' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-worker' });
 const databaseUrl = requireEnv('DATABASE_URL');
 // Pools separados (10 cada): a chamada ao ERP simulado não disputa conexão com a loja.

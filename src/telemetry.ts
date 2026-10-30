@@ -12,6 +12,7 @@ import {
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { resolveServiceIdentity } from './service-identity.ts';
 
 export interface TelemetryOptions {
   // Os testes passam o InMemorySpanExporter; sem ele e sem OTEL_TRACES_EXPORTER, não há exportação.
@@ -53,11 +54,11 @@ function defaultExporter(): SpanExporter | undefined {
 export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
   ensureContextManager();
 
+  const identity = resolveServiceIdentity(options.serviceName ?? 'casecellshop');
   const resource = resourceFromAttributes({
-    // OTEL_SERVICE_NAME vence, como no padrão do OpenTelemetry; o nome dos mains vale fora do compose.
-    'service.name': process.env['OTEL_SERVICE_NAME'] ?? options.serviceName ?? 'casecellshop',
-    'deployment.environment.name': process.env['DEPLOY_ENV'] ?? 'development',
-    'service.version': process.env['SERVICE_VERSION'] ?? '0.0.0',
+    'service.name': identity.service,
+    'deployment.environment.name': identity.env,
+    'service.version': identity.version,
   });
 
   const exporter = options.spanExporter ?? defaultExporter();
