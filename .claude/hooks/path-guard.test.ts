@@ -1,10 +1,53 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
+
+interface HookInput {
+  hook_event_name: string;
+  tool_name: string;
+  cwd: string;
+  agent_type?: string;
+  tool_input: Record<string, string>;
+}
+
+// O motivo da recusa, ou null quando a edição passa.
+let decide: (input: HookInput, projectRoot: string) => string | null;
+
+// Import dinâmico: o hook é .mjs sem tipos, e assim o teste falha com "módulo inexistente" enquanto ele não existe.
+beforeAll(async () => {
+  const module = (await import(pathToFileURL(hook).href)) as { decide: typeof decide };
+  decide = module.decide;
+});
+
+function editInput(agentType: string | undefined, filePath: string): HookInput {
+  return {
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Edit',
+    cwd: root,
+    ...(agentType ? { agent_type: agentType } : {}),
+    tool_input: { file_path: filePath },
+  };
+}
+
+// A decisão dentro do processo, com a tabela inteira de casos: cada processo Node custa cerca de 75 ms.
+function edit(agentType: string | undefined, filePath: string): string | null {
+  return decide(editInput(agentType, filePath), root);
+}
+
+function expectDenied(reason: string | null): void {
+  expect(reason).toEqual(expect.any(String));
+  expect(reason).not.toBe('');
+}
+
+function expectAllowed(reason: string | null): void {
+  expect(reason).toBeNull();
+}
 
 interface HookResult {
   code: number | null;
@@ -13,37 +56,34 @@ interface HookResult {
 }
 
 // Roda o hook como o Claude Code roda: JSON na entrada padrão e CLAUDE_PROJECT_DIR no ambiente.
-function runHook(rawInput: string): HookResult {
+// Só os testes de fiação usam isto; sem `projectDir`, o ambiente não leva CLAUDE_PROJECT_DIR.
+function runHook(rawInput: string, projectDir: string | undefined = root, cwd?: string): HookResult {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (projectDir === undefined) delete env.CLAUDE_PROJECT_DIR;
+  else env.CLAUDE_PROJECT_DIR = projectDir;
   const result = spawnSync(process.execPath, [hook], {
     input: rawInput,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+    env,
+    ...(cwd ? { cwd } : {}),
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-function edit(agentType: string | undefined, filePath: string): HookResult {
-  return runHook(
-    JSON.stringify({
-      hook_event_name: 'PreToolUse',
-      tool_name: 'Edit',
-      cwd: root,
-      ...(agentType ? { agent_type: agentType } : {}),
-      tool_input: { file_path: filePath },
-    }),
-  );
+interface Denial {
+  hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
 }
 
-function expectDenied(result: HookResult): void {
+function expectProcessDenied(result: HookResult): Denial {
   expect(result.code).toBe(0);
-  const output = JSON.parse(result.stdout) as {
-    hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
-  };
+  const output = JSON.parse(result.stdout) as Denial;
+  expect(output.hookSpecificOutput.hookEventName).toBe('PreToolUse');
   expect(output.hookSpecificOutput.permissionDecision).toBe('deny');
   expect(output.hookSpecificOutput.permissionDecisionReason).not.toBe('');
+  return output;
 }
 
-function expectAllowed(result: HookResult): void {
+function expectProcessAllowed(result: HookResult): void {
   expect(result.code).toBe(0);
   expect(result.stdout).toBe('');
 }
@@ -240,14 +280,15 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
 
   it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
     expectDenied(
-      runHook(
-        JSON.stringify({
+      decide(
+        {
           hook_event_name: 'PreToolUse',
           tool_name: 'Write',
           cwd: root,
           agent_type: 'implementer',
           tool_input: { file_path: join(root, path), content: 'x' },
-        }),
+        },
+        root,
       ),
     );
   });
@@ -292,14 +333,15 @@ describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a config
 
   it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
     expectDenied(
-      runHook(
-        JSON.stringify({
+      decide(
+        {
           hook_event_name: 'PreToolUse',
           tool_name: 'Write',
           cwd: root,
           agent_type: 'implementer',
           tool_input: { file_path: join(root, path), content: 'exit 0' },
-        }),
+        },
+        root,
       ),
     );
   });
@@ -323,17 +365,19 @@ describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a config
 
 // O github-guard confia no que está em .claude/reviews/ e em .claude/state/ (AI-15, AI-16): nenhuma sessão os edita,
 // a principal inclusive. O NotebookEdit traz o caminho em notebook_path; Edit e Write, em file_path.
-function writeTool(toolName: string, agentType: string | undefined, filePath: string): HookResult {
+function writeToolInput(toolName: string, agentType: string | undefined, filePath: string): HookInput {
   const key = toolName === 'NotebookEdit' ? 'notebook_path' : 'file_path';
-  return runHook(
-    JSON.stringify({
-      hook_event_name: 'PreToolUse',
-      tool_name: toolName,
-      cwd: root,
-      ...(agentType ? { agent_type: agentType } : {}),
-      tool_input: { [key]: filePath, content: 'x', new_source: 'x' },
-    }),
-  );
+  return {
+    hook_event_name: 'PreToolUse',
+    tool_name: toolName,
+    cwd: root,
+    ...(agentType ? { agent_type: agentType } : {}),
+    tool_input: { [key]: filePath, content: 'x', new_source: 'x' },
+  };
+}
+
+function writeTool(toolName: string, agentType: string | undefined, filePath: string): string | null {
+  return decide(writeToolInput(toolName, agentType, filePath), root);
 }
 
 const TRUSTED_FOLDERS = [
@@ -363,8 +407,7 @@ function trustedVariants(relative: string): [string, string][] {
 }
 
 describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .claude/state/', () => {
-  // Um caso por caminho, sessão e ferramenta: cada `it` roda só as grafias do caminho (cerca de 9 processos do hook),
-  // em vez de todas as combinações de uma vez, que estourava o limite de tempo do Vitest.
+  // Um caso por caminho, sessão e ferramenta; cada `it` confere todas as grafias do caminho.
   const denyCases: [string, string, string, string | undefined][] = TRUSTED_FOLDERS.flatMap((path) =>
     WRITERS.flatMap(([session, agentType]) =>
       EDIT_TOOLS.map((tool): [string, string, string, string | undefined] => [path, session, tool, agentType]),
@@ -419,7 +462,46 @@ describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .cl
   });
 });
 
-describe('FND-08 entrada ilegível e sessão principal', () => {
+describe('FND-08 sessão principal', () => {
+  it.each([
+    'src/contract/health.ts',
+    'src/x.test.ts',
+    'test/integration/checkout/foo.test.ts',
+    '.specs/features/casecellshop/spec.md',
+    'AGENTS.md',
+    'openapi.yaml',
+  ])('FND-08 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
+    expectAllowed(edit(undefined, join(root, path)));
+  });
+});
+
+// A fiação do hook como processo (stdin, stdout, código de saída, ambiente): poucos testes, porque cada
+// processo Node custa cerca de 75 ms; a tabela de casos fica na decisão, dentro do processo.
+describe('FND-08 o hook como processo', () => {
+  const foreignDirs: string[] = [];
+
+  afterAll(() => {
+    for (const dir of foreignDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function foreignDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'pg-'));
+    foreignDirs.push(dir);
+    return dir;
+  }
+
+  it('FND-08 a edição negada sai com código 0 e o JSON hookSpecificOutput com deny no stdout', () => {
+    const result = runHook(JSON.stringify(editInput('implementer', 'src/x.test.ts')));
+
+    const denial = expectProcessDenied(result);
+    expect(denial.hookSpecificOutput.permissionDecisionReason).toBe(edit('implementer', 'src/x.test.ts'));
+  });
+
+  it('FND-08 a edição permitida sai com código 0 e o stdout vazio', () => {
+    expectProcessAllowed(runHook(JSON.stringify(editInput('implementer', 'src/app.ts'))));
+  });
+
   it.each([
     ['texto que não é JSON', 'isto não é json'],
     ['entrada vazia', ''],
@@ -431,15 +513,41 @@ describe('FND-08 entrada ilegível e sessão principal', () => {
     expect(result.stderr).not.toBe('');
   });
 
+  it('FND-08 o CLAUDE_PROJECT_DIR vale mais que o cwd da entrada para achar a raiz do repositório', () => {
+    const elsewhere = foreignDir();
+    const inside = join(root, 'test', 'helpers', 'clock.ts');
+
+    // Com a raiz certa o caminho é de test/ e o test-writer pode; com o cwd como raiz, ele estaria fora do repositório.
+    expectProcessAllowed(runHook(JSON.stringify({ ...editInput('test-writer', inside), cwd: elsewhere })));
+    // E o contrário: com outra raiz no ambiente, o mesmo caminho cai fora do repositório mesmo com o cwd certo.
+    expectProcessDenied(runHook(JSON.stringify({ ...editInput('test-writer', inside), cwd: root }), elsewhere));
+  });
+
+  it('FND-08 sem CLAUDE_PROJECT_DIR no ambiente a raiz é o cwd da entrada', () => {
+    const inside = join(root, 'test', 'helpers', 'clock.ts');
+
+    expectProcessAllowed(runHook(JSON.stringify(editInput('test-writer', inside)), undefined));
+    expectProcessDenied(runHook(JSON.stringify(editInput('test-writer', join(root, 'src', 'app.ts'))), undefined));
+  });
+
+  it('FND-08 o NotebookEdit traz o caminho em notebook_path e a guarda o confere como processo', () => {
+    expectProcessDenied(runHook(JSON.stringify(writeToolInput('NotebookEdit', 'implementer', 'src/x.test.ts'))));
+    expectProcessAllowed(runHook(JSON.stringify(writeToolInput('NotebookEdit', 'implementer', 'src/app.ts'))));
+  });
+
+  // Diferencial: o processo e a função exportada dão o mesmo resultado, um caso negado e um permitido por papel.
   it.each([
-    'src/contract/health.ts',
-    'src/x.test.ts',
-    'test/integration/checkout/foo.test.ts',
-    '.specs/features/casecellshop/spec.md',
-    'AGENTS.md',
-    'openapi.yaml',
-  ])('FND-08 a sessão principal, sem agent_type, pode editar %s', (path) => {
-    expectAllowed(edit(undefined, path));
-    expectAllowed(edit(undefined, join(root, path)));
+    ['a sessão principal', undefined, '.claude/reviews/x.md', 'src/app.ts'],
+    ['o implementer', 'implementer', '.oxlintrc.json', 'src/app.ts'],
+    ['o test-writer', 'test-writer', 'src/app.ts', 'src/x.test.ts'],
+    ['o reviewer', 'reviewer', '.claude/state/stop-exceptions.log', 'src/app.ts'],
+  ])('FND-08 o processo e decide() dão o mesmo resultado para %s', (_session, agentType, denied, allowed) => {
+    const viaProcess = runHook(JSON.stringify(editInput(agentType, denied)));
+    const reason = edit(agentType, denied);
+    expectDenied(reason);
+    expect(expectProcessDenied(viaProcess).hookSpecificOutput.permissionDecisionReason).toBe(reason);
+
+    expectAllowed(edit(agentType, allowed));
+    expectProcessAllowed(runHook(JSON.stringify(editInput(agentType, allowed))));
   });
 });
