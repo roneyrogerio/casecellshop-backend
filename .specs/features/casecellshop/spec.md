@@ -65,7 +65,7 @@ Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de 
 - **CHK-06** Um `expectedUnitPrice` diferente do banco recebe `409` com o preço atual, e nada é reservado.
 - **CHK-07** Dois pedidos com os SKUs {A, B} e {B, A}, em paralelo e em laço, terminam sem deadlock.
 - **CHK-08** Um `lock_timeout` na linha de estoque vira `503`; no passo da chave, `409`.
-- **CHK-09** O `202` traz `Location`, `Retry-After` e `X-Request-Id`, inclusive na repetição com a mesma chave.
+- **CHK-09** O `202` traz no corpo o `orderId`, o `status` (`pending` no primeiro envio; o atual na repetição) e o total em centavos, validados pelo schema do contrato, e os cabeçalhos `Location`, `Retry-After` e `X-Request-Id`, inclusive na repetição com a mesma chave.
 - **CHK-10** `400` sem chave, com SKU repetido ou entrada inválida; `413`, `415`; `422` para a mesma chave com outro corpo ou SKU inexistente; cada causa com o seu `type`.
 - **CHK-11** O status do pedido é `pending`, `invoiced` ou `failed` com o motivo; um `orderId` inexistente recebe `404`.
 - **CHK-12** O trace sai da requisição e chega à linha da outbox.
@@ -120,12 +120,14 @@ Com relógio controlado:
 
 ## Design conceitual
 
+- **DOC-IDX-01** O README e o topo do `ARCHITECTURE.md` trazem um índice das cinco perguntas do desafio, cada uma com a seção e os critérios `DOC-*` que a respondem, para quem avalia chegar a cada resposta sem procurar (M6).
+
 Cada seção do `ARCHITECTURE.md` abre pela decisão, cobre os pontos abaixo, usa os mesmos nomes e números do código e diz, em cada afirmação, se ela está implementada (com arquivo e teste) ou se é proposta da arquitetura alvo.
 
 - **Diagnóstico e arquitetura alvo** (rascunho no M1, final no M6):
   - **DOC-DIA-01** causa raiz de cada problema;
   - **DOC-DIA-02** impacto para o cliente, o negócio e a operação;
-  - **DOC-DIA-03** 2 ou 3 caminhos por problema, comparados em custo, complexidade, latência, consistência e esforço operacional;
+  - **DOC-DIA-03** 2 ou 3 caminhos por problema, comparados em custo, complexidade, latência, consistência e esforço operacional; no Problema 1, a leitura direta do MySQL do ERP, que o enunciado permite (só leitura), entra na comparação, mesmo que descartada, com o motivo;
   - **DOC-DIA-04** arquitetura de 30 a 90 dias, com o que entra em cada fase, citando cache, fila, banco próprio da loja, workers, sincronização, observabilidade e reconciliação com o ERP;
   - **DOC-DIA-05** a nuvem como hipótese de evolução do datacenter atual: cada componente com o serviço gerenciado correspondente, justificado pelo esforço operacional que tira; o ERP no datacenter e a conexão híbrida (VPN ou link dedicado) como fonte de latência e de falha;
   - **DOC-DIA-06** um diagrama simples da arquitetura alvo (Mermaid).

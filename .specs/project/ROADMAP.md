@@ -115,6 +115,8 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de diagnóstico e arquitetura alvo, versão final (`DOC-DIA`), e a revisão do `ARCHITECTURE.md` pelos critérios `DOC-*` e contra o código.
 - README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese de que depende e o teste que a prova; decisões em uma linha, com link para as ADRs; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com o link para o `PROMPTS.md`, que aponta as instruções versionadas dos agentes como os prompts relevantes.
+- Índice das cinco perguntas no README e no topo do `ARCHITECTURE.md` (`DOC-IDX-01`).
+- O texto de resposta às cinco perguntas, entregue fora do repositório, com o link do repositório público no fim, como o desafio pede.
 - `/security-review` final.
 - Verificação: repositório público; clone limpo pela URL pública, sem credenciais; compose, testes e CI verde.
 
