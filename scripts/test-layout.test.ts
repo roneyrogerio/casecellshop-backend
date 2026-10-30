@@ -1,9 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import config from '../vitest.config.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const fixturesDir = path.join(root, 'test', 'fixtures');
@@ -52,55 +51,50 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   }, 60_000);
 });
 
-interface ProjectTest {
-  name?: string;
-  include?: string[];
-  exclude?: string[];
+// A lista vem do próprio Vitest, e não de uma reimplementação do casamento de padrões:
+// um include ou exclude errado só aparece comparando com o que ele de fato descobre.
+function vitestFiles(project: string): string[] {
+  const result = spawnSync('npx', ['vitest', 'list', '--project', project, '--filesOnly'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  expect(result.status).toBe(0);
+  return result.stdout
+    .split('\n')
+    .map((line) => line.replace(/^\[[^\]]+\]\s*/, '').trim())
+    .filter((line) => line !== '')
+    .sort();
 }
 
-function findProject(name: string): ProjectTest {
-  const projects = (config as { test?: { projects?: unknown[] } }).test?.projects ?? [];
-  for (const project of projects) {
-    const test = (project as { test?: ProjectTest }).test;
-    if (test?.name === name) return test;
-  }
-  throw new Error(`projeto ${name} não encontrado no vitest.config.ts`);
-}
-
-// Casa um arquivo como o Vitest decide: algum `include` e nenhum `exclude`.
-function matches(project: ProjectTest, file: string): boolean {
-  const included = (project.include ?? []).some((pattern) => path.matchesGlob(file, pattern));
-  const excluded = (project.exclude ?? []).some((pattern) => path.matchesGlob(file, pattern));
-  return included && !excluded;
+// Arquivos novos ainda sem commit também contam (--others), e o que foi apagado do disco não.
+function testFilesInRepo(): string[] {
+  const result = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '*.test.ts'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  expect(result.status).toBe(0);
+  return result.stdout
+    .split('\n')
+    .filter((line) => line !== '' && existsSync(path.join(root, line)))
+    .sort();
 }
 
 describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', () => {
-  it.each([
-    'src/a/b.test.ts',
-    'scripts/x.test.ts',
-    '.claude/hooks/y.test.ts',
-    '.claude/z.test.ts',
-    'qualquer/pasta/w.test.ts',
-  ])('AI-02 o projeto unit casa %s', (file) => {
-    expect(matches(findProject('unit'), file)).toBe(true);
-  });
+  const all = testFilesInRepo();
+  const outsideIntegration = all.filter((file) => !file.startsWith('test/integration/'));
 
-  it('AI-02 o projeto unit não casa um teste de test/integration/', () => {
-    expect(matches(findProject('unit'), 'test/integration/checkout/k.test.ts')).toBe(false);
-  });
+  it('AI-02 o projeto unit lista exatamente os *.test.ts do repositório fora de test/integration/', () => {
+    expect(vitestFiles('unit')).toEqual(outsideIntegration);
+  }, 60_000);
 
-  it('AI-02 o projeto unit não casa um arquivo que não é *.test.ts', () => {
-    expect(matches(findProject('unit'), 'src/a/b.ts')).toBe(false);
-  });
+  it('AI-02 o projeto integration lista exatamente os *.test.ts de test/integration/', () => {
+    expect(vitestFiles('integration')).toEqual(all.filter((file) => file.startsWith('test/integration/')));
+  }, 60_000);
 
-  it('AI-02 o projeto integration casa test/integration/**', () => {
-    expect(matches(findProject('integration'), 'test/integration/checkout/k.test.ts')).toBe(true);
-  });
-
-  it.each(['src/a/b.test.ts', 'scripts/x.test.ts', '.claude/hooks/y.test.ts', 'qualquer/pasta/w.test.ts'])(
-    'AI-02 o projeto integration não casa %s',
-    (file) => {
-      expect(matches(findProject('integration'), file)).toBe(false);
-    },
-  );
+  it('AI-02 controle: a conferência enxerga os testes de .claude/, de scripts/ e de test/integration/', () => {
+    expect(outsideIntegration).toContain('.claude/hooks/path-guard.test.ts');
+    expect(outsideIntegration).toContain('scripts/test-layout.test.ts');
+    expect(all.some((file) => file.startsWith('test/integration/'))).toBe(true);
+    expect(vitestFiles('unit')).not.toContain('test/integration/foundation/compose.test.ts');
+  }, 60_000);
 });

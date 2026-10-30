@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -12,6 +15,7 @@ interface Facts {
   credentialHelperIsBot: boolean;
   botLogin: string | null;
   mcpRegistered: boolean;
+  commitHookInstalled: boolean;
 }
 
 interface Diagnosis {
@@ -47,6 +51,7 @@ const LOCAL_OK: Facts = {
   credentialHelperIsBot: true,
   botLogin: 'honeyforge-bot',
   mcpRegistered: true,
+  commitHookInstalled: true,
 };
 
 const REMOTE_OK: Facts = {
@@ -54,6 +59,7 @@ const REMOTE_OK: Facts = {
   remote: true,
   credentialHelperIsBot: false,
   mcpRegistered: false,
+  commitHookInstalled: false,
 };
 
 function failures(facts: Facts): Diagnosis[] {
@@ -105,6 +111,18 @@ describe('AI-09 diagnóstico do ambiente, local', () => {
     expect(found.some((entry) => (entry.fix ?? '').includes('npm run setup:local'))).toBe(true);
   });
 
+  it('AI-09 hook commit-msg não instalado falha e a correção cita npm run setup:local', () => {
+    const found = failures({ ...LOCAL_OK, commitHookInstalled: false });
+
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.every((entry) => (entry.fix ?? '') !== '')).toBe(true);
+    expect(found.some((entry) => (entry.fix ?? '').includes('npm run setup:local'))).toBe(true);
+  });
+
+  it('AI-09 hook commit-msg instalado não gera falha (controle)', () => {
+    expect(failures({ ...LOCAL_OK, commitHookInstalled: true })).toEqual([]);
+  });
+
   it('AI-09 cada falha corrige só o que está errado: dois defeitos geram mais falhas que um', () => {
     const one = failures({ ...LOCAL_OK, dockerRunning: false });
     const two = failures({
@@ -131,6 +149,13 @@ describe('AI-09 diagnóstico do ambiente, na nuvem', () => {
     });
 
     expect(found).toEqual([]);
+  });
+
+  it('AI-09 na nuvem o hook commit-msg não instalado não entra no diagnóstico', () => {
+    expect(failures({ ...REMOTE_OK, commitHookInstalled: false })).toEqual([]);
+    expect(diagnose({ ...REMOTE_OK, commitHookInstalled: false }).some((entry) => /commit-msg|commitlint/i.test(entry.item))).toBe(
+      false,
+    );
   });
 
   it('AI-09 na nuvem a falha do login do bot cita /web-setup', () => {
@@ -166,4 +191,41 @@ describe('AI-09 configuração da credencial do git pelo hook', () => {
   it('AI-09 na máquina, sem helper e sem token, só explica (guardar o token é de uma pessoa)', () => {
     expect(planGitSetup({ remote: false, tokenPresent: false, credentialHelperIsBot: false })).toBe('explain');
   });
+});
+
+describe('AI-09 o hook commit-msg versionado em .githooks/', () => {
+  const hookPath = join(import.meta.dirname, '..', '.githooks', 'commit-msg');
+
+  it('AI-09 .githooks/commit-msg existe e é executável', () => {
+    expect(statSync(hookPath).isFile()).toBe(true);
+    expect(() => {
+      accessSync(hookPath, constants.X_OK);
+    }).not.toThrow();
+    expect(statSync(hookPath).mode & 0o111).not.toBe(0);
+  });
+
+  it('AI-09 .githooks/commit-msg roda o commitlint com --edit sobre o arquivo da mensagem', () => {
+    const content = readFileSync(hookPath, 'utf8');
+
+    expect(content.startsWith('#!')).toBe(true);
+    expect(content).toMatch(/commitlint[^\n]*--edit/);
+  });
+
+  // Controle negativo: o hook de verdade recusa uma mensagem fora do padrão e aceita uma no padrão.
+  it('AI-09 .githooks/commit-msg recusa mensagem fora do padrão e aceita a convencional', () => {
+    const root = join(import.meta.dirname, '..');
+    const dir = mkdtempSync(join(tmpdir(), 'commit-msg-'));
+    const run = (message: string) => {
+      const file = join(dir, 'COMMIT_EDITMSG');
+      writeFileSync(file, `${message}\n`);
+      return spawnSync(hookPath, [file], { cwd: root, encoding: 'utf8' }).status;
+    };
+
+    try {
+      expect(run('mensagem qualquer sem tipo')).not.toBe(0);
+      expect(run('docs(specs): ajusta o texto do critério')).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

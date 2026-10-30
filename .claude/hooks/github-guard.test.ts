@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -92,17 +93,76 @@ describe('AI-08 github-guard: comentário de revisão', () => {
     expect(check(comment(`   ${REPORT}x`), deps(REPORT)).allow).toBe(false);
   });
 
-  it('AI-08 comentário comum passa, mesmo sem relatório salvo', () => {
-    expect(check(comment('Corrigido no commit abc123.'), deps()).allow).toBe(true);
+  it('AI-08 comentário comum é recusado, com motivo, mesmo sem relatório salvo', () => {
+    const verdict = check(comment('Corrigido no commit abc123.'), deps());
+
+    expect(verdict.allow).toBe(false);
+    expect(verdict.reason).toBeTruthy();
   });
 
-  it('AI-08 comentário que só cita "## Revisão" no meio do texto passa', () => {
-    expect(check(comment('Veja a seção ## Revisão abaixo.'), deps()).allow).toBe(true);
+  it('AI-08 comentário comum é recusado também quando há relatórios salvos', () => {
+    expect(check(comment('Corrigido no commit abc123.'), deps(REPORT)).allow).toBe(false);
+  });
+
+  it('AI-08 comentário que só cita "## Revisão" no meio do texto é recusado', () => {
+    expect(check(comment('Veja a seção ## Revisão abaixo.'), deps(REPORT)).allow).toBe(false);
+  });
+
+  it.each([undefined, null, '', '   \n', 42])('AI-08 comentário com corpo %j é recusado', (body) => {
+    expect(check(comment(body), deps(REPORT)).allow).toBe(false);
+  });
+
+  it('AI-08 comentário com o relatório mais uma quebra de linha no fim é recusado (só o espaço inicial é ignorado)', () => {
+    expect(check(comment(`${REPORT}\n`), deps(REPORT)).allow).toBe(false);
+  });
+
+  it('AI-08 comentário que é só um trecho do relatório salvo é recusado', () => {
+    expect(check(comment('## Revisão'), deps(REPORT)).allow).toBe(false);
+  });
+
+  // Controle negativo: a regra é a identidade com o arquivo, e não o título "## Revisão".
+  it('AI-08 permite o comentário idêntico a um relatório salvo que não começa com "## Revisão"', () => {
+    expect(check(comment('Relatório sem o título padrão.\n'), deps('Relatório sem o título padrão.\n')).allow).toBe(true);
   });
 });
 
 describe('AI-08 github-guard: outras ferramentas', () => {
   it.each(['mcp__github__get_me', 'mcp__github__update_pull_request', 'Bash', 'Read'])('AI-08 %s passa', (toolName) => {
     expect(check({ tool_name: toolName, tool_input: { draft: false, body: REPORT } }, deps()).allow).toBe(true);
+  });
+});
+
+describe('AI-08 github-guard como processo', () => {
+  const hook = join(import.meta.dirname, 'github-guard.mjs');
+
+  function run(raw: string) {
+    const result = spawnSync(process.execPath, [hook], {
+      input: raw,
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..') },
+    });
+    return { code: result.status, stderr: result.stderr };
+  }
+
+  it.each([
+    ['texto que não é JSON', 'isto não é json'],
+    ['entrada vazia', ''],
+    ['JSON truncado', '{"tool_name": "mcp__github__add_issue_comment", "tool_input": {'],
+  ])('AI-08 entrada ilegível recusa com código 2 (%s)', (_label, raw) => {
+    const result = run(raw);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).not.toBe('');
+  });
+
+  it('AI-08 controle: JSON legível de uma ferramenta sem relação sai com código 0', () => {
+    expect(run(JSON.stringify({ tool_name: 'mcp__github__get_me', tool_input: {} })).code).toBe(0);
+  });
+
+  it('AI-08 controle: criar PR em rascunho sai com código 0 e fora de rascunho sai com 2', () => {
+    const tool = 'mcp__github__create_pull_request';
+
+    expect(run(JSON.stringify({ tool_name: tool, tool_input: { draft: true } })).code).toBe(0);
+    expect(run(JSON.stringify({ tool_name: tool, tool_input: { draft: false } })).code).toBe(2);
   });
 });

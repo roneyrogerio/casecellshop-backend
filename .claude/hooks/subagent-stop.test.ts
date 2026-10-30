@@ -1,6 +1,9 @@
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 interface CheckResult {
   ok: boolean;
@@ -11,6 +14,8 @@ interface Deps {
   runCheck(name: string): Promise<CheckResult>;
   readCount(key: string): number;
   writeCount(key: string, n: number): void;
+  changedFiles(): string[];
+  scriptsChanged(): boolean;
 }
 
 interface StopInput {
@@ -35,7 +40,12 @@ beforeAll(async () => {
 });
 
 // Dublê das dependências: `failing` mapeia o nome da checagem à saída que ela imprime ao falhar.
-function makeDeps(failing: Record<string, string> = {}, counts: Record<string, number> = {}) {
+// `changed` são os caminhos que o `git status --porcelain` mostraria; `scriptsChanged` diz se o bloco `scripts` do package.json mudou.
+function makeDeps(
+  failing: Record<string, string> = {},
+  counts: Record<string, number> = {},
+  git: { changed?: string[]; scriptsChanged?: boolean } = {},
+) {
   const ran: string[] = [];
   const reads: string[] = [];
   const writes: [string, number][] = [];
@@ -53,6 +63,8 @@ function makeDeps(failing: Record<string, string> = {}, counts: Record<string, n
       writes.push([key, n]);
       counts[key] = n;
     },
+    changedFiles: () => git.changed ?? [],
+    scriptsChanged: () => git.scriptsChanged ?? false,
   };
   return { deps, ran, reads, writes, counts };
 }
@@ -243,5 +255,433 @@ describe('AI-03 hook de parada devolve o agente ao trabalho enquanto a verifica�
 
     expect(decision.action).toBe('allow');
     expect(ran).toHaveLength(3);
+  });
+});
+
+const IMPLEMENTER_FORBIDDEN_CHANGES = [
+  'src/checkout/reserve.test.ts',
+  'scripts/check-env.test.ts',
+  'test/integration/checkout/foo.test.ts',
+  'test/helpers/clock.ts',
+  'test/fixtures/dados.json',
+  '.github/workflows/ci.yml',
+  'scripts/check-env.ts',
+  '.claude/settings.json',
+  '.specs/features/casecellshop/spec.md',
+  'src/contract/health.ts',
+  'openapi.yaml',
+  'tsconfig.json',
+  'src/tsconfig.json',
+  '.oxlintrc.json',
+  'vitest.config.ts',
+  'commitlint.config.mjs',
+  '.npmrc',
+  '.gitignore',
+  '.mcp.json',
+  'CLAUDE.md',
+  'src/x/AGENTS.md',
+];
+
+describe('AI-03 o implementer é devolvido quando o git status mostra arquivo fora do papel dele', () => {
+  it.each(IMPLEMENTER_FORBIDDEN_CHANGES)(
+    'AI-03 o implementer com %s alterado é devolvido, com o caminho na mensagem, mesmo com as checagens ok',
+    async (file) => {
+      const { deps, writes } = makeDeps({}, {}, { changed: ['src/checkout/reserve.ts', file] });
+
+      const decision = await decide(stop('implementer'), deps);
+
+      expect(decision.action).toBe('block');
+      expect(decision.message).toContain(file);
+      expect(writes).toContainEqual([KEY, 1]);
+    },
+  );
+
+  // Controle negativo: o que o implementer pode escrever não o devolve.
+  it('AI-03 o implementer que só alterou src/, migrations/ e package.json é liberado', async () => {
+    const { deps, writes } = makeDeps(
+      {},
+      { [KEY]: 2 },
+      { changed: ['src/checkout/reserve.ts', 'migrations/store/001_x.sql', 'package.json'] },
+    );
+
+    const decision = await decide(stop('implementer'), deps);
+
+    expect(decision.action).toBe('allow');
+    expect(writes).toContainEqual([KEY, 0]);
+  });
+
+  it('AI-03 o implementer sem arquivo alterado é liberado', async () => {
+    const { deps } = makeDeps({}, {}, { changed: [] });
+
+    expect((await decide(stop('implementer'), deps)).action).toBe('allow');
+  });
+
+  it('AI-03 a devolução por arquivo fora do papel conta no mesmo contador, com teto de 3', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/a.test.ts'] });
+
+    const actions: string[] = [];
+    for (let stops = 0; stops < 4; stops += 1) actions.push((await decide(stop('implementer'), deps)).action);
+
+    expect(actions).toEqual(['block', 'block', 'block', 'exception']);
+  });
+
+  it('AI-03 a devolução por arquivo fora do papel soma com a de lint no mesmo contador', async () => {
+    const failing: Record<string, string> = { lint: 'erro' };
+    const { deps, counts } = makeDeps(failing, {}, { changed: ['src/a.test.ts'] });
+
+    await decide(stop('implementer'), deps);
+    expect(counts[KEY]).toBe(1);
+    delete failing.lint;
+    await decide(stop('implementer'), deps);
+    expect(counts[KEY]).toBe(2);
+  });
+
+  it('AI-03 a mensagem cita o lint e o arquivo fora do papel quando os dois acontecem', async () => {
+    const { deps } = makeDeps({ lint: 'src/x.ts: no-unused-vars' }, {}, { changed: ['test/helpers/clock.ts'] });
+
+    const decision = await decide(stop('implementer'), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('src/x.ts: no-unused-vars');
+    expect(decision.message).toContain('test/helpers/clock.ts');
+  });
+
+  it('AI-03 depois do teto, o arquivo fora do papel vira exceção e aparece na mensagem', async () => {
+    const { deps } = makeDeps({}, { [KEY]: 3 }, { changed: ['test/helpers/clock.ts'] });
+
+    const decision = await decide(stop('implementer'), deps);
+
+    expect(decision.action).toBe('exception');
+    expect(decision.message).toContain('test/helpers/clock.ts');
+  });
+
+  it('AI-03 outros agentes não são devolvidos por arquivo alterado', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/a.test.ts', '.github/workflows/ci.yml'], scriptsChanged: true });
+
+    expect((await decide(stop('reviewer'), deps)).action).toBe('allow');
+    expect((await decide(stop('general-purpose'), deps)).action).toBe('allow');
+    expect((await decide(stop(undefined), deps)).action).toBe('allow');
+  });
+});
+
+describe('AI-03 o implementer é devolvido quando muda o bloco scripts do package.json', () => {
+  it('AI-03 com o bloco scripts alterado é devolvido, com a menção a scripts, mesmo com as checagens ok', async () => {
+    const { deps, writes } = makeDeps({}, {}, { changed: ['package.json'], scriptsChanged: true });
+
+    const decision = await decide(stop('implementer'), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('scripts');
+    expect(writes).toContainEqual([KEY, 1]);
+  });
+
+  it('AI-03 com package.json alterado mas o bloco scripts igual (outra dependência) é liberado', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['package.json'], scriptsChanged: false });
+
+    expect((await decide(stop('implementer'), deps)).action).toBe('allow');
+  });
+
+  it('AI-03 a devolução por scripts respeita o teto de 3', async () => {
+    const { deps } = makeDeps({}, {}, { scriptsChanged: true });
+
+    const actions: string[] = [];
+    for (let stops = 0; stops < 4; stops += 1) actions.push((await decide(stop('implementer'), deps)).action);
+
+    expect(actions).toEqual(['block', 'block', 'block', 'exception']);
+  });
+});
+
+describe('AI-03 o test-writer é devolvido quando altera arquivo fora dos testes', () => {
+  it.each(['src/app.ts', 'src/contract/health.ts', 'package.json', '.specs/features/casecellshop/spec.md', 'openapi.yaml'])(
+    'AI-03 o test-writer com %s alterado é devolvido, com o caminho na mensagem',
+    async (file) => {
+      const { deps, writes } = makeDeps({}, {}, { changed: ['src/x.test.ts', file] });
+
+      const decision = await decide(stop('test-writer'), deps);
+
+      expect(decision.action).toBe('block');
+      expect(decision.message).toContain(file);
+      expect(writes).toContainEqual([KEY, 1]);
+    },
+  );
+
+  it('AI-03 o test-writer que só alterou *.test.ts e test/ é liberado', async () => {
+    const { deps } = makeDeps(
+      {},
+      {},
+      {
+        changed: [
+          'src/checkout/reserve.test.ts',
+          'scripts/x.test.ts',
+          '.claude/hooks/y.test.ts',
+          'test/integration/checkout/a.test.ts',
+          'test/helpers/clock.ts',
+          'test/fixtures/dados.json',
+        ],
+      },
+    );
+
+    expect((await decide(stop('test-writer'), deps)).action).toBe('allow');
+  });
+
+  it('AI-03 a devolução do test-writer por arquivo fora dos testes respeita o teto de 3', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/app.ts'] });
+
+    const actions: string[] = [];
+    for (let stops = 0; stops < 4; stops += 1) actions.push((await decide(stop('test-writer'), deps)).action);
+
+    expect(actions).toEqual(['block', 'block', 'block', 'exception']);
+  });
+
+  it('AI-03 o test-writer não é devolvido por scripts alterados quando o único arquivo é de teste', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/x.test.ts'], scriptsChanged: false });
+
+    expect((await decide(stop('test-writer'), deps)).action).toBe('allow');
+  });
+});
+
+// Processo de verdade: o hook é um script, e o que o Claude Code vê é o código de saída, o stderr e os arquivos.
+const hookFile = join(import.meta.dirname, 'subagent-stop.mjs');
+
+interface Sandbox {
+  project: string;
+  bin: string;
+  tmp: string;
+}
+
+const sandboxes: string[] = [];
+
+afterEach(() => {
+  for (const dir of sandboxes.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+// Um `npm` falso no PATH: sai com o código dado e imprime a frase dada.
+function makeSandbox(npm: { exit: number; print: string }): Sandbox {
+  const base = mkdtempSync(join(tmpdir(), 'ai03-'));
+  sandboxes.push(base);
+  const bin = join(base, 'bin');
+  const project = join(base, 'project');
+  const tmp = join(base, 'tmp');
+  for (const dir of [bin, project, tmp]) mkdirSync(dir, { recursive: true });
+  const fake = join(bin, 'npm');
+  writeFileSync(fake, `#!/bin/sh\necho "${npm.print}"\nexit ${npm.exit}\n`);
+  chmodSync(fake, 0o755);
+  return { project, bin, tmp };
+}
+
+function runHook(sandbox: Sandbox, input: unknown, raw?: string) {
+  const result = spawnSync(process.execPath, [hookFile], {
+    input: raw ?? JSON.stringify(input),
+    encoding: 'utf8',
+    cwd: sandbox.project,
+    env: {
+      ...process.env,
+      PATH: `${sandbox.bin}:${process.env.PATH ?? ''}`,
+      // O contador de devoluções fica em os.tmpdir(): isolado, para uma execução não afetar a outra.
+      TMPDIR: sandbox.tmp,
+      CLAUDE_PROJECT_DIR: sandbox.project,
+    },
+  });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function git(sandbox: Sandbox, ...args: string[]): void {
+  const result = spawnSync(
+    'git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args],
+    { cwd: sandbox.project, encoding: 'utf8' },
+  );
+  expect(result.status, result.stderr).toBe(0);
+}
+
+function writeIn(sandbox: Sandbox, relative: string, content: string): void {
+  const file = join(sandbox.project, relative);
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, content);
+}
+
+const IMPLEMENTER_STOP = { agent_type: 'implementer', agent_id: 'a1', session_id: 's1' };
+
+// Repositório com um commit inicial que já tem src/ e test/ e um package.json com scripts.
+function makeRepo(sandbox: Sandbox): void {
+  git(sandbox, 'init', '-q');
+  writeIn(sandbox, 'package.json', JSON.stringify({ name: 'x', scripts: { lint: 'oxlint' }, dependencies: {} }, null, 2));
+  writeIn(sandbox, 'src/app.ts', 'export {};\n');
+  writeIn(sandbox, 'test/helpers/clock.ts', 'export {};\n');
+  git(sandbox, 'add', '-A');
+  git(sandbox, 'commit', '-q', '-m', 'base');
+}
+
+describe('AI-03 o hook de parada como processo', () => {
+  it('AI-03 o implementer com o npm falhando sai com código 2 e o stderr traz a saída da falha', () => {
+    const sandbox = makeSandbox({ exit: 1, print: 'LINT FALHOU' });
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('LINT FALHOU');
+  });
+
+  it('AI-03 o implementer com o npm passando e fora de um repositório git sai com código 0', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  it('AI-03 o implementer com o npm passando e só src/ alterado num repositório git sai com código 0', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
+
+    expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
+  });
+
+  it('AI-03 o implementer que alterou um teste rastreado sai com código 2 e o stderr cita o caminho, com o npm passando', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'test/helpers/clock.ts', 'export const a = 1;\n');
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('test/helpers/clock.ts');
+  });
+
+  it('AI-03 o implementer que criou um teste novo numa pasta que já existe sai com código 2', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'src/novo.test.ts', 'export {};\n');
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('src/novo.test.ts');
+  });
+
+  // O git status esconde os arquivos de uma pasta nova atrás do nome da pasta, a menos que liste todos.
+  it('AI-03 o implementer que criou um teste dentro de uma pasta nova sai com código 2 e o stderr cita o arquivo', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'test/integration/checkout/novo.test.ts', 'export {};\n');
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('test/integration/checkout/novo.test.ts');
+  });
+
+  it('AI-03 o implementer que mudou o bloco scripts do package.json sai com código 2', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'package.json', JSON.stringify({ name: 'x', scripts: { lint: 'true' }, dependencies: {} }, null, 2));
+
+    const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('scripts');
+  });
+
+  it('AI-03 o implementer que mudou só as dependências do package.json sai com código 0', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(
+      sandbox,
+      'package.json',
+      JSON.stringify({ name: 'x', scripts: { lint: 'oxlint' }, dependencies: { zod: '4.6.7' } }, null, 2),
+    );
+
+    expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
+  });
+
+  it('AI-03 o test-writer que alterou código de produção sai com código 2 e o stderr cita o caminho', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'src/app.ts', 'export const a = 1;\n');
+
+    const result = runHook(sandbox, { agent_type: 'test-writer', agent_id: 'a1', session_id: 's1' });
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('src/app.ts');
+  });
+
+  it('AI-03 o test-writer que só alterou testes sai com código 0', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    writeIn(sandbox, 'test/helpers/clock.ts', 'export const a = 1;\n');
+    writeIn(sandbox, 'src/app.test.ts', 'export {};\n');
+
+    expect(runHook(sandbox, { agent_type: 'test-writer', agent_id: 'a1', session_id: 's1' }).code).toBe(0);
+  });
+});
+
+describe('AI-03 o hook de parada grava o relatório do reviewer', () => {
+  const REPORT = '## Revisão 2\ntexto';
+
+  it('AI-03 ao fim do reviewer, grava .claude/reviews/<agent_id>.md com exatamente a mensagem final e sai com 0', () => {
+    const sandbox = makeSandbox({ exit: 1, print: 'não devia rodar' });
+
+    const result = runHook(sandbox, {
+      agent_type: 'reviewer',
+      agent_id: 'r1',
+      session_id: 's1',
+      last_assistant_message: REPORT,
+    });
+
+    expect(result.code).toBe(0);
+    expect(readFileSync(join(sandbox.project, '.claude', 'reviews', 'r1.md'), 'utf8')).toBe(REPORT);
+  });
+
+  it('AI-03 a mensagem do reviewer é gravada sem alteração, com acentos, linhas em branco e quebra final', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    const exact = '## Revisão 3\n\n- achado: não corrigido (rodada 2)\n\n```ts\nconst a = `x`;\n```\n';
+
+    runHook(sandbox, { agent_type: 'reviewer', agent_id: 'r9', session_id: 's1', last_assistant_message: exact });
+
+    expect(readFileSync(join(sandbox.project, '.claude', 'reviews', 'r9.md'), 'utf8')).toBe(exact);
+  });
+
+  it('AI-03 um agent_id com barras não escreve fora de .claude/reviews/', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    const result = runHook(sandbox, {
+      agent_type: 'reviewer',
+      agent_id: '../../evil',
+      session_id: 's1',
+      last_assistant_message: REPORT,
+    });
+
+    expect(result.code).toBe(0);
+    expect(existsSync(join(sandbox.project, 'evil.md'))).toBe(false);
+    expect(existsSync(join(sandbox.project, '..', 'evil.md'))).toBe(false);
+    const saved = readdirSync(join(sandbox.project, '.claude', 'reviews'));
+    expect(saved).toHaveLength(1);
+    expect(readFileSync(join(sandbox.project, '.claude', 'reviews', saved[0] ?? ''), 'utf8')).toBe(REPORT);
+  });
+
+  it('AI-03 controle: o implementer, o test-writer e o agente sem tipo não gravam relatório', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    for (const agentType of ['implementer', 'test-writer', undefined]) {
+      runHook(sandbox, {
+        ...(agentType ? { agent_type: agentType } : {}),
+        agent_id: 'x1',
+        session_id: 's1',
+        last_assistant_message: REPORT,
+      });
+    }
+
+    expect(existsSync(join(sandbox.project, '.claude', 'reviews'))).toBe(false);
+  });
+
+  it('AI-03 o reviewer sem last_assistant_message sai com 0 e não grava arquivo', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    const result = runHook(sandbox, { agent_type: 'reviewer', agent_id: 'r2', session_id: 's1' });
+
+    expect(result.code).toBe(0);
+    expect(existsSync(join(sandbox.project, '.claude', 'reviews', 'r2.md'))).toBe(false);
   });
 });

@@ -60,6 +60,12 @@ describe('AI-06 permissões do .claude/settings.json', () => {
     'Bash(git push --force*)',
     'Bash(git push -f*)',
     'Bash(git push --delete*)',
+    'Bash(git commit *--no-verify*)',
+    'Bash(git commit * -n*)',
+    'Bash(git push *--force*)',
+    'Bash(git push * +*)',
+    'Bash(git push * :*)',
+    'Bash(git push *--mirror*)',
     'mcp__github__merge_pull_request',
     'mcp__github__pull_request_review_write',
     'mcp__github__update_pull_request_branch',
@@ -70,6 +76,16 @@ describe('AI-06 permissões do .claude/settings.json', () => {
     'Read(**/.env.*)',
   ])('AI-06 nega %s', (rule) => {
     expect(settings.permissions.deny ?? []).toContain(rule);
+  });
+
+  // Controle negativo: as negações novas não podem derrubar o commit e o push comuns.
+  it('AI-06 o commit e o push comuns seguem liberados e não negados por inteiro', () => {
+    const deny = settings.permissions.deny ?? [];
+
+    expect(deny).not.toContain('Bash(git commit *)');
+    expect(deny).not.toContain('Bash(git push *)');
+    expect(settings.permissions.allow ?? []).toContain('Bash(git commit *)');
+    expect(settings.permissions.allow ?? []).toContain('Bash(git push *)');
   });
 
   it('AI-06 nenhuma ferramenta negada por nome também está liberada', () => {
@@ -91,21 +107,46 @@ describe('AI-06 permissões do .claude/settings.json', () => {
 });
 
 describe('AI-06 hooks do .claude/settings.json', () => {
-  it('AI-06 o hook SubagentStop do implementer e do test-writer chama o subagent-stop.mjs', () => {
+  it('AI-06 o hook SubagentStop do implementer, do test-writer e do reviewer chama o subagent-stop.mjs', () => {
     const entries = settings.hooks?.SubagentStop ?? [];
 
-    const entry = entries.find((candidate) => candidate.matcher === 'implementer|test-writer');
+    const entry = entries.find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/subagent-stop.mjs')),
+    );
 
     expect(entry).toBeDefined();
-    expect(
-      commandsOf(entry ? [entry] : []).some((command) => command.includes('.claude/hooks/subagent-stop.mjs')),
-    ).toBe(true);
+    for (const agent of ['implementer', 'test-writer', 'reviewer']) expect(matches(entry?.matcher, agent)).toBe(true);
+    expect(matches(entry?.matcher, 'general-purpose')).toBe(false);
+    expect(matches(entry?.matcher, 'Explore')).toBe(false);
   });
 
   it('AI-06 um hook SessionStart chama o scripts/check-env.ts', () => {
     const commands = commandsOf(settings.hooks?.SessionStart ?? []);
 
     expect(commands.some((command) => command.includes('scripts/check-env.ts'))).toBe(true);
+  });
+
+  it('AI-06 o SessionStart só roda no início e na retomada da sessão (matcher startup|resume)', () => {
+    const entry = (settings.hooks?.SessionStart ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('scripts/check-env.ts')),
+    );
+
+    expect(entry?.matcher).toBe('startup|resume');
+    expect(matches(entry?.matcher, 'startup')).toBe(true);
+    expect(matches(entry?.matcher, 'resume')).toBe(true);
+    expect(matches(entry?.matcher, 'clear')).toBe(false);
+    expect(matches(entry?.matcher, 'compact')).toBe(false);
+  });
+
+  it('AI-06 um hook PreToolUse com matcher Bash chama o bash-guard.mjs', () => {
+    const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) => candidate.matcher === 'Bash');
+
+    expect(entry).toBeDefined();
+    expect(commandsOf(entry ? [entry] : []).some((command) => command.includes('.claude/hooks/bash-guard.mjs'))).toBe(
+      true,
+    );
+    expect(matches(entry?.matcher, 'Bash')).toBe(true);
+    expect(matches(entry?.matcher, 'Edit')).toBe(false);
   });
 
   it('AI-06 um hook PreToolUse cobre create_pull_request e add_issue_comment e chama o github-guard.mjs', () => {

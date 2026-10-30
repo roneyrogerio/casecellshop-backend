@@ -210,6 +210,70 @@ describe('AI-04 guarda de caminho nega ao implementer o que configura a verifica
   );
 });
 
+// Pelo nome do arquivo, em qualquer pasta (AI-04): o implementer não pode afrouxar a verificação
+// escondendo a configuração dentro de src/ ou criando uma variante do arquivo.
+const IMPLEMENTER_PROTECTED_BY_NAME = [
+  'src/.oxlintrc.json',
+  'src/a/.oxlintrc.jsonc',
+  'oxlint.config.ts',
+  'src/tsconfig.json',
+  'tsconfig.build.json',
+  'src/vitest.config.ts',
+  'vite.config.ts',
+  'vitest.workspace.ts',
+  'commitlint.config.cjs',
+  'redocly.yaml',
+  '.npmrc',
+  '.nvmrc',
+  '.gitignore',
+  '.mcp.json',
+  'src/CLAUDE.md',
+  'src/CLAUDE.local.md',
+  'CLAUDE.local.md',
+  'src/x/AGENTS.md',
+];
+
+describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer não pode editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
+    expectDenied(
+      runHook(
+        JSON.stringify({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Write',
+          cwd: root,
+          agent_type: 'implementer',
+          tool_input: { file_path: join(root, path), content: 'x' },
+        }),
+      ),
+    );
+  });
+
+  // Controle negativo: nomes que só lembram os protegidos, e o código de produção, continuam liberados.
+  it.each([
+    'src/checkout/reserve.ts',
+    'migrations/store/001_x.sql',
+    'package.json',
+    'src/oxlintrc.ts',
+    'src/tsconfigs/loader.ts',
+    'src/vitest-helpers.ts',
+    'src/claude.ts',
+    'src/agents.ts',
+    'src/agents/list.ts',
+    'src/gitignore-parser.ts',
+    'src/mcp/server.ts',
+  ])('AI-04 o implementer continua podendo editar %s', (path) => {
+    for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+  });
+
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
+  });
+});
+
 describe('FND-08 entrada ilegível e sessão principal', () => {
   it.each([
     ['texto que não é JSON', 'isto não é json'],
