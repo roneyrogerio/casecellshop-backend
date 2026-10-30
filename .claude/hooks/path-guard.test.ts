@@ -363,13 +363,20 @@ function trustedVariants(relative: string): [string, string][] {
 }
 
 describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .claude/state/', () => {
-  it.each(TRUSTED_FOLDERS)('AI-15 ninguém edita %s, por Edit, Write ou NotebookEdit, escrito de qualquer jeito', (path) => {
-    for (const [, agentType] of WRITERS) {
-      for (const tool of EDIT_TOOLS) {
-        for (const [, variant] of trustedVariants(path)) expectDenied(writeTool(tool, agentType, variant));
-      }
-    }
-  });
+  // Um caso por caminho, sessão e ferramenta: cada `it` roda só as grafias do caminho (cerca de 9 processos do hook),
+  // em vez de todas as combinações de uma vez, que estourava o limite de tempo do Vitest.
+  const denyCases: [string, string, string, string | undefined][] = TRUSTED_FOLDERS.flatMap((path) =>
+    WRITERS.flatMap(([session, agentType]) =>
+      EDIT_TOOLS.map((tool): [string, string, string, string | undefined] => [path, session, tool, agentType]),
+    ),
+  );
+
+  it.each(denyCases)(
+    'AI-15 ninguém edita %s: %s, por %s, escrito de qualquer jeito',
+    (path, _session, tool, agentType) => {
+      for (const [, variant] of trustedVariants(path)) expectDenied(writeTool(tool, agentType, variant));
+    },
+  );
 
   it('AI-15 a sessão principal não escreve .Claude/Reviews/x.md com Write', () => {
     expectDenied(writeTool('Write', undefined, '.Claude/Reviews/x.md'));
