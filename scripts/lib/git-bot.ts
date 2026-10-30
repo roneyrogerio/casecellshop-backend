@@ -15,3 +15,14 @@ export function configureGitBot(root: string): void {
   git('--add', 'credential.helper', '');
   git('--add', 'credential.helper', `!node "${join(root, 'scripts', 'git-credential-bot.ts')}"`);
 }
+
+// O hook commit-msg versionado em .githooks/ vale para qualquer commit deste
+// clone. Não depende do token, então é instalado mesmo antes dele existir.
+export function commitHookInstalled(root: string): boolean {
+  const hooksPath = spawnSync('git', ['-C', root, 'config', '--local', '--get', 'core.hooksPath'], { encoding: 'utf8' });
+  return (hooksPath.stdout ?? '').trim() === '.githooks';
+}
+
+export function installCommitHook(root: string): void {
+  spawnSync('git', ['-C', root, 'config', '--local', 'core.hooksPath', '.githooks'], { encoding: 'utf8' });
+}

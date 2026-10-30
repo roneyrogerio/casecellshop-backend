@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { BOT_KEYCHAIN_SERVICE, BOT_LOGIN, readBotToken } from './lib/bot-token.ts';
 import { collectFacts, diagnose, report } from './check-env.ts';
-import { configureGitBot } from './lib/git-bot.ts';
+import { configureGitBot, installCommitHook } from './lib/git-bot.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -22,6 +22,7 @@ if (!readBotToken()) {
 // O push sai como o bot. O MCP do GitHub não precisa de registro: o .mcp.json
 // versionado o declara, e o Claude Code o carrega ao abrir a pasta.
 configureGitBot(root);
+installCommitHook(root);
 
 const results = diagnose(await collectFacts(root));
 console.log(report(results));

@@ -2,7 +2,8 @@
 // este comando a cada conexão e usa a saída como cabeçalhos: o token do bot sai
 // do chaveiro só para a conexão, e o próprio servidor do GitHub passa a expor só
 // as ferramentas da lista. Merge, aprovação e escrita de arquivo não existem
-// para o agente, nem por engano nem por injeção de prompt.
+// para o agente pelo MCP. O token ainda é legível por quem roda código nesta
+// máquina (R11): a contenção do chaveiro não é desta peça.
 import { pathToFileURL } from 'node:url';
 import { readBotToken } from './lib/bot-token.ts';
 
@@ -23,8 +24,9 @@ export function buildHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     'X-MCP-Tools': GITHUB_TOOLS.join(','),
-    // Esconde o conteúdo público de issues de quem não tem push, que é a porta
-    // de entrada de injeção de prompt vinda de terceiros.
+    // Filtra conteúdo de issues de quem não tem push, porta comum de injeção de
+    // prompt de terceiros. O próprio GitHub o chama de filtro de melhor esforço,
+    // e não de fronteira de segurança.
     'X-MCP-Lockdown': 'true',
   };
 }

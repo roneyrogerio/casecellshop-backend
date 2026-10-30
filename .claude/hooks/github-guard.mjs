@@ -6,8 +6,6 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REVIEW_HEADING = '## Revisão';
-
 export function check(input, deps) {
   const tool = input.tool_name ?? '';
   const args = input.tool_input ?? {};
@@ -17,15 +15,16 @@ export function check(input, deps) {
   }
 
   if (tool.endsWith('__add_issue_comment')) {
-    // Só o espaço antes do título é ignorado, porque não muda o relatório; do
-    // título em diante, o texto tem de ser idêntico ao arquivo.
+    // O único comentário do fluxo é o relatório do reviewer, gravado pelo hook de
+    // parada dele: qualquer corpo que não seja idêntico a um relatório salvo é
+    // recusado. Só o espaço inicial é ignorado, porque não muda o relatório.
     const body = typeof args.body === 'string' ? args.body.trimStart() : '';
     const saved = deps.reviewBodies().map((review) => review.trimStart());
-    if (body.startsWith(REVIEW_HEADING) && !saved.includes(body)) {
+    if (!body || !saved.includes(body)) {
       return {
         allow: false,
         reason:
-          'Relatório de revisão diferente do salvo em .claude/reviews/: poste o texto do arquivo, exatamente como o reviewer o escreveu.',
+          'Comentário diferente de todo relatório salvo em .claude/reviews/: o único comentário do fluxo é o relatório do reviewer, postado exatamente como ele o escreveu.',
       };
     }
   }
@@ -34,7 +33,14 @@ export function check(input, deps) {
 }
 
 function main() {
-  const input = JSON.parse(readFileSync(0, 'utf8'));
+  let input;
+  try {
+    input = JSON.parse(readFileSync(0, 'utf8'));
+  } catch {
+    // Sem entrada legível, recusa: deixar passar seria falhar aberto.
+    process.stderr.write('github-guard: entrada do hook ilegível\n');
+    process.exit(2);
+  }
   const reviewsDir = join(process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), '.claude', 'reviews');
   const decision = check(input, {
     reviewBodies: () =>

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Hook commit-msg (AI-09): recusa na hora a mensagem fora do Conventional Commits,
+# antes de o commit existir. O CI confere de novo; este hook evita que um erro
+# chegue ao GitHub e precise de reescrita de histórico.
+exec npx --no-install commitlint --edit "$1"

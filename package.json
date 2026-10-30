@@ -19,7 +19,8 @@
     "check:instructions": "node scripts/check-instructions.ts",
     "check:migrations": "node scripts/check-migrations.ts",
     "setup:local": "node scripts/setup-local.ts",
-    "check:env": "node scripts/check-env.ts"
+    "check:env": "node scripts/check-env.ts",
+    "check:scripts": "node scripts/check-scripts.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "9.1.0",

@@ -55,9 +55,9 @@ Update `spec.md`, `design.md`, the contract in `src/contract/` (then `npm run op
 ## 4. Each slice
 
 1. `test-writer` with the map: failing tests for the slice criteria. Its stop hook requires lint and typecheck green. Check `git status` against the role, then commit `test(<escopo>): …`. The tests must fail by assertion; a collection error goes back to it.
-2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
+2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Read `.claude/state/stop-exceptions.log` (a stop-hook exception is an escalation); check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
 3. Read the CI with `mcp__github__pull_request_read` (`method: get_check_runs`) and, on a failure, `mcp__github__get_job_logs` (`failed_only: true`, `return_content: true`, `tail_lines: 200`), so only the failing tail enters the context. Route it: code → `implementer` (escalation step for that problem); a test that looks wrong → `implementer` reports with evidence and `test-writer` fixes it; oracle, spec or contract → you; infrastructure → one re-run, then treat as a code problem.
-4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan and the CI summary. Save its final message unchanged to `.claude/reviews/<pr>-<round>.md` and post that file's text with `mcp__github__add_issue_comment`: a hook refuses a `## Revisão` comment that differs from a saved report, so the PR shows the report exactly as written. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta.
+4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan and the CI summary. Its stop hook saves its final message to `.claude/reviews/<agent_id>.md`; post that file's text unchanged with `mcp__github__add_issue_comment`: a hook refuses a `## Revisão` comment that differs from a saved report, so the PR shows the report exactly as written. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta.
 
 The free list (commits that need no new round): the status line of `ROADMAP.md`, the PR description and its checklist. `README.md` and `PROMPTS.md` are not free: the challenge evaluates them.
 
@@ -79,7 +79,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 ## Commits
 
-Conventional Commits, type in English and description in Portuguese, lowercase start, at most 72 characters, body with the motivation. Commit messages go in a file (`git commit -F <file>`). Trailers, after a blank line:
+Conventional Commits, type in English and description in Portuguese, lowercase start (start with a verb, never with a proper noun), header up to 100 characters, body with the motivation; a local `commit-msg` hook runs commitlint. Commit messages go in a file (`git commit -F <file>`). Trailers, after a blank line:
 
 ```text
 Co-Authored-By: Claude <model name> <noreply@anthropic.com>

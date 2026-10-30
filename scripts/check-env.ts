@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BOT_LOGIN, readBotToken } from './lib/bot-token.ts';
-import { configureGitBot, gitHelperIsBot } from './lib/git-bot.ts';
+import { commitHookInstalled, configureGitBot, gitHelperIsBot, installCommitHook } from './lib/git-bot.ts';
 
 export interface Facts {
   remote: boolean;
@@ -20,6 +20,7 @@ export interface Facts {
   credentialHelperIsBot: boolean;
   botLogin: string | null;
   mcpRegistered: boolean;
+  commitHookInstalled: boolean;
 }
 
 export interface Diagnosis {
@@ -67,6 +68,11 @@ export function diagnose(facts: Facts): Diagnosis[] {
         fix: 'Rode npm run setup:local (configura o credential helper só neste repositório; o início de sessão faz isso sozinho quando o token existe).',
       },
       {
+        item: 'Hook commit-msg do commitlint instalado',
+        ok: facts.commitHookInstalled,
+        fix: 'Rode npm run setup:local (aponta o core.hooksPath deste clone para .githooks/; o início de sessão faz isso sozinho).',
+      },
+      {
         item: 'Servidor github declarado no .mcp.json',
         ok: facts.mcpRegistered,
         fix: 'O .mcp.json do repositório não declara o servidor github: restaure-o com git checkout -- .mcp.json e rode npm run setup:local. Se o Claude Code perguntar, aceite a confiança da pasta e o servidor github.',
@@ -101,6 +107,7 @@ async function githubLogin(remote: boolean): Promise<string | null> {
 
 export async function collectFacts(root: string): Promise<Facts> {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
+  if (!remote && !commitHookInstalled(root)) installCommitHook(root);
   if (!remote && planGitSetup({ remote, tokenPresent: Boolean(readBotToken()), credentialHelperIsBot: gitHelperIsBot(root) }) === 'configure') {
     configureGitBot(root);
   }
@@ -114,6 +121,7 @@ export async function collectFacts(root: string): Promise<Facts> {
     credentialHelperIsBot: remote || gitHelperIsBot(root),
     botLogin: await githubLogin(remote),
     mcpRegistered: declaresGithubServer(root),
+    commitHookInstalled: remote || commitHookInstalled(root),
   };
 }
 
