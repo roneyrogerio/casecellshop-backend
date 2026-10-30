@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { cleanupTempDirs } from '../test/helpers/git-sandbox.ts';
+import { makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
 
 interface CredentialModule {
   answer: (request: string, token: string | undefined) => string;
@@ -70,4 +72,32 @@ describe('AI-08 credential helper do git só responde para https://github.com', 
     expect(answer('', TOKEN)).toBe('');
     expect(answer('', undefined)).toBe('');
   });
+});
+
+// O CLI de verdade, numa cópia dos scripts em um repositório temporário: sem identidade, nenhum token é lido.
+describe('AI-08 o credential helper (CLI) sem identidade configurada', () => {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+
+  it('AI-08 sem identidade, para https://github.com, responde quit=1', () => {
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'git-credential-bot.ts', ['get'], {
+      input: request('protocol=https', 'host=github.com'),
+    });
+
+    // Compara sem imprimir a saída: se um token real vazasse, a mensagem de falha não o mostraria.
+    expect(result.stdout === 'quit=1\n').toBe(true);
+  }, 30_000);
+
+  it('AI-08 sem identidade, para outro host, continua sem resposta', () => {
+    const dir = makeScriptsSandbox();
+
+    const result = runScript(dir, 'git-credential-bot.ts', ['get'], {
+      input: request('protocol=https', 'host=gitlab.com'),
+    });
+
+    expect(result.stdout).toBe('');
+  }, 30_000);
 });

@@ -173,3 +173,114 @@ describe('FND-06 limites do Claude Code no que carrega sempre', () => {
     expect(checkInstructions(root)).toEqual([]);
   });
 });
+
+// Texto ASCII com exatamente `size` bytes (= caracteres) em linhas de `lineLength`,
+// para ficar abaixo do teto de linhas enquanto passa do teto de tamanho.
+function textOf(size: number, lineLength = 80): string {
+  const line = `${'a'.repeat(lineLength - 1)}\n`;
+  const full = Math.floor((size - 1) / line.length);
+  const rest = size - full * line.length;
+  return line.repeat(full) + 'a'.repeat(rest - 1) + '\n';
+}
+
+describe('FND-06 teto de bytes do SKILL.md e de linhas e caracteres das regras', () => {
+  it('FND-06 o texto de apoio tem os bytes e as linhas esperados', () => {
+    expect(Buffer.byteLength(textOf(12_000))).toBe(12_000);
+    expect(Buffer.byteLength(textOf(12_001))).toBe(12_001);
+    expect(textOf(12_001).split('\n').length - 1).toBeLessThan(500);
+    expect(textOf(40_000, 250)).toHaveLength(40_000);
+    expect(textOf(40_001, 250)).toHaveLength(40_001);
+    expect(textOf(40_001, 250).split('\n').length - 1).toBeLessThan(200);
+  });
+
+  // Trocado em relação ao commit 88e2097 (15.000/15.001 bytes): o critério passou a 12.000 bytes.
+  it('FND-06 acusa um SKILL.md com menos de 500 linhas mas com 12.001 bytes', () => {
+    writeValidTree();
+    write('.claude/skills/x/SKILL.md', textOf(12_001));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('skills', 'x', 'SKILL.md'));
+    expect(violations[0]).toContain('bytes');
+  });
+
+  it('FND-06 não acusa um SKILL.md com exatamente 12.000 bytes', () => {
+    writeValidTree();
+    write('.claude/skills/x/SKILL.md', textOf(12_000));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 não acusa um arquivo de apoio de 20.000 bytes na pasta da skill', () => {
+    writeValidTree();
+    write('.claude/skills/x/SKILL.md', lines(50));
+    write('.claude/skills/x/process-changes.md', textOf(20_000));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 acusa uma regra de .claude/rules/ com menos de 200 linhas mas com 40.001 caracteres', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', textOf(40_001, 250));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('rules', 'area.md'));
+    expect(violations[0]).toContain('caracteres');
+  });
+
+  it('FND-06 não acusa uma regra de .claude/rules/ com exatamente 40.000 caracteres', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', textOf(40_000, 250));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 acusa uma regra de .claude/rules/ com 201 linhas', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', lines(201));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('rules', 'area.md'));
+  });
+
+  it('FND-06 não acusa uma regra de .claude/rules/ com 200 linhas', () => {
+    writeValidTree();
+    write('.claude/rules/area.md', lines(200));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  // O Claude Code carrega as regras também de subpastas de .claude/rules/ (A13).
+  it('FND-06 acusa uma regra em subpasta de .claude/rules/ com 201 linhas, citando o caminho', () => {
+    writeValidTree();
+    write('.claude/rules/area/x.md', lines(201));
+
+    const violations = checkInstructions(tree);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(join('rules', 'area', 'x.md'));
+  });
+
+  it('FND-06 não acusa uma regra em subpasta de .claude/rules/ com 200 linhas', () => {
+    writeValidTree();
+    write('.claude/rules/area/x.md', lines(200));
+
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 uma árvore sem .claude/rules/ não quebra nem tem violação', () => {
+    writeValidTree();
+
+    expect(() => checkInstructions(tree)).not.toThrow();
+    expect(checkInstructions(tree)).toEqual([]);
+  });
+
+  it('FND-06 o repositório real continua sem violação com os limites novos', () => {
+    expect(checkInstructions(root)).toEqual([]);
+  });
+});

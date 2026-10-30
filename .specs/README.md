@@ -51,7 +51,7 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 | Ferramenta ou processo | Linha na tabela de ferramentas do `STATE.md` |
 | Risco em aberto | Tabela de riscos do `STATE.md` |
 | Erro que mudou o rumo | `L-NNN` no `STATE.md` |
-| Uso de IA | `PROMPTS.md`, na raiz |
+| Instruções da IA | `AGENTS.md`, a skill e os agentes em `.claude/`; o `PROMPTS.md` explica por que não há diário de prompts |
 
 **Estrutura de uma AD:**
 - contexto;
@@ -92,21 +92,3 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 ```
 
 Linha da tabela de ferramentas: `| Tema | Escolha | Descartado | Por quê |`.
-
-Entrada do `PROMPTS.md`:
-
-~~~markdown
-### <assunto>
-
-- **Pedido:** <o que foi pedido>
-- **Prompt** (opcional): o texto literal, no idioma original:
-
-  ```text
-  <prompt>
-  ```
-
-- **O que a IA fez:** <o que ela produziu>
-- **Corrigido** ou **Rejeitado:** <o que mudou e por quê, se mudou>
-- **Resultado:** <o que ficou>
-- **Verificação:** <teste, comando ou fonte que confirmou>
-~~~

@@ -42,7 +42,7 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 - **Worker** (uma réplica): envio ao ERP com retry e DLQ, reconciliação e sincronização.
 - **ERP simulado:** módulo atrás da porta `ErpClient`, com estado próprio, falhas configuráveis e as hipóteses abaixo.
 - **Observabilidade:** logs estruturados, métricas em `/metrics` e traces que atravessam a outbox.
-- **Documentação:** README (como rodar, garantias, decisões, limitações, prompts principais e operação), `ARCHITECTURE.md` (diagnóstico, arquitetura alvo e o porquê de cada bloco) e `PROMPTS.md`.
+- **Documentação:** README (como rodar, garantias, decisões, limitações e operação), `ARCHITECTURE.md` (diagnóstico, arquitetura alvo e o porquê de cada bloco) e `PROMPTS.md` (onde estão os prompts que governam os agentes).
 - **Testes** de regras, concorrência, idempotência, cache, sincronização, contrato e falhas do ERP; os de falha contam faturas, não chamadas.
 
 **Fora, com o motivo:**

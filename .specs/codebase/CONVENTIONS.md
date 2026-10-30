@@ -8,7 +8,7 @@ Valem para todo o repositório, desde o primeiro commit.
   - O corpo explica a motivação.
   - Um commit feito com IA leva dois trailers: `Co-Authored-By` com o modelo e `Assisted-by: <papel>:<modelo> effort=<nível> step=<degrau>`, na convenção do kernel Linux, para o histórico mostrar quem produziu cada commit. O autor do commit é o mantenedor, que responde por ele.
   - O tipo no início separa feature, correção, teste e documentação no histórico.
-- **Pull requests:** um por marco (ou dois, se o plano passar do corte de tamanho), aberto em rascunho pela conta `honeyforge-bot`, com o plano aprovado como checklist e o título no formato do commit (AD-013).
+- **Pull requests:** um por marco (ou dois, se o plano passar do corte de tamanho), aberto em rascunho pela identidade configurada no clone (`AI-14`; a conta de máquina, no modo `bot`), com o plano aprovado como checklist e o título no formato do commit (AD-013).
   - O único comentário é o relatório do `reviewer`, um por rodada, idêntico ao que ele escreveu.
   - O mantenedor aprova no GitHub, e o ruleset exige essa aprovação sobre o último push; a aprovação liga o auto-merge, e o merge é por merge commit, sem squash, para o histórico mostrar o teste antes do código.
   - Sem issues: o trabalho parte do marco no `ROADMAP.md` e dos critérios no `spec.md`.
