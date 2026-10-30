@@ -138,7 +138,7 @@ Cada seção do `ARCHITECTURE.md` abre pela decisão, cobre os pontos abaixo, us
   - **DOC-MSG-01** publicar antes ou depois de gravar o pedido;
   - **DOC-MSG-02** como evitar pedido fantasma e mensagem fantasma;
   - **DOC-MSG-03** retry, DLQ, OpenAPI e testes;
-  - **DOC-MSG-04** os prompts de IA relevantes.
+  - **DOC-MSG-04** os prompts de IA relevantes: as instruções versionadas dos agentes, indicadas no `PROMPTS.md`, e não um diário de pedidos.
 - **Cache e performance da vitrine** (M4):
   - **DOC-CAC-01** onde fica cada camada de cache e o papel dela (CDN e HTTP, em processo, L2 compartilhado, banco da loja);
   - **DOC-CAC-02** TTL, invalidação, cache-aside × refresh-ahead, fallback e prevenção de stampede;

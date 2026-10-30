@@ -60,7 +60,7 @@ Update `spec.md`, `design.md`, the contract in `src/contract/` (then `npm run op
 3. Read the CI with `mcp__github__pull_request_read` (`method: get_check_runs`) and, on a failure, `mcp__github__get_job_logs` (`failed_only: true`, `return_content: true`, `tail_lines: 200`), so only the failing tail enters the context. Route it: code → `implementer` (escalation step for that problem); a test that looks wrong → `implementer` reports with evidence and `test-writer` fixes it; oracle, spec or contract → you; infrastructure → one re-run, then treat as a code problem.
 4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan, the CI summary, the round number and, from the second round on, the path of the previous report in `.claude/reviews/`. Before a whole-PR round, run `git fetch origin` yourself: the reviewer only reads git (AI-11), and a ref change in its run is logged as an exception (AI-12). Its stop hook saves its final message to `.claude/reviews/<agent_id>.md`; post that file's text unchanged with `mcp__github__add_issue_comment`: a hook refuses a `## Revisão` comment that differs from a saved report, so the PR shows the report exactly as written. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta.
 
-The free list (commits that need no new round): the status line of `ROADMAP.md`, the PR description and its checklist. `README.md` and `PROMPTS.md` are not free: the challenge evaluates them.
+The free list (commits that need no new round): the status line of `ROADMAP.md`, the PR description and its checklist. `README.md` is not free: the challenge evaluates it.
 
 ## 5. Exceptions (maintainer point 2)
 
@@ -71,7 +71,7 @@ Stop and ask the maintainer, in one question, with your recommendation, when: a 
 The PR is ready when every slice has its `feat:` green, the last review round covers the HEAD (or only free-list commits came after it), no `alta` or `média` finding is open, the checklist is complete and no `SPEC_DEVIATION` remains. Then:
 
 - write the milestone record in the PR description: rounds and findings by severity, findings the `reviewer` got wrong, escalation steps used, red CI runs by cause, approvals asked, lessons (1–3), and the pending items for the next plan;
-- update `PROMPTS.md` and the `ROADMAP.md` status line;
+- update the `ROADMAP.md` status line;
 - `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer), and tell the maintainer, in a few lines, what to read: the criteria × test names table of the CI summary and the `ARCHITECTURE.md` sections of the `DOC-*` criteria this milestone touched (maintainer point 3, ~10 min). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, set `draft: true` again.
 
 ## 7. Close (`/marco fechar`)
@@ -96,19 +96,8 @@ Record a decision in the PR that makes it when it changes structure, a quality a
 - Product or architecture: a new `### AD-NNN` block in `STATE.md` (context, decision, alternatives, trade-off, "Rever quando", references). It is accepted by the merge of its PR. An accepted AD is never edited except its status line: a new AD supersedes it ("substituída por AD-NNN").
 - Tool or process: a row in the tool table of `STATE.md`.
 - Open risk or a mistake that changed course: the risk table or a new `L-NNN` lesson.
-- AI usage: `PROMPTS.md`, short: the request, what the AI got wrong and how it was corrected, and how it was verified.
 - State the decision and its reason in the project's terms (the effect here: "so the setup works without a keychain on WSL"). Research informs the decision and stays out of the repository: no market comparisons, adoption numbers or "project X does it" in `STATE.md`, the README or commit messages. Sources go only under "Referências". The same applies to the reason written in a commit body.
 
 ## Process changes
 
-A change to this skill, the agents, the hooks, the CI or the settings goes in its own `chore(ai)` PR, with a time ceiling stated in its plan, never inside a milestone PR. After changing instructions, run `npm run check:instructions`.
-
-A change to the factory earns its place by making the flow more reliable, faster to run, faster to develop with, better guaranteed or cheaper in tokens, and it says which one. To change it:
-
-1. **Start from evidence:** a review finding, a failed run, a transcript showing an agent doing the wrong thing, or a maintainer request. State the problem as its effect on this project.
-2. **Check the documented way first:** the Claude Code docs for the feature involved (best practices, hooks, sub-agents, skills, memory, settings, permissions) and the docs of the tool itself; then how established projects solve it. Prefer a documented feature over code of our own, and our own small script over a new dependency. The research stays out of the repository (see "Decision records").
-3. **Put the rule where it is enforced at the right strength:** what must always or never happen goes in a hook, a `deny` rule, the CI or the ruleset; `AGENTS.md` holds only facts every task needs and Claude cannot see in the code; `.claude/rules/` holds the convention of one area; this skill holds procedures; an agent file holds what one role needs. A written rule that keeps being missed moves to a hook, and a hook that only enforces a preference is removed.
-4. **Same flow as a milestone:** criteria, failing tests from `test-writer` with a negative control for each guard, the change, a green CI and an independent review round on the delta.
-5. **Use the dedicated tools:** read files with Read and change them with Edit or Write; Bash runs commands, never edits files.
-6. **Prove it live when you can** (the hook fired, the guard denied, the script ran in a clean environment), and say what could not run.
-7. **Record it:** the decision in `STATE.md` in the project's terms, the AI usage in `PROMPTS.md`, and the item checked off or moved to the next plan.
+A change to this skill, the agents, the hooks, the CI or the settings follows [process-changes.md](process-changes.md): read it before planning one.

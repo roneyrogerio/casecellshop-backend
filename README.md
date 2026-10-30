@@ -57,7 +57,7 @@ Os testes unitários ficam ao lado do arquivo que testam; os de integração, em
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): o diagnóstico dos três problemas, os caminhos comparados, a arquitetura de 30 a 90 dias e a nuvem como hipótese.
 - [`openapi.yaml`](openapi.yaml): o contrato HTTP em OpenAPI 3.1, gerado do zod em [`src/contract/`](src/contract/).
 - [`.specs/`](.specs/README.md): visão, marcos, decisões (`AD-NNN`), critérios de aceite e design.
-- [`PROMPTS.md`](PROMPTS.md): o uso de IA, com o que foi aceito, corrigido ou rejeitado.
+- [`PROMPTS.md`](PROMPTS.md): onde estão os prompts que governam a IA (as instruções versionadas dos agentes) e por que o projeto não mantém um diário de prompts.
 - [`AGENTS.md`](AGENTS.md): as regras que todo agente de IA segue; o passo a passo de cada marco está na skill [`/marco`](.claude/skills/marco/SKILL.md).
 
 ## Como o projeto é feito com IA
