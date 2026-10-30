@@ -70,13 +70,14 @@ O código é escrito por agentes do Claude Code, e a confiança vem de verifica�
 - **Os agentes agem no GitHub como a conta `honeyforge-bot`,** pelo servidor MCP oficial, restrito às ferramentas do fluxo: sem merge, sem aprovação, sem escrita de arquivo.
 - **A `main` só muda por PR,** com os checks verdes e a aprovação do mantenedor, impostos por um ruleset do GitHub. A aprovação liga o auto-merge.
 
-**Configurar uma máquina** (uma vez por clone):
+**Configurar uma máquina** (terminal ou VS Code):
 
-1. Guarde o token clássico da conta do bot no chaveiro. No macOS: `security add-generic-password -s loja-honeyforge-bot -a honeyforge-bot -w`; no Linux: `secret-tool store --label="honeyforge-bot" service loja-honeyforge-bot`.
-2. Rode `npm run setup:local`. Ele configura o push pela conta do bot e registra o MCP do GitHub, sem gravar o token em lugar nenhum.
-3. Abra o Claude Code. Em toda sessão, o `npm run check:env` diz o que falta: Node, dependências, Docker, a identidade do bot e o MCP.
+1. Guarde, uma vez, o token clássico da conta do bot no chaveiro. No macOS: `security add-generic-password -s loja-honeyforge-bot -a honeyforge-bot -w`; no Linux: `secret-tool store --label="honeyforge-bot" service loja-honeyforge-bot`.
+2. Abra o Claude Code na pasta do projeto e aceite a confiança da pasta, uma vez.
 
-Na sessão do Claude Code na nuvem, conecte o GitHub com o token do bot pelo `/web-setup`. O mesmo diagnóstico roda lá.
+Pronto: o `.mcp.json` liga o MCP do GitHub sozinho, e o início de cada sessão configura o push como o bot e diz o que mais faltar, como Node, dependências ou Docker, com o comando para resolver.
+
+Na sessão do Claude Code na nuvem, o diagnóstico também roda. A autenticação do MCP lá ainda está a validar (AD-013).
 
 ## Licença
 
