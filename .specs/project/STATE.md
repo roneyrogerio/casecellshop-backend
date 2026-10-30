@@ -310,6 +310,14 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 - **Um hook de parada devolve o agente ao trabalho** enquanto lint, typecheck ou os testes ligados às mudanças falharem (AI-03).
 - **Revisão:** uma rodada por fatia e uma nova só por commit fora da lista livre. Achado `baixa` vira item do próximo plano. O teto é de 3 rodadas por fatia e 5 por marco.
 - **O `AGENTS.md` traz só o que toda tarefa usa,** e o roteiro vai para a skill, carregada sob demanda. Os agentes leem as specs por trecho, guiados por um mapa da tarefa em cada delegação.
+- **Onde cada regra fica,** pelo que a documentação do Claude Code recomenda:
+  - **specs:** o quê e o porquê do produto (critérios, design, decisões);
+  - **`AGENTS.md`:** fatos que toda tarefa usa;
+  - **regra por caminho em `.claude/rules/`:** a convenção de uma área, que só carrega quando um arquivo dela é lido ou escrito, como a de testes em `.claude/rules/tests.md`;
+  - **skill:** um procedimento de vários passos, carregado sob demanda, como o `/marco`;
+  - **hook, `deny` ou ruleset:** o que não admite exceção.
+
+  As invariantes de persistência ficam no `AGENTS.md`, e não numa regra por caminho, porque o plano e a revisão por `git diff` não leem os arquivos que carregariam a regra.
 - **As specs ficam sem teto de palavras.** O `FND-06` passa a conferir só o que carrega em toda sessão, com os limites do Claude Code: 200 linhas por instrução e 500 por skill.
 - **O humano age em quatro pontos:**
   1. aprova o plano;
@@ -409,7 +417,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 | R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, num modelo mais forte; o `test-writer` escreve os testes antes, sem ler a implementação, e a guarda impede o `implementer` de alterá-los e de alterar o CI; o PR sai da conta do bot e só entra na `main` com a aprovação do dono, imposta pelo ruleset (AD-013). Resta: o dono pede e aprova, e o relatório do `reviewer` chega ao PR pela sessão principal, então é informação, nunca aprovação |
 | R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TypeScript 7, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers. **Resultado (29/10/2026):** os dez pontos passaram no Node 26.13.0 e na 24.12.0, sem plano B |
 | R9 | A H2 pode não valer: o ERP fatura sem estoque e fica negativo | A sincronização grava zero, registra o caso em log, e a loja para de vender o SKU |
-| R10 | A guarda de caminho só cobre `Edit`, `Write` e `NotebookEdit`; um agente pode escrever pelo Bash | O hook de parada roda a verificação a cada fim de agente; a sessão principal confere o `git status` contra o papel antes de cada commit; o CI confere migrações e instruções. A sandbox (R11) restringiria a escrita ao repositório |
+| R10 | A guarda de caminho só cobre `Edit`, `Write` e `NotebookEdit`; um agente pode escrever pelo Bash | O hook de parada roda a verificação a cada fim de agente; a sessão principal confere o `git status` contra o papel antes de cada commit; o CI confere migrações e instruções. A sandbox (R11) restringiria a escrita ao repositório. Commit e push pelos subagentes são proibidos só pela instrução, agora que `git commit` está liberado; se um subagente commitar, entra um hook de Bash por papel |
 | R11 | Um agente com Bash roda com o usuário do macOS: lê o que o dono lê (`~/.ssh`, o token do `gh` do dono, o chaveiro com o token do bot), e as regras `deny` comparam texto (`/usr/bin/security` passa por `Bash(security *)`) | Sandbox do Bash do Claude Code com leitura de `~/` negada e rede restrita, a validar com o Testcontainers no F1; até lá, as negações de texto e o ruleset, que protege a `main` mesmo com o token do bot vazado |
 
 ## Lições

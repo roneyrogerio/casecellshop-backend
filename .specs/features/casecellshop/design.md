@@ -202,7 +202,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **`type` dos erros:** `/problems/<causa>`, como `/problems/invalid-request`.
 - **Compose:** `postgres`, `migrate`, `api`, `worker` e `jaeger` (interface em `${JAEGER_UI_PORT:-16686}`; o OTLP/HTTP, na 4318, fica só na rede do compose, sem autenticação exposta; a API e o worker usam `OTEL_TRACES_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT` e `OTEL_SERVICE_NAME`), com as credenciais locais como padrão no `compose.yaml`, sem `.env`, que os agentes não leem. O `.dockerignore` deixa de fora `test/` e `**/*.test.ts`. A API publica a porta `${API_PORT:-3000}`. O teste do `FND-01` sobe esse arquivo pelo `DockerComposeEnvironment` do Testcontainers, com nome de projeto próprio e a `API_PORT` e a `JAEGER_UI_PORT` livres, sem conflitar com o compose de desenvolvimento.
 - **Lint do OpenAPI:** Redocly com `recommended-strict`, em que aviso também reprova. O contrato declara `servers: [{ url: '/' }]` e `security: []` nas rotas públicas. Uma regra que não se aplica a uma rota é desligada só para ela, no `redocly.yaml`, com o motivo num comentário.
-- **Limite das instruções (`FND-06`):** linhas contadas como no `wc -l`: até 200 no `AGENTS.md`, no `CLAUDE.md` e em cada agente de `.claude/agents/`, e até 500 em cada `SKILL.md`. As specs não têm teto (AD-012).
+- **Limite das instruções (`FND-06`):** linhas contadas como no `wc -l`: até 200 no `AGENTS.md` e no `CLAUDE.md` (recomendação do Claude Code), a mesma régua em cada agente (escolha do projeto) e até 500 em cada `SKILL.md` (recomendação do Claude Code). As specs não têm teto (AD-012).
 
 ## Parâmetros
 
