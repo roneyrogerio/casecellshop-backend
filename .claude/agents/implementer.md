@@ -26,7 +26,7 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 
 ## Run
 
-The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Report done only when all of them pass.
+The CI checks that depend on your code: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run openapi -- --check` and `npm run lint:openapi`. Also, never change or delete a migration already in `origin/main`; add a new one instead: `git diff --name-status --no-renames origin/main -- migrations` lists only `A` lines. Report done only when all of them pass.
 
 The spec limits (`npm run check:specs`) and the commit messages (`npm run lint:commits`) belong to the main session. If one of them fails, report it; never change its configuration (`commitlint.config.mjs`, `scripts/check-spec-limits.ts`) to make it pass.
 
