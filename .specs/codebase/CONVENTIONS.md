@@ -4,7 +4,7 @@ Valem para todo o repositório, desde o primeiro commit.
 
 - **Commits:** [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/), no formato `<tipo>(<escopo>): <descrição>`.
   - O tipo fica em inglês, porque é a palavra fixa do padrão: `feat`, `fix`, `test`, `refactor`, `docs`, `build`, `ci` ou `chore`.
-  - A descrição fica em português, com o verbo no presente, começando em minúscula (nomes próprios no meio ficam como são), sem ponto final e com até 72 caracteres no cabeçalho. O commitlint confere no CI (`commitlint.config.mjs`). Exemplo: `feat(checkout): adiciona reserva atômica de estoque`.
+  - A descrição fica em português, com o verbo no presente, começando em minúscula (nomes próprios no meio ficam como são) e sem ponto final, com o cabeçalho até 100 caracteres: as regras do `@commitlint/config-conventional`, sem regras próprias, conferidas no CI e por um hook `commit-msg` local. Exemplo: `feat(checkout): adiciona reserva atômica de estoque`.
   - O corpo explica a motivação.
   - Um commit feito com IA leva dois trailers: `Co-Authored-By` com o modelo e `Assisted-by: <papel>:<modelo> effort=<nível> step=<degrau>`, na convenção do kernel Linux, para o histórico mostrar quem produziu cada commit. O autor do commit é o mantenedor, que responde por ele.
   - O tipo no início separa feature, correção, teste e documentação no histórico.
