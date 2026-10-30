@@ -10,6 +10,8 @@ paths:
 Loaded only when a test file is read or written, because only then do these rules matter.
 
 - Unit tests (no database, network or Docker) sit next to the file they test; every `*.test.ts` outside `test/integration/` runs in the `unit` project.
+- Hooks and scripts: test the decision through the function the file exports, in-process, with the whole case table; only a few tests per file run it as a process, for the wiring (stdin, stdout, exit code, one allowed and one denied case). Each Node process costs ~75 ms, and a matrix run as processes once took the unit suite from 44 s to 100 s, past what a pre-push can afford. A per-test temporary git repository is for tests that change refs, config or the worktree; read-only tests share one per file.
+- Tests of repository configuration with no source file to sit next to (`.github/`, `.githooks/`, `.mcp.json`, the `package.json` scripts, the agent instructions) live in `test/repo/`. Write temporary files under the system temp folder, never inside the repository: a parallel lint or an interrupted run would trip over them.
 - Integration tests live in `test/integration/<area>/`: Testcontainers and supertest, one folder per area of `spec.md`. Shared helpers and fixtures live in `test/helpers/` and `test/fixtures/`.
 - Each test name is the ID of the criterion it proves followed by a description in Brazilian Portuguese, e.g. `CHK-01 50 checkouts simultâneos com estoque 5 aceitam exatamente 5`. Identifiers stay in English.
 - Anything that touches the database runs against real PostgreSQL; no database mocks. No `sleep`: use the injectable clock and timestamps seeded in the database. ERP failure tests count invoices in the simulated ERP, not calls.
