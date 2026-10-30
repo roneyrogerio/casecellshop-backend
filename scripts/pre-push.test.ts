@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanupTempDirs, git, initRepo, makeTempDir } from '../test/helpers/git-sandbox.ts';
@@ -10,13 +10,52 @@ const hook = join(root, '.githooks', 'pre-push');
 
 afterEach(cleanupTempDirs);
 
+// Depois de aceitar a URL, o hook roda `npm run verify` (AI-17). Dentro do Vitest isso rodaria a verificação de
+// verdade, então todo teste que chama o hook põe um `npm` falso no começo do PATH: ele grava os argumentos e o
+// diretório em que rodou e sai com o código escolhido. O `npm` real nunca roda.
+interface FakeNpm {
+  bin: string;
+  calls(): { args: string; cwd: string }[];
+}
+
+function makeFakeNpm(exitCode: number): FakeNpm {
+  const dir = makeTempDir('prepush-npm-');
+  const bin = join(dir, 'bin');
+  const log = join(dir, 'npm.log');
+  mkdirSync(bin);
+  const fake = join(bin, 'npm');
+  writeFileSync(fake, `#!/bin/sh\n{ echo "$*"; pwd; } >> '${log}'\nexit ${exitCode}\n`);
+  chmodSync(fake, 0o755);
+  return {
+    bin,
+    calls: () => {
+      if (!existsSync(log)) return [];
+      const lines = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '');
+      const calls: { args: string; cwd: string }[] = [];
+      for (let index = 0; index + 1 < lines.length; index += 2) {
+        calls.push({ args: lines[index] ?? '', cwd: realpathSync(lines[index + 1] ?? '') });
+      }
+      return calls;
+    },
+  };
+}
+
+function isolatedEnv(npm: FakeNpm): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: `${npm.bin}:${process.env.PATH ?? ''}` };
+}
+
+const REFS = 'refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x 0000000000000000000000000000000000000000\n';
+
 // Como o git chama: $1 é o nome do remoto, $2 a URL já reescrita pelo insteadOf, e as refs entram pela entrada padrão.
-function runHook(url: string) {
-  const result = spawnSync(hook, ['origin', url], {
-    input: 'refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x 0000000000000000000000000000000000000000\n',
-    encoding: 'utf8',
-  });
-  return { code: result.status, stderr: result.stderr, error: result.error };
+// O hook roda dentro de um repositório de teste (a raiz dele é o que o `npm run verify` deve receber como cwd).
+function runHook(url: string, options: { npmExit?: number; subdir?: string } = {}) {
+  const project = makeTempDir('prepush-run-');
+  initRepo(project);
+  const npm = makeFakeNpm(options.npmExit ?? 0);
+  const cwd = options.subdir === undefined ? project : join(project, options.subdir);
+  mkdirSync(cwd, { recursive: true });
+  const result = spawnSync(hook, ['origin', url], { input: REFS, encoding: 'utf8', cwd, env: isolatedEnv(npm) });
+  return { code: result.status, stderr: result.stderr, error: result.error, npm, project };
 }
 
 describe('AI-08 o .githooks/pre-push é versionado e executável', () => {
@@ -70,7 +109,7 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
   );
 
   it('AI-08 sem argumentos recusa', () => {
-    const result = spawnSync(hook, [], { input: '', encoding: 'utf8' });
+    const result = spawnSync(hook, [], { input: '', encoding: 'utf8', env: isolatedEnv(makeFakeNpm(0)) });
 
     expect(result.status).not.toBe(0);
   });
@@ -90,7 +129,7 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
     const args = ['-c', `url.${bare}.insteadOf=https://github.com/a/b.git`];
     if (hooksPath !== null) args.push('-c', `core.hooksPath=${hooksPath}`);
     args.push('push', 'origin', 'HEAD:refs/heads/feature');
-    return spawnSync('git', args, { cwd: project, encoding: 'utf8' });
+    return spawnSync('git', args, { cwd: project, encoding: 'utf8', env: isolatedEnv(makeFakeNpm(0)) });
   }
 
   function branchesIn(bare: string): string {
@@ -114,5 +153,56 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
 
     expect(result.status, result.stderr).toBe(0);
     expect(branchesIn(bare)).toContain('refs/heads/feature');
+  });
+});
+
+describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois de aceitar a URL', () => {
+  const ACCEPTED = 'https://github.com/roneyrogerio/casecellshop-backend.git';
+
+  it('AI-17 com a URL aceita e o verify passando, sai com 0 e chama exatamente "npm run verify" uma vez, na raiz', () => {
+    const result = runHook(ACCEPTED);
+
+    expect(result.code).toBe(0);
+    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+  });
+
+  it('AI-17 chamado de uma subpasta, roda o verify na raiz do repositório, e não na subpasta', () => {
+    const result = runHook(ACCEPTED, { subdir: 'src/checkout' });
+
+    expect(result.code).toBe(0);
+    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+  });
+
+  it('AI-17 com o verify falhando, o push é recusado (código diferente de 0)', () => {
+    const result = runHook(ACCEPTED, { npmExit: 1 });
+
+    expect(result.error).toBeUndefined();
+    expect(result.code).not.toBe(0);
+    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+  });
+
+  it('AI-17 o código do verify que falhou com outro valor também recusa o push', () => {
+    const result = runHook(ACCEPTED, { npmExit: 7 });
+
+    expect(result.code).not.toBe(0);
+    expect(result.npm.calls()).toHaveLength(1);
+  });
+
+  // Controle negativo: o verify só roda depois da URL; a URL recusada nunca chega ao npm.
+  it.each(['git@github.com:a/b.git', 'ssh://git@github.com/a/b.git', '/tmp/x.git', 'https://github.com.evil.com/a/b.git', ''])(
+    'AI-17 com a URL "%s" recusada, o npm nunca é chamado',
+    (url) => {
+      const result = runHook(url);
+
+      expect(result.code).not.toBe(0);
+      expect(result.npm.calls()).toEqual([]);
+    },
+  );
+
+  it('AI-17 a URL recusada com o verify que passaria continua recusada (o verify não a salva)', () => {
+    const result = runHook('git@github.com:a/b.git', { npmExit: 0 });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).not.toBe('');
   });
 });

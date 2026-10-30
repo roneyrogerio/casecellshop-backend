@@ -13,8 +13,14 @@ interface Job {
   steps?: Step[];
 }
 
+interface Concurrency {
+  group?: unknown;
+  'cancel-in-progress'?: unknown;
+}
+
 interface Workflow {
   permissions?: Record<string, string>;
+  concurrency?: Concurrency | string;
   jobs?: Record<string, Job>;
 }
 
@@ -71,6 +77,26 @@ function weakCheckRuns(workflow: Workflow): string[] {
 function topPermissionsAreReadOnly(workflow: Workflow): boolean {
   const permissions = workflow.permissions;
   return permissions !== undefined && Object.keys(permissions).length === 1 && permissions.contents === 'read';
+}
+
+// AI-17: um push novo no mesmo PR cancela a execução anterior; o push da main nunca cancela a anterior.
+// O grupo separa o PR (número ou ref) e o workflow; o cancelamento é uma expressão só verdadeira em pull_request.
+function concurrencyOf(workflow: Workflow): Concurrency | undefined {
+  return typeof workflow.concurrency === 'object' ? workflow.concurrency : undefined;
+}
+
+function groupSeparatesPrAndWorkflow(workflow: Workflow): boolean {
+  const group = concurrencyOf(workflow)?.group;
+  if (typeof group !== 'string') return false;
+  return (
+    group.includes('github.workflow') &&
+    /github\.event\.pull_request\.number|github\.head_ref|github\.ref/.test(group)
+  );
+}
+
+function cancelsOnlyPullRequests(workflow: Workflow): boolean {
+  const cancel = concurrencyOf(workflow)?.['cancel-in-progress'];
+  return typeof cancel === 'string' && /github\.event_name\s*==\s*'pull_request'/.test(cancel);
 }
 
 const ci = parse(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')) as Workflow;
@@ -153,6 +179,58 @@ describe('AI-05 as conferências do ci.yml enxergam o que procuram (controle neg
     expect(weakCheckRuns({ jobs: { j: { steps: [{ run: 'npm run --silent check:scripts' }] } } })).toHaveLength(1);
     expect(weakCheckRuns(GOOD)).toEqual([]);
     expect(weakCheckRuns({ jobs: { j: { steps: [{ run: 'npm run lint' }] } } })).toEqual([]);
+  });
+});
+
+describe('AI-17 as conferências da concurrency enxergam o que procuram (controle negativo)', () => {
+  const GOOD_CONCURRENCY = parse(`
+concurrency:
+  group: \${{ github.workflow }}-\${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
+`) as Workflow;
+
+  it('AI-17 a conferência do grupo reprova grupo fixo, sem o PR ou sem o workflow, e aceita workflow mais PR ou ref', () => {
+    expect(groupSeparatesPrAndWorkflow({})).toBe(false);
+    expect(groupSeparatesPrAndWorkflow({ concurrency: { group: 'ci' } })).toBe(false);
+    expect(groupSeparatesPrAndWorkflow({ concurrency: { group: '${{ github.workflow }}' } })).toBe(false);
+    expect(groupSeparatesPrAndWorkflow({ concurrency: { group: '${{ github.ref }}' } })).toBe(false);
+    expect(groupSeparatesPrAndWorkflow({ concurrency: 'ci' })).toBe(false);
+    expect(groupSeparatesPrAndWorkflow(GOOD_CONCURRENCY)).toBe(true);
+    expect(
+      groupSeparatesPrAndWorkflow({ concurrency: { group: '${{ github.workflow }}-${{ github.ref }}' } }),
+    ).toBe(true);
+  });
+
+  it('AI-17 a conferência do cancelamento reprova true fixo, ausência e outra condição, e aceita o event_name', () => {
+    expect(cancelsOnlyPullRequests({})).toBe(false);
+    expect(cancelsOnlyPullRequests({ concurrency: { group: 'g', 'cancel-in-progress': true } })).toBe(false);
+    expect(cancelsOnlyPullRequests({ concurrency: { group: 'g', 'cancel-in-progress': 'true' } })).toBe(false);
+    expect(
+      cancelsOnlyPullRequests({
+        concurrency: { group: 'g', 'cancel-in-progress': "${{ github.ref != 'refs/heads/main' }}" },
+      }),
+    ).toBe(false);
+    expect(cancelsOnlyPullRequests(GOOD_CONCURRENCY)).toBe(true);
+  });
+});
+
+describe('AI-17 o ci.yml cancela a execução anterior do mesmo PR e nunca a da main', () => {
+  it('AI-17 declara concurrency no nível do workflow, e não só dentro de um job', () => {
+    expect(concurrencyOf(ci)).toBeDefined();
+  });
+
+  it('AI-17 o grupo separa o PR (número ou ref) e o workflow', () => {
+    expect(groupSeparatesPrAndWorkflow(ci)).toBe(true);
+  });
+
+  it('AI-17 cancel-in-progress é a expressão github.event_name == pull_request, e não true fixo', () => {
+    expect(cancelsOnlyPullRequests(ci)).toBe(true);
+  });
+
+  it('AI-17 o workflow continua rodando no push da main', () => {
+    const triggers = (ci as { on?: { push?: { branches?: string[] } } }).on;
+
+    expect(triggers?.push?.branches).toContain('main');
   });
 });
 

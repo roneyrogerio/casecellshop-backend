@@ -321,6 +321,97 @@ describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a config
   });
 });
 
+// O github-guard confia no que está em .claude/reviews/ e em .claude/state/ (AI-15, AI-16): nenhuma sessão os edita,
+// a principal inclusive. O NotebookEdit traz o caminho em notebook_path; Edit e Write, em file_path.
+function writeTool(toolName: string, agentType: string | undefined, filePath: string): HookResult {
+  const key = toolName === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+  return runHook(
+    JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      cwd: root,
+      ...(agentType ? { agent_type: agentType } : {}),
+      tool_input: { [key]: filePath, content: 'x', new_source: 'x' },
+    }),
+  );
+}
+
+const TRUSTED_FOLDERS = [
+  '.claude/reviews/abc.md',
+  '.claude/reviews/sub/dir/abc.md',
+  '.claude/reviews/x.test.ts',
+  '.claude/state/security-review/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b',
+  '.claude/state/stop-exceptions.log',
+  '.claude/state/x.test.ts',
+];
+
+const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
+const WRITERS: [string, string | undefined][] = [
+  ['a sessão principal', undefined],
+  ['o implementer', 'implementer'],
+  ['o test-writer', 'test-writer'],
+  ['o reviewer', 'reviewer'],
+];
+
+function trustedVariants(relative: string): [string, string][] {
+  return [
+    ...variants(relative),
+    ['com .. passando por outra pasta', relative.replace('.claude/', '.claude/hooks/../')],
+    ['com .. saindo de src', `src/../${relative}`],
+    ['com ./ no meio', relative.replace('.claude/', './.claude/./')],
+  ];
+}
+
+describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .claude/state/', () => {
+  it.each(TRUSTED_FOLDERS)('AI-15 ninguém edita %s, por Edit, Write ou NotebookEdit, escrito de qualquer jeito', (path) => {
+    for (const [, agentType] of WRITERS) {
+      for (const tool of EDIT_TOOLS) {
+        for (const [, variant] of trustedVariants(path)) expectDenied(writeTool(tool, agentType, variant));
+      }
+    }
+  });
+
+  it('AI-15 a sessão principal não escreve .Claude/Reviews/x.md com Write', () => {
+    expectDenied(writeTool('Write', undefined, '.Claude/Reviews/x.md'));
+    expectDenied(writeTool('Write', undefined, join(root, '.Claude/Reviews/x.md')));
+  });
+
+  it('AI-15 a sessão principal não edita .claude/state/ de um caminho absoluto com maiúsculas', () => {
+    expectDenied(writeTool('Edit', undefined, join(root, '.CLAUDE/STATE/security-review/ABC')));
+  });
+
+  // Controles negativos: a negação é só dessas duas pastas, e a sessão principal segue editando o resto de .claude/.
+  it.each([
+    '.claude/settings.json',
+    '.claude/hooks/x.mjs',
+    '.claude/hooks/post-tool.mjs',
+    '.claude/agents/reviewer.md',
+    '.claude/reviews-old/x.md',
+    '.claude/reviewsx.md',
+    '.claude/state-old/x',
+    '.claude/statement/x.md',
+    'src/reviews/x.md',
+    'reviews/x.md',
+    'state/x',
+  ])('AI-15 controle: a sessão principal continua editando %s', (path) => {
+    for (const tool of EDIT_TOOLS) {
+      expectAllowed(writeTool(tool, undefined, path));
+      expectAllowed(writeTool(tool, undefined, join(root, path)));
+    }
+  });
+
+  it.each(['src/reviews/x.md', 'src/state/x.ts'])(
+    'AI-15 controle: o implementer continua editando %s, que só lembra as pastas protegidas',
+    (path) => {
+      expectAllowed(writeTool('Write', 'implementer', path));
+    },
+  );
+
+  it('AI-15 controle: o test-writer continua editando um teste comum dentro de .claude/hooks/', () => {
+    expectAllowed(writeTool('Edit', 'test-writer', '.claude/hooks/post-tool.test.ts'));
+  });
+});
+
 describe('FND-08 entrada ilegível e sessão principal', () => {
   it.each([
     ['texto que não é JSON', 'isto não é json'],

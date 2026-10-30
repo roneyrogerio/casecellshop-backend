@@ -773,6 +773,128 @@ describe('AI-03 o hook de parada grava o relatório do reviewer', () => {
   });
 });
 
+const postToolFile = join(import.meta.dirname, 'post-tool.mjs');
+
+// O revisor em segundo plano entrega o relatório pela ferramenta SubagentHandback; o PostToolUse grava e,
+// depois, a parada dele traz só o texto de encerramento (AI-15).
+function runHandback(sandbox: Sandbox, agentId: string, message: string) {
+  const result = spawnSync(process.execPath, [postToolFile], {
+    input: JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      session_id: 's1',
+      cwd: sandbox.project,
+      agent_type: 'reviewer',
+      agent_id: agentId,
+      tool_name: 'SubagentHandback',
+      tool_input: { message },
+    }),
+    encoding: 'utf8',
+    cwd: sandbox.project,
+    env: hookEnv(sandbox),
+  });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function reviewerStop(agentId: string, lastMessage: string) {
+  return { agent_type: 'reviewer', agent_id: agentId, session_id: 's1', last_assistant_message: lastMessage };
+}
+
+function savedReport(sandbox: Sandbox, agentId: string): string {
+  return readFileSync(join(sandbox.project, '.claude', 'reviews', `${agentId}.md`), 'utf8');
+}
+
+describe('AI-15 o hook de parada não sobrescreve o relatório entregue pelo SubagentHandback', () => {
+  it('AI-15 depois do SubagentHandback com "A", a parada do mesmo reviewer com "B" deixa o relatório em "A"', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    expect(runHandback(sandbox, 'R1', 'A').code).toBe(0);
+
+    const result = runStopOnly(sandbox, reviewerStop('R1', 'B'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  it('AI-15 numa retomada sem SubagentHandback, a segunda parada de R1 com "C" volta a gravar a mensagem final', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+
+    // A retomada dispara o SubagentStart de novo e o revisor encerra sem entregar nada pela ferramenta.
+    const result = runHook(sandbox, reviewerStop('R1', 'C'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('C');
+  });
+
+  it('AI-15 a segunda parada de R1 com "C" também grava quando o SubagentStart da retomada não rodou', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+
+    runStopOnly(sandbox, reviewerStop('R1', 'C'));
+
+    expect(savedReport(sandbox, 'R1')).toBe('C');
+  });
+
+  it('AI-15 uma nova entrega pelo SubagentHandback depois da retomada vale de novo contra a parada seguinte', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+    runStopOnly(sandbox, reviewerStop('R1', 'B'));
+    runStopOnly(sandbox, reviewerStop('R1', 'C'));
+
+    runHandback(sandbox, 'R1', 'D');
+    runStopOnly(sandbox, reviewerStop('R1', 'E'));
+
+    expect(savedReport(sandbox, 'R1')).toBe('D');
+  });
+
+  it('AI-15 a parada de R1 sem texto final, depois do SubagentHandback, também deixa o relatório intacto', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runStart(sandbox, { ...reviewerStop('R1', ''), cwd: sandbox.project });
+    runHandback(sandbox, 'R1', 'A');
+
+    const result = runStopOnly(sandbox, { agent_type: 'reviewer', agent_id: 'R1', session_id: 's1' });
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  // Controle negativo: o SubagentHandback de um revisor não protege o relatório de outro.
+  it('AI-15 controle: o SubagentHandback de R1 não impede a parada de R2 de gravar a mensagem final dele', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    runHandback(sandbox, 'R1', 'A');
+
+    runHook(sandbox, reviewerStop('R2', 'B'));
+
+    expect(savedReport(sandbox, 'R2')).toBe('B');
+    expect(savedReport(sandbox, 'R1')).toBe('A');
+  });
+
+  // Controle negativo: o revisor em primeiro plano não usa a ferramenta, e a mensagem final continua sendo o relatório.
+  it('AI-15 controle: o revisor em primeiro plano, sem SubagentHandback, tem a mensagem final gravada', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    const result = runHook(sandbox, reviewerStop('R3', '## Revisão 1\ntexto\n'));
+
+    expect(result.code).toBe(0);
+    expect(savedReport(sandbox, 'R3')).toBe('## Revisão 1\ntexto\n');
+  });
+
+  it('AI-15 controle: duas paradas seguidas do revisor em primeiro plano gravam sempre a última mensagem', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+
+    runHook(sandbox, reviewerStop('R3', 'primeira'));
+    runHook(sandbox, reviewerStop('R3', 'segunda'));
+
+    expect(savedReport(sandbox, 'R3')).toBe('segunda');
+  });
+});
+
 // AI-12 com git de verdade: o retrato do SubagentStart contra o estado na parada, sem depender de como o comando foi escrito.
 function exceptionLog(sandbox: Sandbox): string | undefined {
   const file = join(sandbox.project, '.claude', 'state', 'stop-exceptions.log');

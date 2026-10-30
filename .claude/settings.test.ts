@@ -190,6 +190,53 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(true);
   });
 
+  it('AI-06 o matcher do github-guard cobre também o update_pull_request (AI-16)', () => {
+    const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+    );
+
+    expect(entry).toBeDefined();
+    expect(matches(entry?.matcher, 'mcp__github__update_pull_request')).toBe(true);
+    expect(matches(entry?.matcher, 'mcp__github__create_pull_request')).toBe(true);
+    expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(true);
+  });
+
+  // Controle negativo: o matcher é uma regex ancorada; a ferramenta de nome parecido não entra por engano.
+  it('AI-06 o matcher do github-guard não cobre update_pull_request_branch nem a leitura de PR', () => {
+    const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+    );
+
+    expect(entry).toBeDefined();
+    expect(matches(entry?.matcher, 'mcp__github__update_pull_request_branch')).toBe(false);
+    expect(matches(entry?.matcher, 'mcp__github__pull_request_read')).toBe(false);
+  });
+
+  it('AI-06 um hook PostToolUse cobre SubagentHandback e Skill e chama o post-tool.mjs', () => {
+    const entries = settings.hooks?.PostToolUse ?? [];
+
+    const entry = entries.find((candidate) =>
+      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/post-tool.mjs')),
+    );
+
+    expect(entry).toBeDefined();
+    expect(commandsOf(entry ? [entry] : [])).toContain('node "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool.mjs"');
+    expect(matches(entry?.matcher, 'SubagentHandback')).toBe(true);
+    expect(matches(entry?.matcher, 'Skill')).toBe(true);
+  });
+
+  it.each(['Bash', 'Edit', 'Read', 'Write', 'mcp__github__add_issue_comment', 'SkillX'])(
+    'AI-06 o matcher do PostToolUse não cobre %s',
+    (toolName) => {
+      const entry = (settings.hooks?.PostToolUse ?? []).find((candidate) =>
+        commandsOf([candidate]).some((command) => command.includes('.claude/hooks/post-tool.mjs')),
+      );
+
+      expect(entry).toBeDefined();
+      expect(matches(entry?.matcher, toolName)).toBe(false);
+    },
+  );
+
   it('AI-06 o matcher do github-guard não cobre uma ferramenta sem relação', () => {
     const entries = settings.hooks?.PreToolUse ?? [];
     const entry = entries.find((candidate) =>
