@@ -82,10 +82,80 @@ function pushProblem({ globals, args }) {
   return null;
 }
 
+// Escrita de arquivo pelo shell (AI-11): a guarda de caminho só confere as
+// ferramentas Edit e Write, então um subagente que grava pelo Bash passa por
+// fora dela. Os interpretadores e o sed só contam na posição de comando, e não
+// como palavra num grep; o redirecionamento só conta fora de aspas, a não ser
+// dentro de um sh -c, e o corpo de um heredoc não é comando.
+const INTERPRETERS = new Set(['python', 'python3', 'perl', 'ruby']);
+const WRAPPERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'xargs', 'sudo']);
+const SHELLS = new Set(['sh', 'bash', 'zsh']);
+
+function stripHeredocBodies(command) {
+  const lines = command.split('\n');
+  const kept = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    kept.push(lines[i]);
+    const marker = /<<-?\s*["']?(\w+)["']?/.exec(lines[i]);
+    if (!marker) continue;
+    while (i + 1 < lines.length && lines[i + 1].trim() !== marker[1]) i += 1;
+    i += 1;
+  }
+  return kept.join('\n');
+}
+
+function commandWords(words) {
+  const found = [];
+  let expectCommand = true;
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const name = word.slice(word.lastIndexOf('/') + 1);
+    if (expectCommand) {
+      if (/^\w+=/.test(word) || (word.startsWith('-') && i > 0)) continue;
+      found.push({ name, args: words.slice(i + 1) });
+      expectCommand = WRAPPERS.has(name);
+      if (SHELLS.has(name) && words[i + 1] === '-c') {
+        expectCommand = true;
+        i += 1;
+      }
+    }
+  }
+  return found;
+}
+
+function shellWriteProblem(command) {
+  const text = stripHeredocBodies(command);
+  for (const words of segmentsOf(text)) {
+    for (const { name, args } of commandWords(words)) {
+      if (INTERPRETERS.has(name)) return `o interpretador ${name}`;
+      if (name === 'sed' && args.some((arg) => arg === '--in-place' || /^-[A-Za-z]*i/.test(arg))) return 'o sed -i';
+      if (name === 'tee') return 'o tee';
+    }
+  }
+  for (const inner of text.matchAll(/\b(?:sh|bash|zsh)\s+-c\s+(["'])([\s\S]*?)\1/g)) {
+    const problem = shellWriteProblem(inner[2]);
+    if (problem) return problem;
+  }
+  const unquoted = text.replaceAll(/'[^']*'|"(?:\\.|[^"\\])*"/g, '');
+  for (const redirect of unquoted.matchAll(/(?:&>>?|\d*>>?)(?!&)\s*([^\s;&|<>()]+)/g)) {
+    if (redirect[1] !== '/dev/null') return `o redirecionamento para ${redirect[1]}`;
+  }
+  return null;
+}
+
 export function check(input) {
   const agentType = input.agent_type;
   const subagent = SUBAGENTS.has(agentType);
   const command = String(input.tool_input?.command ?? '');
+  if (subagent) {
+    const problem = shellWriteProblem(command);
+    if (problem) {
+      return {
+        allow: false,
+        reason: `${agentType} não escreve arquivo pelo Bash (${problem}): use as ferramentas Edit e Write, onde a guarda de caminho confere o papel na hora (AI-11).`,
+      };
+    }
+  }
   for (const words of segmentsOf(command)) {
     for (const call of gitCalls(words)) {
       if (subagent) {
