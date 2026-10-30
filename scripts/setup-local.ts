@@ -209,6 +209,33 @@ export async function setupBot(
   return true;
 }
 
+const IDENTITY_KEYS = ['casecellshop.identity', 'casecellshop.botLogin', 'casecellshop.keychainService', 'casecellshop.tokenStore'];
+
+function localValue(root: string, key: string): string | undefined {
+  const result = spawnSync('git', ['-C', root, 'config', '--local', '--get', key], { encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+// A identidade nova precisa estar gravada enquanto o setup roda (o token é lido
+// pelo item que ela aponta), mas, se o setup falhar, o clone não pode ficar
+// apontando para um item recusado ou de outra conta: o git config volta a ser
+// exatamente o de antes, inclusive nas chaves que não existiam.
+export async function configureIdentity(
+  root: string,
+  identity: Identity,
+  store: TokenStore,
+  deps: { setupBot: () => Promise<boolean> },
+): Promise<boolean> {
+  const before = new Map(IDENTITY_KEYS.map((key) => [key, localValue(root, key)]));
+  writeIdentity(root, identity);
+  writeTokenStore(root, store);
+  if (await deps.setupBot()) return true;
+  for (const [key, value] of before) {
+    spawnSync('git', ['-C', root, 'config', '--local', ...(value === undefined ? ['--unset-all', key] : [key, value])], { encoding: 'utf8' });
+  }
+  return false;
+}
+
 async function confirmInTerminal(message: string): Promise<boolean> {
   const { default: select } = await import('@inquirer/select');
   const answer = await select({ message, choices: [{ value: 'nao', name: 'Não, manter o token guardado' }, { value: 'sim', name: 'Sim, trocar' }] });
@@ -231,28 +258,33 @@ async function main(): Promise<number> {
   }
   const { identity } = parsed;
   console.log(identity.mode === 'bot' ? `Identidade: conta de máquina ${identity.login} (chaveiro: ${identity.keychainService}).` : 'Identidade: a credencial do GitHub desta máquina.');
-  writeIdentity(root, identity);
-  if (identity.mode === 'bot') {
-    // Sem --token-store, vale o que já estava gravado no clone.
-    const requested: TokenStore | undefined = 'tokenStore' in parsed ? (parsed as { tokenStore?: TokenStore }).tokenStore : undefined;
-    const store = requested ?? readTokenStore(root);
-    writeTokenStore(root, store);
-    if (store === 'file') console.log(`O token fica em ${tokenFilePath(identity.keychainService)}.`);
-    const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-    const ok = await setupBot(root, identity, store, {
-      readToken: () => readToken(identity, root),
-      checkToken: (token) => checkToken(token),
-      keychainStatus: () => keychainStatus(),
-      storeToken: (mode) => (store === 'file' ? storeTokenInFile(identity) : Promise.resolve(storeTokenInteractively(identity, mode))),
-      confirm: confirmInTerminal,
-      interactive,
-      installHelper: () => configureGitBot(root),
-      log: (message) => console.log(message),
-    });
-    if (!ok) return 1;
-  } else {
-    writeTokenStore(root, 'system');
-    removeGitBot(root);
+  // Sem --token-store, vale o que já estava gravado no clone.
+  const requested: TokenStore | undefined = 'tokenStore' in parsed ? (parsed as { tokenStore?: TokenStore }).tokenStore : undefined;
+  const store: TokenStore = identity.mode === 'bot' ? (requested ?? readTokenStore(root)) : 'system';
+  if (identity.mode === 'bot' && store === 'file') console.log(`O token fica em ${tokenFilePath(identity.keychainService)}.`);
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const ok = await configureIdentity(root, identity, store, {
+    setupBot:
+      identity.mode === 'bot'
+        ? () =>
+            setupBot(root, identity, store, {
+              readToken: () => readToken(identity, root),
+              checkToken: (token) => checkToken(token),
+              keychainStatus: () => keychainStatus(),
+              storeToken: (mode) => (store === 'file' ? storeTokenInFile(identity) : Promise.resolve(storeTokenInteractively(identity, mode))),
+              confirm: confirmInTerminal,
+              interactive,
+              installHelper: () => configureGitBot(root),
+              log: (message) => console.log(message),
+            })
+        : () => {
+            removeGitBot(root);
+            return Promise.resolve(true);
+          },
+  });
+  if (!ok) {
+    console.log('A configuração anterior deste clone foi mantida.');
+    return 1;
   }
   installCommitHook(root);
   // O diagnóstico é informativo: o que falta além da identidade (Docker, Node)

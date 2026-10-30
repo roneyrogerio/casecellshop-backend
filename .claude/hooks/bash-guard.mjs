@@ -84,12 +84,71 @@ function pushProblem({ globals, args }) {
 
 // Escrita de arquivo pelo shell (AI-11): a guarda de caminho só confere as
 // ferramentas Edit e Write, então um subagente que grava pelo Bash passa por
-// fora dela. Os interpretadores e o sed só contam na posição de comando, e não
-// como palavra num grep; o redirecionamento só conta fora de aspas, a não ser
-// dentro de um sh -c, e o corpo de um heredoc não é comando.
-const INTERPRETERS = new Set(['python', 'python3', 'perl', 'ruby']);
-const WRAPPERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'xargs', 'sudo']);
+// fora dela. O comando é lido como o shell o lê: o texto entre aspas é uma
+// palavra só (o padrão de um grep não vira comando), mas o alvo entre aspas de
+// um redirecionamento continua sendo um arquivo. Os interpretadores e o sed só
+// contam na posição de comando, o corpo de um heredoc não é comando, e o
+// conteúdo de um sh -c é lido de novo, como comando.
+const INTERPRETER = /^(?:python[\d.]*|perl[\d.]*|ruby[\d.]*)$/;
+const WRAPPERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'xargs', 'sudo', 'timeout', 'nice']);
 const SHELLS = new Set(['sh', 'bash', 'zsh']);
+
+// Segmentos (separados por ; & | ( ) { } crase e quebra de linha fora de
+// aspas) e os alvos de redirecionamento de saída. O >| é operador, e não pipe.
+function readShell(text) {
+  const segments = [];
+  const targets = [];
+  let words = [];
+  let word = null;
+  let pendingRedirect = false;
+  const endWord = () => {
+    if (word === null) return;
+    if (pendingRedirect) {
+      targets.push(word);
+      pendingRedirect = false;
+    } else words.push(word);
+    word = null;
+  };
+  const endSegment = () => {
+    endWord();
+    if (words.length > 0) segments.push(words);
+    words = [];
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      const close = text.indexOf(ch, i + 1);
+      const end = close === -1 ? text.length : close;
+      word = (word ?? '') + text.slice(i + 1, end);
+      i = end;
+    } else if (ch === '\\') {
+      word = (word ?? '') + (text[i + 1] ?? '');
+      i += 1;
+    } else if (ch === '>' || (ch === '&' && text[i + 1] === '>')) {
+      // Um número colado antes do > é o descritor, e não uma palavra.
+      if (word !== null && /^\d+$/.test(word)) word = null;
+      endWord();
+      let j = ch === '&' ? i + 2 : i + 1;
+      if (text[j] === '>' || text[j] === '|') j += 1;
+      if (text[j] === '&') {
+        // 2>&1, >&2 e >&-: junção de descritores, não arquivo.
+        i = j;
+        while (/[\d-]/.test(text[i + 1] ?? '')) i += 1;
+        continue;
+      }
+      pendingRedirect = true;
+      i = j - 1;
+    } else if (/[;&|(){}`\n]/.test(ch)) {
+      endSegment();
+    } else if (/\s/.test(ch)) {
+      endWord();
+    } else {
+      word = (word ?? '') + ch;
+    }
+  }
+  endSegment();
+  return { segments, targets };
+}
 
 function stripHeredocBodies(command) {
   const lines = command.split('\n');
@@ -112,11 +171,13 @@ function commandWords(words) {
     const name = word.slice(word.lastIndexOf('/') + 1);
     if (expectCommand) {
       if (/^\w+=/.test(word) || (word.startsWith('-') && i > 0)) continue;
+      // O timeout recebe a duração antes do comando.
+      if (/^\d+(?:\.\d+)?[smhd]?$/.test(word) && found.at(-1)?.name === 'timeout') continue;
       found.push({ name, args: words.slice(i + 1) });
       expectCommand = WRAPPERS.has(name);
       if (SHELLS.has(name) && words[i + 1] === '-c') {
-        expectCommand = true;
-        i += 1;
+        found.push({ name: '-c', args: [words[i + 2] ?? ''] });
+        break;
       }
     }
   }
@@ -124,21 +185,20 @@ function commandWords(words) {
 }
 
 function shellWriteProblem(command) {
-  const text = stripHeredocBodies(command);
-  for (const words of segmentsOf(text)) {
+  const { segments, targets } = readShell(stripHeredocBodies(command));
+  const target = targets.find((path) => path !== '/dev/null');
+  if (target !== undefined) return `o redirecionamento para ${target}`;
+  for (const words of segments) {
     for (const { name, args } of commandWords(words)) {
-      if (INTERPRETERS.has(name)) return `o interpretador ${name}`;
+      if (name === '-c') {
+        const inner = shellWriteProblem(args[0]);
+        if (inner) return inner;
+        continue;
+      }
+      if (INTERPRETER.test(name)) return `o interpretador ${name}`;
       if (name === 'sed' && args.some((arg) => arg === '--in-place' || /^-[A-Za-z]*i/.test(arg))) return 'o sed -i';
       if (name === 'tee') return 'o tee';
     }
-  }
-  for (const inner of text.matchAll(/\b(?:sh|bash|zsh)\s+-c\s+(["'])([\s\S]*?)\1/g)) {
-    const problem = shellWriteProblem(inner[2]);
-    if (problem) return problem;
-  }
-  const unquoted = text.replaceAll(/'[^']*'|"(?:\\.|[^"\\])*"/g, '');
-  for (const redirect of unquoted.matchAll(/(?:&>>?|\d*>>?)(?!&)\s*([^\s;&|<>()]+)/g)) {
-    if (redirect[1] !== '/dev/null') return `o redirecionamento para ${redirect[1]}`;
   }
   return null;
 }

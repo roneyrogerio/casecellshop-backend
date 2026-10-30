@@ -30,6 +30,14 @@ function markdownIn(dir: string): string[] {
     .map((file) => join(dir, file));
 }
 
+// As regras podem ficar em subpastas de .claude/rules/ e carregam do mesmo jeito.
+function markdownUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => join(dir, file));
+}
+
 function skillFiles(skillsDir: string): string[] {
   if (!existsSync(skillsDir)) return [];
   return readdirSync(skillsDir, { withFileTypes: true })
@@ -44,7 +52,7 @@ export function checkInstructions(rootDir: string): string[] {
       .filter((path) => existsSync(path))
       .map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
     ...markdownIn(join(rootDir, '.claude', 'agents')).map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
-    ...markdownIn(join(rootDir, '.claude', 'rules')).map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
+    ...markdownUnder(join(rootDir, '.claude', 'rules')).map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
     ...skillFiles(join(rootDir, '.claude', 'skills')).map((path) => ({ path, max: MAX_SKILL_LINES })),
   ];
 
@@ -53,7 +61,7 @@ export function checkInstructions(rootDir: string): string[] {
     const lines = countLines(readFileSync(path, 'utf8'));
     if (lines > max) violations.push(`${relative(rootDir, path)} tem ${lines} linhas, acima do limite de ${max}`);
   }
-  for (const path of markdownIn(join(rootDir, '.claude', 'rules'))) {
+  for (const path of markdownUnder(join(rootDir, '.claude', 'rules'))) {
     const chars = readFileSync(path, 'utf8').length;
     if (chars > MAX_RULE_CHARS) {
       violations.push(`${relative(rootDir, path)} tem ${chars} caracteres, acima do limite de ${MAX_RULE_CHARS} (o Claude Code entrega só o começo)`);

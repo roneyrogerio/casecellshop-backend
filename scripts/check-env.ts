@@ -192,11 +192,16 @@ export async function collectFacts(root: string): Promise<Facts> {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
   const identity = readIdentity(root);
   const tokenStore = readTokenStore(root);
-  const token = remote ? undefined : readToken(identity, root);
   if (!remote && !commitHookInstalled(root)) installCommitHook(root);
-  const plan = planGitSetup({ remote, identity, tokenPresent: Boolean(token), credentialHelperIsBot: gitHelperIsBot(root) });
+  let login = await githubLogin(remote, remote ? undefined : readToken(identity, root));
+  const plan = planGitSetup({ remote, identity, githubLogin: login, credentialHelperIsBot: gitHelperIsBot(root) });
   if (plan === 'configure') configureGitBot(root);
-  if (plan === 'unconfigure') removeGitBot(root);
+  if (plan === 'unconfigure') {
+    // No modo self, o helper do projeto respondia quit=1 à leitura da
+    // credencial: depois de tirá-lo, a credencial da máquina é lida de novo.
+    removeGitBot(root);
+    login = await githubLogin(remote, readToken(identity, root));
+  }
   return {
     remote,
     nodeVersion: process.version,
@@ -206,7 +211,7 @@ export async function collectFacts(root: string): Promise<Facts> {
     originUrl: run('git', ['-C', root, 'remote', 'get-url', '--push', 'origin']).out,
     credentialHelperIsBot: remote || gitHelperIsBot(root),
     identity,
-    githubLogin: await githubLogin(remote, token),
+    githubLogin: login,
     tokenStore,
     keychainStatus: remote || identity?.mode !== 'bot' || tokenStore === 'file' ? 'ok' : keychainStatus(),
     mcpRegistered: declaresGithubServer(root),
@@ -215,19 +220,21 @@ export async function collectFacts(root: string): Promise<Facts> {
 }
 
 // O que o início de sessão pode resolver sozinho: ajustar a credencial do git ao
-// modo escolhido. O resto (escolher a identidade, guardar o token, aceitar a
-// confiança da pasta) só uma pessoa faz, e o relatório explica.
+// modo escolhido. No modo bot, o helper só entra com o token da conta
+// configurada: com o token de outra conta, o push sairia como ela. O resto
+// (escolher a identidade, guardar o token, aceitar a confiança da pasta) só uma
+// pessoa faz, e o relatório explica.
 export function planGitSetup(facts: {
   remote: boolean;
   identity: Identity | undefined;
-  tokenPresent: boolean;
+  githubLogin: string | null;
   credentialHelperIsBot: boolean;
 }): 'configure' | 'unconfigure' | 'skip' | 'explain' {
   if (facts.remote) return 'skip';
   if (!facts.identity) return 'explain';
   if (facts.identity.mode === 'self') return facts.credentialHelperIsBot ? 'unconfigure' : 'skip';
   if (facts.credentialHelperIsBot) return 'skip';
-  return facts.tokenPresent ? 'configure' : 'explain';
+  return facts.githubLogin === facts.identity.login ? 'configure' : 'explain';
 }
 
 function declaresGithubServer(root: string): boolean {
