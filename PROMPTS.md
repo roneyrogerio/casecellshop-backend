@@ -289,3 +289,10 @@ Never commit or push without my approval. Talk to me in Brazilian Portuguese.
 - **O que a IA fez:** o `reviewer` marcou os oito achados como corrigidos, com a evidência de cada um, e achou o A9: o commitlint entrou sem a linha na tabela de ferramentas. Ele também notou que a `main` local estava defasada, o que pôs na lista do A4 um commit que já estava na base.
 - **Resultado:** o fechamento moveu a AD-007 para o `STATE-ARCHIVE.md` antes de mudar os status, para o `STATE.md` caber no limite; a AD-010 e a AD-011 passaram a "aceita", a AD-008 a "alterada pela AD-011", e o commitlint ganhou a linha "Mensagens de commit" (A9).
 - **Verificação:** `npm run check:specs` e o CI do commit de fechamento.
+
+### Auditoria das instruções (`/doctor prompt-audit`)
+
+- **Pedido:** o mantenedor rodou o `/doctor prompt-audit` depois das mudanças no `AGENTS.md`, nos agentes e no `.claude/settings.json`.
+- **O que a IA fez:** auditou o `CLAUDE.md`, o `AGENTS.md`, os quatro agentes, a skill de usuário `prototype` e o plugin `impeccable` contra o Claude Opus 5.5 (sessão principal, `planner`, `reviewer`) e o Claude Sonnet 5.5 (`test-writer`, `implementer`). Não achou texto escrito para modelo antigo; achou cinco fatos que o M1 deixou para trás.
+- **Resultado:** o `reviewer` compara com a `origin/main`, e não com a `main` local, que estava defasada; o `AGENTS.md` diz que a guarda cobre `Edit`, `Write` e `NotebookEdit`, e não o Bash (R10); o `implementer` só reporta pronto com todas as checagens do CI; a lista de comandos do `AGENTS.md` ficou completa; e saiu a referência ao `opusplan`. Dois pontos ficaram só sinalizados: a lista de comandos do `reviewer` e a exceção do `FND-07` e do `FND-08` à regra de nascer falhando.
+- **Verificação:** `npm run check:specs`, os testes unitários e o CI.

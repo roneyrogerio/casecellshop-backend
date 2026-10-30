@@ -26,7 +26,7 @@ Write your report in Brazilian Portuguese. Identifiers stay in English; code com
 
 ## Run
 
-`npx tsc --noEmit`, `npm run lint` and `npm test`. Report done only when all three pass.
+Every check that `.github/workflows/ci.yml` runs (lint, `tsc`, tests, `openapi.yaml` up to date, spec limits and commit messages). Report done only when all of them pass.
 
 ## Never
 

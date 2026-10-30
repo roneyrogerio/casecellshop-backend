@@ -12,7 +12,7 @@ Write the whole review in Brazilian Portuguese. Keep identifiers, paths, command
 
 ## Scope
 
-The current branch against `main`: `git diff main...HEAD` and `git log main..HEAD`.
+The current branch against the PR base, `origin/main` (the local `main` may be stale): `git diff origin/main...HEAD` and `git log origin/main..HEAD`.
 
 Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `npx tsc --noEmit`. Never edit files, commit, push, post on GitHub or touch a database outside the test containers. Your verdict informs the maintainer; it is never a GitHub approval or change request.
 
@@ -30,7 +30,7 @@ Use Bash only for read-only commands and to run `npm test`, `npm run lint` and `
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
 5. **Contract:** routes, statuses, headers and bodies match the contract in `src/contract/`; handlers take their types from it; the committed `openapi.yaml` is the generated one; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
-7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p main..HEAD -- test/ '*.test.ts'`); no change to `vitest.config.ts`, `.github/workflows/` or the test scripts in `package.json` narrows which tests run or drops a CI check (check `git log -p main..HEAD -- vitest.config.ts .github/workflows package.json`); spec files within their word limits; accepted ADs not edited.
+7. **Conventions:** commit messages and language rules from `CONVENTIONS.md`; test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none of them deletes, skips or weakens a test unless an earlier finding asked for that change (check `git log -p origin/main..HEAD -- test/ '*.test.ts'`); no change to `vitest.config.ts`, `.github/workflows/` or the test scripts in `package.json` narrows which tests run or drops a CI check (check `git log -p origin/main..HEAD -- vitest.config.ts .github/workflows package.json`); spec files within their word limits; accepted ADs not edited.
 
 ## Security checklist
 

@@ -32,7 +32,7 @@ The workflow, the conventions, the decision-record rule and the decisions in `ST
 
 ## Workflow
 
-The main session orchestrates. It runs on `opus` with `effortLevel: high` (set in `.claude/settings.json`) for planning and executing alike, and changes only when the maintainer explicitly asks for another model or effort. It writes the specs, the contract in `src/contract/` (and regenerates `openapi.yaml`), `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
+The main session orchestrates. It runs on `opus` with `effortLevel: high` (set in `.claude/settings.json`), and changes only when the maintainer explicitly asks for another model or effort. It writes the specs, the contract in `src/contract/` (and regenerates `openapi.yaml`), `ARCHITECTURE.md` and the other docs, makes every commit and opens the PRs. Tests come only from `test-writer`, and production code only from `implementer`. Agents run one at a time. For each milestone:
 
 1. Delegate to `planner`: it proposes the milestone plan and the spec deviations. The maintainer approves; the main session updates the spec.
 2. Draft the milestone section of `ARCHITECTURE.md`, add the criteria to `spec.md` and the routes to the contract, then regenerate `openapi.yaml`. Commit them and open a draft PR with the approved plan as a checklist in its description.
@@ -70,7 +70,7 @@ Record a decision in the PR where it is made, so the reasoning stays reviewable 
 
 Claude Code enforces these whatever the instructions say (`.claude/settings.json`):
 
-- `test-writer` can edit only `*.test.ts` files and `test/`; `implementer` cannot edit `*.test.ts` files, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `CLAUDE.md`. A `PreToolUse` hook keyed by `agent_type` checks every edit (`.claude/hooks/path-guard.mjs`).
+- `test-writer` can edit only `*.test.ts` files and `test/`; `implementer` cannot edit `*.test.ts` files, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` or `CLAUDE.md`. A `PreToolUse` hook keyed by `agent_type` checks every `Edit`, `Write` and `NotebookEdit` call (`.claude/hooks/path-guard.mjs`). Writes through Bash are not covered (R10), so the main session checks `git status` against the agent's role after each call.
 - `git commit`, `git push` and PR writes with `gh` always ask the maintainer, in every permission mode.
 - Force pushes, `gh pr merge`, `gh pr review`, `gh issue create` and reading `.env` files are denied.
 - Bash rules match the usual form of a command and are not a security boundary; the reviewer's history check and the maintainer's merge stay the final checks. Never work around a guardrail: report the block instead.
@@ -139,4 +139,4 @@ The defaults live in each agent's frontmatter in `.claude/agents/`:
 
 ## Commands
 
-Created in M1: `docker compose up`, `npm run openapi`, `npm test`, `npm run test:unit`, `npm run lint`, `npx tsc --noEmit`.
+`docker compose up`, `npm test`, `npm run test:unit`, `npm run lint`, `npm run typecheck`, `npm run openapi` (`-- --check` to compare), `npm run lint:openapi`, `npm run check:specs` and `npm run lint:commits`.
