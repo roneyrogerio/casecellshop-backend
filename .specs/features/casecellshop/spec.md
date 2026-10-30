@@ -12,6 +12,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 | `CAT` | Vitrine e sincronização | M4 |
 | `OBS` | Observabilidade | M1 a M5 |
 | `DOC` | Design conceitual | M1 a M6 |
+| `AI` | Fábrica agêntica (o fluxo de IA, não o produto) | F1 |
 
 ## Fundação
 
@@ -20,9 +21,22 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 - **FND-03** Uma requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` no corpo e no `X-Request-Id`.
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
 - **FND-05** O span do repositório sai como filho do span da requisição.
-- **FND-06** O CI falha se um arquivo de `.specs/` passar do limite de tamanho do [`README`](../../README.md), ou se o `AGENTS.md` ou um agente de `.claude/agents/` passar de 200 linhas ([`CONVENTIONS.md`](../../codebase/CONVENTIONS.md)).
+- **FND-06** O CI falha se um arquivo que carrega em toda sessão passar do limite que o Claude Code recomenda: 200 linhas no `AGENTS.md`, no `CLAUDE.md` e em cada agente de `.claude/agents/`, e 500 linhas em cada `SKILL.md` de `.claude/skills/`. As specs não têm teto de palavras: os agentes as leem por trecho, e não inteiras (AD-012).
 - **FND-07** O CI falha se o `openapi.yaml` commitado divergir do gerado pelo contrato em `src/contract/`, ou se não passar no lint de OpenAPI 3.1.
 - **FND-08** A guarda de caminho (`.claude/hooks/path-guard.mjs`) nega ao `test-writer` editar fora de `test/` e dos arquivos `*.test.ts`, e ao `implementer` editar os arquivos `*.test.ts`, `test/`, `.specs/`, `.claude/`, `src/contract/`, `openapi.yaml`, `ARCHITECTURE.md`, `AGENTS.md` e `CLAUDE.md`, com o caminho relativo, absoluto, com `..` ou em outra caixa; nega também um caminho fora do repositório e uma entrada ilegível, e deixa passar a sessão principal.
+
+## Fábrica agêntica
+
+Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de cada um está na AD-012 e na tabela de ferramentas do [`STATE.md`](../../project/STATE.md). Os testes ficam ao lado do que testam.
+
+- **AI-01** A conferência de migrações do CI só olha os `.sql`: aceita uma migração nova e a remoção do `migrations/store/.gitkeep`, e reprova alterar ou apagar um `.sql` que já está na base.
+- **AI-02** `it.only`, `it.skip`, `describe.only` e `describe.skip` reprovam o `npm run lint`, e todo `*.test.ts` fora de `test/integration/` roda no projeto `unit` do Vitest, para que nenhum teste fique de fora do CI sem aviso.
+- **AI-03** O hook de parada (`.claude/hooks/subagent-stop.mjs`) devolve o `implementer` ao trabalho enquanto o lint, o typecheck ou os testes ligados aos arquivos alterados falharem, e devolve o `test-writer` enquanto o lint ou o typecheck falharem. Na quarta parada do mesmo agente, ele deixa terminar e avisa que a falha virou exceção para a sessão principal.
+- **AI-04** A guarda de caminho nega ao `implementer` o que configura a verificação (`.github/`, `scripts/`, `vitest.config.ts`, `tsconfig.json`, `.oxlintrc.json`, `commitlint.config.mjs`, `redocly.yaml`, `.npmrc` e `.claude/`) e continua liberando `src/`, `migrations/` e o `package.json`.
+- **AI-05** O `ci.yml` declara `permissions: contents: read` no topo, fixa toda action por SHA, não interpola `github.base_ref` em `run:` e faz o checkout com `persist-credentials: false`. Entra no F2, antes de o repositório ficar público.
+- **AI-06** O `.claude/settings.json` libera `git commit` e o script do bot (`npm run bot`), nega `git push` direto, `gh`, `curl`, `wget` e `security` (que usariam a credencial de administrador do dono ou leriam o token do bot), mantém os `deny` de `.env`, desliga o modo `bypassPermissions` e liga o hook de parada para o `implementer` e o `test-writer`.
+- **AI-08** O script do bot (`scripts/bot.ts`) só monta comandos de uma lista fixa: push da branch atual para ela mesma (nunca para `main`, nunca forçado), PR criado só em rascunho, descrição e comentário só por `--body-file`, marcar pronto ou voltar a rascunho, e leituras do PR, dos checks e do log de um job. Recusa qualquer outro verbo ou argumento, e o token nunca entra nos argumentos do comando.
+- **AI-07** A skill `.claude/skills/marco/SKILL.md` existe, só carrega quando invocada (`disable-model-invocation: true`) e tem até 500 linhas. O `AGENTS.md` não descreve o roteiro do marco, nenhum agente manda ler o `AGENTS.md` (ele já chega pelo `CLAUDE.md`), e não existe agente `planner` nem menção a ele nas instruções.
 
 ## Checkout
 
