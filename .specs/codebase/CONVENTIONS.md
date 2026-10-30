@@ -4,7 +4,7 @@ Valem para todo o repositório, desde o primeiro commit.
 
 - **Commits:** [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/), no formato `<tipo>(<escopo>): <descrição>`.
   - O tipo fica em inglês, porque é a palavra fixa do padrão: `feat`, `fix`, `test`, `refactor`, `docs`, `build`, `ci` ou `chore`.
-  - A descrição fica em português, com o verbo no presente, em minúscula, sem ponto final e com até 72 caracteres no cabeçalho. Exemplo: `feat(checkout): adiciona reserva atômica de estoque`.
+  - A descrição fica em português, com o verbo no presente, começando em minúscula (nomes próprios no meio ficam como são), sem ponto final e com até 72 caracteres no cabeçalho. O commitlint confere no CI (`commitlint.config.mjs`). Exemplo: `feat(checkout): adiciona reserva atômica de estoque`.
   - O corpo explica a motivação.
   - Um commit com contribuição relevante da IA leva o trailer `Co-Authored-By` do modelo, e a descrição do PR diz o que a IA gerou. Quem faz o merge revisou o resultado e responde por ele.
   - O tipo no início separa feature, correção, teste e documentação no histórico.
