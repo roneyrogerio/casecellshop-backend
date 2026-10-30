@@ -104,6 +104,28 @@ export function hookOwned(rel) {
 const HOOK_OWNED_REASON =
   '.claude/reviews/ e .claude/state/ são gravados só pelos hooks (AI-15): o relatório do reviewer e os registros não se editam à mão.';
 
+// A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
+// para deixar passar. O main só lê a entrada e escreve a resposta do hook.
+export function decide(input, root) {
+  const rule = RULES[input.agent_type];
+  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+  if (!root || !target) return rule ? `${rule.reason} Caminho não informado.` : null;
+
+  // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
+  // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+  const rel = path
+    .relative(root, path.resolve(root, target))
+    .split(path.sep)
+    .join('/')
+    .toLowerCase();
+  if (hookOwned(rel)) return `${HOOK_OWNED_REASON} Caminho: ${rel}`;
+  if (!rule) return null;
+  if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+    return `${rule.reason} O caminho está fora do repositório.`;
+  }
+  return rule.allows(rel) ? null : `${rule.reason} Caminho: ${rel}`;
+}
+
 function main() {
   let input;
   try {
@@ -114,27 +136,8 @@ function main() {
     process.exit(2);
   }
 
-  const rule = RULES[input.agent_type];
-  const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
-  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
-  if (!root || !target) {
-    if (rule) deny(`${rule.reason} Caminho não informado.`);
-    process.exit(0);
-  }
-
-  // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
-  // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
-  const rel = path
-    .relative(root, path.resolve(root, target))
-    .split(path.sep)
-    .join('/')
-    .toLowerCase();
-  if (hookOwned(rel)) deny(`${HOOK_OWNED_REASON} Caminho: ${rel}`);
-  if (!rule) process.exit(0);
-  if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
-    deny(`${rule.reason} O caminho está fora do repositório.`);
-  }
-  if (!rule.allows(rel)) deny(`${rule.reason} Caminho: ${rel}`);
+  const reason = decide(input, process.env.CLAUDE_PROJECT_DIR ?? input.cwd);
+  if (reason) deny(reason);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();
