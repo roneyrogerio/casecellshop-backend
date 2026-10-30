@@ -9,15 +9,33 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collectFacts, diagnose, report, tokenLogin } from './check-env.ts';
 import { configureGitBot, installCommitHook, removeGitBot } from './lib/git-bot.ts';
-import { defaultKeychainService, type Identity, readIdentity, readToken, writeIdentity } from './lib/identity.ts';
+import {
+  defaultKeychainService,
+  type Identity,
+  keychainHelp,
+  keychainStatus,
+  readIdentity,
+  readToken,
+  readTokenStore,
+  type TokenStore,
+  tokenFilePath,
+  writeIdentity,
+  writeTokenFile,
+  writeTokenStore,
+} from './lib/identity.ts';
+
+// O setup e o diagnóstico mostram a mesma ajuda quando falta o chaveiro.
+export { keychainHelp };
 
 export const USAGE = [
   'Uso:',
   '  npm run setup:local',
   '      Na primeira vez, pergunta no terminal; depois, reaproveita a escolha (para trocar o token, por exemplo).',
-  '  npm run setup:local -- --identity bot --login <conta-de-máquina> [--keychain <item-do-chaveiro>]',
+  '  npm run setup:local -- --identity bot --login <conta-de-máquina> [--keychain <item>] [--token-store file]',
   '      Os agentes agem como uma conta de máquina separada da sua; você aprova os PRs deles.',
-  '      O token fica no chaveiro, no item casecellshop-<conta>, a menos que --keychain diga outro.',
+  '      O token fica no chaveiro do sistema (Chaveiro no macOS, Secret Service no Linux), no item',
+  '      casecellshop-<conta>, a menos que --keychain diga outro. Sem chaveiro (servidor, contêiner, WSL),',
+  '      --token-store file o guarda num arquivo em ~/.config/casecellshop/, com permissão 600 e sem cifra.',
   '  npm run setup:local -- --identity self',
   '      Os agentes usam a credencial do GitHub que o git desta máquina já tem. Os PRs saem no seu',
   '      nome, e o GitHub não deixa o autor aprová-los.',
@@ -27,11 +45,13 @@ export const USAGE = [
 // hífen nas pontas, até 39 caracteres.
 const GITHUB_LOGIN = /^(?=.{1,39}$)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
 
-export function parseSetupArgs(argv: string[]): { identity: Identity } | { error: string } {
+type Parsed = { identity: Identity; tokenStore?: TokenStore } | { error: string };
+
+export function parseSetupArgs(argv: string[]): Parsed {
   const options = new Map<string, string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? '';
-    const match = /^--(identity|login|keychain)(?:=(.*))?$/.exec(arg);
+    const match = /^--(identity|login|keychain|token-store)(?:=(.*))?$/.exec(arg);
     if (!match) return { error: `Argumento desconhecido: ${arg}\n\n${USAGE}` };
     const value = match[2] ?? argv[(i += 1)];
     if (value === undefined || value === '' || value.startsWith('--')) return { error: `--${match[1]} sem valor.\n\n${USAGE}` };
@@ -40,20 +60,21 @@ export function parseSetupArgs(argv: string[]): { identity: Identity } | { error
   const mode = options.get('identity');
   const login = options.get('login');
   const keychain = options.get('keychain');
+  const store = options.get('token-store');
   if (mode === 'self') {
-    if (login !== undefined || keychain !== undefined) return { error: `--login e --keychain só valem no modo bot.\n\n${USAGE}` };
+    if (login !== undefined || keychain !== undefined || store !== undefined) {
+      return { error: `--login, --keychain e --token-store só valem no modo bot.\n\n${USAGE}` };
+    }
     return { identity: { mode: 'self' } };
   }
   if (mode !== 'bot') return { error: `Escolha a identidade.\n\n${USAGE}` };
   if (!login || !GITHUB_LOGIN.test(login)) return { error: `Informe um login válido do GitHub em --login.\n\n${USAGE}` };
-  return { identity: { mode: 'bot', login, keychainService: keychain ?? defaultKeychainService(login) } };
+  if (store !== undefined && store !== 'file' && store !== 'system') return { error: `--token-store aceita file ou system.\n\n${USAGE}` };
+  const identity: Identity = { mode: 'bot', login, keychainService: keychain ?? defaultKeychainService(login) };
+  return store === undefined ? { identity } : { identity, tokenStore: store };
 }
 
-export function resolveIdentity(
-  argv: string[],
-  configured: Identity | undefined,
-  interactive: boolean,
-): { identity: Identity } | { error: string } | { ask: true } {
+export function resolveIdentity(argv: string[], configured: Identity | undefined, interactive: boolean): Parsed | { ask: true } {
   if (argv.length > 0) return parseSetupArgs(argv);
   if (configured) return { identity: configured };
   return interactive ? { ask: true } : { error: `Este clone ainda não tem identidade configurada.\n\n${USAGE}` };
@@ -106,17 +127,40 @@ function storeTokenInteractively(identity: Extract<Identity, { mode: 'bot' }>): 
   return stored.status === 0;
 }
 
-async function setupBot(root: string, identity: Extract<Identity, { mode: 'bot' }>): Promise<boolean> {
+// No modo arquivo, o token passa por este processo (não há chaveiro que o
+// peça); o campo esconde o que é digitado, e o arquivo nasce com permissão 600.
+async function storeTokenInFile(identity: Extract<Identity, { mode: 'bot' }>): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    console.error('Para gravar o token em arquivo, rode o setup num terminal interativo.');
+    return false;
+  }
+  const { default: input } = await import('@inquirer/input');
+  const token = (await input({ message: `Token clássico de ${identity.login} (escopos repo e workflow):`, transformer: (value) => '*'.repeat(value.length) })).trim();
+  if (!token) return false;
+  const path = writeTokenFile(identity.keychainService, token);
+  console.log(`Token gravado em ${path}, com permissão 600. O arquivo não é cifrado: proteja a máquina e o disco.`);
+  return true;
+}
+
+async function setupBot(root: string, identity: Extract<Identity, { mode: 'bot' }>, store: TokenStore): Promise<boolean> {
   const login = await tokenLogin(readToken(identity, root));
   if (login !== identity.login) {
-    console.log(login ? `O token guardado é de ${login}, não de ${identity.login}.` : `Não há token válido de ${identity.login} no chaveiro.`);
-    if (!storeTokenInteractively(identity)) {
-      console.error('O chaveiro não guardou o token. Rode o comando de novo.');
+    console.log(login ? `O token guardado é de ${login}, não de ${identity.login}.` : `Não há token válido de ${identity.login} guardado.`);
+    if (store === 'system') {
+      const status = keychainStatus();
+      if (status !== 'ok') {
+        console.error(keychainHelp(status));
+        return false;
+      }
+    }
+    const stored = store === 'file' ? await storeTokenInFile(identity) : storeTokenInteractively(identity);
+    if (!stored) {
+      console.error(store === 'file' ? 'O token não foi gravado. Rode o comando de novo.' : 'O chaveiro não guardou o token. Rode o comando de novo.');
       return false;
     }
-    const stored = await tokenLogin(readToken(identity, root));
-    if (stored !== identity.login) {
-      console.error(stored ? `O token novo é de ${stored}, não de ${identity.login}.` : 'O GitHub recusou o token novo (ou não houve rede para conferir).');
+    const confirmed = await tokenLogin(readToken(identity, root));
+    if (confirmed !== identity.login) {
+      console.error(confirmed ? `O token novo é de ${confirmed}, não de ${identity.login}.` : 'O GitHub recusou o token novo (ou não houve rede para conferir).');
       return false;
     }
   }
@@ -136,8 +180,14 @@ async function main(): Promise<number> {
   console.log(identity.mode === 'bot' ? `Identidade: conta de máquina ${identity.login} (chaveiro: ${identity.keychainService}).` : 'Identidade: a credencial do GitHub desta máquina.');
   writeIdentity(root, identity);
   if (identity.mode === 'bot') {
-    if (!(await setupBot(root, identity))) return 1;
+    // Sem --token-store, vale o que já estava gravado no clone.
+    const requested: TokenStore | undefined = 'tokenStore' in parsed ? (parsed as { tokenStore?: TokenStore }).tokenStore : undefined;
+    const store = requested ?? readTokenStore(root);
+    writeTokenStore(root, store);
+    if (store === 'file') console.log(`O token fica em ${tokenFilePath(identity.keychainService)}.`);
+    if (!(await setupBot(root, identity, store))) return 1;
   } else {
+    writeTokenStore(root, 'system');
     removeGitBot(root);
   }
   installCommitHook(root);

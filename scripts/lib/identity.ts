@@ -2,16 +2,28 @@
 // no git config --local e nunca fixa no código: cada pessoa usa a conta de
 // máquina dela (modo bot) ou a própria credencial (modo self). O git config
 // foi escolhido porque o git, o credential helper, o headersHelper e os hooks
-// o leem do mesmo lugar em qualquer shell. O token nunca é impresso nem gravado
-// em disco: quem precisa dele chama readToken a cada uso.
+// o leem do mesmo lugar em qualquer shell. O token nunca é impresso, e só vai
+// para um arquivo no disco por escolha explícita (TokenStore): quem precisa
+// dele chama readToken a cada uso.
 import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 export type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
+
+// Onde o token do modo bot fica: o chaveiro do sistema (o Chaveiro no macOS, o
+// Secret Service no Linux) ou, só por escolha explícita, um arquivo fora do
+// repositório, para máquina sem chaveiro (servidor, contêiner, WSL).
+export type TokenStore = 'system' | 'file';
+
+type Env = Record<string, string | undefined>;
 
 const KEYS = {
   identity: 'casecellshop.identity',
   botLogin: 'casecellshop.botLogin',
   keychainService: 'casecellshop.keychainService',
+  tokenStore: 'casecellshop.tokenStore',
 } as const;
 
 function readLocal(root: string, key: string): string | undefined {
@@ -50,6 +62,68 @@ export function writeIdentity(root: string, identity: Identity): void {
   git(root, '--unset-all', KEYS.keychainService);
 }
 
+export function readTokenStore(root: string): TokenStore {
+  return readLocal(root, KEYS.tokenStore) === 'file' ? 'file' : 'system';
+}
+
+export function writeTokenStore(root: string, store: TokenStore): void {
+  if (store === 'file') git(root, KEYS.tokenStore, 'file');
+  else git(root, '--unset-all', KEYS.tokenStore);
+}
+
+// Mesmo lugar que o gh e o Git Credential Manager usam para configuração por
+// usuário (XDG), fora do repositório. O nome perde separadores e "..", para
+// um item estranho não sair da pasta.
+export function tokenFilePath(service: string, env: Env = process.env): string {
+  const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config');
+  return join(base, 'casecellshop', service.replaceAll('..', '_').replaceAll(/[/\\]/g, '_'));
+}
+
+// Permissão 600, inclusive ao regravar um arquivo que já existia mais aberto:
+// o writeFileSync só aplica o mode na criação.
+export function writeTokenFile(service: string, token: string, env: Env = process.env): string {
+  const path = tokenFilePath(service, env);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, token, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
+function readTokenFile(service: string, env: Env): string | undefined {
+  try {
+    return readFileSync(tokenFilePath(service, env), 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+type Run = (cmd: string, args: string[]) => { status: number | null; stderr: string; error?: { code?: string } };
+
+const defaultRun: Run = (cmd, args) => {
+  const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5000 });
+  return { status: result.status, stderr: result.stderr ?? '', error: result.error as { code?: string } | undefined };
+};
+
+// No Linux, o Secret Service só existe numa sessão com D-Bus e um provedor
+// (GNOME Keyring, KWallet); em servidor, contêiner e WSL ele falta. Uma busca
+// que não acha nada sai com 1 sem erro de D-Bus, e isso conta como chaveiro ok.
+export function keychainStatus(deps: { platform?: NodeJS.Platform; run?: Run } = {}): 'ok' | 'missing-tool' | 'no-service' {
+  if ((deps.platform ?? process.platform) !== 'linux') return 'ok';
+  const probe = (deps.run ?? defaultRun)('secret-tool', ['search', 'service', 'casecellshop-probe']);
+  if (probe.error?.code === 'ENOENT') return 'missing-tool';
+  if (/d-?bus|org\.freedesktop\.secrets/i.test(probe.stderr)) return 'no-service';
+  return 'ok';
+}
+
+// O que dizer quando o chaveiro do Linux não está disponível: o pacote que
+// falta, ou as saídas quando não há Secret Service (servidor, contêiner, WSL).
+export function keychainHelp(status: 'missing-tool' | 'no-service'): string {
+  if (status === 'missing-tool') {
+    return 'Falta o secret-tool, que fala com o chaveiro do Linux (Secret Service). Instale o pacote libsecret-tools (Debian e Ubuntu: sudo apt install libsecret-tools; Fedora: libsecret; Arch: libsecret) e rode o setup de novo.';
+  }
+  return 'Não há chaveiro do sistema respondendo (Secret Service, como o GNOME Keyring), o que é comum em servidor, contêiner e WSL. Saídas: npm run setup:local -- --identity self, com a credencial do git da máquina (no WSL, o Git Credential Manager do Git for Windows); ou --token-store file, que guarda o token num arquivo com permissão 600, que não é cifrado.';
+}
+
 function systemKeychain(service: string): string | undefined {
   const lookup =
     process.platform === 'darwin'
@@ -80,10 +154,13 @@ function machineCredential(root: string): string | undefined {
 export function readToken(
   identity: Identity | undefined,
   root: string,
-  deps: { keychain?: (service: string) => string | undefined } = {},
+  deps: { keychain?: (service: string) => string | undefined; env?: Env } = {},
 ): string | undefined {
   if (!identity) return undefined;
-  const raw = identity.mode === 'bot' ? (deps.keychain ?? systemKeychain)(identity.keychainService) : machineCredential(root);
+  let raw: string | undefined;
+  if (identity.mode === 'self') raw = machineCredential(root);
+  else if (readTokenStore(root) === 'file') raw = readTokenFile(identity.keychainService, deps.env ?? process.env);
+  else raw = (deps.keychain ?? systemKeychain)(identity.keychainService);
   const token = raw?.trim();
   return token || undefined;
 }

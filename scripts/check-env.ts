@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { commitHookInstalled, configureGitBot, gitHelperIsBot, installCommitHook, removeGitBot } from './lib/git-bot.ts';
-import { type Identity, readIdentity, readToken } from './lib/identity.ts';
+import { type Identity, keychainHelp, keychainStatus, readIdentity, readToken, readTokenStore, tokenFilePath } from './lib/identity.ts';
 
 export interface Facts {
   remote: boolean;
@@ -22,6 +22,10 @@ export interface Facts {
   // O login que o token da identidade devolve na API do GitHub; null sem token
   // ou com token recusado.
   githubLogin: string | null;
+  // Onde o token do modo bot fica (ausente = chaveiro do sistema) e se o
+  // chaveiro do sistema responde (ausente = ok).
+  tokenStore?: 'system' | 'file';
+  keychainStatus?: 'ok' | 'missing-tool' | 'no-service';
   mcpRegistered: boolean;
   commitHookInstalled: boolean;
 }
@@ -43,15 +47,28 @@ function identityItems(facts: Facts): Diagnosis[] {
     return [{ item: 'Identidade do GitHub configurada neste clone (git config casecellshop.identity)', ok: false, fix: `Escolha com que conta os agentes agem no GitHub: ${SETUP_USAGE}.` }];
   }
   if (identity.mode === 'bot') {
-    return [
+    const inFile = facts.tokenStore === 'file';
+    const status = facts.keychainStatus ?? 'ok';
+    const setup = `npm run setup:local -- --identity bot --login ${identity.login}`;
+    let fix = `O token de ${identity.login} falta, foi recusado ou é de outra conta: rode ${setup}, que pede o token novo.`;
+    if (facts.remote) fix = `A sessão na nuvem não está como ${identity.login}: rode /web-setup num terminal com o GH_TOKEN dessa conta.`;
+    else if (!inFile && status !== 'ok') fix = `${keychainHelp(status)} Depois, rode ${setup}.`;
+    const items: Diagnosis[] = [
       {
-        item: `GitHub como ${identity.login} (modo bot, chaveiro: ${identity.keychainService})`,
+        item: `GitHub como ${identity.login} (modo bot, ${inFile ? `token em arquivo: ${tokenFilePath(identity.keychainService)}` : `chaveiro: ${identity.keychainService}`})`,
         ok: facts.githubLogin === identity.login,
-        fix: facts.remote
-          ? `A sessão na nuvem não está como ${identity.login}: rode /web-setup num terminal com o GH_TOKEN dessa conta.`
-          : `O token de ${identity.login} falta no chaveiro, foi recusado ou é de outra conta: rode npm run setup:local -- --identity bot --login ${identity.login}, que pede o token novo.`,
+        fix,
       },
     ];
+    if (inFile) {
+      items.push({
+        item: 'O token do bot está num arquivo não cifrado, e não no chaveiro do sistema',
+        ok: true,
+        notice: true,
+        fix: 'O arquivo tem permissão 600: quem tem acesso ao seu usuário lê o token. Com um chaveiro disponível, prefira rodar o setup com --token-store system.',
+      });
+    }
+    return items;
   }
   return [
     {
@@ -157,6 +174,7 @@ export async function tokenLogin(token: string | undefined): Promise<string | nu
 export async function collectFacts(root: string): Promise<Facts> {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
   const identity = readIdentity(root);
+  const tokenStore = readTokenStore(root);
   const token = remote ? undefined : readToken(identity, root);
   if (!remote && !commitHookInstalled(root)) installCommitHook(root);
   const plan = planGitSetup({ remote, identity, tokenPresent: Boolean(token), credentialHelperIsBot: gitHelperIsBot(root) });
@@ -172,6 +190,8 @@ export async function collectFacts(root: string): Promise<Facts> {
     credentialHelperIsBot: remote || gitHelperIsBot(root),
     identity,
     githubLogin: await githubLogin(remote, token),
+    tokenStore,
+    keychainStatus: remote || identity?.mode !== 'bot' || tokenStore === 'file' ? 'ok' : keychainStatus(),
     mcpRegistered: declaresGithubServer(root),
     commitHookInstalled: remote || commitHookInstalled(root),
   };
