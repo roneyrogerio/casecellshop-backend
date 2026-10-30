@@ -6,16 +6,14 @@ Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md);
 
 ## Como cada marco é feito
 
-A sessão principal do Claude Code orquestra o marco: escreve as specs, o contrato e a documentação, faz os commits e abre o PR. Ela roda em Opus com esforço `high`, fixos em `.claude/settings.json`; só muda a pedido explícito do mantenedor. Quatro agentes, em `.claude/agents/`, fazem o resto, um de cada vez, cada um num ponto em que um olhar separado reduz um viés:
+Pela skill `/marco` (`.claude/skills/marco/SKILL.md`), na arquitetura da AD-012:
+1. A sessão principal planeja, e o mantenedor aprova o plano.
+2. O `test-writer` escreve os testes antes.
+3. O `implementer` escreve o código.
+4. O `reviewer` revisa cada fatia.
+5. O mantenedor aprova o PR, e o GitHub faz o merge com o ruleset satisfeito (AD-013).
 
-1. O `planner` (Opus, esforço alto, só leitura) confere a spec contra o código já feito e propõe o plano do marco, com os desvios encontrados. A pessoa responsável aprova, e a sessão principal atualiza a spec.
-2. A seção do `ARCHITECTURE.md` é escrita em rascunho, os critérios entram no `spec.md` e as rotas no contrato (`src/contract/`, que gera o `openapi.yaml`); com esse commit, abre-se o PR em rascunho, com o plano como checklist na descrição.
-3. O `test-writer` (Sonnet, esforço alto) escreve os testes que falham a partir dos critérios e do contrato, sem ler a implementação (commit `test:`).
-4. O `implementer` (Sonnet, esforço médio) escreve o código até os testes e o CI passarem, sem poder alterar os testes (commit `feat:`).
-5. O `reviewer` (Opus, esforço alto, só leitura) revisa o PR contra a spec, as ADRs e as convenções, apontando só o que afeta a corretude, com um checklist de segurança. O parecer vai como comentário no PR.
-6. A pessoa responsável faz o merge, sem squash, para o histórico mostrar o teste antes do código.
-
-**Escalonamento**, só no `implementer` e contado por problema (um achado do `reviewer`, ou um check do CI vermelho pela mesma causa): a primeira correção roda em Sonnet com esforço alto; se o mesmo problema voltar, em Opus com esforço alto, até resolver. Cada degrau é uma chamada nova, com o modelo e o esforço passados na chamada, e o esforço `max` não é usado. O `/security-review` nativo roda no PR do M2 e antes da entrega. Os agentes têm nome e instruções em inglês e produzem em português, conforme as [convenções](../codebase/CONVENTIONS.md). Cada marco traz seus logs, métricas e spans, e as decisões e o uso de IA são registrados no mesmo PR, no `STATE.md` e no `PROMPTS.md`.
+Uma mudança de processo vai num PR próprio, com teto de tempo, antes do marco que ela afeta.
 
 ## Dos requisitos aos marcos
 
@@ -59,6 +57,16 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - README inicial: pré-requisitos (Docker e Node a partir da 24.12), um comando para subir e outro para testar, a tabela requisito → arquivo → teste e um `requests.http`.
 
 **Pronto quando:** `FND-*` passam.
+
+## F1 — Fábrica v2 · EM ANDAMENTO
+
+**Meta:** o fluxo de IA passa a se verificar sozinho e a deixar o humano só onde ele decide, antes do M2, num PR de processo com teto de uma janela de 5 h (AD-012, AD-013).
+
+**Pronto quando:**
+- os critérios `AI-01` a `AI-10`, menos o `AI-05` (que entra antes do M2, no endurecimento do CI), estão verdes, cada trilho com um controle negativo;
+- o CI está verde;
+- o ruleset protege a `main`;
+- o PR registra o tempo gasto.
 
 ## M2 — Checkout
 
