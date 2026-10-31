@@ -563,6 +563,24 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Referências:** [kysely-codegen](https://github.com/RobinBlomberg/kysely-codegen).
 
+### AD-020 · A linha do pedido nasce antes da chave de idempotência
+
+**Status:** proposta (PR #12). Precisa, na AD-006, "a chave e o hash do payload normalizado são o primeiro passo da transação".
+
+**Contexto.** A AD-006 põe a chave como primeiro passo do checkout, para uma requisição repetida esperar no índice único antes de qualquer reserva. O esquema da loja (PR #11) liga a chave ao pedido por uma FK obrigatória (`idempotency_keys.order_id NOT NULL`), com o `id` do pedido gerado pelo banco. Com isso, a chave não pode existir antes da linha do pedido.
+
+**Decisão.** A transação do checkout grava primeiro só a linha do pedido, sem itens, e logo depois a chave, com `ON CONFLICT (key) DO NOTHING`. Os itens, a mensagem da outbox e a reserva vêm depois da chave. Numa repetição, ou quando a chave chega com outro corpo, a transação é desfeita, e a linha do pedido some no `ROLLBACK`. O que a AD-006 protege continua valendo: nada é reservado antes da chave, e a requisição concorrente com a mesma chave espera no índice dela.
+
+**Alternativas consideradas:**
+- **FK conferida no `COMMIT` (`DEFERRABLE INITIALLY DEFERRED`), com o `id` gerado na aplicação:** a chave fica literalmente em primeiro, mas pede uma migração e muda quem gera o identificador, sem efeito observável de fora.
+- **O pedido apontando para a chave, com a referência opcional:** inverte a relação do esquema que já está na `main` e exige migração.
+
+**Trade-off.** Uma requisição repetida grava e desfaz uma linha de pedido a mais.
+
+**Rever quando:** o checkout ganhar passos antes da reserva que custem caro, ou a chave passar a ter vida própria antes do pedido.
+
+**Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
