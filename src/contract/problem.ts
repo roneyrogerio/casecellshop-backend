@@ -28,6 +28,15 @@ export const Problem = z
       )
       .optional()
       .meta({ description: 'Cada violação do contrato, só no invalid-request.' }),
+    currentPrices: z
+      .array(
+        z.strictObject({
+          sku: z.string(),
+          unitPrice: z.int().min(0).meta({ description: 'Preço unitário atual, em centavos.' }),
+        }),
+      )
+      .optional()
+      .meta({ description: 'Preço atual de cada item com preço alterado, só no price-changed (AD-018).' }),
   })
   .meta({
     // Com id, o gerador emite um $ref único em vez de repetir o schema em cada resposta.
