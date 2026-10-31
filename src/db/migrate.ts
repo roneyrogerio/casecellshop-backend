@@ -1,7 +1,9 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runner } from 'node-pg-migrate';
+import { Kysely, PostgresDialect } from 'kysely';
+import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import type { Pool } from 'pg';
-import { withClient } from './client.ts';
 
 export interface MigrationFolder {
   // Caminho absoluto da pasta de migrações.
@@ -15,26 +17,46 @@ export const MIGRATION_FOLDERS: readonly MigrationFolder[] = [
   { dir: fileURLToPath(new URL('../../migrations/erp_sim', import.meta.url)), schema: 'erp_sim' },
 ];
 
+// Um arquivo ignorado (extensão errada, sem `up`) seria pulado em silêncio pelo
+// provider; aqui vira erro, para uma migração nunca deixar de rodar sem aviso.
+function createProvider(dir: string): FileMigrationProvider {
+  return new FileMigrationProvider({
+    fs,
+    path,
+    migrationFolder: dir,
+    onFileIgnored: (fileName) => {
+      if (fileName === '.gitkeep') return;
+      throw new Error(`arquivo ignorado na pasta de migrações: ${fileName}`);
+    },
+    import: async (filePath: string) => {
+      const fileName = path.basename(filePath);
+      if (!filePath.endsWith('.ts')) {
+        throw new Error(`migração com extensão inválida (esperado .ts): ${fileName}`);
+      }
+      const module: unknown = await import(filePath);
+      if (typeof (module as { down?: unknown }).down !== 'function') {
+        throw new Error(`migração sem a exportação down: ${fileName}`);
+      }
+      return module;
+    },
+  });
+}
+
 // Aplica as migrações dos dois schemas, cada um com a sua tabela de controle.
-// O runner usa um advisory lock (espera, não falha) e confere a ordem; cada
-// arquivo roda numa transação própria.
+// O Migrator espera pelo advisory lock, reprova migração fora de ordem e aplica
+// as pendentes de cada schema numa transação só.
 export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = MIGRATION_FOLDERS): Promise<void> {
+  // Não chamamos db.destroy(): o pool pertence a quem chamou.
+  const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) });
   for (const { dir, schema } of folders) {
-    await withClient(pool, async (client) => {
-      await runner({
-        dbClient: client,
-        dir,
-        direction: 'up',
-        migrationsTable: 'pgmigrations',
-        migrationsSchema: schema,
-        createMigrationsSchema: true,
-        checkOrder: true,
-        singleTransaction: false,
-        advisoryLockMode: 'wait',
-        // Silencia o console do runner; quem chama registra o resultado.
-        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
-      });
+    const migrator = new Migrator({
+      db,
+      provider: createProvider(dir),
+      migrationTableSchema: schema,
     });
+    const { error } = await migrator.migrateToLatest();
+    // O erro original segue sem embrulho, para a mensagem da migração aparecer.
+    if (error) throw error instanceof Error ? error : new Error('falha ao migrar', { cause: error });
   }
 }
 
