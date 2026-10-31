@@ -145,7 +145,6 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
 - **Skill `/marco` no limite de bytes (próxima mudança de processo):** o `SKILL.md` tem 11.998 dos 12.000 bytes do `FND-06`; antes de acrescentar texto, passar trechos de referência para arquivos de apoio da pasta da skill.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
-- **Teste de mutação com Stryker** (decisão do mantenedor, PR próprio depois do M3): uma rodada por marco, só nos módulos sem banco; pede dependência nova e a linha no `STATE.md`. A decidir no plano desse PR: o worker, o relay e o checkout, onde está o maior risco, ficam de fora por terem banco; uma rodada incremental fora do CI os cobriria.
 - **CI sem os testes de compose na perna do Node 24.12** (PR de processo): o `Dockerfile` fixa o Node 26, então os testes que sobem o compose testam a mesma imagem nas duas pernas da matriz, e cada perna constrói o compose duas vezes.
 - **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor (a conferir):** status checks estritos no ruleset; apagar as branches `chore/agentic-factory-v2` e `chore/ai-factory-v2`; validade do token do bot; CodeQL, Dependabot e push protection.
@@ -163,11 +162,12 @@ Se for preciso reduzir, os cortes vêm nesta ordem, sem tirar nenhum requisito d
 
 Fora do escopo principal. Entram só depois que M1 a M6 estiverem completos, nesta ordem:
 
-1. Seção curta "segurança e limites" no README: sem autenticação, abuso possível, limites do contrato, preço lido do banco e o que muda em produção.
-2. Estimativa de capacidade no design de diagnóstico, a partir das premissas de carga.
-3. Plano de rollout por fase, com critério de saída e rollback.
-4. `/livez` e `/readyz` separados.
-5. Diagrama de sequência (Mermaid) do checkout ao faturamento.
+1. **Teste de mutação com o Stryker** (decidido pelo mantenedor em 31/10/2026, PR próprio): mede se os testes, escritos por IA, pegam erro, e a nota entra em "Como a IA foi usada" no README. No CI, os módulos sem banco (camada anticorrupção do ERP, semáforo, cálculo do retry, validação e erros); fora do CI, uma rodada incremental no worker, no relay e no checkout, que sobem contêiner. Dependência nova, com a linha no `STATE.md` e o critério com ID no `spec.md` no plano desse PR.
+2. Seção curta "segurança e limites" no README: sem autenticação, abuso possível, limites do contrato, preço lido do banco e o que muda em produção.
+3. Estimativa de capacidade no design de diagnóstico, a partir das premissas de carga.
+4. Plano de rollout por fase, com critério de saída e rollback.
+5. `/livez` e `/readyz` separados.
+6. Diagrama de sequência (Mermaid) do checkout ao faturamento.
 
 ## Arquitetura alvo
 
