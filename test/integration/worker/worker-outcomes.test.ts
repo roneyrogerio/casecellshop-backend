@@ -272,6 +272,122 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
     await expectInvoiced(world, order);
   });
 
+  // A leitura dos itens é uma consulta ao banco: se ficasse depois da permissão, ela poderia demorar entre a
+  // última conferência de prazo e a chamada, e o ERP seria chamado com a permissão já velha (A14).
+  const READ_ITEMS_OR_TAKE_PERMIT = /from\s+"order_items"|update\s+"outbox"[\s\S]*"first_sent_at"/i;
+
+  it('ORD-11 os itens do pedido são lidos antes de tomar a permissão de chamada, e nenhuma consulta ao banco fica entre a tomada e a primeira chamada ao ERP', async () => {
+    const world = await createWorld(suite);
+    const order = await submitOrder(suite, world);
+    const statements: { kind: 'items' | 'permit'; erpCalls: number }[] = [];
+    // Cada leitura de itens é anotada com as chamadas ao ERP já feitas: a primeira leitura sai antes de qualquer uma.
+    const probe = interceptPool(suite.pool, {
+      match: READ_ITEMS_OR_TAKE_PERMIT,
+      before: (sql) => {
+        statements.push({ kind: /first_sent_at/i.test(sql) ? 'permit' : 'items', erpCalls: world.transport.sends.length });
+      },
+    });
+
+    await buildWorker(world, { pool: probe.pool }).pollOnce();
+
+    const firstItems = statements.findIndex((statement) => statement.kind === 'items');
+    const firstPermit = statements.findIndex((statement) => statement.kind === 'permit');
+    expect(firstItems, 'o worker leu os itens do pedido').toBeGreaterThanOrEqual(0);
+    expect(firstPermit, 'o worker tomou a permissão de chamada').toBeGreaterThanOrEqual(0);
+    expect(firstItems, 'os itens são lidos antes da permissão').toBeLessThan(firstPermit);
+    expect(statements[firstItems]?.erpCalls).toBe(0);
+    expect(await invoices(order.orderId)).toBe(1);
+  });
+
+  it('ORD-11 uma leitura lenta dos itens (2 s) com a permissão tomada logo depois não envelhece a permissão: o ERP é chamado com ela a 32 s, nunca acima de 33 s', async () => {
+    const world = await createWorld(suite);
+    const order = await submitOrder(suite, world);
+    let permitSentAt: number | undefined;
+    let calledAt: number | undefined;
+    let itemReads = 0;
+    const probe = interceptPool(suite.pool, {
+      match: READ_ITEMS_OR_TAKE_PERMIT,
+      before: (sql) => {
+        if (/first_sent_at/i.test(sql)) {
+          if (permitSentAt !== undefined) return;
+          permitSentAt = world.clock.now();
+          // O processo para 32 s entre mandar o UPDATE da permissão e chamar: ainda abaixo dos 33 s.
+          world.clock.advance(32_000);
+          return;
+        }
+        if (itemReads > 0) return;
+        itemReads += 1;
+        world.clock.advance(2_000);
+      },
+    });
+    world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, () => {
+      calledAt = world.clock.now();
+      return Promise.resolve();
+    });
+
+    await buildWorker(world, { pool: probe.pool }).pollOnce();
+
+    expect(itemReads, 'a leitura lenta dos itens passou pelo pool injetado').toBe(1);
+    expect(permitSentAt, 'a permissão passou pelo pool injetado').toBeDefined();
+    expect(calledAt, 'o ERP foi chamado').toBeDefined();
+    // A idade que importa é a da permissão no momento da chamada, e a leitura dos itens não conta nela.
+    expect(Number(calledAt) - Number(permitSentAt)).toBeLessThanOrEqual(33_000);
+    expect(await invoices(order.orderId)).toBe(1);
+    await expectInvoiced(world, order);
+  });
+
+  // A criação que vem depois da consulta regrava a permissão (a renovação) e precisa da mesma conferência
+  // de idade imediatamente antes de sair: uma renovação lenta deixa a permissão nova já velha.
+  const RENEW_PERMIT = /update\s+"outbox"\s+set\s+"last_call_at"/i;
+
+  it('ORD-11 se o processo para 34 s entre mandar o UPDATE da renovação e criar, a permissão renovada passou de 33 s e o worker desiste sem criar', async () => {
+    const world = await createWorld(suite);
+    const order = await submitOrder(suite, world);
+    await markSentBefore(suite.pool, order.orderId);
+    const logs = captureLogs();
+    let renewals = 0;
+    const probe = interceptPool(suite.pool, {
+      match: RENEW_PERMIT,
+      before: (sql) => {
+        if (/first_sent_at/i.test(sql)) return;
+        renewals += 1;
+        world.clock.advance(34_000);
+      },
+    });
+
+    await buildWorker(world, { pool: probe.pool, logger: logs.logger }).pollOnce();
+
+    expect(renewals, 'o UPDATE da renovação passou pelo pool injetado').toBe(1);
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+    expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
+    expect(await invoices(order.orderId)).toBe(0);
+    expect(logs.eventsOf('outbox.lease_short', order.orderId)).toHaveLength(1);
+    expect(world.queue.deletes).toEqual([]);
+    expect(world.queue.visibilityChanges).toEqual([]);
+    await expectOneInFlight(world);
+  });
+
+  it('ORD-11 controle da renovação: se o processo para 32 s entre o UPDATE da renovação e criar, a permissão ainda vale e o worker cria e fatura', async () => {
+    const world = await createWorld(suite);
+    const order = await submitOrder(suite, world);
+    await markSentBefore(suite.pool, order.orderId);
+    let renewals = 0;
+    const probe = interceptPool(suite.pool, {
+      match: RENEW_PERMIT,
+      before: (sql) => {
+        if (/first_sent_at/i.test(sql)) return;
+        renewals += 1;
+        world.clock.advance(32_000);
+      },
+    });
+
+    await buildWorker(world, { pool: probe.pool }).pollOnce();
+
+    expect(renewals, 'o UPDATE da renovação passou pelo pool injetado').toBe(1);
+    expect(await invoices(order.orderId)).toBe(1);
+    await expectInvoiced(world, order);
+  });
+
   it('ORD-11 duas mensagens do mesmo pedido recebidas juntas não chamam o ERP ao mesmo tempo: a segunda é adiada pela permissão de chamada e depois apagada', async () => {
     const world = await createWorld(suite);
     const order = await submitOrder(suite, world, { times: 2 });

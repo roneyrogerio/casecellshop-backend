@@ -350,6 +350,24 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     expect(rig.world.queue.deletesOf(order.orderId).map((call) => call.result)).toEqual(['stale']);
   });
 
+  it('OBS-02 o closed só conta quando o DeleteMessage sai ok: com o receipt handle antigo (stale), não soma closed e soma 1 em outbox_conclusion_no_row_total', async () => {
+    const rig = await createRig();
+    const logs = captureLogs();
+    const order = await rig.submit();
+    await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    // Outro consumidor recebe a mensagem entre o recebimento do worker e o DeleteMessage dele.
+    rig.world.queue.afterReceive(() => stealMessage(rig.world, order.orderId));
+
+    await buildWorker(rig.world, { logger: logs.logger }).pollOnce();
+
+    const families = await rig.scrape();
+    expect(rig.world.queue.deletesOf(order.orderId).map((call) => call.result)).toEqual(['stale']);
+    expect(attemptOutcome(families, 'closed') ?? 0).toBe(0);
+    expect(valueOf(families, 'outbox_conclusion_no_row_total')).toBe(1);
+    expect(logs.eventsOf('outbox.conclusion_no_row', order.orderId)).toHaveLength(1);
+    expect(rig.world.transport.sends).toHaveLength(0);
+  });
+
   it('OBS-02 um retry que o SQS recusa (receipt handle antigo) soma em outbox_conclusion_no_row_total e não em retry', async () => {
     const rig = await createRig();
     const logs = captureLogs();
