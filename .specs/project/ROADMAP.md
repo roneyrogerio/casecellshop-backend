@@ -74,7 +74,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP.
 
 - Design de concorrência e idempotência (`DOC-CON`).
-- Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados com `--verify` no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` olhando os `.ts` e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
+- Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados com `--verify` no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` na regra nova e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
+  - Antes da conversão, a sessão principal ajusta o que o `implementer` não edita (AI-04): o `include` do `tsconfig.json` e o `overrides` do `.oxlintrc.json` (`FND-11`); a regra de migrações do `AGENTS.md` e do `implementer.md`; o comentário do `ci.yml`; e o `scripts/check-migrations.ts`, depois dos testes novos do `test-writer`.
+  - Depois disso, o `implementer` escreve a migração em TypeScript, apaga o `.sql` e troca o runner.
 - Transação do checkout, respostas, status do pedido e contrato das duas rotas, conforme o design.
 - `/security-review` no PR, porque é o marco que recebe dados do cliente.
 
