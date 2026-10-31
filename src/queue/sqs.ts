@@ -51,6 +51,7 @@ export interface Queue {
 }
 
 const REQUEST_TIMEOUT_MS = 5_000;
+const RECEIVE_MARGIN_SECONDS = 5;
 
 export function createSqsClient(settings: SqsSettings): SQSClient {
   return new SQSClient({
@@ -102,6 +103,8 @@ export function createQueue(client: SQSClient, queueUrl: string): Queue {
           MessageAttributeNames: [TRACEPARENT_ATTRIBUTE],
           ...(options.visibilitySeconds === undefined ? {} : { VisibilityTimeout: options.visibilitySeconds }),
         }),
+        // O long polling dura até waitSeconds; o timeout comum de 5 s o cortaria. Este prazo só vale para o receive.
+        { requestTimeout: (options.waitSeconds + RECEIVE_MARGIN_SECONDS) * 1000 },
       );
       return (response.Messages ?? []).map((message) => ({
         body: message.Body ?? '',

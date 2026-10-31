@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { systemClock } from '../clock.ts';
 import { envPort, optionalEnv, requireEnv } from '../config.ts';
 import { createRelay } from '../outbox/relay.ts';
+import { createSemaphore } from '../outbox/semaphore.ts';
 import { createQueue, createSqsClient } from '../queue/sqs.ts';
 import { createPool } from '../db/pool.ts';
 import { installGracefulShutdown } from '../lifecycle.ts';
@@ -29,11 +30,13 @@ if (!Object.hasOwn(SIM_MODES, simMode)) throw new Error(`ERP_SIM_MODE inválido:
 const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
 sim.script.setDefault(SIM_MODES[simMode as keyof typeof SIM_MODES]);
 const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
-const worker = createWorker({ pool, erp, logger, telemetry, clock: systemClock });
 
 const sqsEndpoint = optionalEnv('SQS_ENDPOINT');
 const sqsClient = createSqsClient({ region: requireEnv('AWS_REGION'), ...(sqsEndpoint ? { endpoint: sqsEndpoint } : {}) });
 const billingQueue = createQueue(sqsClient, requireEnv('BILLING_QUEUE_URL'));
+// Um limite só para todas as chamadas ao ERP do processo (design.md, "Worker: envio").
+const semaphore = createSemaphore(DEFAULT_WORKER_CONFIG.erpConcurrency);
+const worker = createWorker({ pool, queue: billingQueue, erp, semaphore, logger, telemetry, clock: systemClock });
 const relay = createRelay({ pool, queue: billingQueue, logger, telemetry, clock: systemClock });
 
 // O worker não tem API; expõe só o /metrics.
