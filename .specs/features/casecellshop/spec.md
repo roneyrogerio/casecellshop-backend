@@ -17,7 +17,11 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 ## Fundação
 
 - **FND-01** `docker compose up` sobe tudo, com as migrações aplicadas antes da API e do worker. Do M3 em diante, sobe também o ElasticMQ com a fila do faturamento e a DLQ já criadas, com a *redrive policy* do design, antes do worker, e uma mensagem na fila continua lá depois de o emulador reiniciar.
-- **FND-02** `npm test` passa local e no CI. O CI verde nas duas versões do Node prova o critério em todo PR; a execução local é registrada uma vez, no PR do M1. Não tem teste próprio.
+- **FND-02** `npm test` passa local e no CI. O CI verde nas duas versões do Node prova o critério em todo PR (na 24.12, sem os testes que sobem o compose, `FND-12`); a execução local é registrada uma vez, no PR do M1. Não tem teste próprio.
+- **FND-12** A versão do Node é imposta, não só declarada (AD-011).
+  - O `package.json` tem `devEngines.runtime` com `name` `node`, a mesma faixa do `engines.node` e `onFail` `error`, então `npm install`, `npm ci` e `npm run` (inclusive `npm test`) param com o erro `EBADDEVENGINES` num Node abaixo do piso, dizendo a versão atual e a exigida. O npm lê o `devEngines` a partir da versão 10.9.0; com um npm mais antigo, sobra o aviso do `engines`.
+  - O CI roda a suíte inteira no Node do `.nvmrc` e, no piso (24.12), a suíte sem os testes que sobem o `docker compose`, que testam a imagem com o Node fixado no `Dockerfile`, a mesma nas duas versões.
+  - Controles negativos: um `devEngines` com outra faixa ou com `onFail` diferente de `error` reprova; uma perna do piso que exclui qualquer outro teste reprova.
 - **FND-03** Uma requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` no corpo e no `X-Request-Id`.
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
 - **FND-05** O span do repositório sai como filho do span da requisição.
