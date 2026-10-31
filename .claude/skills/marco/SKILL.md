@@ -11,7 +11,7 @@ You are the main session: you orchestrate one milestone (`$ARGUMENTS`). You plan
 
 ## Essentials (keep these even after compaction)
 
-- The maintainer acts at four points only: approves the plan, decides exceptions, does the fixed ~10 min check, approves and merges. Everything else is yours and the agents'.
+- The maintainer acts at four points only: approves the plan, decides exceptions, reads the PR's decision summary, approves and merges. Everything else is yours and the agents'.
 - The CI is the oracle. A slice is done when its `feat:` commit is green and a review round covers it. Never report done on a red or unrun check.
 - One review round per slice; a new round only when a commit outside the free list lands after it, covering only that delta. Reviewing stops when no `alta` or `média` finding is open (AD-015); `baixa` never blocks: a text error in lines the PR changed is fixed in this PR and checked on the fix delta inside the same round (the same line at a third check goes to the maintainer); any other `baixa` goes to the next plan (AD-022). A blocking finding comes with a reproduction, and its fix with a test that failed before it. The maintainer decides on the third round over the same finding, or when fixes create a new `média` twice in a row.
 - `implementer` escalation: step 0 frontmatter (Sonnet, `medium`); step 1 `model: sonnet`, `effort: high`; step 2 `model: opus`, `effort: high`, at most two calls per problem; past it, the maintainer decides.
@@ -71,11 +71,12 @@ Stop and ask the maintainer, in one question, with your recommendation, when: a 
 
 The PR is ready when every slice has its `feat:` green, the last review round covers the HEAD (or only free-list commits came after it), no `alta` or `média` finding is open, the checklist is complete and no `SPEC_DEVIATION` remains. Then:
 
-- write the milestone record in the PR description: rounds and findings by severity, findings the `reviewer` got wrong, escalation steps used, red CI runs by cause, approvals asked, the milestone's token use from `/usage`, lessons (1–3), and the pending items for the next plan;
+- open the PR description with a `Resumo de decisão` (≤ ~300 words, AD-023): what it delivers; what needs the maintainer's judgment (ADs, exceptions, `SPEC_DEVIATION`, the changed `DOC-*` answer, residual risks) or `nada`; the machine evidence, one line each; risk areas touched (migration, concurrency, contract, CI, permissions), yes or no, linked;
+- below it, the milestone record: rounds and findings by severity, findings the `reviewer` got wrong, escalation steps, red CI runs by cause, approvals asked, token use from `/usage`, lessons (1–3), pending items for the next plan;
 - update the `ROADMAP.md` status line;
 - run the `app-check` skill through the Skill tool on the HEAD and put its evidence in the PR description (AI-22); an unexpected output is a finding;
 - run `npm run verify:full`, push, then `/security-review` through the Skill tool on that HEAD (AI-16; only the Skill tool records it, a typed command does not); post its report as a comment starting with `## Revisão de segurança`, and treat its `alta` and `média` findings like the reviewer's (a fix commit needs a new review round and a new `/security-review`);
-- `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer), and tell the maintainer, in a few lines, what to read: the criteria × test names table of the CI summary and the `ARCHITECTURE.md` sections of the `DOC-*` criteria this milestone touched (maintainer point 3, ~10 min). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, ask the maintainer to convert the PR back to draft: the machine account cannot.
+- `mcp__github__update_pull_request` with `draft: false` and `reviewers: ["roneyrogerio"]` (GitHub notifies the maintainer); the maintainer reads only the decision summary, 2 to 5 min (point 3). The maintainer approves on GitHub (point 4); the approval turns on auto-merge, and GitHub merges once the ruleset is satisfied. A commit after the approval dismisses it. If the CI turns red after `draft: false`, ask the maintainer to convert the PR back to draft: the machine account cannot.
 
 ## 7. Close (`/marco fechar`)
 
@@ -90,7 +91,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>
 Assisted-by: <main|test-writer|implementer>:<model-id> effort=<level> step=<0|1|2>
 ```
 
-The first trailer credits the model that produced most of the commit; the second says which role, model, effort and escalation step produced it, so the history shows who did what.
+The first trailer credits the model that produced most of the commit; the second, the role, model, effort and escalation step.
 
 ## Decision records
 
@@ -99,7 +100,7 @@ Record a decision in the PR that makes it when it changes structure, a quality a
 - Product or architecture: a new `### AD-NNN` block in `STATE.md` (context, decision, alternatives, trade-off, "Rever quando", references). It is accepted by the merge of its PR. An accepted AD is never edited except its status line: a new AD supersedes it ("substituída por AD-NNN").
 - Tool or process: a row in the tool table of `STATE.md`.
 - Open risk or a mistake that changed course: the risk table or a new `L-NNN` lesson.
-- State the decision and its reason in the project's terms (the effect here: "so the setup works without a keychain on WSL"). Research informs the decision and stays out of the repository: no market comparisons, adoption numbers or "project X does it" in `STATE.md`, the README or commit messages. Sources go only under "Referências". The same applies to the reason written in a commit body.
+- State the decision and its reason in the project's terms (the effect here). Research informs the decision and stays out of the repository: no market comparisons, adoption numbers or "project X does it" in `STATE.md`, the README or commit bodies; sources go only under "Referências".
 
 ## Process changes
 
