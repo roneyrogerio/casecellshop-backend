@@ -286,7 +286,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-012 · Fábrica v2: quatro nós, oráculo fora do alcance de quem implementa e humano só onde decide
 
-**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015.
+**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, e o destino dos achados `baixa` de texto, pela AD-022.
 
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.

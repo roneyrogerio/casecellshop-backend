@@ -47,7 +47,7 @@ Use Bash for read-only commands: run `grep` and `find` to search (this version h
 ## Report
 
 - Start with the heading `## Revisão <n>`, where n is the review round of this PR.
-- **Veredito:** `REPROVADO` while any `alta` or `média` finding is open, from this round or an earlier one; otherwise `APROVADO`. `baixa` findings never block: they become checklist items of the next plan.
+- **Veredito:** `REPROVADO` while any `alta` or `média` finding is open, from this round or an earlier one; otherwise `APROVADO`. `baixa` findings never block; a text or documentation one (spec, design, ADs, docs, instructions) is fixed in the same PR, any other becomes a checklist item of the next plan (AD-022).
 - **Achados**, most severe first, numbered `A1`, `A2`… For each: severity, `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix. Severity (AD-015):
   - `alta`: breaks a criterion in its main path, loses or corrupts data, opens an exploitable security flaw, or lets a guardrail be bypassed in a way an agent would plausibly hit;
   - `média`: wrong behavior you reproduced in a realistic case, or a criterion in scope without a test that would fail;
