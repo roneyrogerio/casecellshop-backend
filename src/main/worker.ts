@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { systemClock } from '../clock.ts';
-import { envPort, requireEnv } from '../config.ts';
+import { envPort, optionalEnv, requireEnv } from '../config.ts';
+import { createRelay } from '../outbox/relay.ts';
+import { createQueue, createSqsClient } from '../queue/sqs.ts';
 import { createPool } from '../db/pool.ts';
 import { installGracefulShutdown } from '../lifecycle.ts';
 import { createLogger } from '../logging.ts';
@@ -29,6 +31,11 @@ sim.script.setDefault(SIM_MODES[simMode as keyof typeof SIM_MODES]);
 const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
 const worker = createWorker({ pool, erp, logger, telemetry, clock: systemClock });
 
+const sqsEndpoint = optionalEnv('SQS_ENDPOINT');
+const sqsClient = createSqsClient({ region: requireEnv('AWS_REGION'), ...(sqsEndpoint ? { endpoint: sqsEndpoint } : {}) });
+const billingQueue = createQueue(sqsClient, requireEnv('BILLING_QUEUE_URL'));
+const relay = createRelay({ pool, queue: billingQueue, logger, telemetry, clock: systemClock });
+
 // O worker não tem API; expõe só o /metrics.
 const metricsServer = createServer((req, res) => {
   if (req.url === '/metrics') {
@@ -41,6 +48,7 @@ const metricsServer = createServer((req, res) => {
 const metricsPort = envPort('WORKER_METRICS_PORT', 9464);
 
 await worker.start();
+await relay.start();
 metricsServer.listen(metricsPort, () => {
   logger.info({ event: 'worker_metrics_started', port: metricsPort }, 'métricas do worker ouvindo');
 });
@@ -48,7 +56,9 @@ metricsServer.listen(metricsPort, () => {
 installGracefulShutdown({
   logger,
   stop: async () => {
+    await relay.stop();
     await worker.stop();
+    sqsClient.destroy();
     await new Promise<void>((resolve, reject) => {
       metricsServer.close((error) => {
         if (error) reject(error);
