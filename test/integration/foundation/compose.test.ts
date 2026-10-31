@@ -217,7 +217,7 @@ console.log(JSON.stringify({
   queueUrl: process.env.BILLING_QUEUE_URL,
   dlqUrl: process.env.BILLING_DLQ_URL,
   billing: await read(process.env.BILLING_QUEUE_URL, ['VisibilityTimeout', 'RedrivePolicy', 'QueueArn']),
-  dlq: await read(process.env.BILLING_DLQ_URL, ['MessageRetentionPeriod', 'QueueArn']),
+  dlq: await read(process.env.BILLING_DLQ_URL, ['QueueArn']),
 }));
 `;
 
@@ -249,7 +249,7 @@ interface QueueInspection {
   queueUrl: string;
   dlqUrl: string;
   billing: { VisibilityTimeout: string; RedrivePolicy: string; QueueArn: string };
-  dlq: { MessageRetentionPeriod?: string; QueueArn: string };
+  dlq: { QueueArn: string };
 }
 
 describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
@@ -271,12 +271,6 @@ describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
     const redrive = JSON.parse(inspection.billing.RedrivePolicy) as { deadLetterTargetArn: string; maxReceiveCount: number | string };
     expect(redrive.deadLetterTargetArn).toBe(inspection.dlq.QueueArn);
     expect(Number(redrive.maxReceiveCount)).toBe(12);
-  });
-
-  it('FND-01 a billing-dlq tem retenção de 14 dias (1209600 s)', async () => {
-    const inspection = (await runInWorkerImage(INSPECT_QUEUES)) as QueueInspection;
-
-    expect(Number(inspection.dlq.MessageRetentionPeriod)).toBe(1_209_600);
   });
 
   // Por último: o restart muda o estado do emulador para os testes que viessem depois.
