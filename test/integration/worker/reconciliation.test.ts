@@ -33,7 +33,9 @@ import {
   startWorkerSuite,
   submitOrder,
   waitForDlq,
+  createGate,
   type AcceptedOrder,
+  type Gate,
   type QueueWorld,
   type WorkerSuite,
 } from '../../helpers/worker.ts';
@@ -432,6 +434,91 @@ describe('ORD-14 o laço da reconciliação', () => {
   });
 });
 
+interface InterruptedRound {
+  inFlight: AcceptedOrder;
+  untouched: AcceptedOrder[];
+}
+
+// Prende, na fronteira do transporte, só a primeira resposta de consulta ao ERP; as seguintes passam.
+function holdFirstFindOrder(world: QueueWorld): Gate {
+  const gate = createGate();
+  let held = false;
+  world.transport.afterErp(
+    { op: 'findOrder' },
+    async () => {
+      if (held) return;
+      held = true;
+      await gate.park();
+    },
+    1_000,
+  );
+  return gate;
+}
+
+// Várias mensagens na DLQ, todas de pedidos que o ERP já tem; o stop() chega com a primeira consulta em voo.
+// Devolve o pedido da consulta em voo e os que a rodada não deveria ter tocado.
+async function stopWhileQueryInFlight(rig: Rig, messages: number): Promise<InterruptedRound> {
+  const { world } = rig;
+  const orders = await seedDead(
+    rig,
+    Array.from({ length: messages }, () => ({ erpHas: true, quantity: 1 })),
+  );
+  const gate = holdFirstFindOrder(world);
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
+
+  void rig.reconciler.start();
+  try {
+    await gate.waitForParked(1);
+    stopping = rig.reconciler.stop().then(() => {
+      stopped = true;
+    });
+    await settle();
+    expect(stopped, 'o stop() espera a consulta que já estava em voo').toBe(false);
+  } finally {
+    gate.releaseAll();
+  }
+  await stopping;
+
+  const first = world.transport.sendsOf('findOrder')[0];
+  const inFlightId = first?.op === 'findOrder' ? first.reference : undefined;
+  const inFlight = orders.find((order) => order.orderId === inFlightId);
+  if (!inFlight) throw new Error('a consulta em voo não é de um pedido semeado');
+  return { inFlight, untouched: orders.filter((order) => order.orderId !== inFlight.orderId) };
+}
+
+describe('ORD-14 o stop() no meio de uma rodada', () => {
+  it('ORD-14 o stop() espera só a consulta ao ERP em voo: nenhuma consulta nova sai depois dele, e as mensagens que sobram seguem na DLQ com o pedido pending e a reserva', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+
+    const { inFlight, untouched } = await stopWhileQueryInFlight(rig, 3);
+
+    // A consulta em voo termina o que começou: o pedido é faturado e a mensagem, apagada.
+    expect(world.transport.sendsOf('findOrder'), 'consultas ao ERP').toHaveLength(1);
+    await expectInvoiced(world, inFlight, { queueEmpty: false });
+    expect(rig.dlq.deletesOf(inFlight.orderId).map((call) => call.result)).toEqual(['ok']);
+    // As outras ficam como estavam; a visibilidade de 5 min as devolve à DLQ para a rodada seguinte.
+    for (const order of untouched) {
+      expect(await invoices(order.orderId)).toBe(1);
+      await expectStillPending(rig, order);
+    }
+    expect(await dlqTotal(world)).toBe(untouched.length);
+  });
+
+  it('ORD-14 o stop() também interrompe a rodada entre lotes: a DLQ não é lida de novo depois dele', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+
+    const { untouched } = await stopWhileQueryInFlight(rig, 11);
+
+    // O primeiro lote tem 10 mensagens; a 11ª fica visível, sem ninguém a receber depois do stop().
+    expect(rig.dlq.receives, 'leituras da DLQ').toHaveLength(1);
+    expect(world.transport.sendsOf('findOrder'), 'consultas ao ERP').toHaveLength(1);
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({ visible: 1, notVisible: untouched.length - 1 });
+  });
+});
+
 describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
   it('OBS-01 outbox.dead sai em error, com orderId, correlationId e os campos obrigatórios, dentro do span outbox.settle; o dead_at fica gravado', async () => {
     const rig = await createRig({ shared: true });
@@ -494,6 +581,45 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
 
     expect(rig.logs.eventsOf('outbox.dead', id)).toHaveLength(2);
     expect((await readOutbox(suite.pool, id)).deadAt).not.toBeNull();
+  });
+});
+
+describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
+  it('OBS-01 a falha numa mensagem loga outbox.reconcile_error (warn) com os campos obrigatórios, o orderId e o correlationId da mensagem, e a rodada segue com as outras', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+    const orders = await seedDead(rig, [{}, {}]);
+    // Os dois já têm desfecho: cada mensagem só precisa do DeleteMessage, e a falha injetada cai em uma.
+    for (const order of orders) {
+      await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    }
+    const injection = rig.dlq.inject('delete');
+
+    const result = await rig.reconciler.reconcileOnce();
+
+    expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
+    expect(result, 'a rodada segue com a outra mensagem').toEqual({ seen: 2, invoiced: 0, closed: 1 });
+    const rejected = rig.dlq.deletes.filter((call) => call.result === 'rejected');
+    expect(rejected).toHaveLength(1);
+    const failedId = rig.dlq.orderIdOf(rejected[0]?.receiptHandle ?? '');
+    const failed = orders.find((order) => order.orderId === failedId);
+    const other = orders.find((order) => order.orderId !== failedId);
+    if (!failed || !other) throw new Error('a mensagem que falhou não é de um pedido semeado');
+    expect(rig.dlq.deletesOf(other.orderId).map((call) => call.result)).toEqual(['ok']);
+    expect(await dlqTotal(world)).toBe(1);
+
+    const errors = rig.logs.eventsOf('outbox.reconcile_error');
+    expect(errors).toHaveLength(1);
+    const line = errors[0] ?? {};
+    expect(line['level']).toBe('warn');
+    expect(line['orderId']).toBe(failed.orderId);
+    expect(line['correlationId']).toBe(failed.requestId);
+    for (const field of ['time', 'level', 'service', 'msg', 'event', 'correlationId', 'trace_id', 'span_id']) {
+      expect(line[field], `falta ${field}`).toBeDefined();
+    }
+    expect(line['service']).toBe(resolveServiceIdentity('casecellshop-worker').service);
+    expect(line['trace_id']).toMatch(/^[0-9a-f]{32}$/);
+    expect(line['span_id']).toMatch(/^[0-9a-f]{16}$/);
   });
 });
 
