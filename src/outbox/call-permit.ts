@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { type Kysely, sql } from 'kysely';
+import { expressionBuilder, type Kysely, sql } from 'kysely';
 import type { StoreDb } from '../db/database.ts';
+
+// Fora do callback do set: a regra do Kysely exige o objeto, e o coalesce precisa citar a coluna.
+const outbox = expressionBuilder<StoreDb, 'outbox'>();
 
 // Permissão de chamada por pedido (AD-024; design.md, "Worker: envio"): uma
 // chamada ao ERP por pedido a cada atraso mínimo, pelo relógio do banco.
@@ -26,12 +29,12 @@ export async function takeCallPermit(db: Kysely<StoreDb>, orderId: string, { min
   const token = randomUUID();
   const taken = await db
     .updateTable('outbox')
-    .set((eb) => ({
+    .set({
       last_call_at: sql<Date>`now()`,
       call_token: token,
-      first_sent_at: eb.fn.coalesce('first_sent_at', sql<Date>`now()`),
+      first_sent_at: outbox.fn.coalesce('first_sent_at', sql<Date>`now()`),
       ...(clearDead ? { dead_at: null } : {}),
-    }))
+    })
     .where('order_id', '=', orderId)
     .where((eb) => eb.or([eb('last_call_at', 'is', null), eb(eb('last_call_at', '+', intervalOf(minDelayMs)), '<=', sql<Date>`now()`)]))
     // O RETURNING devolve a linha nova, então o "enviado antes" sai da comparação: na primeira tomada
