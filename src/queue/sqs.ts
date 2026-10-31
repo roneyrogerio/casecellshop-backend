@@ -57,7 +57,8 @@ export function createSqsClient(settings: SqsSettings): SQSClient {
     region: settings.region,
     // Uma tentativa só: quem chama (relay, worker) decide se repete.
     maxAttempts: 1,
-    requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS },
+    // Sem throwOnRequestTimeout o handler só avisa no log e não aborta: o relay ficaria com a transação aberta.
+    requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS, connectionTimeout: REQUEST_TIMEOUT_MS, throwOnRequestTimeout: true },
     ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
   });
 }

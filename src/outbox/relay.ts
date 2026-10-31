@@ -58,14 +58,19 @@ export function createRelay({ pool, queue, logger, telemetry, clock, config }: R
       if (rows.length === 0) return { read: 0, published: 0 };
 
       // Valida o corpo antes de enviar: a mensagem que sai tem de passar no contrato do worker.
-      const outgoing = rows.map((row) => ({
-        id: row.order_id,
-        body: JSON.stringify(BillingMessage.parse({ orderId: row.order_id, correlationId: row.correlation_id })),
-        traceparent: row.traceparent,
-      }));
+      // Linha inválida fica fora do lote: se derrubasse a rodada, travaria as demais, já que é das mais antigas.
+      const outgoing = rows.flatMap((row) => {
+        const parsed = BillingMessage.safeParse({ orderId: row.order_id, correlationId: row.correlation_id });
+        if (!parsed.success) {
+          logger.error({ event: 'outbox.invalid_row', orderId: row.order_id }, 'linha da outbox inválida, fora do lote');
+          return [];
+        }
+        return [{ id: row.order_id, body: JSON.stringify(parsed.data), traceparent: row.traceparent }];
+      });
+      if (outgoing.length === 0) return { read: rows.length, published: 0 };
       const { failedIds } = await queue.send(outgoing);
       const failed = new Set(failedIds);
-      const accepted = rows.map((row) => row.order_id).filter((id) => !failed.has(id));
+      const accepted = outgoing.map((message) => message.id).filter((id) => !failed.has(id));
       if (accepted.length === 0) return { read: rows.length, published: 0 };
 
       // Se este UPDATE falhar, a mensagem já está no SQS e a linha volta ao lote: entrega ao menos uma vez.
@@ -84,7 +89,7 @@ export function createRelay({ pool, queue, logger, telemetry, clock, config }: R
     while (state === 'running') {
       let full = false;
       try {
-        full = (await round()).read >= settings.batchSize;
+        full = (await round()).published >= settings.batchSize;
       } catch (error) {
         logger.error({ event: 'outbox.relay_error', err: error }, 'falha na rodada do relay');
       }
