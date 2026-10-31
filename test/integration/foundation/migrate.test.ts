@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MIGRATION_FOLDERS, migrate } from '../../../src/db/migrate.ts';
+import { createMigrationPool, createPool } from '../../../src/db/pool.ts';
 import {
   appliedMigrations,
   fixtureFolder,
@@ -304,30 +306,32 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
   const rounds = 3;
   const folder = fixtureFolder('concorrencia');
   const expectedNames = ['20260101000000_lenta', '20260101000001_depois'];
-  const STATEMENT_TIMEOUT_MS = 1_000;
-  const LOCK_TIMEOUT_MS = 500;
+  const logger = pino({ level: 'silent' });
+  // A barreira só é solta depois de as duas chamadas esperarem mais que os 2 s do lock_timeout das
+  // requisições (e menos que os 5 s do statement_timeout, para o corte ser o do lock).
+  const WAIT_PAST_REQUEST_LIMITS_SECONDS = 3;
 
-  // O pool curto imita o de produção (statement_timeout e lock_timeout menores que a migração mais
-  // lenta e que a espera pelo lock); a barreira só é solta depois de as duas chamadas esperarem
-  // mais que o dobro do statement_timeout.
   it.each([
-    ['sem statement_timeout nem lock_timeout', {}, 0],
     [
-      'sobre um pool com statement_timeout de 1 s e lock_timeout de 500 ms, menores que a migração mais lenta',
-      { statement_timeout: STATEMENT_TIMEOUT_MS, lock_timeout: LOCK_TIMEOUT_MS },
-      2,
+      'sobre um pool sem statement_timeout nem lock_timeout',
+      0,
+      (uri: string): pg.Pool => {
+        const bare = new pg.Pool({ connectionString: uri, max: 10 });
+        bare.on('error', noop);
+        return bare;
+      },
+    ],
+    [
+      'sobre o pool do serviço de migração, com a espera acima dos 2 s do lock_timeout das requisições',
+      WAIT_PAST_REQUEST_LIMITS_SECONDS,
+      (uri: string): pg.Pool => createMigrationPool(uri, logger),
     ],
   ] as const)(
     'FND-11 duas chamadas de migrate ao mesmo tempo terminam sem erro, com cada migração aplicada uma vez, %s',
-    async (_label, limits, minWaitSeconds) => {
+    async (_label, minWaitSeconds, makePool) => {
       for (let round = 0; round < rounds; round += 1) {
         const database = await container.createDatabase();
-        const migrationPool = new pg.Pool({
-          connectionString: database.uri,
-          max: 10,
-          ...limits,
-        });
-        migrationPool.on('error', noop);
+        const migrationPool = makePool(database.uri);
         try {
           const settled = await runOverlapped(database, minWaitSeconds, () => [
             migrate(migrationPool, [folder]),
@@ -349,6 +353,51 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
     120_000,
   );
 
+  it('FND-11 controle negativo: sobre o pool das requisições, a mesma espera é cortada pelo lock_timeout ou pelo statement_timeout', async () => {
+    for (let round = 0; round < rounds; round += 1) {
+      const database = await container.createDatabase();
+      const requestPool = createPool(database.uri, logger);
+      try {
+        const settled = await runOverlapped(database, WAIT_PAST_REQUEST_LIMITS_SECONDS, () => [
+          migrate(requestPool, [folder]),
+          migrate(requestPool, [folder]),
+        ]);
+
+        // Os 2 s do lock_timeout vencem os 5 s do statement_timeout; aceitam-se os dois códigos para o
+        // teste não depender de qual limite o servidor aplica primeiro.
+        const failures = settled.filter((outcome) => outcome.status === 'rejected');
+        expect(failures.length).toBeGreaterThanOrEqual(1);
+        for (const failure of failures) {
+          expect((failure.reason as { code?: string }).code).toMatch(/^(55P03|57014)$/);
+        }
+      } finally {
+        await requestPool.end();
+      }
+    }
+  }, 120_000);
+
+  it('FND-11 os limites do pool: o do serviço de migração não tem statement_timeout nem lock_timeout, e o das requisições tem 5 s e 2 s', async () => {
+    const database = await container.createDatabase();
+    const migrationPool = createMigrationPool(database.uri, logger);
+    const requestPool = createPool(database.uri, logger);
+    try {
+      const show = async (pool: pg.Pool): Promise<{ statement: string; lock: string }> => {
+        const statement = await pool.query<{ statement_timeout: string }>('SHOW statement_timeout');
+        const lock = await pool.query<{ lock_timeout: string }>('SHOW lock_timeout');
+        return {
+          statement: statement.rows[0]?.statement_timeout ?? '',
+          lock: lock.rows[0]?.lock_timeout ?? '',
+        };
+      };
+
+      expect(await show(migrationPool)).toEqual({ statement: '0', lock: '0' });
+      expect(await show(requestPool)).toEqual({ statement: '5s', lock: '2s' });
+    } finally {
+      await migrationPool.end();
+      await requestPool.end();
+    }
+  }, 60_000);
+
   it('FND-11 controle negativo: com um adaptador sem lock, exatamente uma das duas chamadas rejeita', async () => {
     for (let round = 0; round < rounds; round += 1) {
       const database = await container.createDatabase();
@@ -365,41 +414,5 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
       // Quem venceu a corrida aplicou as duas migrações, uma vez.
       expect(await appliedMigrations(database.pool, 'public')).toEqual(expectedNames);
     }
-  }, 120_000);
-
-  it('FND-11 controle negativo do pool curto: o Migrator cru sobre um pool com statement_timeout de 1 s é cortado com 57014', async () => {
-    const database = await container.createDatabase();
-    const shortUri = new URL(database.uri);
-    shortUri.searchParams.set('statement_timeout', String(STATEMENT_TIMEOUT_MS));
-
-    // Sem o migrate do projeto, a espera pela barreira passa de 1 s e o servidor cancela o comando.
-    const settled = await runOverlapped(database, 2, () => [
-      runPlainMigrator(shortUri.toString(), folder),
-      runPlainMigrator(shortUri.toString(), folder),
-    ]);
-
-    const codes = settled.map((outcome) => {
-      const error: unknown = outcome.status === 'fulfilled' ? outcome.value.error : outcome.reason;
-      return (error as { code?: string } | undefined)?.code;
-    });
-    expect(codes).toContain('57014');
-  }, 120_000);
-
-  it('FND-11 controle negativo do lock_timeout: o Migrator cru sobre um pool com lock_timeout de 500 ms é cortado com 55P03 ao esperar o lock', async () => {
-    const database = await container.createDatabase();
-    const shortUri = new URL(database.uri);
-    shortUri.searchParams.set('lock_timeout', String(LOCK_TIMEOUT_MS));
-
-    // Sem statement_timeout: só o lock_timeout pode cortar a espera pela barreira e pelo lock do migrador.
-    const settled = await runOverlapped(database, 2, () => [
-      runPlainMigrator(shortUri.toString(), folder),
-      runPlainMigrator(shortUri.toString(), folder),
-    ]);
-
-    const codes = settled.map((outcome) => {
-      const error: unknown = outcome.status === 'fulfilled' ? outcome.value.error : outcome.reason;
-      return (error as { code?: string } | undefined)?.code;
-    });
-    expect(codes).toContain('55P03');
   }, 120_000);
 });
