@@ -155,9 +155,12 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 | Aqui | No SQS |
 | --- | --- |
 | lease | visibility timeout |
+| token da reivindicação | receipt handle |
 | tentativas | `maxReceiveCount` |
 | `dead` | DLQ |
 | SQL de reprocessar em lote | redrive |
+
+Ficam no banco, sem par no SQS (AD-021): o atraso mínimo contado do início da última chamada, o `first_sent_at`, a consulta ao ERP antes de criar e a espera com *full jitter* por mensagem.
 
 ## Sincronização (AD-009)
 

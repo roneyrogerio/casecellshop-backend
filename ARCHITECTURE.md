@@ -258,6 +258,24 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
 - **Testes:** contam faturas no ERP simulado, não chamadas, contra o PostgreSQL real. As falhas são injetadas por um roteiro do simulado (lento, indisponível, fatura sem responder, fatura depois do timeout abaixo e acima da H4, `502` seguido de fatura, sem a H1b). O tempo corre num relógio manual e em horários semeados no banco, sem `sleep` **[M3, `ORD-01` a `ORD-20`]**.
 - **Rastreabilidade:** cada tentativa é um span filho do span do checkout, retomado pelo `traceparent` gravado na outbox, e os logs do worker levam `orderId`, `attempt` e o `correlationId` da requisição original **[M3, `ORD-18`, `OBS-01`]**.
 
+### Como isto vira SQS, SNS e EventBridge na AWS
+
+A outbox continua sendo a fila mesmo com o SQS, porque o problema que ela resolve é a escrita dupla, e o SQS não participa da transação do banco. É o padrão que o guia de padrões de nuvem da AWS recomenda: gravar a mensagem numa tabela de outbox na mesma transação e publicar depois, por um relay (AD-021).
+
+- **Hoje:** a tabela `outbox` no PostgreSQL é a fila, consumida pelo worker com `FOR UPDATE SKIP LOCKED` **[implementado: `src/outbox/claim.ts`, `ORD-02`, `ORD-20`]**.
+- **Na AWS:** o banco vai para o RDS; um relay lê a outbox (pelo mesmo `SKIP LOCKED`, ou por captura de mudanças) e publica no SQS Standard, que entrega pelo menos uma vez e sem ordem garantida. O consumidor já é idempotente pela consulta ao ERP antes de criar, então a fila FIFO só entraria se a ordem por pedido importasse; a deduplicação dela cobre só 5 minutos **[alvo]**.
+- **Um segundo consumidor** (notificação ao cliente, analytics) não lê a fila do faturamento: o relay publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS e a sua DLQ **[alvo]**.
+
+| Outbox no PostgreSQL | SQS |
+| --- | --- |
+| lease (`lease_until`) | visibility timeout |
+| token da reivindicação (`claim_token`) | receipt handle |
+| 12 tentativas | `maxReceiveCount = 12` |
+| status `dead` | DLQ, com retenção maior que a da fila de origem |
+| reprocessamento em lote pelo runbook | redrive |
+
+O que fica no banco mesmo com o SQS, porque não tem par nele: o atraso mínimo contado do início da última chamada (H4), o `first_sent_at`, a consulta ao ERP antes de criar e a espera com *full jitter* por mensagem. É por isso que pôr o SQS no caminho do worker aqui só duplicaria o retry e a DLQ. O SQS não roda no compose: o LocalStack exige token de conta desde a versão 2026.03.0, e o ElasticMQ, que roda sem token, entra como adicional, num relay fora do caminho crítico **[adicional, `ROADMAP.md`]**.
+
 ### Prompts de IA relevantes
 
 `DOC-MSG-04`. O projeto não guarda um diário de prompts: os prompts que decidem cada passo são as instruções versionadas dos agentes, listadas no [`PROMPTS.md`](PROMPTS.md). Os trechos que governam esta área, citados literalmente:

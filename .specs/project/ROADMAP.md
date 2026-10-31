@@ -147,6 +147,7 @@ Fora do escopo principal. Entram só depois que M1 a M6 estiverem completos, nes
 3. Plano de rollout por fase, com critério de saída e rollback.
 4. `/livez` e `/readyz` separados.
 5. Diagrama de sequência (Mermaid) do checkout ao faturamento.
+6. Relay da outbox para um SQS local (ElasticMQ), num perfil opcional do compose, publicando o evento "pedido faturado" fora do caminho crítico (AD-021); pede dependência nova e AD própria.
 
 ## Arquitetura alvo
 

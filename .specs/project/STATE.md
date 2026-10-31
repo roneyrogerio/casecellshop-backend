@@ -63,7 +63,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-003 · Outbox transacional como fila, no próprio PostgreSQL
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026); o motivo para não rodar SQS local é corrigido pela AD-021
 
 **Contexto.** Publicar antes de gravar o pedido gera mensagem fantasma; publicar depois gera pedido fantasma se o processo cair entre os dois passos. Um worker atrasado não pode desfazer o que outro concluiu, e o ERP lento não pode receber mais chamadas do que aguenta.
 
@@ -578,6 +578,30 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Trade-off.** Uma requisição repetida grava e desfaz uma linha de pedido a mais.
 
 **Rever quando:** o checkout ganhar passos antes da reserva que custem caro, ou a chave passar a ter vida própria antes do pedido.
+
+### AD-021 · A outbox continua sendo a fila; o SQS entra por um relay
+
+**Status:** proposta (31/10/2026, PR #13). Corrige, na AD-003, o motivo dado para não rodar SQS local.
+
+**Contexto.** A vaga pede SQS, SNS e EventBridge, e a AD-003 descartou "SQS no LocalStack" porque ele exige token de conta desde a versão 2026.03.0. Isso continua verdade, mas não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem token, e funciona com o `@aws-sdk/client-sqs` da versão 3. Então rodar um SQS no compose é viável, e a decisão precisa do motivo que vale.
+
+**Decisão.**
+
+- A outbox no PostgreSQL continua sendo a fila do worker, como na AD-003.
+- O motivo é a escrita dupla, não a ferramenta: gravar o pedido e publicar numa fila externa são duas escritas sem transação comum, então a outbox seria necessária mesmo com o SQS. E o que o worker decide por mensagem (o atraso mínimo contado do início da última chamada, o `first_sent_at`, a consulta ao ERP antes de criar, a espera com *full jitter*) continua no banco; pôr o SQS no caminho duplicaria o retry e a DLQ.
+- Em produção na AWS, um relay lê a outbox e publica no SQS Standard; o consumidor já é idempotente, então a FIFO só entraria se a ordem por pedido importasse. Um segundo consumidor dos eventos de pedido entra por um barramento do EventBridge ou um tópico do SNS, com uma fila SQS e uma DLQ por consumidor. A correspondência está no `ARCHITECTURE.md`, seção "Mensageria e resiliência".
+- Como adicional, depois do M6: um relay que publica o evento "pedido faturado" num ElasticMQ, num perfil opcional do compose, fora do caminho crítico (`ROADMAP.md`, "Adicionais"). Ele pede uma dependência nova e uma AD própria quando entrar.
+
+**Alternativas consideradas:**
+
+- **O worker consumir de um SQS local (ElasticMQ):** mostra o SQS rodando, mas a outbox continua necessária na frente dele, e o retry por mensagem teria de ser emulado com `ChangeMessageVisibility`.
+- **SQS no LocalStack:** exige token de conta desde a 2026.03.0, o que quebra o "executável sem credenciais"; a imagem antiga sem token está congelada.
+
+**Trade-off.** Quem lê o código não vê o SQS rodando; vê a correspondência e a evolução por escrito.
+
+**Rever quando:** surgir um segundo consumidor dos eventos de pedido, ou a vazão passar do que o polling sustenta, como a AD-003 já diz.
+
+**Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/); [ElasticMQ](https://github.com/softwaremill/elasticmq); [Amazon SQS, filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html).
 
 **Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
 
