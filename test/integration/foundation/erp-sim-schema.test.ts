@@ -105,6 +105,16 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
         is_identity: 'NO',
         identity_generation: null,
       },
+      // Chave de deduplicação da H1b: anulável, para o modo sem a H1b gravar NULL (design.md, "Modo sem a H1b").
+      {
+        table_name: 'invoices',
+        column_name: 'dedup_key',
+        data_type: 'text',
+        is_nullable: 'YES',
+        column_default: null,
+        is_identity: 'NO',
+        identity_generation: null,
+      },
       {
         table_name: 'products',
         column_name: 'sku',
@@ -144,7 +154,7 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     ]);
   });
 
-  it('FND-11 chaves primárias, unicidade da reference e os CHECKs, pelo catálogo', async () => {
+  it('FND-11 chaves primárias, unicidade da dedup_key e os CHECKs, pelo catálogo', async () => {
     // contype 'n' (NOT NULL como restrição, no PostgreSQL 18) fica de fora: a nulidade já foi conferida acima.
     const result = await pool.query(
       `SELECT cls.relname AS table_name, con.contype, pg_get_constraintdef(con.oid) AS definition
@@ -158,10 +168,26 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     expect(result.rows).toEqual([
       { table_name: 'invoices', contype: 'c', definition: 'CHECK ((total_cents >= 0))' },
       { table_name: 'invoices', contype: 'p', definition: 'PRIMARY KEY (id)' },
-      { table_name: 'invoices', contype: 'u', definition: 'UNIQUE (reference)' },
+      { table_name: 'invoices', contype: 'u', definition: 'UNIQUE (dedup_key)' },
       { table_name: 'products', contype: 'c', definition: 'CHECK ((on_hand >= 0))' },
       { table_name: 'products', contype: 'c', definition: 'CHECK ((price_cents >= 0))' },
       { table_name: 'products', contype: 'p', definition: 'PRIMARY KEY (sku)' },
+    ]);
+  });
+
+  it('FND-11 a reference das invoices deixa de ser única e ganha um índice simples; a dedup_key tem o índice único', async () => {
+    const result = await pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = 'erp_sim' AND tablename = 'invoices'`,
+    );
+
+    // O nome do índice não é contrato (pode ser gerado): compara só a definição, sem o nome.
+    const definitions = result.rows
+      .map((row) => row.indexdef.replace(/^CREATE (UNIQUE )?INDEX \S+ ON /, 'CREATE $1INDEX ON '))
+      .sort();
+    expect(definitions).toEqual([
+      'CREATE INDEX ON erp_sim.invoices USING btree (reference)',
+      'CREATE UNIQUE INDEX ON erp_sim.invoices USING btree (dedup_key)',
+      'CREATE UNIQUE INDEX ON erp_sim.invoices USING btree (id)',
     ]);
   });
 
@@ -201,8 +227,26 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     expect(created.rows[0]?.id).toMatch(/^\d+$/);
     expect(created.rows[0]?.recent).toBe(true);
 
-    const duplicateReference = await violation(
-      pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)`),
+    // Duas linhas com dedup_key nula e a mesma reference são aceitas: é o modo sem a H1b.
+    await pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)`);
+    const sameReference = await pool.query<{ total: string }>(
+      `SELECT count(*)::text AS total FROM erp_sim.invoices WHERE reference = 'fnd11-ref-1' AND dedup_key IS NULL`,
+    );
+    expect(sameReference.rows[0]?.total).toBe('2');
+
+    // Duas com o mesmo dedup_key recebem 23505 na restrição dele. O nome vem do catálogo, pela definição.
+    const uniqueConstraint = await pool.query<{ conname: string }>(
+      `SELECT con.conname FROM pg_constraint con JOIN pg_class cls ON cls.oid = con.conrelid
+         JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = 'erp_sim' AND cls.relname = 'invoices' AND pg_get_constraintdef(con.oid) = 'UNIQUE (dedup_key)'`,
+    );
+    await pool.query(
+      `INSERT INTO erp_sim.invoices (reference, dedup_key, items, total_cents) VALUES ('fnd11-ref-4', 'fnd11-ref-4', '[]'::jsonb, 0)`,
+    );
+    const duplicateDedupKey = await violation(
+      pool.query(
+        `INSERT INTO erp_sim.invoices (reference, dedup_key, items, total_cents) VALUES ('fnd11-ref-4', 'fnd11-ref-4', '[]'::jsonb, 0)`,
+      ),
     );
     const negativeTotal = await violation(
       pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-2', '[]'::jsonb, -1)`),
@@ -211,7 +255,8 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     const explicitId = await violation(
       pool.query(`INSERT INTO erp_sim.invoices (id, reference, items, total_cents) VALUES (999, 'fnd11-ref-3', '[]'::jsonb, 0)`),
     );
-    expect(duplicateReference).toEqual({ code: '23505', constraint: 'invoices_reference_key' });
+    expect(uniqueConstraint.rows).toHaveLength(1);
+    expect(duplicateDedupKey).toEqual({ code: '23505', constraint: uniqueConstraint.rows[0]?.conname });
     expect(negativeTotal).toEqual({ code: '23514', constraint: 'invoices_total_cents_check' });
     expect(explicitId?.code).toBe('428C9');
   });
