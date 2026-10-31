@@ -611,24 +611,31 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Polling publisher](https://microservices.io/patterns/data/polling-publisher.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html), [filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) e [redrive](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html); [ElasticMQ](https://github.com/softwaremill/elasticmq); [bbc/sqs-consumer, testes com ElasticMQ](https://github.com/bbc/sqs-consumer); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/).
 
-### AD-022 · Achado baixo de texto se corrige no mesmo PR
+### AD-022 · Erro de texto do próprio PR se corrige no PR, numa rodada só
 
-**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os achados de texto.
+**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
 
-**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte. No M3, vários eram só de texto (uma frase da spec que contradizia o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) e ficariam valendo no repositório enquanto o próximo PR não chega, lidos pelos agentes e por quem avalia o desafio.
+**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, cada uma achando mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
 
-**Decisão.** Um achado `baixa` de texto ou documentação (spec, design, ADs, `ARCHITECTURE.md`, README, instruções dos agentes) é corrigido pela sessão principal no mesmo PR, juntando os de uma rodada num commit só, que passa pela rodada seguinte com o resto do delta. Um achado `baixa` de código ou de teste continua indo para o próximo plano, e nenhum `baixa` bloqueia o PR. Decidido pelo mantenedor no M3.
+**Decisão.**
+
+- **Pela origem:** um erro de texto em linha que o PR alterou é corrigido no mesmo PR, sem teto. Uma melhoria em texto que o PR não tocou, e qualquer `baixa` de código ou de teste, vai para o próximo plano. Erro de texto é fato errado, contradição com a spec, o design ou uma AD, referência ou ID quebrado, ou termo divergente; preferência de redação não é achado.
+- **Conferência só do delta, na mesma rodada:** o `reviewer` recebe o diff do commit de ajuste e diz se cada achado fechou e se as linhas novas criam erro. Achado em linha que o ajuste não tocou fica fora da conferência e segue a regra acima, então o escopo encolhe a cada conferência e converge. Uma linha refeita várias vezes sem convergir vai ao mantenedor, não ao próximo plano.
+- **Uma rodada, um relatório:** o PR recebe um só comentário por rodada, o último relatório, com todos os achados da rodada numa tabela (origem, commit da correção, status: corrigido, sem mudança necessária ou adiado) e o resultado de cada conferência. Os commits de ajuste ficam separados, e o histórico guarda a prova de que a IA errou e foi corrigida.
+- Decidido pelo mantenedor no M3, depois de pesquisa.
 
 **Alternativas consideradas:**
 
-- **Manter tudo no próximo plano (AD-015):** o texto errado fica publicado até o PR seguinte.
-- **Corrigir também o `baixa` de código no mesmo PR:** cada correção de código pede teste antes e uma rodada nova, o laço que a L-007 registra.
+- **Manter tudo no próximo plano (AD-015):** o erro de texto do próprio PR fica publicado até o PR seguinte, e o que se deixa para depois tende a não ser feito.
+- **Uma rodada nova por correção, com revisão aberta:** foi o que gerou o laço das Revisões 6 a 9; um revisor que procura problemas sempre acha algum.
+- **Teto de duas conferências, com o resto para o próximo plano:** deixaria publicado um erro do próprio PR.
+- **Corrigir sem nova conferência ("aprova com nits"):** a norma entre pessoas pressupõe confiança no autor, e aqui o autor é o mesmo agente que errou; uma correção também erra, como a do A34 mostrou (A36).
 
-**Trade-off.** Uma rodada curta a mais, só de texto, quando a última rodada deixa achados de texto.
+**Trade-off.** Conferências curtas a mais no fim da rodada, e o relatório final fica mais longo. Em troca, o erro não sai publicado e o PR mostra uma rodada, não quatro.
 
-**Rever quando:** as rodadas só de texto passarem a somar mais tempo do que a correção economiza, ou um achado de texto voltar a aparecer depois de corrigido.
+**Rever quando:** as conferências de texto passarem a não convergir em duas ou três passadas, ou a soma delas passar do tempo de uma rodada de código.
 
-**Referências:** AD-015; L-007.
+**Referências:** AD-015; L-007; [Google, Code Review Developer Guide: "Cleaning It Up Later"](https://google.github.io/eng-practices/review/reviewer/pushback.html) e ["LGTM with comments"](https://google.github.io/eng-practices/review/reviewer/speed.html); [Claude Code, Code Review](https://code.claude.com/docs/en/code-review-pull-requests) (achados *nit* e *pre-existing*, re-revisão do que mudou); [Claude Code, boas práticas](https://code.claude.com/docs/en/best-practices) ("skip style").
 
 ## Escolhas de ferramenta
 
