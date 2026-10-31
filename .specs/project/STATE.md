@@ -583,7 +583,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-021 · O SQS é a fila do faturamento; a outbox é a caixa de saída
 
-**Status:** proposta (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
+**Status:** aceita (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
 
 **Contexto.** A AD-003 fez da tabela da outbox a própria fila e descartou o SQS local porque o LocalStack exige token de conta desde a versão 2026.03.0. Esse motivo não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem conta nem token, e as bibliotecas de SQS mais usadas em Node (o `sqs-consumer` da BBC, o `nestjs-sqs`) o usam nos próprios testes com o `@aws-sdk/client-sqs` da versão 3. O PDF avalia retry, DLQ e reconciliação no fluxo do checkout e cita o LocalStack entre os serviços de apoio, e a vaga pede SQS: a fila do faturamento é o lugar onde o SQS mostra o que o desafio avalia.
 
@@ -613,7 +613,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-022 · Erro de texto do próprio PR se corrige no PR, numa rodada só
 
-**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
+**Status:** aceita (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
 
 **Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, e da 6 à 8 cada uma achou mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
 
