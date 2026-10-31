@@ -547,7 +547,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-019 · Tipos do banco conferidos por comparação, sem o `--verify` do gerador
 
-**Status:** proposta (PR #11). Substitui, na AD-017, a conferência dos tipos "com `--verify`".
+**Status:** aceita (31/10/2026, PR #11). Substitui, na AD-017, a conferência dos tipos "com `--verify`".
 
 **Contexto.** A AD-017 manda o CI conferir os tipos gerados com o `--verify` do kysely-codegen. Na versão 0.20.0, quando o `--verify` acha divergência, ele lança antes de fechar a própria conexão com o banco. Nos testes do `FND-09`, essa conexão aberta caía quando o PostgreSQL parava, e o processo recebia 15 erros não capturados.
 

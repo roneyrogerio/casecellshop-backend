@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M2 — Checkout (parte 1, a camada de dados, no PR #11; parte 2, o checkout, num PR depois dele)
+**Marco atual:** M2 — Checkout (parte 1, a camada de dados, concluída no PR #11; parte 2, o checkout, em andamento)
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
