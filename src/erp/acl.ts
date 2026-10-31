@@ -25,7 +25,9 @@ export interface ErpClientOptions {
 type Outcome =
   | { kind: 'response'; response: ErpResponse }
   | { kind: 'network'; code: ErpNetworkError['code'] }
-  | { kind: 'timeout' };
+  | { kind: 'timeout' }
+  // Rejeição que não é de rede nem o aborto do timeout: pode ter chegado ao ERP.
+  | { kind: 'transport_error' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -48,8 +50,13 @@ function parseCatalogItem(value: unknown): ErpCatalogItem | undefined {
   if (
     typeof sku !== 'string' ||
     typeof name !== 'string' ||
+    // Dinheiro em centavos inteiros e estoque nunca negativo: um valor fora disso é contrato quebrado.
     typeof priceCents !== 'number' ||
-    typeof onHand !== 'number'
+    typeof onHand !== 'number' ||
+    !Number.isSafeInteger(priceCents) ||
+    !Number.isSafeInteger(onHand) ||
+    priceCents < 0 ||
+    onHand < 0
   ) {
     return undefined;
   }
@@ -73,20 +80,28 @@ export function createErpClient({ transport, clock, timeoutMs }: ErpClientOption
       timedOut = true;
       controller.abort(new Error('Timeout da chamada ao ERP'));
     });
+    // Disputa com o aborto: o timeout vale mesmo que o transporte ignore o sinal, e a
+    // resposta tardia dele é descartada. O race já trata a rejeição da promessa perdedora.
+    const aborted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => reject(new Error('Timeout da chamada ao ERP')), {
+        once: true,
+      });
+    });
     try {
-      return { kind: 'response', response: await transport.send(request, controller.signal) };
+      return { kind: 'response', response: await Promise.race([transport.send(request, controller.signal), aborted]) };
     } catch (error) {
       if (timedOut) return { kind: 'timeout' };
       if (error instanceof ErpNetworkError) return { kind: 'network', code: error.code };
-      // Falha que o contrato do transporte não prevê: pode ter chegado ao ERP.
-      return { kind: 'timeout' };
+      return { kind: 'transport_error' };
     }
   }
 
   return {
     async createOrder(request): Promise<CreateOrderResult> {
       const outcome = await call({ op: 'createOrder', body: request });
-      if (outcome.kind === 'timeout') return { kind: 'ambiguous', cause: 'timeout' };
+      if (outcome.kind === 'timeout' || outcome.kind === 'transport_error') {
+        return { kind: 'ambiguous', cause: outcome.kind === 'timeout' ? 'timeout' : 'transport_error' };
+      }
       if (outcome.kind === 'network') {
         // ECONNRESET caiu depois do envio; os outros dois, antes.
         return outcome.code === 'ECONNRESET'
@@ -109,7 +124,9 @@ export function createErpClient({ transport, clock, timeoutMs }: ErpClientOption
 
     async findOrderByReference(reference): Promise<FindOrderResult> {
       const outcome = await call({ op: 'findOrder', reference });
-      if (outcome.kind === 'timeout') return { kind: 'transient', cause: 'timeout' };
+      if (outcome.kind === 'timeout' || outcome.kind === 'transport_error') {
+        return { kind: 'transient', cause: outcome.kind };
+      }
       if (outcome.kind === 'network') return { kind: 'transient', cause: outcome.code };
       const { status, body } = outcome.response;
       if (status === 200) {
@@ -126,13 +143,20 @@ export function createErpClient({ transport, clock, timeoutMs }: ErpClientOption
 
     async listCatalog(page): Promise<ListCatalogResult> {
       const outcome = await call({ op: 'listCatalog', page });
-      if (outcome.kind === 'timeout') return { kind: 'transient', cause: 'timeout' };
+      if (outcome.kind === 'timeout' || outcome.kind === 'transport_error') {
+        return { kind: 'transient', cause: outcome.kind };
+      }
       if (outcome.kind === 'network') return { kind: 'transient', cause: outcome.code };
       const { status, body } = outcome.response;
-      if (status === 200 && isRecord(body) && Array.isArray(body['items'])) {
+      if (
+        status === 200 &&
+        isRecord(body) &&
+        Array.isArray(body['items']) &&
+        typeof body['hasNext'] === 'boolean'
+      ) {
         const items = body['items'].map(parseCatalogItem);
         if (items.every((item): item is ErpCatalogItem => item !== undefined)) {
-          return { kind: 'ok', page: { items, hasNext: body['hasNext'] === true } };
+          return { kind: 'ok', page: { items, hasNext: body['hasNext'] } };
         }
       }
       if (status === 404 || isConfigStatus(status)) return { kind: 'config_error', status };

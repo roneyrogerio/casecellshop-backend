@@ -18,6 +18,8 @@ export async function up(db: Kysely<any>): Promise<void> {
   await schema.createIndex('invoices_reference_idx').on('invoices').column('reference').execute();
 }
 
+// O rollback recria UNIQUE (reference) e falha com 23505 se houver faturas duplicadas do
+// modo sem a H1b: exige um banco sem referências repetidas (só acontece em desenvolvimento).
 export async function down(db: Kysely<any>): Promise<void> {
   const schema = db.schema.withSchema('erp_sim');
   await schema.dropIndex('invoices_reference_idx').execute();
