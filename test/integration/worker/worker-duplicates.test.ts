@@ -316,9 +316,22 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
     await vi.waitFor(async () => expect((await countsOf(world.emq, world.queues.queueUrl)).visible).toBe(2));
     const worker = buildWorker(world);
 
+    // A tentativa que ganhar a permissão fica presa na chamada ao ERP (depois de a fatura nascer, antes de a
+    // resposta voltar) até a outra ser adiada. Sem isso, sob carga a primeira conclui antes de a segunda ler o
+    // status do pedido, e a segunda apagaria a mensagem como `outbox.closed` sem nunca disputar a permissão.
+    let held = false;
+    world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, async () => {
+      held = true;
+      await vi.waitFor(() => expect(world.queue.visibilityChanges, 'a segunda tentativa foi adiada pela permissão').toHaveLength(1), {
+        timeout: 20_000,
+        interval: 10,
+      });
+    });
+
     // As duas chegam juntas ao mesmo worker.
     expect(await worker.pollOnce()).toBe(2);
 
+    expect(held, 'a chamada ao ERP ficou presa até o adiamento da outra mensagem').toBe(true);
     expect(await invoices(order.orderId)).toBe(1);
     expect(world.transport.sendsOf('createOrder')).toHaveLength(1);
     expect(world.transport.maxInFlight).toBe(1);

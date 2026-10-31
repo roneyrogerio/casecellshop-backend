@@ -75,11 +75,13 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     await settle();
     expect(sequence, 'o start() não resolve enquanto o stop() espera a tentativa em voo').toEqual([]);
 
-    // O timeout da chamada presa, no relógio manual, solta o stop(); então o start() volta a receber.
+    // O timeout da chamada presa, no relógio manual, solta o stop(); então o start() volta a receber. Um avanço
+    // só basta: o timer do timeout é armado antes de a chamada chegar ao transporte, e a chamada já chegou. O
+    // relógio não avança mais: o ERP simulado fatura sem esperar o relógio, e um avanço repetido enquanto o laço
+    // volta a receber estouraria o timeout (10 s) da chamada da mensagem nova sob carga, deixando-a ambígua.
     world.clock.advance(ERP_TIMEOUT_MS);
     await vi.waitFor(
       async () => {
-        world.clock.advance(500);
         expect((await readOrder(world.pool, fresh.orderId)).status).toBe('invoiced');
       },
       { timeout: 20_000, interval: 20 },
