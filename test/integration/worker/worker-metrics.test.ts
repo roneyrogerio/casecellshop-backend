@@ -270,6 +270,37 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     expect(erpRequests(families, 'create_order', 'ok')).toBe(1);
   });
 
+  it.each([
+    ['fatura', 'invoiced'],
+    ['fatura', 'failed'],
+    ['rejeição', 'invoiced'],
+    ['rejeição', 'failed'],
+  ] as const)(
+    'OBS-02 conclusão por %s com o pedido já %s fora do fluxo: fecha a mensagem, soma 1 em closed e nada em invoiced, failed nem no aceite ao faturamento',
+    async (result, externalStatus) => {
+      // A conclusão da fatura e a da rejeição têm de reconhecer o mesmo pedido já concluído.
+      const rig = createRig();
+      const order = await acceptOrder(suite);
+      if (result === 'rejeição') rig.world.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: order.orderId });
+      rig.world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, async () => {
+        await suite.pool.query(
+          externalStatus === 'invoiced'
+            ? "update orders set status = 'invoiced', outcome_at = now() where id = $1"
+            : "update orders set status = 'failed', failure_reason = 'cancelled', outcome_at = now() where id = $1",
+          [order.orderId],
+        );
+      });
+
+      await rig.run();
+
+      const families = await rig.scrape();
+      expect(attemptOutcome(families, 'closed')).toBe(1);
+      expect(attemptOutcome(families, 'invoiced') ?? 0).toBe(0);
+      expect(attemptOutcome(families, 'failed') ?? 0).toBe(0);
+      expect(valueOf(families, 'order_accept_to_invoice_seconds', {}, 'order_accept_to_invoice_seconds_count') ?? 0).toBe(0);
+    },
+  );
+
   it('OBS-02 uma conclusão sem linha afetada (token trocado durante a chamada) soma 1 em outbox_conclusion_no_row_total', async () => {
     const rig = createRig();
     const order: AcceptedOrder = await acceptOrder(suite);

@@ -211,6 +211,39 @@ describe('OBS-01 logs do worker', () => {
     expect(world.transport.sends).toHaveLength(0);
   });
 
+  it.each([
+    ['fatura', 'invoiced'],
+    ['fatura', 'failed'],
+    ['rejeição', 'invoiced'],
+    ['rejeição', 'failed'],
+  ] as const)(
+    'OBS-01 conclusão por %s com o pedido já %s fora do fluxo: sai outbox.closed com os campos obrigatórios e o correlationId, e nenhum order.invoiced nem order.failed',
+    async (result, externalStatus) => {
+      const logs = captureLogs();
+      const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+      const recorded = await recordedContext(order.orderId);
+      const world = createErpWorld(suite.database.erpPool);
+      if (result === 'rejeição') world.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: order.orderId });
+      world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, async () => {
+        await suite.pool.query(
+          externalStatus === 'invoiced'
+            ? "update orders set status = 'invoiced', outcome_at = now() where id = $1"
+            : "update orders set status = 'failed', failure_reason = 'cancelled', outcome_at = now() where id = $1",
+          [order.orderId],
+        );
+      });
+
+      await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger }).pollOnce();
+
+      const closed = logs.eventsOf('outbox.closed', order.orderId);
+      expect(closed).toHaveLength(1);
+      expect(closed[0]?.['level']).toBe('info');
+      expectAttemptLine(closed[0] ?? {}, order, recorded, 1);
+      expect(logs.eventsOf('order.invoiced', order.orderId)).toEqual([]);
+      expect(logs.eventsOf('order.failed', order.orderId)).toEqual([]);
+    },
+  );
+
   it('OBS-01 outbox.dead do limite já gasto traz os campos obrigatórios, orderId, attempt e o correlationId do checkout', async () => {
     const maxAttempts = 3;
     const logs = captureLogs();
@@ -268,6 +301,58 @@ describe('OBS-01 logs do worker', () => {
     expect(invoiced).toHaveLength(1);
     expect(invoiced[0]?.['span_id']).toBe(attempt?.spanContext().spanId);
     expect(invoiced[0]?.['trace_id']).toBe(attempt?.spanContext().traceId);
+  });
+});
+
+describe('OBS-01 os eventos decididos na reivindicação saem num span outbox.settle, não num outbox.attempt', () => {
+  async function settleSpansOf(orderId: string, recorded: Recorded) {
+    const { telemetry, exporter } = suite.checkout;
+    await telemetry.forceFlush();
+    const spans = exporter.getFinishedSpans().filter((span) => span.attributes['orderId'] === orderId);
+    return {
+      settle: spans.filter((span) => span.name === 'outbox.settle' && span.parentSpanContext?.spanId === recorded.spanId),
+      attempts: spans.filter((span) => span.name === 'outbox.attempt'),
+    };
+  }
+
+  it('OBS-01 outbox.closed: um span outbox.settle filho do traceparent da outbox, com orderId, attempt e outcome closed, e nenhum outbox.attempt', async () => {
+    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const recorded = await recordedContext(order.orderId);
+    await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    const world = createErpWorld(suite.database.erpPool);
+
+    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry }).pollOnce();
+
+    const { settle, attempts } = await settleSpansOf(order.orderId, recorded);
+    expect(settle).toHaveLength(1);
+    expect(settle[0]?.spanContext().traceId).toBe(recorded.traceId);
+    expect(settle[0]?.attributes).toMatchObject({
+      orderId: order.orderId,
+      attempt: (await readOutbox(suite.pool, order.orderId)).attempts,
+      outcome: 'closed',
+    });
+    expect(attempts).toEqual([]);
+  });
+
+  it('OBS-01 outbox.dead do limite já gasto: um span outbox.settle com outcome dead, e nenhum outbox.attempt', async () => {
+    const maxAttempts = 3;
+    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const recorded = await recordedContext(order.orderId);
+    await suite.pool.query('update outbox set attempts = $2 where order_id = $1', [order.orderId, maxAttempts]);
+    await makeClaimable(suite.pool, order.orderId);
+    const world = createErpWorld(suite.database.erpPool);
+
+    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, config: { maxAttempts } }).pollOnce();
+
+    const { settle, attempts } = await settleSpansOf(order.orderId, recorded);
+    expect(settle).toHaveLength(1);
+    expect(settle[0]?.spanContext().traceId).toBe(recorded.traceId);
+    expect(settle[0]?.attributes).toMatchObject({
+      orderId: order.orderId,
+      attempt: (await readOutbox(suite.pool, order.orderId)).attempts,
+      outcome: 'dead',
+    });
+    expect(attempts).toEqual([]);
   });
 });
 
