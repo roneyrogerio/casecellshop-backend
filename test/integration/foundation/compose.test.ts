@@ -273,8 +273,13 @@ describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
     expect(Number(redrive.maxReceiveCount)).toBe(12);
   });
 
-  // Por último: o restart muda o estado do emulador para os testes que viessem depois.
+  // Por último: o restart muda o estado do emulador, e o worker fica parado para os testes que viessem depois.
   it('FND-01 uma mensagem enviada à billing continua lá depois de docker compose restart elasticmq', async () => {
+    // O worker do compose consome a billing: ele receberia esta mensagem (que não passa no schema do
+    // faturamento), a deixaria sem resposta e ela ficaria invisível por 60 s, e a leitura abaixo não a
+    // acharia. Com o worker parado, só o teste lê a fila, e o que se prova é a persistência no volume.
+    // O `run` dos scripts usa o serviço só pela imagem e pela configuração (--no-deps), então segue valendo.
+    await composeCli(['stop', '--timeout', '10', 'worker']);
     const body = `persistencia-${randomBytes(6).toString('hex')}`;
     await runInWorkerImage(SEND_MESSAGE, { MESSAGE_BODY: body });
 
