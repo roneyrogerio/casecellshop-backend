@@ -1,4 +1,4 @@
-import { defaultTextMapGetter, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
+import { type Attributes, defaultTextMapGetter, ROOT_CONTEXT, SpanKind } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { sql } from 'kysely';
 import type { Pool } from 'pg';
@@ -69,9 +69,10 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
   const settings: WorkerConfig = { ...DEFAULT_WORKER_CONFIG, ...config };
   const db = createDb(pool);
   const semaphore = createSemaphore(settings.erpConcurrency);
-  let running = false;
-  // Ligado só enquanto o stop() espera; um pollOnce direto continua reivindicando fora disso.
-  let stopping = false;
+  // Um estado só: 'stopping' é o intervalo em que o stop() espera o laço e as tentativas; fora
+  // dele, start() e pollOnce() reivindicam, inclusive depois de um stop().
+  let state: 'stopped' | 'running' | 'stopping' = 'stopped';
+  let stopped: Promise<void> | undefined;
   const inFlight = new Set<Promise<void>>();
   let loop: Promise<void> | undefined;
 
@@ -141,8 +142,12 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
           log.warn({ event: 'outbox.conclusion_no_row' }, 'o token já não vale: a conclusão não mudou nada');
           return;
         }
-        // Faturado ou falho só conta se esta transação mudou o pedido; senão ele já tinha outro desfecho.
-        if ((conclusion.kind === 'invoiced' || conclusion.kind === 'failed') && !result.orderChanged) return;
+        // Faturado ou falho só conta se esta transação mudou o pedido; senão a mensagem foi só encerrada.
+        if ((conclusion.kind === 'invoiced' || conclusion.kind === 'failed') && !result.orderChanged) {
+          telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
+          log.info({ event: 'outbox.closed' }, 'pedido já tinha desfecho: mensagem encerrada');
+          return;
+        }
         telemetry.outboxAttemptOutcome.add(1, { outcome: conclusion.kind });
         if (conclusion.kind === 'invoiced') {
           log.info({ event: 'order.invoiced' }, 'pedido faturado');
@@ -190,13 +195,13 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
 
   // A tentativa continua o trace do checkout (traceparent da outbox) e o correlationId dele; sem
   // traceparent, o span é raiz. O mixin do logger lê os dois do contexto ativo.
-  // Também serve aos eventos que a reivindicação decide (closed, dead), para levarem o mesmo contexto.
-  function inAttemptSpan(message: ClaimSettled, fn: () => Promise<void> | void): Promise<void> {
+  // Os eventos que a reivindicação decide (closed, dead) rodam num span `outbox.settle`, que não é uma tentativa.
+  function inSpan(name: string, message: ClaimSettled, fn: () => Promise<void> | void, extra: Attributes = {}): Promise<void> {
     const parent = propagator.extract(ROOT_CONTEXT, message.traceparent ? { traceparent: message.traceparent } : {}, defaultTextMapGetter);
     return logContext.run({ correlationId: message.correlationId }, () =>
       telemetry.tracer.startActiveSpan(
-        'outbox.attempt',
-        { kind: SpanKind.CONSUMER, attributes: { orderId: message.orderId, attempt: message.attempts } },
+        name,
+        { kind: SpanKind.CONSUMER, attributes: { orderId: message.orderId, attempt: message.attempts, ...extra } },
         parent,
         async (span) => {
           try {
@@ -210,14 +215,14 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
   }
 
   function attempt(message: ClaimedMessage): Promise<void> {
-    return inAttemptSpan(message, () => runAttempt(message));
+    return inSpan('outbox.attempt', message, () => runAttempt(message));
   }
 
   // Reivindica até as permissões livres e dispara as tentativas sem esperá-las: `done` resolve
   // quando todas terminam. Cada tentativa devolve a sua permissão ao fim.
   async function claimRound(): Promise<{ count: number; done: Promise<void> }> {
     const permits = await semaphore.acquireFree();
-    if (stopping) {
+    if (state === 'stopping') {
       semaphore.release(permits);
       return { count: 0, done: Promise.resolve() };
     }
@@ -231,16 +236,26 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
     semaphore.release(permits - result.claimed.length);
     // Decididos na reivindicação, sem chamar o ERP, mas com o contexto da outbox como os da tentativa.
     for (const settled of result.closed) {
-      await inAttemptSpan(settled, () => {
-        telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
-        logger.info({ event: 'outbox.closed', orderId: settled.orderId, attempt: settled.attempts }, 'pedido já tinha desfecho: mensagem encerrada');
-      });
+      await inSpan(
+        'outbox.settle',
+        settled,
+        () => {
+          telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
+          logger.info({ event: 'outbox.closed', orderId: settled.orderId, attempt: settled.attempts }, 'pedido já tinha desfecho: mensagem encerrada');
+        },
+        { outcome: 'closed' },
+      );
     }
     for (const settled of result.dead) {
-      await inAttemptSpan(settled, () => {
-        telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
-        logger.error({ event: 'outbox.dead', orderId: settled.orderId, attempt: settled.attempts }, 'limite de tentativas gasto: mensagem na DLQ');
-      });
+      await inSpan(
+        'outbox.settle',
+        settled,
+        () => {
+          telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
+          logger.error({ event: 'outbox.dead', orderId: settled.orderId, attempt: settled.attempts }, 'limite de tentativas gasto: mensagem na DLQ');
+        },
+        { outcome: 'dead' },
+      );
     }
     const done = Promise.all(result.claimed.map((message) => attempt(message).finally(() => semaphore.release(1)))).then(() => undefined);
     return { count: result.claimed.length, done };
@@ -256,7 +271,7 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
   // Não espera a rodada: uma chamada lenta não segura a vazão das outras, e a reivindicação
   // seguinte já espera por uma permissão livre.
   async function run(): Promise<void> {
-    while (!stopping) {
+    while (state === 'running') {
       let count = 0;
       try {
         const round = await claimRound();
@@ -266,33 +281,36 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
       } catch (error) {
         logger.error({ event: 'worker.poll_error', err: error }, 'falha na rodada do worker');
       }
-      if (count === 0 && !stopping) await clock.sleep(settings.pollIntervalMs);
+      if (count === 0 && state === 'running') await clock.sleep(settings.pollIntervalMs);
     }
   }
 
   return {
-    start() {
-      if (!running) {
-        running = true;
+    async start() {
+      // Um start() durante o stop() espera o encerramento e então reinicia.
+      while (state === 'stopping') await stopped;
+      if (state === 'stopped') {
+        state = 'running';
         loop = run();
         logger.info({ event: 'worker_started' }, 'worker iniciado');
       }
-      return Promise.resolve();
     },
-    async stop() {
-      if (running) {
-        running = false;
-        stopping = true;
+    // Sem `async`: devolve a própria promessa do encerramento, para quem espera nela ver o stop() antes do start().
+    stop() {
+      if (state === 'stopping' && stopped) return stopped;
+      if (state !== 'running') return Promise.resolve();
+      state = 'stopping';
+      stopped = (async () => {
         try {
           // Para de reivindicar e espera as tentativas em andamento; o prazo é do lifecycle.
           await loop;
           await Promise.all(inFlight);
         } finally {
-          // Só vale durante o encerramento: depois dele, start() e pollOnce() voltam a reivindicar.
-          stopping = false;
+          state = 'stopped';
         }
         logger.info({ event: 'worker_stopped' }, 'worker encerrado');
-      }
+      })();
+      return stopped;
     },
     pollOnce,
   };
