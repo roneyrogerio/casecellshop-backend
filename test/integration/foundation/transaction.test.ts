@@ -13,9 +13,13 @@ afterAll(async () => {
   await database?.stop();
 });
 
-// A tabela erp_sim.invoices tem `reference` único, o que dá a violação de unicidade do cenário.
+// A tabela erp_sim.invoices tem `dedup_key` único, o que dá a violação de unicidade do cenário
+// (a `reference` deixou de ser única para o modo sem a H1b).
 async function insertInvoice(trx: Transaction<ErpSimDb>, reference: string): Promise<void> {
-  await trx.insertInto('erp_sim.invoices').values({ reference, items: '[]', total_cents: 0 }).execute();
+  await trx
+    .insertInto('erp_sim.invoices')
+    .values({ reference, dedup_key: reference, items: '[]', total_cents: 0 })
+    .execute();
 }
 
 // O código do defeito: a segunda gravação viola a unicidade, o erro é capturado e a função

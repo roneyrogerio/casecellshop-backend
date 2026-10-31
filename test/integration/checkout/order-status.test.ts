@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
+import type { Pool } from 'pg';
 import { pino } from 'pino';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { OrderStatus, PROBLEM_MEDIA_TYPE, Problem } from '../../../src/contract/index.ts';
+import { createLogger } from '../../../src/logging.ts';
 import { createTelemetry } from '../../../src/telemetry.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
@@ -174,6 +176,74 @@ describe('CHK-11 X-Request-Id nas respostas do status', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['x-request-id']).toMatch(UUID);
+  });
+});
+
+// Um pool que falha na retirada da conexão, do jeito que o teste escolhe: o repositório de pedidos
+// recebe a falha no lugar do banco.
+function brokenPool(failure: () => Error, mode: 'reject' | 'throw'): Pool {
+  const connect = mode === 'reject' ? () => Promise.reject(failure()) : () => {
+    throw failure();
+  };
+  return { options: {}, connect, on: () => undefined, end: () => Promise.resolve() } as unknown as Pool;
+}
+
+function appWithPool(pool: Pool) {
+  return createApp({
+    pool,
+    // O logger de produção: o nível sai em texto, como o `level: 'error'` que o teste confere.
+    logger: createLogger({ serviceName: 'casecellshop-api', destination: logSink }),
+    telemetry: createTelemetry({ spanExporter: new InMemorySpanExporter() }),
+  });
+}
+
+describe('CHK-11 defeito do código no status do pedido responde 500; a falha do banco continua 503', () => {
+  it.each([
+    ['TypeError na retirada da conexão (promessa rejeitada)', 'reject'],
+    ['TypeError lançado na retirada da conexão', 'throw'],
+  ] as const)('CHK-11 %s: 500 em problem+json sem Retry-After e sem detalhe interno, com o log error unhandled_error', async (_label, mode) => {
+    const correlationId = `chk11-500-${randomUUID()}`;
+    const detail = 'Cannot read properties of undefined (reading rows)';
+    const app500 = appWithPool(brokenPool(() => new TypeError(detail), mode));
+
+    const res = await request(app500).get(`/orders/${randomUUID()}/status`).set('X-Request-Id', correlationId);
+
+    expect(res.status).toBe(500);
+    expect((res.headers['content-type'] as string).split(';')[0]).toBe(PROBLEM_MEDIA_TYPE);
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(res.headers['x-request-id']).toBe(correlationId);
+    expectMatchesContract(statusRoute, res);
+    const problem = Problem.parse(res.body);
+    expect(problem.status).toBe(500);
+    expect(problem.type).toBe('/problems/internal-error');
+    expect(problem.correlationId).toBe(correlationId);
+    expect(res.text).not.toContain(detail);
+    expect(res.text).not.toMatch(/TypeError|stack/);
+
+    await vi.waitFor(() => {
+      const unhandled = logLines.filter((line) => line['event'] === 'unhandled_error' && line['correlationId'] === correlationId);
+      expect(unhandled).toHaveLength(1);
+      expect(unhandled[0]?.['level']).toBe('error');
+    });
+    // O defeito não é a indisponibilidade do banco: o evento de 503 não sai.
+    expect(logLines.filter((line) => line['event'] === 'order_status_failed' && line['correlationId'] === correlationId)).toEqual([]);
+  });
+
+  it.each([
+    ['pool esgotado (Error sem código)', () => new Error('timeout exceeded when trying to connect')],
+    ['conexão terminada (Error sem código)', () => new Error('Connection terminated unexpectedly')],
+    ['falha de conexão (ECONNREFUSED)', () => Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' })],
+    ['statement_timeout (57014)', () => Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })],
+  ])('CHK-11 controle: %s continua 503 com Retry-After 5 em problem+json', async (_label, failure) => {
+    const app503 = appWithPool(brokenPool(failure, 'reject'));
+
+    const res = await request(app503).get(`/orders/${randomUUID()}/status`);
+
+    expect(res.status).toBe(503);
+    expect((res.headers['content-type'] as string).split(';')[0]).toBe(PROBLEM_MEDIA_TYPE);
+    expect(res.headers['retry-after']).toBe('5');
+    expectMatchesContract(statusRoute, res);
+    expect(Problem.parse(res.body).type).toBe('/problems/service-unavailable');
   });
 });
 

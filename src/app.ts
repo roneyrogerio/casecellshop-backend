@@ -5,6 +5,7 @@ import type { Logger } from 'pino';
 import { checkoutRoute, healthRoute, orderStatusRoute, type HealthStatus, type OrderStatus } from './contract/index.ts';
 import { createCheckoutRepository } from './checkout/repository.ts';
 import { createCheckoutRoutes } from './checkout/routes.ts';
+import { isUnavailable } from './db/unavailable.ts';
 import { createHealthRepository } from './health/repository.ts';
 import { createOrdersRepository } from './orders/repository.ts';
 import { createErrorHandler, notFoundHandler, ProblemError } from './http/problem.ts';
@@ -62,6 +63,8 @@ export function createApp({ pool, logger, telemetry }: AppDependencies): Express
     try {
       found = await orders.findStatus(orderId);
     } catch (error) {
+      // Só a falha do banco é 503; um defeito do código segue para o middleware único (500).
+      if (!isUnavailable(error)) throw error;
       logger.warn({ event: 'order_status_failed', err: error }, 'o banco não respondeu à consulta do pedido');
       throw new ProblemError({
         status: 503,

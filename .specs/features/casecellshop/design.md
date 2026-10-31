@@ -120,26 +120,37 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 ## Worker: envio (AD-003)
 
-- **Limite:** um semáforo no processo, em ordem de chegada, para todas as chamadas ao ERP (envio, sincronização e reconciliação).
+Esta seção descreve a primeira parte do M3, com a fila na própria tabela da outbox. A AD-021 troca a fila pelo SQS na segunda parte: o Passo 0 dela reescreve a reivindicação, o lease, o retry, a DLQ e o reprocessamento em termos de SQS, e mantém a tentativa, a conclusão e os parâmetros.
+
+- **Limite:** um semáforo no processo, em ordem de chegada, para todas as chamadas ao ERP (envio, sincronização e reconciliação). A permissão devolvida vai direto ao primeiro da fila, para quem chega depois não passar à frente.
 - **Reivindicação:**
   - o worker adquire primeiro as permissões e só reivindica tantas mensagens quantas permissões tem; cada tentativa segura a sua até a conclusão, para a consulta e a criação não esperarem na fila no meio da tentativa e o lease não correr enquanto a mensagem espera a vez;
   - numa transação curta, com `FOR UPDATE SKIP LOCKED`, grava e faz commit, antes de qualquer chamada: lease, token novo, mais uma tentativa (contada aqui, para uma mensagem que derruba o processo também chegar à DLQ) e `first_sent_at`, se vazio (nunca apagado);
   - uma mensagem só é reivindicada depois do atraso mínimo, contado de `last_call_at`. Vale para retry, lease vencido, reprocessamento e reconciliação;
   - uma mensagem de lease vencido é reivindicada sozinha, e o erro de uma mensagem não interrompe as outras;
-  - uma mensagem cujo pedido já não está `pending` é encerrada sem chamar o ERP.
+  - uma mensagem cujo pedido já não está `pending` é encerrada sem chamar o ERP;
+  - uma mensagem que já gastou o limite de tentativas vai para `dead` na reivindicação, sem chamar o ERP: é o caminho da mensagem que derruba o processo, que nunca chega a gravar desfecho.
 - **Chamada:**
   - fora da transação, com o preço aceito no checkout (H3);
-  - antes de cada chamada, grava `last_call_at` e confere o lease: se restar menos que o timeout mais uma folga, desiste;
+  - antes de cada chamada, grava `last_call_at` e confere o lease num `UPDATE` só, pelo relógio do banco (`WHERE claim_token = :t AND lease_until > now() + timeout + folga`): sem linha afetada, desiste, e a mensagem volta quando o lease vencer;
   - com `first_sent_at` já preenchido, consulta pela referência antes de criar;
   - o token protege o banco da loja, não o ERP; do lado do ERP, a proteção contra duas criações simultâneas é a H1b.
-- **Conclusão:** concluir, adiar, marcar como falho ou mandar para a DLQ só tem efeito com `WHERE claim_token = :t`, para um worker atrasado não sobrescrever o resultado de outro; a transição do pedido segue o compare-and-set; uma conclusão sem linha afetada é contada numa métrica; se gravar o desfecho falhar, o worker repete enquanto o lease vale.
+- **Conclusão:** concluir, adiar, marcar como falho ou mandar para a DLQ só tem efeito com `WHERE claim_token = :t`, para um worker atrasado não sobrescrever o resultado de outro; a transição do pedido segue o compare-and-set; uma conclusão sem linha afetada é contada numa métrica; se gravar o desfecho falhar, o worker repete enquanto o lease vale, até 5 vezes por tentativa, para um erro rápido e persistente não virar um laço contra o banco; esgotadas as repetições, desiste, e a mensagem volta pela reivindicação quando o lease vencer.
 - **Desfechos:**
   - transitório ou ambíguo: nova tentativa depois do atraso mínimo mais *full jitter* sobre um exponencial com teto; o jitter espalha os retries depois de uma falha que atingiu muitos pedidos de uma vez;
   - permanente: pedido falho e reserva liberada;
   - limite de tentativas: `dead` (a DLQ), com o pedido `pending`.
 - **Encerramento:** no `SIGTERM`, o worker para de reivindicar e espera a chamada em andamento; se o prazo estourar, o lease vence e o token protege o estado. O contêiner roda `node` direto, sem `npm`, para o sinal chegar ao processo.
+- **Interface (`src/worker.ts`):** `createWorker({ pool, erp, logger, telemetry, clock, random?, config? })` devolve `start`, `stop` e `pollOnce`.
+  - `pollOnce()` faz uma rodada: adquire as permissões livres do semáforo, reivindica até esse número de mensagens, roda as tentativas em paralelo e resolve, depois de todas terminarem, com o número de mensagens reivindicadas. Uma tentativa que lança um erro inesperado conta como ambígua e não interrompe as outras;
+  - `start()` não espera a rodada inteira: mantém as tentativas em andamento e reivindica de novo assim que uma permissão volta, para uma chamada lenta não segurar a vazão das outras; quando a reivindicação volta vazia, espera o intervalo de polling pelo relógio injetável. O `stop()` para de reivindicar e espera as tentativas em andamento; um `start()` depois do `stop()` volta a reivindicar, e um `start()` chamado enquanto o `stop()` espera aguarda o `stop()` terminar e então volta a reivindicar (um estado só: parado, rodando ou parando);
+  - `random` (padrão `Math.random`) sorteia o jitter, para o teste fixá-lo; `config` sobrepõe os parâmetros da tabela (lease, atraso mínimo, timeout, folga, tentativas, base e teto da espera, polling, limite de chamadas);
+  - `erp` é a porta `ErpClient`; o `src/main/worker.ts` monta o ERP simulado sobre o pool próprio dele e a camada anticorrupção por cima.
+- **Nos testes:** os prazos gravados correm no relógio do banco, então o teste semeia `lease_until`, `last_call_at` e `next_attempt_at` em vez de esperar; o timeout do ERP e os atrasos do simulado correm no relógio manual. A morte do worker é uma rodada abandonada no meio de uma chamada com o comportamento `hang`, seguida do lease vencido semeado.
 
 ## Worker: reconciliação e runbook (AD-003)
+
+Como "Worker: envio", esta seção descreve o desenho com a fila na tabela da outbox; a segunda parte do M3 a reescreve sobre a DLQ do SQS e o *redrive* (AD-021).
 
 - **Reconciliação, periódica:** consulta pela referência as mensagens em `dead` cujo atraso mínimo passou, em lotes ordenados por `reconciled_at`. Se o ERP tem o pedido, conclui como faturado e encerra a mensagem com `WHERE status = 'dead'`. Se não tem, ou se a consulta falhar, a mensagem fica para o runbook.
 - **Reprocessar em lote:** um SQL devolve à fila as mensagens em `dead` (por exemplo, as do período de uma queda), zera as tentativas e preserva `first_sent_at`. É seguro, porque cada uma é consultada no ERP antes de qualquer criação, e só depois do atraso mínimo.
@@ -148,9 +159,12 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 | Aqui | No SQS |
 | --- | --- |
 | lease | visibility timeout |
+| token da reivindicação | receipt handle |
 | tentativas | `maxReceiveCount` |
 | `dead` | DLQ |
 | SQL de reprocessar em lote | redrive |
+
+Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o atraso mínimo da H4), o `first_sent_at` e o resultado da consulta ao ERP antes de criar. A espera de cada retry (atraso mínimo mais *full jitter*) é calculada no worker e aplicada pela visibilidade da mensagem (`ChangeMessageVisibility`).
 
 ## Sincronização (AD-009)
 
@@ -187,6 +201,32 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - **consulta pela referência:** "existe" ou "não existe", este só com o sinal explícito do ERP (`404` com o corpo de pedido inexistente); qualquer outra falha é transitória e nunca leva a uma criação;
   - **catálogo:** sucesso ou transitório;
   - **qualquer operação:** `400`, `401`, `403` e um `404` sem o corpo esperado são erros de configuração ou de contrato: transitórios e com alerta, para que um erro do adaptador ou uma credencial expirada não falhem todos os pedidos de uma vez. Qualquer outro status é ambíguo.
+- **Porta `ErpClient` (`src/erp/erp-client.ts`):** cada operação devolve um resultado de lista fechada, nunca uma exceção de negócio:
+  - `createOrder(request)`: `ok` (com o pedido do ERP), `permanent` (`reason`: `rejected` ou `out_of_stock`, que viram os motivos `erp_rejected` e `erp_out_of_stock` do pedido), `transient`, `ambiguous` ou `config_error`;
+  - `findOrderByReference(reference)`: `found` (com o pedido), `not_found`, `transient` ou `config_error`;
+  - `listCatalog(page)`: `ok` (com a página), `transient` ou `config_error`.
+
+  Para o worker, `config_error` é transitório, com o log `erp.config_error` e o counter de erros de configuração.
+- **Transporte (`ErpTransport`):** `send(request, signal)` resolve com `{ status, body }` ou rejeita com um `ErpNetworkError` (`code`: `ECONNREFUSED` ou `ENOTFOUND`, a requisição não chegou; `ECONNRESET`, a conexão caiu depois do envio). Respostas do ERP simulado:
+  - criação: `201` (fatura nova) ou `200` (a existente, pela H1b), com `{ erpOrderId, reference }`; recusa `422` com `{ code, sku? }`, em que `code` é `out_of_stock` (H2), `unknown_product` ou `rejected`;
+  - consulta: `200` com o pedido, ou `404` com `{ code: 'order_not_found' }`;
+  - catálogo: `200` com `{ items, hasNext }`.
+
+  Os itens do catálogo vêm com os nomes da porta (`sku`, `name`, `priceCents`, `onHand`). Na camada anticorrupção, `422` com `out_of_stock` é `permanent` por falta de estoque, e qualquer outro `422` é `permanent` por rejeição. Na criação e no catálogo, todo `404` é `config_error`, com ou sem corpo: o corpo `order_not_found` só tem sentido na consulta. Uma criação devolvida pela H1b não baixa o estoque de novo.
+- **Camada anticorrupção (`src/erp/acl.ts`):** `createErpClient({ transport, clock, timeoutMs })` devolve a porta. O timeout aborta o sinal da chamada pelo `clock.sleep`, e a chamada abortada é ambígua na criação e transitória na consulta e no catálogo.
+- **Roteiro do ERP simulado (`src/erp/sim/index.ts`):** `createSimulatedErp({ pool, clock, withoutH1b? })` devolve `{ transport, script }`. O `script.enqueue(behavior, match?)` põe na fila um comportamento para a próxima chamada que casar com `match` (`op`: `createOrder`, `findOrder` ou `listCatalog`; `reference`, na criação e na consulta), e cada comportamento vale para uma chamada só. Sem comportamento na fila, vale o padrão (`script.setDefault`, inicialmente `normal`); o `src/main/worker.ts` o lê de `ERP_SIM_MODE` (`normal`, `slow` ou `unavailable`). Os atrasos correm no relógio injetável, fora de transação. Comportamentos:
+  - `normal`;
+  - `slow` (`delayMs`): espera e depois processa e responde como no `normal`; abortada durante a espera, não processa;
+  - `unavailable`: rejeita com `ECONNREFUSED`, sem processar;
+  - `reject`: `422` com `rejected`, sem processar;
+  - `status` (`status`, `body?`): responde esse status, sem processar; cobre `400`, `401`, `403`, o `404` sem o corpo esperado, `429`, `500`, `503` e `504`;
+  - `invoice_no_response`: fatura e não responde até o sinal abortar;
+  - `invoice_after` (`delayMs`): não responde, e a fatura é gravada `delayMs` depois do início da chamada, mesmo com a chamada já abortada; com atraso abaixo e acima dos 40 s da H4;
+  - `fast_502_then_invoice` (`delayMs`): responde `502` na hora e grava a fatura `delayMs` depois;
+  - `hang`: nunca responde nem fatura.
+
+  A falta de estoque (H2) e o SKU desconhecido vêm do estado do `erp_sim`, não do roteiro. O `script.drain()` espera terminar toda gravação de fatura já iniciada, a imediata do `invoice_no_response` e as adiadas cujo prazo o relógio já alcançou, para o teste contar as faturas sem `sleep`.
+- **Modo sem a H1b:** uma migração nova do `erp_sim` troca a unicidade de `invoices.reference` por uma coluna `dedup_key`, única e anulável, com índice simples em `reference`. Com a H1b, a criação grava `dedup_key = reference` e usa `ON CONFLICT (dedup_key) DO NOTHING`; sem ela, grava `NULL`, e cada criação vira uma fatura nova. A consulta pela referência devolve a fatura mais antiga.
 
 ## Observabilidade (AD-008)
 
@@ -195,6 +235,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização, transação abortada antes do `COMMIT` (`db.transaction_aborted`, `FND-10`).
   - **Checkout (M2):** `info` `checkout.accepted` e `warn` `checkout.rejected` (com a causa) e `checkout.price_changed`, todos com o `orderId` quando ele existe; o log `http_request` do checkout e do status também leva o `orderId`.
+  - **Worker (M3):** cada tentativa roda no `logContext` com o `correlationId` gravado na outbox e dentro do span dela, e todo log da tentativa leva `orderId` e `attempt`. Eventos: `info` `order.invoiced` e `outbox.closed` (pedido que já não estava `pending`); `warn` `order.failed` (com o motivo), `outbox.retry` (com o `outcome` que o causou, só quando a mensagem de fato volta à fila), `outbox.lease_short`, `outbox.conclusion_no_row`, `outbox.conclusion_failed` (falha ao gravar o desfecho, antes de repetir) e `erp.config_error` (com o status); `error` `outbox.dead`, `outbox.attempt_error` (erro inesperado na tentativa), `worker.poll_error` (falha da reivindicação no laço do `start()`) e `db.transaction_aborted` (no lugar do `outbox.conclusion_failed`, quando a falha é a transação abortada). O span da tentativa se chama `outbox.attempt`, com os atributos `orderId` e `attempt`. Os eventos que a reivindicação decide sem chamar o ERP (`outbox.closed` e o `outbox.dead` do limite já gasto) rodam num span próprio, `outbox.settle`, filho do mesmo `traceparent`, com `orderId`, `attempt` e `outcome`, para quem conta tentativas no backend de traces não contar encerramentos. Quando a conclusão fecha a mensagem mas o pedido já tinha outro desfecho (mudado fora do fluxo), sai o `outbox.closed` e conta `closed`, para toda mensagem encerrada aparecer no log e no counter.
 - **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`). No SDK 3, o provider é o `TracerProvider` do `sdk-trace`, e os processadores recebem `{ exporter }`; nos testes, `forceFlush()` vem antes de ler o `InMemorySpanExporter`.
 - **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. O exportador vem de `OTEL_TRACES_EXPORTER`: nenhum por padrão, para o healthcheck do compose não encher o log a cada 2 s; `console` para ver os traces em desenvolvimento; `otlp` (OTLP/HTTP) para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version` nos traces e nos logs, com os mesmos valores, porque o Datadog só liga log e trace com a marcação unificada de serviço. O log leva no topo do JSON o `trace_id` (32 caracteres hexadecimais), o `span_id` (16) e o `trace_flags`, os nomes que o OpenTelemetry recomenda.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
@@ -205,6 +246,13 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - **estoque:** unidades reservadas e SKUs com `reserved > on_hand` (gauges);
   - **ERP:** duração e desfecho (histogram e counter), chamadas em andamento (gauge), rejeições por falta de estoque e erros de configuração (counters);
   - **sincronização:** idade da última rodada completa (gauge), correções por campo e SKUs ausentes zerados (counters).
+- **Nomes das métricas do worker (M3),** no `/metrics` dele:
+  - `outbox_attempt_outcome_total` (counter, label `outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed` ou `lease_short`), contado quando o desfecho é gravado: `closed` e o `dead` do limite já gasto na reivindicação, `lease_short` quando a tentativa desiste; a conclusão sem linha afetada não conta aqui, só no counter dela;
+  - `outbox_conclusion_no_row_total` (counter, sem label);
+  - `order_accept_to_invoice_seconds` (histogram, sem label, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` e o `failed` do `outbox_attempt_outcome_total`, e os logs `order.invoiced` e `order.failed`, também só saem nesse caso;
+  - `erp_request_duration_seconds` (histogram) e `erp_request_total` (counter), com os labels `operation` (`create_order`, `find_order` ou `list_catalog`) e `outcome` (`ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous` ou `config_error`), com fronteiras até 30 s, a última em 30;
+  - `erp_requests_in_flight` (gauge, sem label);
+  - `erp_config_error_total` (counter, label `operation`) e `erp_out_of_stock_rejection_total` (counter, sem label).
 - **Gauges e counters lidos do banco** saem da API, que não é o processo monitorado; os alertas de fila e de sincronização também disparam sem dados. Um counter derivado do banco só sobe quando um `UPDATE … RETURNING` marca a linha.
 - **Alertas e dashboard:** em PromQL, com os nomes de `/metrics`; um teste confere cada nome usado. No Datadog, o Agent coleta o mesmo endpoint pela integração OpenMetrics, que acrescenta um namespace.
 
@@ -213,7 +261,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Pontos de injeção,** que os testes usam sem ler o resto de `src/`:
   - `src/app.ts`: `createApp({ pool, logger, telemetry })` devolve o app do Express, sem abrir porta;
   - `src/telemetry.ts`: `createTelemetry({ spanExporter? })` devolve, além do que a API e o worker usam, `forceFlush()` e `shutdown()`; os testes passam o `InMemorySpanExporter` do `sdk-trace`;
-  - `src/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`;
+  - `src/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`; no M3, o `erpPool` dá lugar à porta `erp` (ver "Worker: envio");
   - `src/erp/erp-client.ts`: a porta `ErpClient`, com `listCatalog(page)`, que devolve `{ items: [{ sku, name, priceCents, onHand }], hasNext }`; `createOrder({ reference, items: [{ sku, quantity, unitPriceCents }] })`, que devolve `{ erpOrderId, reference }`; e `findOrderByReference(reference)`, que devolve o mesmo objeto ou `null`;
   - `src/erp/sim/index.ts`: `createSimulatedErpClient({ pool, clock })` monta a porta: a camada anticorrupção sobre o transporte simulado, como na AD-004. No M1, só há o modo normal; a separação entre as duas entra no M3, com os modos de falha. O estado fica no schema `erp_sim`, com as tabelas `erp_sim.products (sku, name, price_cents, on_hand)` e `erp_sim.invoices (id, reference único, items, total_cents, created_at)`; os testes criam produtos e contam faturas por SQL nelas;
   - `src/clock.ts`: a porta `Clock`, com `now()` em milissegundos e `sleep(ms)`; os testes usam um relógio manual;

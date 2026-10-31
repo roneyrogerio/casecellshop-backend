@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M2 — Checkout (parte 1, a camada de dados, concluída no PR #11; parte 2, o checkout, no PR #12)
+**Marco atual:** M3 — Processamento assíncrono (parte 1, o worker com a fila na tabela da outbox, no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, a seguir)
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -69,9 +69,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - o ruleset protege a `main`;
 - o PR registra o tempo gasto.
 
-## M2 — Checkout
+## M2 — Checkout · CONCLUÍDO
 
-**Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP.
+**Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP. Entrou pelos PRs #11 (camada de dados) e #12 (checkout e status do pedido).
 
 - Design de concorrência e idempotência (`DOC-CON`).
 - Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados e conferidos no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` na regra nova e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
@@ -88,8 +88,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de mensageria e resiliência (`DOC-MSG`).
 - Worker (envio, desfechos, reconciliação e runbook) e camada anticorrupção, conforme o design.
+- Em duas partes: a primeira (PR #13) entrega o worker com a fila na própria tabela da outbox; a segunda troca a fila pelo SQS, com o ElasticMQ no compose e nos testes, um *Message Relay* da outbox para o SQS e a DLQ do SQS, e traz a reconciliação e o runbook sobre essa DLQ (AD-021).
 
-**Pronto quando:** `ORD-*` passam, contando faturas no ERP com falhas injetadas pelo ERP simulado.
+**Pronto quando:** `ORD-*` passam, contando faturas no ERP com falhas injetadas pelo ERP simulado, com a fila do faturamento no SQS.
 
 ## M4 — Vitrine e frescor
 
@@ -153,7 +154,7 @@ Fora do escopo principal. Entram só depois que M1 a M6 estiverem completos, nes
 Descrita no `ARCHITECTURE.md`, fora deste escopo:
 
 - cache L2 compartilhado, CDN e cabeçalhos de cache HTTP;
-- fila gerenciada (SQS com DLQ e redrive policy) alimentada pela outbox;
+- o SQS gerenciado da AWS no lugar do ElasticMQ, e o EventBridge na saída do relay para um segundo consumidor dos eventos de pedido;
 - várias réplicas do worker, com a sincronização coordenada e o limite de chamadas e os pools divididos entre elas;
 - sincronização incremental e captura de mudanças (CDC) a partir de uma réplica do MySQL do ERP, se a replicação puder ser habilitada;
 - eventos de domínio;

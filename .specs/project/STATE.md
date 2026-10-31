@@ -1,7 +1,7 @@
 # Estado do projeto
 
-**Atualizado em:** 30/10/2026
-**Trabalho atual:** M2 — Checkout (M1 concluído)
+**Atualizado em:** 31/10/2026
+**Trabalho atual:** M3 — Processamento assíncrono (M2 concluído)
 
 Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita não é editada: se mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
 
@@ -63,7 +63,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-003 · Outbox transacional como fila, no próprio PostgreSQL
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026); "a tabela da outbox é a fila" e o motivo para não rodar SQS local são substituídos pela AD-021
 
 **Contexto.** Publicar antes de gravar o pedido gera mensagem fantasma; publicar depois gera pedido fantasma se o processo cair entre os dois passos. Um worker atrasado não pode desfazer o que outro concluiu, e o ERP lento não pode receber mais chamadas do que aguenta.
 
@@ -145,7 +145,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-006 · Idempotência por `Idempotency-Key`, gravada primeiro na transação
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026). A ordem do pedido e da chave na transação é alterada pela AD-020.
 
 **Contexto.** Duplo clique, retry do cliente e reprocessamento não podem gerar dois pedidos. Checar a chave com um `SELECT` antes de gravar repete o *check-then-act*, e a chave precisa vir antes da reserva: senão, a repetição de um pedido que levou a última unidade receberia `409` em vez do pedido original.
 
@@ -286,7 +286,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-012 · Fábrica v2: quatro nós, oráculo fora do alcance de quem implementa e humano só onde decide
 
-**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015.
+**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, e o destino dos achados `baixa` de texto, pela AD-022.
 
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
@@ -422,7 +422,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-015 · A revisão para quando não sobra achado alto nem médio
 
-**Status:** aceita (30/10/2026, PR #6). Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco.
+**Status:** aceita (30/10/2026, PR #6). Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco. O destino dos achados `baixa` de texto é substituído pela AD-022.
 
 **Contexto.** O teto fixo da AD-012 contava igual uma rodada que achava um problema de desenho e uma que só confirmava correções. No PR #4, as duas últimas de cinco rodadas só acharam problemas criados pelas correções anteriores. No PR #5, a Revisão 3 achou uma regressão média criada pela correção da Revisão 2, e a Revisão 4, restrita ao delta, fechou sem achado alto ou médio. Parar pelo número deixaria um achado médio aberto; revisar sem regra de parada repete rodadas que não acham nada novo.
 
@@ -565,7 +565,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-020 · A linha do pedido nasce antes da chave de idempotência
 
-**Status:** proposta (PR #12). Precisa, na AD-006, "a chave e o hash do payload normalizado são o primeiro passo da transação".
+**Status:** aceita (31/10/2026, PR #12). Altera, na AD-006, "a chave e o hash do payload normalizado são o primeiro passo da transação".
 
 **Contexto.** A AD-006 põe a chave como primeiro passo do checkout, para uma requisição repetida esperar no índice único antes de qualquer reserva. O esquema da loja (PR #11) liga a chave ao pedido por uma FK obrigatória (`idempotency_keys.order_id NOT NULL`), com o `id` do pedido gerado pelo banco. Com isso, a chave não pode existir antes da linha do pedido.
 
@@ -581,13 +581,69 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
 
+### AD-021 · O SQS é a fila do faturamento; a outbox é a caixa de saída
+
+**Status:** proposta (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
+
+**Contexto.** A AD-003 fez da tabela da outbox a própria fila e descartou o SQS local porque o LocalStack exige token de conta desde a versão 2026.03.0. Esse motivo não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem conta nem token, e as bibliotecas de SQS mais usadas em Node (o `sqs-consumer` da BBC, o `nestjs-sqs`) o usam nos próprios testes com o `@aws-sdk/client-sqs` da versão 3. O PDF avalia retry, DLQ e reconciliação no fluxo do checkout e cita o LocalStack entre os serviços de apoio, e a vaga pede SQS: a fila do faturamento é o lugar onde o SQS mostra o que o desafio avalia.
+
+**Decisão.**
+
+- **Transactional Outbox, só como caixa de saída:** o checkout grava o pedido e a linha da outbox na mesma transação, como hoje. A outbox deixa de ser consumida pelo worker.
+- **Message Relay (Polling Publisher):** um processo lê as linhas ainda não publicadas com `FOR UPDATE SKIP LOCKED`, publica em lote no SQS e marca a linha como publicada. Uma queda entre a publicação e a marcação publica de novo: a entrega é pelo menos uma vez.
+- **O SQS é a fila:** o worker consome com *long polling*, até as permissões livres do semáforo; o *visibility timeout* faz o papel do lease; o retry muda a visibilidade da mensagem (`ChangeMessageVisibility`) para o atraso mínimo mais o *full jitter*; a mensagem só é apagada depois de gravado o desfecho; a DLQ do SQS recebe a mensagem depois de `maxReceiveCount` = 12 recebimentos, e a reconciliação e o runbook trabalham sobre ela, com o *redrive* (`StartMessageMoveTask`).
+- **Idempotent Consumer:** o estado que o SQS não guarda continua no banco, na linha do pedido: o `first_sent_at`, o início da última chamada (para o atraso mínimo da H4) e a consulta ao ERP antes de criar. A conclusão continua por compare-and-set do pedido, e o estoque só muda se o pedido mudou.
+- **Emulador local:** o ElasticMQ (`softwaremill/elasticmq-native`, com a versão fixada) no compose e nos testes de integração, sem conta nem segredo. O código só usa o SDK oficial da AWS, então a AWS real é outro endereço. O `@aws-sdk/client-sqs` entra como dependência nova no PR 2 do M3, registrado na tabela de ferramentas.
+- **SNS e EventBridge:** ficam na arquitetura alvo, para um segundo consumidor dos eventos de pedido, cada um com a sua fila SQS e a sua DLQ (`ARCHITECTURE.md`, "Mensageria e resiliência"). O desafio tem um consumidor só.
+
+**Alternativas consideradas:**
+
+- **Manter a tabela da outbox como fila (AD-003):** correto e mais simples, mas deixa fora o SQS que a vaga pede e o emulador que o PDF sugere.
+- **O SQS só para eventos de outros consumidores, com o worker na outbox:** mostra o SQS rodando num caminho lateral, fora do retry, da DLQ e da reconciliação que o desafio avalia.
+- **Floci:** cobre também SNS e EventBridge, mas tem oito meses de vida e falhas de compatibilidade com o SQS corrigidas até outubro de 2026. Fica como troca de imagem se o EventBridge precisar rodar.
+- **LocalStack:** exige token desde a 2026.03.0, e a imagem antiga sem token está congelada, sem correções de segurança.
+- **Moto e MiniStack:** não implementam o `StartMessageMoveTask` de que o *redrive* precisa.
+- **Mock do SDK:** não há fila de verdade, então não prova retry, DLQ nem *redrive* (linha "Testes" da tabela de ferramentas).
+
+**Trade-off.** Um contêiner e uma dependência a mais, e o *visibility timeout* corre no relógio real do emulador, fora do relógio injetável. Os testes não esperam esse relógio: provocam a volta da mensagem com `ChangeMessageVisibility` e `VisibilityTimeout = 0`, como hoje semeiam o `lease_until`, e o atraso mínimo da H4 continua vindo do início da última chamada semeado no banco. Em troca, a fila do faturamento é a mesma que iria para a AWS.
+
+**Rever quando:** surgir um segundo consumidor dos eventos de pedido (entram o EventBridge e um emulador que o cubra), ou o ElasticMQ deixar de acompanhar a API do SQS que o projeto usa.
+
+**Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Polling publisher](https://microservices.io/patterns/data/polling-publisher.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html), [filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) e [redrive](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html); [ElasticMQ](https://github.com/softwaremill/elasticmq); [bbc/sqs-consumer, testes com ElasticMQ](https://github.com/bbc/sqs-consumer); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/).
+
+### AD-022 · Erro de texto do próprio PR se corrige no PR, numa rodada só
+
+**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
+
+**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, e da 6 à 8 cada uma achou mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
+
+**Decisão.**
+
+- **Pela origem:** um erro de texto em linha que o PR alterou é corrigido no mesmo PR, nunca mandado para o próximo plano. Uma melhoria em texto que o PR não tocou, e qualquer `baixa` de código ou de teste, vai para o próximo plano. Erro de texto é fato errado, contradição com a spec, o design ou uma AD, referência ou ID quebrado, ou termo divergente; preferência de redação não é achado.
+- **Conferência só do delta, na mesma rodada:** o `reviewer` recebe o diff do commit de ajuste e diz se cada achado fechou e se as linhas novas criam erro. Achado em linha que o ajuste não tocou fica fora da conferência e segue a regra acima, então o escopo encolhe a cada conferência e converge. A mesma linha numa terceira conferência vai ao mantenedor, não ao próximo plano, como a terceira rodada sobre o mesmo achado na AD-015.
+- **Uma rodada, um relatório:** o PR recebe um só comentário por rodada, o último relatório, com todos os achados da rodada numa tabela (origem, commit da correção, status: corrigido, sem mudança necessária ou adiado) e o resultado de cada conferência. Os commits de ajuste ficam separados, e o histórico guarda a prova de que a IA errou e foi corrigida.
+- Decidido pelo mantenedor no M3, depois de pesquisa.
+
+**Alternativas consideradas:**
+
+- **Manter tudo no próximo plano (AD-015):** o erro de texto do próprio PR fica publicado até o PR seguinte, e o que se deixa para depois tende a não ser feito.
+- **Uma rodada nova por correção, com revisão aberta:** foi o que gerou o laço das Revisões 6 a 9; um revisor que procura problemas sempre acha algum.
+- **Teto de duas conferências, com o resto para o próximo plano:** deixaria publicado um erro do próprio PR.
+- **Corrigir sem nova conferência ("aprova com nits"):** a norma entre pessoas pressupõe confiança no autor, e aqui o autor é o mesmo agente que errou; uma correção também erra, como a do A34 mostrou (A36).
+
+**Trade-off.** Conferências curtas a mais no fim da rodada, e o relatório final fica mais longo. Em troca, o erro não sai publicado e o PR mostra uma rodada, não quatro.
+
+**Rever quando:** a soma das conferências de texto de uma rodada passar do tempo de uma rodada de código.
+
+**Referências:** AD-015; L-007; [Google, Code Review Developer Guide: "Cleaning It Up Later"](https://google.github.io/eng-practices/review/reviewer/pushback.html) e ["LGTM with comments"](https://google.github.io/eng-practices/review/reviewer/speed.html); [Claude Code, Code Review](https://code.claude.com/docs/en/code-review-pull-requests) (achados *nit* e *pre-existing*, re-revisão do que mudou); [Claude Code, boas práticas](https://code.claude.com/docs/en/best-practices) ("skip style").
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
 | --- | --- | --- | --- |
 | Runtime | Node.js 26.13.0 LTS, fixado no `.nvmrc` e na imagem, com `engines` a partir da 24.12 e o CI nas duas linhas (AD-011). ESM, *type stripping* e `erasableSyntaxOnly`. TypeScript 7.0.2 só com `--noEmit` | Node 24 como alvo; build com `tsc`; `tsx` | Sem build, o que roda é o código do repositório. O Node 26 é o LTS ativo, e a 24.12, onde o *type stripping* ficou estável, é o piso para quem clona com o LTS anterior |
 | HTTP | Express 5.3.0 | NestJS; Fastify | O Nest depende de decorators, que o Node não aceita no *type stripping*. A validação pelo contrato em zod (AD-010) é um middleware curto no Express, que já se integra ao pino e aos spans manuais do OpenTelemetry; o Fastify faria o mesmo por plugins, sem ganho aqui, porque o framework não é o gargalo: a vitrine responde do cache, e o checkout é uma transação curta |
-| Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1; unitários ao lado do arquivo testado, integração em `test/integration/<área>/` | Mocks do banco; service container no CI; todos os testes em `test/` (PR #1) | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. O unitário testa um arquivo isolado e muda, move e some com ele; o de integração atravessa HTTP, banco e worker e não pertence a um arquivo. A guarda separa os papéis pelo nome `*.test.ts`, e o `.dockerignore` deixa os testes fora da imagem |
+| Testes | Vitest 5.0.5, supertest 7.3.1, Testcontainers 12.2.1; unitários ao lado do arquivo testado, integração em `test/integration/<área>/`. Dublês de teste nesta ordem: a implementação real (o PostgreSQL, o ERP simulado e, para fila, o emulador); a falha injetada na fronteira ou uma implementação falsa da nossa porta, para o caso que a real não produz sob demanda, conferindo que a falha aconteceu; o mock que conta chamadas só quando o critério é sobre o número de chamadas; nunca o mock de um SDK de terceiros nem de consultas ao banco | Mocks do banco; mock do SDK da AWS; service container no CI; todos os testes em `test/` (PR #1) | As garantias só se provam com banco real, e o caminho é o mesmo na máquina e no CI. A ordem dos dublês é a do capítulo "Test Doubles" do livro de engenharia do Google ("prefer realism over isolation"): mock em excesso exige manutenção e acha pouco defeito. A redação anterior ("sem mock de banco") proibia a injeção de falha que dois testes do M3 usam com razão (o defeito no status do pedido e a transação abortada no worker). O unitário testa um arquivo isolado e muda, move e some com ele; o de integração atravessa HTTP, banco e worker e não pertence a um arquivo. A guarda separa os papéis pelo nome `*.test.ts`, e o `.dockerignore` deixa os testes fora da imagem |
 | Acesso ao banco | Kysely 0.29.7 sobre o `pg`, para as consultas e as migrações, com os tipos gerados do banco migrado pelo kysely-codegen 0.20.0 e conferidos no CI por comparação com o banco migrado (AD-019); `set`/`values` só na forma de objeto e coluna nunca dentro de `` sql`…` `` (AD-017) | SQL em texto com tipos à mão; Kanel; script próprio com `PREPARE`; PgTyped; sqlx-ts; Prisma 7; ZenStack 3; Drizzle 0.45; MikroORM; TypeORM; Slonik | Uma coluna apagada ou renomeada quebra o `tsc` em todo uso, inclusive no SQL de concorrência, que continua legível e sem comando inteiro em SQL cru no código da aplicação; o SQLSTATE segue em `err.code` e os spans do repositório seguem manuais (AD-008); os motivos de cada descarte estão na AD-017 |
 | Migrações | O `Migrator` do Kysely, a partir da primeira fatia do M2 (AD-017): arquivos TypeScript com `up` e `down` sobre `Kysely<any>`, um migrador por schema, *advisory lock*, ordem conferida e as pendentes numa transação só; o CI barra a alteração de uma migração que já está na `main`. Até ali, node-pg-migrate 9.0.0 com arquivos `.sql` | node-pg-migrate com `.sql` (o do M1 e do F1); o `Migrator` lendo `.sql` por um leitor nosso; `kysely-ctl`; runner próprio; Flyway; dbmate; Postgrator; postgres-migrations; graphile-migrate; `@databases/pg-migrations`; umzug | A mesma ferramenta das consultas, sem dependência a mais, e a migração passa pelo `tsc` e pelo lint; os motivos de cada descarte do Kysely estão na AD-017. Os outros trazem Java, um binário sem API para Node, outro driver, ou não têm lock ou versão recente. Não confere o conteúdo do que já rodou; a regra do CI cobre isso no PR |
 | Arranque do ferramental (M1) | O `implementer` cria o `package.json`, o lockfile e as configurações e faz o spike do R8 antes do contrato e dos testes, num commit `build:` sem comportamento | O `test-writer` criar as configurações; a sessão principal fazer o spike | O `test-writer` só edita testes, e o contrato e os testes precisam das dependências; um commit `build:` mantém o teste antes do código |
@@ -603,6 +659,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 | Comandos e aprovação | Commit, push e as ferramentas MCP do GitHub sem aprovação; a mensagem do commit num arquivo, com `git commit -F`; a aprovação humana fica no plano e no PR, imposta pelo ruleset (AD-013) | Aprovar cada commit, push e comentário (M1) | Aprovar cada comando não verificava nada: a Anthropic mediu que pedidos constantes levam a aprovar sem ler. A `main` só muda por PR com checks verdes e a aprovação do dono, o que nenhum agente consegue contornar |
 | Mensagens de commit | Conventional Commits pelo `@commitlint/config-conventional`, sem regras próprias (cabeçalho até 100 caracteres, descrição em minúscula e sem ponto final); conferido por um hook `commit-msg` local (`.githooks/`, instalado pelo início de sessão) e de novo no CI; trailers `Co-Authored-By` e `Assisted-by: <papel>:<modelo> effort=<nível> step=<degrau>` | Regras próprias (72 caracteres, tipos restritos); conferir só no CI; script próprio | É o padrão da comunidade, e o tipo do commit é o que o CI usa para aceitar uma mudança no bloco `scripts` do `package.json` (só `ci:` ou `build:`, AI-05). Conferir só no CI deixou quatro mensagens erradas chegarem ao PR, e a reescrita custou uma branch nova, porque o push forçado é bloqueado. O `Assisted-by` adapta a convenção do kernel Linux (`Assisted-by: AGENT_NAME:MODEL_VERSION`), acrescentando o esforço e o degrau da escada |
 | Registro de decisões | ADs no `STATE.md`, aceitas pelo merge do PR que as propõe; os agentes leem só os blocos `### AD-NNN` citados; o `STATE-ARCHIVE.md` guarda a AD-007 e não recebe mais nada | Um arquivo por decisão | As ADs são curtas e se citam entre si; a leitura por trecho (AD-012) resolve o custo de ler o log inteiro, que era o motivo do arquivo e do limite de tamanho |
+| Evidência rodando o app | Antes de o PR de um marco sair do rascunho, a sessão principal roda a skill de projeto `app-check` (AI-22): sobe o compose com um nome de projeto próprio, percorre checkout, worker e status com as chamadas HTTP feitas de dentro dos contêineres, lê o `/metrics` e os logs do worker, e põe a saída numa seção da descrição do PR; o que aparecer de inesperado vira achado. Uma vez por PR, no HEAD que vai sair do rascunho. A receita respeita as guardas do projeto (o `curl` negado e os comentários só do `reviewer` e da revisão de segurança) e foi rodada de ponta a ponta antes de entrar. Decidida pelo mantenedor no M3 e posta no PR #13, como exceção à regra do PR próprio de processo | Uma etapa ou um agente de QA; só o teste de ponta a ponta no CI; a skill com o nome `verify`; um script `npm run smoke` | Os testes provam o que afirmam, e o teste de ponta a ponta do `ORD-19` já cobre o fluxo a cada push; ler a saída real pega o que nenhuma asserção previu (um campo de log, um nome de métrica, a montagem do processo). Uma skill de projeto é o formato que o Claude Code documenta para a receita de rodar o app; com o nome `verify`, ele a rodaria antes de cada commit, o que repetiria o CI a cada fatia. Uma etapa de QA repetiria o `test-writer` e o `reviewer` |
 
 ## Riscos em aberto
 
