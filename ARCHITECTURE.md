@@ -305,7 +305,7 @@ O SQS não guarda o que o worker decide por pedido, então isso fica no banco, n
   - Never call the ERP inside a database transaction.
   - Lock order between existing rows: outbox message, order, stock by SKU, one `UPDATE` per row.
   - Order transitions by compare-and-set; stock changes only if the transition affected a row.
-  - Every outbox transition is conditioned on the claim token.
+  - The billing queue is SQS (ElasticMQ locally): every queue transition uses the message's receipt handle, and every send or reconciliation attempt takes the per-order call permit before its first ERP call and renews it before the next (compare-and-set on `outbox.last_call_at`, AD-024).
   - Deadlines stored in the database use the database clock; process timers use the injectable clock.
   ```
 
