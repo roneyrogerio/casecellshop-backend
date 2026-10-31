@@ -25,6 +25,21 @@ async function sqlState(promise: Promise<unknown>): Promise<string | undefined> 
   }
 }
 
+// O nome da restrição também é contrato: quem traduz a violação ou lê o log precisa de um nome que explique a regra.
+const PAIR_CONSTRAINT = 'orders_failure_reason_matches_status';
+
+async function violation(promise: Promise<unknown>): Promise<{ code: string | undefined; constraint: string | undefined } | undefined> {
+  try {
+    await promise;
+    return undefined;
+  } catch (error) {
+    const { code, constraint } = error as { code?: string; constraint?: string };
+    return { code, constraint };
+  }
+}
+
+const PAIR_VIOLATION = { code: '23514', constraint: PAIR_CONSTRAINT };
+
 function insertOrder(status: string, failureReason: string | null): Promise<unknown> {
   return database.pool.query('INSERT INTO public.orders (status, failure_reason) VALUES ($1, $2)', [
     status,
@@ -60,23 +75,23 @@ const FAILURE_REASONS = ['erp_rejected', 'erp_out_of_stock', 'cancelled'];
 
 describe('CHK-11 o banco garante o motivo do pedido falho no INSERT', () => {
   it('CHK-11 pedido failed sem motivo é recusado com check_violation', async () => {
-    expect(await sqlState(insertOrder('failed', null))).toBe('23514');
+    expect(await violation(insertOrder('failed', null))).toEqual(PAIR_VIOLATION);
   });
 
   it('CHK-11 pedido pending com motivo é recusado com check_violation', async () => {
-    expect(await sqlState(insertOrder('pending', 'erp_rejected'))).toBe('23514');
+    expect(await violation(insertOrder('pending', 'erp_rejected'))).toEqual(PAIR_VIOLATION);
   });
 
   it('CHK-11 pedido invoiced com motivo é recusado com check_violation', async () => {
-    expect(await sqlState(insertOrder('invoiced', 'erp_rejected'))).toBe('23514');
+    expect(await violation(insertOrder('invoiced', 'erp_rejected'))).toEqual(PAIR_VIOLATION);
   });
 
   it('CHK-11 pedido failed com motivo fora dos três é recusado com check_violation', async () => {
-    expect(await sqlState(insertOrder('failed', 'timeout'))).toBe('23514');
+    expect(await violation(insertOrder('failed', 'timeout'))).toEqual(PAIR_VIOLATION);
   });
 
   it('CHK-11 pedido pending com motivo fora dos três é recusado com check_violation', async () => {
-    expect(await sqlState(insertOrder('pending', 'timeout'))).toBe('23514');
+    expect(await violation(insertOrder('pending', 'timeout'))).toEqual(PAIR_VIOLATION);
   });
 
   it('CHK-11 pedido com status fora de pending, invoiced e failed é recusado com check_violation', async () => {
@@ -108,14 +123,14 @@ describe('CHK-11 o banco garante o motivo do pedido falho no UPDATE', () => {
   it('CHK-11 UPDATE de pending para failed sem motivo é recusado e a linha não muda', async () => {
     const id = await createOrder('pending', null);
 
-    expect(await sqlState(updateOrder(id, 'failed', null))).toBe('23514');
+    expect(await violation(updateOrder(id, 'failed', null))).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'pending', failure_reason: null });
   });
 
   it('CHK-11 UPDATE de pending para failed com motivo fora dos três é recusado', async () => {
     const id = await createOrder('pending', null);
 
-    expect(await sqlState(updateOrder(id, 'failed', 'timeout'))).toBe('23514');
+    expect(await violation(updateOrder(id, 'failed', 'timeout'))).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'pending', failure_reason: null });
   });
 
@@ -123,8 +138,8 @@ describe('CHK-11 o banco garante o motivo do pedido falho no UPDATE', () => {
     const id = await createOrder('pending', null);
 
     expect(
-      await sqlState(database.pool.query('UPDATE public.orders SET failure_reason = $2 WHERE id = $1', [id, 'cancelled'])),
-    ).toBe('23514');
+      await violation(database.pool.query('UPDATE public.orders SET failure_reason = $2 WHERE id = $1', [id, 'cancelled'])),
+    ).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'pending', failure_reason: null });
   });
 
@@ -132,8 +147,8 @@ describe('CHK-11 o banco garante o motivo do pedido falho no UPDATE', () => {
     const id = await createOrder('failed', 'erp_rejected');
 
     expect(
-      await sqlState(database.pool.query('UPDATE public.orders SET status = $2 WHERE id = $1', [id, 'invoiced'])),
-    ).toBe('23514');
+      await violation(database.pool.query('UPDATE public.orders SET status = $2 WHERE id = $1', [id, 'invoiced'])),
+    ).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'failed', failure_reason: 'erp_rejected' });
   });
 
@@ -141,8 +156,8 @@ describe('CHK-11 o banco garante o motivo do pedido falho no UPDATE', () => {
     const id = await createOrder('failed', 'cancelled');
 
     expect(
-      await sqlState(database.pool.query('UPDATE public.orders SET status = $2 WHERE id = $1', [id, 'pending'])),
-    ).toBe('23514');
+      await violation(database.pool.query('UPDATE public.orders SET status = $2 WHERE id = $1', [id, 'pending'])),
+    ).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'failed', failure_reason: 'cancelled' });
   });
 
@@ -150,8 +165,8 @@ describe('CHK-11 o banco garante o motivo do pedido falho no UPDATE', () => {
     const id = await createOrder('failed', 'erp_out_of_stock');
 
     expect(
-      await sqlState(database.pool.query('UPDATE public.orders SET failure_reason = NULL WHERE id = $1', [id])),
-    ).toBe('23514');
+      await violation(database.pool.query('UPDATE public.orders SET failure_reason = NULL WHERE id = $1', [id])),
+    ).toEqual(PAIR_VIOLATION);
     expect(await readOrder(id)).toEqual({ status: 'failed', failure_reason: 'erp_out_of_stock' });
   });
 
