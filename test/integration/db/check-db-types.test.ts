@@ -81,6 +81,19 @@ describe('FND-09 a conferência dos tipos do banco', () => {
     expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(false);
   });
 
+  it('FND-09 controle negativo: um arquivo a mais no outDir (extra.ts, escrito à mão) devolve divergência citando esse arquivo', async () => {
+    const { uri } = await container.createDatabase();
+    const outDir = copyVersionedTypes();
+    writeFileSync(path.join(outDir, 'extra.ts'), 'export interface Extra {\n  coluna: string;\n}\n');
+
+    const divergences = await checkDbTypes({ databaseUrl: uri, outDir });
+
+    expect(divergences.some((sentence) => sentence.includes('extra.ts'))).toBe(true);
+    // Os dois arquivos gerados continuam batendo: só o que sobra é citado.
+    expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(false);
+    expect(divergences.some((sentence) => sentence.includes('erp-sim.ts'))).toBe(false);
+  });
+
   it('FND-09 a cópia dos versionados, sem edição, não tem divergência (o par do controle negativo da edição à mão)', async () => {
     const { uri } = await container.createDatabase();
     const outDir = copyVersionedTypes();

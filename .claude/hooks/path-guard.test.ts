@@ -263,6 +263,12 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   'vitest.workspace.ts',
   'commitlint.config.cjs',
   'redocly.yaml',
+  '.kysely-codegenrc',
+  '.kysely-codegenrc.json',
+  '.kysely-codegenrc.yaml',
+  '.kysely-codegenrc.js',
+  'src/db/.kysely-codegenrc.json',
+  'src/a/b/.kysely-codegenrc.outro',
   '.npmrc',
   '.nvmrc',
   '.gitignore',
@@ -306,6 +312,10 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
     'src/agents/list.ts',
     'src/gitignore-parser.ts',
     'src/mcp/server.ts',
+    'src/db/types/store.ts',
+    'src/db/kysely-codegenrc.ts',
+    'src/db/codegen.ts',
+    'src/kysely-codegen/index.ts',
   ])('AI-04 o implementer continua podendo editar %s', (path) => {
     for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
   });

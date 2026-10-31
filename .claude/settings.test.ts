@@ -266,10 +266,11 @@ function isConciseOutputStyle(value: unknown): boolean {
 }
 
 describe('AI-21 estilo de resposta do .claude/settings.json', () => {
+  // A asserção principal passa só pela função que os controles negativos provam; uma comparação direta ao lado
+  // dela poderia continuar verde com a função quebrada.
   it('AI-21 o settings.json define outputStyle exatamente como "Concise"', () => {
     const { outputStyle } = settings as Settings & { outputStyle?: unknown };
 
-    expect(outputStyle).toBe('Concise');
     expect(isConciseOutputStyle(outputStyle)).toBe(true);
   });
 
@@ -280,5 +281,51 @@ describe('AI-21 estilo de resposta do .claude/settings.json', () => {
 
   it('AI-21 a conferência reprova outputStyle ausente', () => {
     expect(isConciseOutputStyle(undefined)).toBe(false);
+  });
+
+  it.each(['CONCISE', ' Concise', 'Concise ', 'Concisely', '', 'Default', null, 1, ['Concise']])(
+    'AI-21 a conferência reprova o valor %j',
+    (value) => {
+      expect(isConciseOutputStyle(value)).toBe(false);
+    },
+  );
+});
+
+// O estilo de quem prefere outro mora no .claude/settings.local.json, que tem precedência e não é versionado.
+// O Claude Code só o ignora no git quando é ele quem cria o arquivo; o .gitignore do repositório precisa listá-lo.
+const SETTINGS_LOCAL = '.claude/settings.local.json';
+
+function gitignoreListsFile(gitignore: string, file: string): boolean {
+  return gitignore
+    .split('\n')
+    .map((line) => line.trim())
+    .some((line) => line === file || line === `/${file}` || line === `**/${file}`);
+}
+
+describe('AI-21 o .claude/settings.local.json não é versionado', () => {
+  const gitignore = readFileSync(join(import.meta.dirname, '..', '.gitignore'), 'utf8');
+
+  it('AI-21 o .gitignore lista o .claude/settings.local.json', () => {
+    expect(gitignoreListsFile(gitignore, SETTINGS_LOCAL)).toBe(true);
+  });
+
+  // Controles negativos: a conferência não confunde com outra linha.
+  it.each([
+    ['sem a linha', 'node_modules/\n.claude/state/\n'],
+    ['só o settings.json', '.claude/settings.json\n'],
+    ['a linha comentada', '# .claude/settings.local.json\n'],
+    ['outra pasta', 'src/.claude/settings.local.json\n'],
+    ['um nome parecido', '.claude/settings.local.json.bak\n'],
+    ['a linha negada', '!.claude/settings.local.json\n'],
+  ])('AI-21 a conferência reprova %s', (_label, text) => {
+    expect(gitignoreListsFile(text, SETTINGS_LOCAL)).toBe(false);
+  });
+
+  it.each([
+    ['a linha sozinha', '.claude/settings.local.json\n'],
+    ['a linha ancorada na raiz', 'node_modules/\n/.claude/settings.local.json\n'],
+    ['a linha entre outras, com espaço no fim', '.env\n.claude/settings.local.json  \n.DS_Store\n'],
+  ])('AI-21 a conferência aceita %s', (_label, text) => {
+    expect(gitignoreListsFile(text, SETTINGS_LOCAL)).toBe(true);
   });
 });

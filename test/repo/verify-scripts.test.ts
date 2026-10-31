@@ -31,6 +31,17 @@ const COMMON = [
   'check:scripts',
 ];
 
+// O critério não dá o nome dos scripts das conferências do M2 (FND-09, AI-19): elas são achadas pelo corpo, que chama
+// o arquivo de scripts/ com node, como o ci.yml (AI-05).
+function scriptsRunning(file: string, scripts: Record<string, string>): string[] {
+  return Object.entries(scripts)
+    .filter(([, body]) => body.trim() === `node ${file}`)
+    .map(([name]) => name);
+}
+
+const KYSELY_CHECK = scriptsRunning('scripts/check-kysely-usage.ts', pkg.scripts);
+const DB_TYPES_CHECK = scriptsRunning('scripts/check-db-types.ts', pkg.scripts);
+
 describe('AI-17 as conferências dos scripts enxergam o que procuram (controle negativo)', () => {
   it('AI-17 o leitor de passos reconhece npm run, npm test e a flag do openapi, e recusa o que não é npm', () => {
     expect(stepsOf('npm run lint && npm run openapi -- --check && npm test')).toEqual([
@@ -49,18 +60,54 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(pkg.scripts['verify:full']).toBeTruthy();
   });
 
-  it('AI-17 o verify roda lint, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations e check:scripts', () => {
+  it('AI-17 existe um script do package.json para cada conferência do M2: node scripts/check-kysely-usage.ts e node scripts/check-db-types.ts', () => {
+    expect(KYSELY_CHECK).toHaveLength(1);
+    expect(DB_TYPES_CHECK).toHaveLength(1);
+  });
+
+  it('AI-17 o leitor de scripts acha o script pelo corpo e recusa um corpo que só cita o arquivo', () => {
+    const sample = {
+      a: 'node scripts/check-kysely-usage.ts',
+      b: 'node scripts/check-kysely-usage.ts --write',
+      c: 'echo scripts/check-kysely-usage.ts',
+      d: 'node scripts/check-migrations.ts',
+    };
+
+    expect(scriptsRunning('scripts/check-kysely-usage.ts', sample)).toEqual(['a']);
+    expect(scriptsRunning('scripts/check-db-types.ts', sample)).toEqual([]);
+  });
+
+  it('AI-17 o verify roda lint, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations, check:scripts e a conferência das formas do Kysely', () => {
     const steps = stepsOf(pkg.scripts.verify);
 
     expect(steps).not.toContain(null);
-    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test:unit'].sort());
+    expect(KYSELY_CHECK).toHaveLength(1);
+    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test:unit', ...KYSELY_CHECK].sort());
   });
 
-  it('AI-17 o verify:full roda os mesmos passos, com todos os testes (npm test) no lugar de test:unit', () => {
+  it('AI-17 o verify:full roda os mesmos passos, com todos os testes (npm test) no lugar de test:unit, e mais a conferência dos tipos do banco', () => {
     const steps = stepsOf(pkg.scripts['verify:full']);
 
     expect(steps).not.toContain(null);
-    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test'].sort());
+    expect(KYSELY_CHECK).toHaveLength(1);
+    expect(DB_TYPES_CHECK).toHaveLength(1);
+    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test', ...KYSELY_CHECK, ...DB_TYPES_CHECK].sort());
+  });
+
+  // A conferência dos tipos sobe o PostgreSQL pelo Docker, e o verify é o do pre-push.
+  it('AI-17 o verify roda a conferência das formas do Kysely e não a dos tipos do banco', () => {
+    const steps = stepsOf(pkg.scripts.verify);
+
+    expect(KYSELY_CHECK.length + DB_TYPES_CHECK.length).toBe(2);
+    for (const name of KYSELY_CHECK) expect(steps).toContain(name);
+    for (const name of DB_TYPES_CHECK) expect(steps).not.toContain(name);
+  });
+
+  it('AI-17 o verify:full roda as duas conferências do M2', () => {
+    const steps = stepsOf(pkg.scripts['verify:full']);
+
+    expect(KYSELY_CHECK.length + DB_TYPES_CHECK.length).toBe(2);
+    for (const name of [...KYSELY_CHECK, ...DB_TYPES_CHECK]) expect(steps).toContain(name);
   });
 
   // Controle negativo: o verify é o do pre-push e não pode carregar a integração (Docker).

@@ -50,6 +50,172 @@ describe('AI-20 o .oxlintrc.json liga como erro as regras de estilo', () => {
   });
 });
 
+// Um override do .oxlintrc.json cujo `files` alcança .ts não pode desligar as regras do AI-20: sem isto, uma pasta
+// inteira escaparia do estilo, e o teste do `rules` do topo continuaria verde.
+const STYLE_RULES = [
+  'typescript/switch-exhaustiveness-check',
+  'typescript/no-deprecated',
+  'typescript/prefer-readonly',
+  'typescript/consistent-type-definitions',
+  'typescript/no-import-type-side-effects',
+  'typescript/return-await',
+  'unicorn/prefer-node-protocol',
+  'unicorn/prefer-structured-clone',
+  'unicorn/prefer-at',
+  'eslint/no-var',
+  'eslint/prefer-const',
+];
+
+// Os arquivos gerados pelo kysely-codegen (FND-09): o único lugar onde `consistent-type-definitions` pode ficar desligado,
+// porque o gerador escreve `interface` e `type` do jeito dele.
+const GENERATED_TYPE_FILES = ['src/db/types/store.ts', 'src/db/types/erp-sim.ts'];
+const GENERATED_ONLY_RULES = ['typescript/consistent-type-definitions'];
+
+// Caminhos de amostra: o glob "alcança .ts" quando casa algum deles.
+const TS_SAMPLES = [
+  'a.ts',
+  'src/app.ts',
+  'src/checkout/reserve.ts',
+  'src/db/migrate.ts',
+  'scripts/check-env.ts',
+  'test/helpers/clock.ts',
+  'test/integration/db/x.test.ts',
+  'migrations/store/20260101000000_x.ts',
+  '.claude/hooks/x.test.ts',
+  ...GENERATED_TYPE_FILES,
+];
+
+function globToRegExp(glob: string): RegExp {
+  let source = '';
+  for (let index = 0; index < glob.length; index += 1) {
+    const char = glob.charAt(index);
+    if (char === '*' && glob.charAt(index + 1) === '*') {
+      const slash = glob.charAt(index + 2) === '/';
+      source += slash ? '(?:.*/)?' : '.*';
+      index += slash ? 2 : 1;
+    } else if (char === '*') {
+      source += '[^/]*';
+    } else if (char === '?') {
+      source += '[^/]';
+    } else if (char === '{') {
+      source += '(?:';
+    } else if (char === '}') {
+      source += ')';
+    } else if (char === ',' && source.includes('(?:')) {
+      source += '|';
+    } else {
+      source += char.replace(/[.+^$()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+
+function tsFilesReached(files: readonly string[]): string[] {
+  const patterns = files.map(globToRegExp);
+  return TS_SAMPLES.filter((sample) => patterns.some((pattern) => pattern.test(sample)));
+}
+
+function isOn(setting: unknown): boolean {
+  const level = Array.isArray(setting) ? (setting as unknown[])[0] : setting;
+  return level === 'error' || level === 2;
+}
+
+interface Override {
+  files: string[];
+  rules?: Record<string, unknown>;
+}
+
+// As violações, uma frase por override: desliga uma das onze regras para arquivos .ts que não são os gerados.
+function styleOverrideViolations(overrides: readonly Override[]): string[] {
+  const violations: string[] = [];
+  for (const override of overrides) {
+    const reached = tsFilesReached(override.files);
+    if (reached.length === 0) continue;
+    const disabled = STYLE_RULES.filter((rule) => override.rules !== undefined && rule in override.rules && !isOn(override.rules[rule]));
+    if (disabled.length === 0) continue;
+    const onlyGenerated = reached.every((file) => GENERATED_TYPE_FILES.includes(file));
+    const onlyAllowedRules = disabled.every((rule) => GENERATED_ONLY_RULES.includes(rule));
+    if (onlyGenerated && onlyAllowedRules) continue;
+    violations.push(`${override.files.join(', ')} desliga ${disabled.join(', ')}`);
+  }
+  return violations;
+}
+
+describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam as regras de estilo', () => {
+  const { overrides = [] } = readJson<OxlintConfig & { overrides?: Override[] }>('.oxlintrc.json');
+
+  it('AI-20 nenhum override para .ts desliga uma das onze regras, salvo consistent-type-definitions nos tipos gerados', () => {
+    expect(styleOverrideViolations(overrides)).toEqual([]);
+  });
+
+  it('AI-20 os dois overrides conhecidos para .ts existem e só desligam o que o critério aceita', () => {
+    const tsOverrides = overrides.filter((override) => tsFilesReached(override.files).length > 0);
+    const disabledBy = (files: string): string[] =>
+      Object.entries(tsOverrides.find((override) => override.files.includes(files))?.rules ?? {})
+        .filter(([, setting]) => !isOn(setting))
+        .map(([rule]) => rule)
+        .sort();
+
+    expect(disabledBy('**/migrations/**/*.ts')).toEqual(['typescript/no-explicit-any']);
+    expect(disabledBy('src/db/types/*.ts')).toEqual([
+      'typescript/consistent-type-definitions',
+      'typescript/no-empty-object-type',
+    ]);
+  });
+
+  // Controles negativos: a conferência enxerga o override que a deixaria passar.
+  it.each(STYLE_RULES)('AI-20 controle: um override de **/*.ts que desliga %s reprova', (rule) => {
+    expect(styleOverrideViolations([{ files: ['**/*.ts'], rules: { [rule]: 'off' } }])).toHaveLength(1);
+  });
+
+  it.each([
+    ['uma pasta', ['src/**/*.ts']],
+    ['só os testes', ['**/*.test.ts']],
+    ['o glob *.ts', ['*.ts']],
+    ['todos os arquivos', ['**/*']],
+    ['as chaves {ts,js}', ['**/*.{ts,js}']],
+    ['uma pasta de scripts', ['scripts/*.ts']],
+  ])('AI-20 controle: um override para %s que desliga return-await reprova', (_label, files) => {
+    expect(styleOverrideViolations([{ files, rules: { 'typescript/return-await': 'off' } }])).toHaveLength(1);
+  });
+
+  it('AI-20 controle: consistent-type-definitions desligada fora dos arquivos gerados reprova', () => {
+    const off = { 'typescript/consistent-type-definitions': 'off' };
+
+    expect(styleOverrideViolations([{ files: ['src/db/types/*.ts'], rules: off }])).toEqual([]);
+    expect(styleOverrideViolations([{ files: ['src/db/*.ts'], rules: off }])).toHaveLength(1);
+    expect(styleOverrideViolations([{ files: ['src/**/*.ts'], rules: off }])).toHaveLength(1);
+    expect(styleOverrideViolations([{ files: ['src/db/types/*.ts', 'src/app.ts'], rules: off }])).toHaveLength(1);
+  });
+
+  it('AI-20 controle: os tipos gerados não podem desligar nenhuma outra das onze regras', () => {
+    const files = ['src/db/types/*.ts'];
+
+    expect(styleOverrideViolations([{ files, rules: { 'typescript/return-await': 'off' } }])).toHaveLength(1);
+    expect(
+      styleOverrideViolations([
+        { files, rules: { 'typescript/consistent-type-definitions': 'off', 'eslint/prefer-const': 'off' } },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it.each([['warn'], [0], [['off']], [['warn', {}]]])('AI-20 controle: baixar a regra para %j também reprova', (setting) => {
+    expect(styleOverrideViolations([{ files: ['**/*.ts'], rules: { 'eslint/no-var': setting } }])).toHaveLength(1);
+  });
+
+  it('AI-20 controle: o que o critério aceita passa', () => {
+    expect(
+      styleOverrideViolations([
+        { files: ['**/migrations/**/*.ts'], rules: { 'typescript/no-explicit-any': 'off' } },
+        { files: ['src/db/types/*.ts'], rules: { 'typescript/consistent-type-definitions': 'off', 'typescript/no-empty-object-type': 'off' } },
+        { files: ['**/*.js', '**/*.mjs', '**/*.cjs'], rules: { 'typescript/return-await': 'off', 'eslint/prefer-const': 'off' } },
+        { files: ['**/*.ts'], rules: { 'eslint/no-var': 'error' } },
+        { files: ['**/*.ts'], rules: { 'typescript/no-explicit-any': 'off' } },
+      ]),
+    ).toEqual([]);
+  });
+});
+
 // Pasta no tmpdir do sistema, e não no repositório (mesma razão do test-layout): um lint paralelo
 // ou uma execução interrompida esbarraria no arquivo de amostra.
 describe('AI-20 controle negativo do lint: switch sem todos os casos da união reprova', () => {
