@@ -639,7 +639,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-023 · Relatório curto e resumo de decisão: o mantenedor lê em 2 a 5 minutos
 
-**Status:** proposta (31/10/2026). Substitui, na AD-012, a leitura de "uns 10 minutos por marco" da matriz critério × teste e do texto das respostas.
+**Status:** aceita (31/10/2026, PR #14). Substitui, na AD-012, a leitura de "uns 10 minutos por marco" da matriz critério × teste e do texto das respostas.
 
 **Contexto.** No M3, os relatórios do `reviewer` tinham de 60 a 110 linhas, com o veredito e os achados misturados ao que foi conferido sem problema e os mesmos achados repetidos em mais de uma seção. A leitura reservada ao mantenedor era de uns 10 minutos por PR, sobre a tabela critério × teste e as seções inteiras do `ARCHITECTURE.md`, e o mantenedor achou isso muito. A sessão principal e o próprio `reviewer` também releem o relatório anterior a cada rodada.
 
