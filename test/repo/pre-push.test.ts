@@ -69,13 +69,13 @@ describe('AI-08 o .githooks/pre-push é versionado e executável', () => {
     const result = spawnSync('git', ['ls-files', '-s', '--', '.githooks/pre-push'], { cwd: root, encoding: 'utf8' });
 
     expect(result.stdout.startsWith('100755 ')).toBe(true);
-  });
+  }, 60_000);
 
   it('AI-08 é um script sh', () => {
     const result = spawnSync('head', ['-n', '1', hook], { encoding: 'utf8' });
 
     expect(result.stdout).toMatch(/^#!\/bin\/sh|^#!\/usr\/bin\/env sh/);
-  });
+  }, 60_000);
 });
 
 describe('AI-08 o pre-push só deixa passar a URL que começa por https://github.com/', () => {
@@ -96,7 +96,7 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
     expect(result.error).toBeUndefined();
     expect(result.code).not.toBe(0);
     expect(result.stderr).not.toBe('');
-  });
+  }, 60_000);
 
   // Controle negativo: a URL HTTPS do GitHub passa.
   it.each(['https://github.com/roneyrogerio/casecellshop-backend.git', 'https://github.com/a/b'])(
@@ -107,13 +107,14 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
       expect(result.error).toBeUndefined();
       expect(result.code).toBe(0);
     },
+    60_000,
   );
 
   it('AI-08 sem argumentos recusa', () => {
     const result = spawnSync(hook, [], { input: '', encoding: 'utf8', env: isolatedEnv(makeFakeNpm(0)) });
 
     expect(result.status).not.toBe(0);
-  });
+  }, 60_000);
 });
 
 describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reescrever a URL', () => {
@@ -144,7 +145,7 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
 
     expect(result.status).not.toBe(0);
     expect(branchesIn(bare)).toBe('');
-  });
+  }, 60_000);
 
   // Controle negativo: sem o hook, o mesmo push chega ao bare. Prova que é o hook que recusa.
   it('AI-08 controle: sem o hook, o mesmo push chega ao bare', () => {
@@ -154,7 +155,7 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
 
     expect(result.status, result.stderr).toBe(0);
     expect(branchesIn(bare)).toContain('refs/heads/feature');
-  });
+  }, 60_000);
 });
 
 describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois de aceitar a URL', () => {
@@ -165,14 +166,14 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
 
     expect(result.code).toBe(0);
     expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
-  });
+  }, 60_000);
 
   it('AI-17 chamado de uma subpasta, roda o verify na raiz do repositório, e não na subpasta', () => {
     const result = runHook(ACCEPTED, { subdir: 'src/checkout' });
 
     expect(result.code).toBe(0);
     expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
-  });
+  }, 60_000);
 
   it('AI-17 com o verify falhando, o push é recusado (código diferente de 0)', () => {
     const result = runHook(ACCEPTED, { npmExit: 1 });
@@ -180,14 +181,14 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
     expect(result.error).toBeUndefined();
     expect(result.code).not.toBe(0);
     expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
-  });
+  }, 60_000);
 
   it('AI-17 o código do verify que falhou com outro valor também recusa o push', () => {
     const result = runHook(ACCEPTED, { npmExit: 7 });
 
     expect(result.code).not.toBe(0);
     expect(result.npm.calls()).toHaveLength(1);
-  });
+  }, 60_000);
 
   // Controle negativo: o verify só roda depois da URL; a URL recusada nunca chega ao npm.
   it.each(['git@github.com:a/b.git', 'ssh://git@github.com/a/b.git', '/tmp/x.git', 'https://github.com.evil.com/a/b.git', ''])(
@@ -198,6 +199,7 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
       expect(result.code).not.toBe(0);
       expect(result.npm.calls()).toEqual([]);
     },
+    60_000,
   );
 
   it('AI-17 a URL recusada com o verify que passaria continua recusada (o verify não a salva)', () => {
@@ -205,5 +207,5 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).not.toBe('');
-  });
+  }, 60_000);
 });

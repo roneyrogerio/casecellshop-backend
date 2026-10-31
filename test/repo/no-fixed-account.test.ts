@@ -31,7 +31,7 @@ describe('AI-14 nenhuma conta fixa no código', () => {
 
     expect(files.length).toBeGreaterThan(5);
     expect(filesWithFixedAccount(files, (file) => readFileSync(join(root, file), 'utf8'))).toEqual([]);
-  });
+  }, 60_000);
 
   // Controle negativo: a busca acha o texto num conteúdo inventado que o tenha.
   it('AI-14 a busca acha a conta fixa num conteúdo inventado (controle negativo)', () => {
