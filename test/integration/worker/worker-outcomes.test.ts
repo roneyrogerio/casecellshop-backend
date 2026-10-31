@@ -245,7 +245,7 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
   it('ORD-11 se o processo para 34 s (relógio injetável) entre mandar o UPDATE da permissão e chamar, a permissão já passou de 33 s e o worker desiste sem chamar o ERP', async () => {
     const world = await createWorld(suite);
     const order = await submitOrder(suite, world);
-    const probe = interceptPool(suite.pool, { match: TAKE_PERMIT_STATEMENT, before: () => world.clock.advance(34_000) });
+    const probe = interceptPool(suite.pool, { match: TAKE_PERMIT_STATEMENT, before: () => world.clock.advance(34_000), times: 1 });
 
     await buildWorker(world, { pool: probe.pool }).pollOnce();
 
@@ -263,7 +263,7 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
   it('ORD-11 controle da idade da permissão: se o processo para 32 s entre mandar o UPDATE e chamar, a permissão ainda vale e o worker chama o ERP e fatura', async () => {
     const world = await createWorld(suite);
     const order = await submitOrder(suite, world);
-    const probe = interceptPool(suite.pool, { match: TAKE_PERMIT_STATEMENT, before: () => world.clock.advance(32_000) });
+    const probe = interceptPool(suite.pool, { match: TAKE_PERMIT_STATEMENT, before: () => world.clock.advance(32_000), times: 1 });
 
     await buildWorker(world, { pool: probe.pool }).pollOnce();
 

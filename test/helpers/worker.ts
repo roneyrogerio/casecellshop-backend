@@ -1,7 +1,7 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { assert, expect, vi } from 'vitest';
+import { assert, expect, onTestFinished, vi } from 'vitest';
 import { CheckoutAccepted } from '../../src/contract/index.ts';
 import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
@@ -120,7 +120,15 @@ export function instrumentTransport(inner: ErpTransport): InstrumentedTransport 
 
   async function finish(call: Promise<ErpResponse>, request: ErpRequest, hook: ((request: ErpRequest) => Promise<void>) | undefined) {
     try {
-      const response = await call;
+      let response: ErpResponse;
+      try {
+        response = await call;
+      } catch (error) {
+        // O gancho roda também quando o simulado lança (ex.: `unavailable`): é o que o teste espera ao
+        // agir entre a resposta do ERP e a volta ao worker, com ou sem resposta.
+        if (hook) await hook(request);
+        throw error;
+      }
       if (hook) await hook(request);
       return response;
     } finally {
@@ -678,12 +686,17 @@ export interface PoolProbe {
   readonly fired: number;
   // Liga e desliga a regra, para o cenário armar a falha só depois da chamada ao ERP.
   armed: boolean;
+  // Devolve a cada cliente tocado o `query` original. Roda sozinho no fim do teste que instalou a regra.
+  release(): void;
 }
 
 // Embrulha o pool do worker: a regra olha cada comando antes de ele seguir ao banco. O resto do caminho é o real.
+// O `pg-pool` reaproveita o cliente mais recente e o pool do suite é de todos os testes do arquivo: por isso
+// a regra é desfeita no fim do teste que a instalou (`onTestFinished`) e nunca vaza para o seguinte.
 export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
   const patched = new WeakSet<object>();
-  const state = { matched: 0, fired: 0 };
+  const restores: (() => void)[] = [];
+  const state = { matched: 0, fired: 0, released: false };
   const probe: PoolProbe = {
     pool,
     armed: true,
@@ -693,7 +706,12 @@ export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
     get fired() {
       return state.fired;
     },
+    release() {
+      state.released = true;
+      for (const restore of restores.splice(0).reverse()) restore();
+    },
   };
+  onTestFinished(() => probe.release());
   probe.pool = new Proxy(pool, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property);
@@ -703,11 +721,13 @@ export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
         if (!patched.has(client)) {
           patched.add(client);
           const raw = client as unknown as { query: (...args: unknown[]) => unknown };
-          const original = raw.query.bind(client);
-          raw.query = async (...args: unknown[]) => {
+          const previous = raw.query;
+          const hadOwn = Object.hasOwn(raw, 'query');
+          const original = previous.bind(client);
+          const wrapper = async (...args: unknown[]) => {
             const first = args[0];
             const text = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
-            if (probe.armed && rule.match.test(text)) {
+            if (!state.released && probe.armed && rule.match.test(text)) {
               state.matched += 1;
               if (state.fired < (rule.times ?? Infinity)) {
                 state.fired += 1;
@@ -717,6 +737,13 @@ export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
             }
             return original(...args);
           };
+          raw.query = wrapper;
+          restores.push(() => {
+            // Só desfaz se ninguém embrulhou por cima; senão `released` já deixa o embrulho passar direto.
+            if (raw.query !== wrapper) return;
+            if (hadOwn) raw.query = previous;
+            else delete (raw as { query?: unknown }).query;
+          });
         }
         return client;
       };
