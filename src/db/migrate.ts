@@ -3,20 +3,27 @@ import { runner } from 'node-pg-migrate';
 import type { Pool } from 'pg';
 import { withClient } from './client.ts';
 
-const MIGRATIONS = [
-  { dir: 'store', schema: 'public' },
-  { dir: 'erp_sim', schema: 'erp_sim' },
-] as const;
+export interface MigrationFolder {
+  // Caminho absoluto da pasta de migrações.
+  dir: string;
+  schema: string;
+}
+
+// Loja antes do erp_sim; os testes do FND-11 passam pastas próprias.
+export const MIGRATION_FOLDERS: readonly MigrationFolder[] = [
+  { dir: fileURLToPath(new URL('../../migrations/store', import.meta.url)), schema: 'public' },
+  { dir: fileURLToPath(new URL('../../migrations/erp_sim', import.meta.url)), schema: 'erp_sim' },
+];
 
 // Aplica as migrações dos dois schemas, cada um com a sua tabela de controle.
 // O runner usa um advisory lock (espera, não falha) e confere a ordem; cada
 // arquivo roda numa transação própria.
-export async function migrate(pool: Pool): Promise<void> {
-  for (const { dir, schema } of MIGRATIONS) {
+export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = MIGRATION_FOLDERS): Promise<void> {
+  for (const { dir, schema } of folders) {
     await withClient(pool, async (client) => {
       await runner({
         dbClient: client,
-        dir: fileURLToPath(new URL(`../../migrations/${dir}`, import.meta.url)),
+        dir,
         direction: 'up',
         migrationsTable: 'pgmigrations',
         migrationsSchema: schema,
