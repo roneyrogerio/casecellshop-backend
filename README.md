@@ -17,6 +17,8 @@ docker compose up --build
 
 Sobem o PostgreSQL, as migrações (que terminam antes de a API e o worker subirem), a API, o worker e o Jaeger.
 
+Quem subiu o projeto antes do M2 precisa recriar o banco uma vez com `docker compose down -v`: as migrações passaram a outro migrador, e o histórico antigo não é reaproveitado (AD-017).
+
 | O quê | Endereço |
 | --- | --- |
 | API | `http://localhost:3000` (`GET /health`) |
