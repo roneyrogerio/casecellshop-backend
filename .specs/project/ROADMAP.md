@@ -98,8 +98,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de cache e performance da vitrine (`DOC-CAC`).
 - Catálogo com cache e sincronização, conforme o design.
+- Uso pelo Insomnia sem passo manual (pedido do mantenedor, 31/10/2026): o `servers` do contrato aponta para `http://localhost:3000` (hoje é `/`, que não resolve num arquivo importado), e, se couber, a API serve o `/openapi.json`.
 
-**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro).
+**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro), e, com um `docker compose up --build`, o `openapi.yaml` importado no Insomnia faz `GET /products`, `POST /checkout` e `GET /orders/{orderId}/status` contra `http://localhost:3000`, sem passo manual.
 
 ## M5 — Observabilidade e operação
 
@@ -142,6 +143,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
   - **Achados `baixa` do #12 que não tocam o SQS** (levados do PR 2 do M3): A5, o `scripts/check-kysely-usage.ts` aceita `sql` renomeado por desestruturação, `K["sql"]` e `sql` passado como argumento, e erra a regex depois de `)` e `}`; A6, o `reachesTs` de `test/repo/strict-checks.test.ts` não vê `*.[jt]s` nem `*.?s`; A7, o controle negativo do `CHK-02` roda fora da rota; A11, `spawnSync` sem `timeout` nos testes de `test/repo/`; e os pontos sem asserção: o `415` sem `Content-Type` e o `unavailable` no counter do checkout.
 - **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
+- **Skill `/marco` no limite de bytes (próxima mudança de processo):** o `SKILL.md` tem 11.998 dos 12.000 bytes do `FND-06`; antes de acrescentar texto, passar trechos de referência para arquivos de apoio da pasta da skill.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
 - **Teste de mutação com Stryker** (decisão do mantenedor, PR próprio depois do M3): uma rodada por marco, só nos módulos sem banco; pede dependência nova e a linha no `STATE.md`.
 - **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
