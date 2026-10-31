@@ -4,6 +4,7 @@ import {
   drain,
   observe,
   openBillingQueues,
+  parseQueueCountsXml,
   sendRaw,
   startBlackHole,
   startElasticMq,
@@ -152,6 +153,22 @@ describe('ORD-22 porta do SQS: recebimento', () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(800);
   });
 
+  // O timeout comum da requisição (5 s) cortaria um long polling configurado perto ou acima dele: o receive tem
+  // prazo próprio de waitSeconds + 5 s (design.md, "Fila no SQS"). O prazo corre em tempo real dentro do SDK.
+  it('ORD-22 receive com waitSeconds de 6 s numa fila vazia espera o long polling inteiro e devolve vazio, em vez de rejeitar pelo timeout de 5 s da requisição', async () => {
+    const { queue } = await fresh();
+
+    const startedAt = performance.now();
+    const outcome = await queue.receive({ max: 10, waitSeconds: 6 }).then(
+      (messages) => ({ messages }) as const,
+      (error: unknown) => ({ error }) as const,
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(outcome, 'o receive rejeitou em vez de esperar o long polling').toEqual({ messages: [] });
+    expect(elapsedMs).toBeGreaterThanOrEqual(5_500);
+  }, 30_000);
+
   it('ORD-22 receive com visibilitySeconds esconde a mensagem, mesmo que a fila tenha visibilidade 0', async () => {
     const { queue, queueUrl } = await fresh({ visibilitySeconds: 0 });
     await sendRaw(emq, queueUrl, 'corpo');
@@ -249,6 +266,20 @@ describe('ORD-22 porta do SQS: delete e changeVisibility', () => {
     // Se a chamada recusada tivesse valido, a mensagem (escondida por 60 s pelo recebimento vigente) já voltaria.
     expect(await queue.receive({ max: 1, waitSeconds: 0 })).toEqual([]);
     expect(await queue.changeVisibility(current?.receiptHandle ?? '', 0)).toBe('ok');
+  });
+});
+
+describe('ORD-19 contagem pela API de consulta do SQS', () => {
+  // O teste do compose lê as contagens da fila e da DLQ por esta API, de dentro do contêiner do worker.
+  it('ORD-19 o GetQueueAttributes por GET traz, no XML, as mensagens visíveis e as em voo', async () => {
+    const { queue, queueUrl } = await fresh();
+    for (let index = 0; index < 2; index += 1) await sendRaw(emq, queueUrl, `m${index}`);
+    await queue.receive({ max: 1, waitSeconds: 0 });
+
+    await vi.waitFor(async () => {
+      const response = await fetch(`${queueUrl}?Action=GetQueueAttributes&AttributeName.1=All`);
+      expect(parseQueueCountsXml(await response.text())).toEqual({ visible: 1, notVisible: 1 });
+    });
   });
 });
 

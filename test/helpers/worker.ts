@@ -1,12 +1,13 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { expect, vi } from 'vitest';
+import { assert, expect, vi } from 'vitest';
 import { CheckoutAccepted } from '../../src/contract/index.ts';
 import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
 import { createSimulatedErp, type SimulatedErp } from '../../src/erp/sim/index.ts';
 import type { ErpRequest, ErpResponse, ErpTransport } from '../../src/erp/transport.ts';
+import type { Semaphore } from '../../src/outbox/semaphore.ts';
 import { createTelemetry, type Telemetry } from '../../src/telemetry.ts';
 import { createWorker, type Worker, type WorkerConfig } from '../../src/worker.ts';
 import {
@@ -25,6 +26,18 @@ import {
 import { createManualClock, type ManualClock } from './clock.ts';
 import { startMigratedDatabase, type TestDatabase } from './database.ts';
 import { ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
+import {
+  countsOf,
+  observeQueue,
+  openBillingQueues,
+  sendRaw,
+  startElasticMq,
+  type ObservedQueue,
+  type OpenedQueues,
+  type QueueCounts,
+  type QueueOptions,
+  type TestElasticMq,
+} from './sqs.ts';
 
 // ---------------------------------------------------------------- transporte medido
 
@@ -229,55 +242,126 @@ export interface WorkerSuite {
   // Pool do worker como em produção: 10 conexões, lock_timeout de 2 s e statement_timeout de 5 s.
   pool: pg.Pool;
   telemetry: Telemetry;
+  // Um ElasticMQ por arquivo de teste; cada teste cria as filas dele (createWorld).
+  emq: TestElasticMq;
+  // Fecha o que cada teste abriu (os clientes do SQS): chamado no afterEach.
+  releaseWorlds(): void;
   stop(): Promise<void>;
 }
 
-// PostgreSQL real, o app do checkout (pedidos nascem como em produção) e o pool do worker.
+// Quem fecha as filas de cada mundo; fora da interface pública da suíte.
+const cleanupsOf = new WeakMap<WorkerSuite, (() => void)[]>();
+
+// PostgreSQL real, o app do checkout (pedidos nascem como em produção), o pool do worker e o ElasticMQ.
 export async function startWorkerSuite(): Promise<WorkerSuite> {
-  const database = await startMigratedDatabase();
+  const [database, emq] = await Promise.all([startMigratedDatabase(), startElasticMq()]);
   const checkout = await startCheckoutHarness(database, APP_POOL_SIZE, PATIENT_LIMITS);
   const pool = createAppPool(database.uri, 10);
   const telemetry = createTelemetry({ spanExporter: new InMemorySpanExporter() });
-  return {
+  const cleanups: (() => void)[] = [];
+  const suite: WorkerSuite = {
     database,
     checkout,
     pool,
     telemetry,
+    emq,
+    releaseWorlds() {
+      for (const cleanup of cleanups.splice(0)) cleanup();
+    },
     async stop() {
+      suite.releaseWorlds();
       await pool.end();
       await telemetry.shutdown();
       await checkout.close();
+      await emq.stop();
       await database.stop();
     },
   };
+  cleanupsOf.set(suite, cleanups);
+  return suite;
 }
 
-// Uma mensagem pendente que sobra de um teste seria reivindicada pelo pollOnce do teste seguinte,
-// que divide o banco com ela. Cancelar a deixa fora da fila sem apagar o que o teste mostrou.
-export async function cancelLeftoverMessages(pool: pg.Pool): Promise<void> {
-  await pool.query("update outbox set status = 'cancelled' where status = 'pending'");
+// ---------------------------------------------------------------- mundo de um teste: ERP, filas e relógio
+
+export interface QueueWorld extends ErpWorld {
+  // Pool do worker (o mesmo da suíte): o teste lê e semeia o banco por ele.
+  pool: pg.Pool;
+  telemetry: Telemetry;
+  emq: TestElasticMq;
+  // As filas reais deste teste (nome único), com a DLQ.
+  queues: OpenedQueues;
+  // A porta que o worker usa: a fila real embrulhada para registrar e, se o teste pedir, falhar.
+  queue: ObservedQueue;
+}
+
+export interface WorldOptions extends QueueOptions {
+  withoutH1b?: boolean;
+  // Telemetria própria do cenário (ERP e worker): os contadores começam do zero.
+  telemetry?: Telemetry;
+}
+
+// ERP simulado no relógio manual e filas novas no ElasticMQ, com a mesma redrive policy do
+// elasticmq.conf (o limite de recebimentos pode ser menor no teste).
+export async function createWorld(suite: WorkerSuite, options: WorldOptions = {}): Promise<QueueWorld> {
+  const erpWorld = createErpWorld(suite.database.erpPool, {
+    ...(options.withoutH1b === undefined ? {} : { withoutH1b: options.withoutH1b }),
+    ...(options.telemetry ? { telemetry: options.telemetry } : {}),
+  });
+  const queues = await openBillingQueues(suite.emq, {
+    ...(options.maxReceiveCount === undefined ? {} : { maxReceiveCount: options.maxReceiveCount }),
+    ...(options.visibilitySeconds === undefined ? {} : { visibilitySeconds: options.visibilitySeconds }),
+  });
+  cleanupsOf.get(suite)?.push(() => queues.close());
+  return {
+    ...erpWorld,
+    pool: suite.pool,
+    telemetry: options.telemetry ?? suite.telemetry,
+    emq: suite.emq,
+    queues,
+    queue: observeQueue(queues.queue),
+  };
 }
 
 export interface BuildWorkerOptions {
-  pool: pg.Pool;
-  telemetry: Telemetry;
+  pool?: pg.Pool;
+  telemetry?: Telemetry;
   config?: Partial<WorkerConfig>;
   random?: () => number;
   // Padrão: silencioso. Os testes de log passam o logger que captura as linhas.
   logger?: Logger;
+  semaphore?: Semaphore;
+  erp?: ErpClient;
 }
 
-// Um worker novo, como um processo novo: semáforo próprio, mesmo ERP e mesmo relógio.
-export function buildWorker(world: ErpWorld, options: BuildWorkerOptions): Worker {
-  return createWorker({
-    pool: options.pool,
-    erp: world.erp,
+// Sem long polling por padrão: com a fila vazia o pollOnce responde na hora. Os testes do start()
+// pedem o de 1 s, o do design, para o laço não girar sem parar.
+export const TEST_WORKER_CONFIG: Partial<WorkerConfig> = { receiveWaitSeconds: 0 };
+
+// Um worker novo, como um processo novo: semáforo próprio, mesmo ERP, mesmo relógio e a mesma fila.
+export function buildWorker(world: QueueWorld, options: BuildWorkerOptions = {}): Worker {
+  const worker = createWorker({
+    pool: options.pool ?? world.pool,
+    queue: world.queue,
+    erp: options.erp ?? world.erp,
     logger: options.logger ?? pino({ level: 'silent' }),
-    telemetry: options.telemetry,
+    telemetry: options.telemetry ?? world.telemetry,
     clock: world.clock,
     random: options.random ?? (() => 0.5),
-    ...(options.config ? { config: options.config } : {}),
+    ...(options.semaphore ? { semaphore: options.semaphore } : {}),
+    config: { ...TEST_WORKER_CONFIG, ...options.config },
   });
+  // Toda rodada recebe do SQS: a fila é a fonte das mensagens (AD-021). Sem esta conferência, um worker que
+  // ainda lesse a tabela da outbox passaria os testes que só olham o banco e o ERP.
+  return {
+    start: () => worker.start(),
+    stop: () => worker.stop(),
+    async pollOnce() {
+      const before = world.queue.receives.length;
+      const received = await worker.pollOnce();
+      expect(world.queue.receives.length, 'a rodada pediu mensagens ao SQS').toBeGreaterThan(before);
+      return received;
+    },
+  };
 }
 
 // ---------------------------------------------------------------- rodadas
@@ -289,6 +373,32 @@ export interface PollHandle {
   // a rodada, já caída, nunca fará.
   failed: Promise<never>;
   until<T>(wait: Promise<T>): Promise<T>;
+}
+
+// Prazo, em tempo real, para o que o teste espera do worker: sem ele, um comportamento que falta viraria um
+// teste pendurado até o timeout do vitest, em vez de uma falha de asserção que diz o que não aconteceu.
+export const WAIT_GUARD_MS = 20_000;
+
+export async function within<T>(wait: Promise<T>, what: string, ms: number = WAIT_GUARD_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const guard = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const message = `passaram ${ms} ms e ainda falta: ${what}`;
+      // A falha é uma AssertionError, como qualquer outra asserção do teste.
+      let failure = new Error(message);
+      try {
+        assert.fail(message);
+      } catch (error) {
+        if (error instanceof Error) failure = error;
+      }
+      reject(failure);
+    }, ms);
+  });
+  try {
+    return await Promise.race([wait, guard]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Inicia uma rodada sem esperá-la: a morte do worker é uma rodada abandonada no meio da chamada.
@@ -314,7 +424,7 @@ export function startPoll(worker: Worker): PollHandle {
     result,
     failed,
     until(wait) {
-      return Promise.race([wait, failed]);
+      return within(Promise.race([wait, failed]), 'o estado que o teste espera do worker');
     },
   };
 }
@@ -322,6 +432,23 @@ export function startPoll(worker: Worker): PollHandle {
 // Espera um estado do banco (consulta em intervalo, sem sleep fixo) ou a queda da rodada.
 export function untilState(poll: PollHandle, check: () => Promise<void>): Promise<void> {
   return poll.until(vi.waitFor(check, { timeout: 20_000, interval: 25 }));
+}
+
+// O laço do start() só termina quando o stop() resolve; o teste avança o relógio manual enquanto espera,
+// para nenhum timer do processo (o timeout de uma chamada presa, um intervalo) segurar o encerramento.
+export async function stopAdvancing(worker: Worker, world: ErpWorld): Promise<void> {
+  let stopped = false;
+  const stopping = worker.stop().then(() => {
+    stopped = true;
+  });
+  await vi.waitFor(
+    () => {
+      world.clock.advance(500);
+      expect(stopped, 'o stop() ainda espera o laço ou uma tentativa').toBe(true);
+    },
+    { timeout: 20_000, interval: 20 },
+  );
+  await stopping;
 }
 
 // ---------------------------------------------------------------- dados
@@ -353,49 +480,41 @@ export async function acceptOrder(
   return { orderId, requestId: String(res.headers['x-request-id']), sku: product.sku, quantity, priceCents, onHand };
 }
 
+// O que a outbox guarda depois do SQS (AD-021, AD-024): a marca de publicação e o estado por pedido
+// que a fila não tem. Nada daqui depende das colunas da fila na tabela, que a migração tira.
 export interface OutboxRow {
-  status: string;
-  attempts: number;
-  leaseUntil: Date | null;
-  claimToken: string | null;
+  publishedAt: Date | null;
   firstSentAt: Date | null;
   lastCallAt: Date | null;
-  nextAttemptAt: Date;
-  // Calculados pelo relógio do banco, o mesmo que grava os prazos.
-  leased: boolean;
-  scheduledInFuture: boolean;
+  callToken: string | null;
+  deadAt: Date | null;
+  // Idade do início da última chamada pelo relógio do banco, o mesmo que a grava; null sem chamada.
+  sinceLastCallMs: number | null;
 }
 
 export async function readOutbox(pool: pg.Pool, orderId: string): Promise<OutboxRow> {
   const result = await pool.query<{
-    status: string;
-    attempts: number;
-    lease_until: Date | null;
-    claim_token: string | null;
+    published_at: Date | null;
     first_sent_at: Date | null;
     last_call_at: Date | null;
-    next_attempt_at: Date;
-    leased: boolean;
-    scheduled: boolean;
+    call_token: string | null;
+    dead_at: Date | null;
+    since_last_call_ms: number | null;
   }>(
-    `select status, attempts, lease_until, claim_token, first_sent_at, last_call_at, next_attempt_at,
-            (lease_until is not null and lease_until > now()) as leased,
-            (next_attempt_at > now()) as scheduled
+    `select published_at, first_sent_at, last_call_at, call_token, dead_at,
+            (extract(epoch from (now() - last_call_at)) * 1000)::float8 as since_last_call_ms
        from outbox where order_id = $1`,
     [orderId],
   );
   const row = result.rows[0];
   if (!row) throw new Error(`outbox inexistente para ${orderId}`);
   return {
-    status: row.status,
-    attempts: row.attempts,
-    leaseUntil: row.lease_until,
-    claimToken: row.claim_token,
+    publishedAt: row.published_at,
     firstSentAt: row.first_sent_at,
     lastCallAt: row.last_call_at,
-    nextAttemptAt: row.next_attempt_at,
-    leased: row.leased,
-    scheduledInFuture: row.scheduled,
+    callToken: row.call_token,
+    deadAt: row.dead_at,
+    sinceLastCallMs: row.since_last_call_ms,
   };
 }
 
@@ -415,32 +534,74 @@ export async function readOrder(pool: pg.Pool, orderId: string): Promise<OrderRo
   return { status: row.status, failureReason: row.failure_reason, outcomeAt: row.outcome_at };
 }
 
-// Mensagens com lease ativo entre as dos pedidos dados.
-export async function countActiveLeases(pool: pg.Pool, orderIds: string[]): Promise<number> {
-  const result = await pool.query<{ n: number }>(
-    "select count(*)::int as n from outbox where status = 'pending' and lease_until > now() and order_id = any($1::uuid[])",
-    [orderIds],
+// ---------------------------------------------------------------- mensagens na fila
+
+// A mensagem que o relay publicaria: corpo { orderId, correlationId } e o traceparent gravados na
+// linha da outbox pelo checkout. Vai direto para a fila do teste (o relay tem os testes dele), e a
+// linha fica marcada como publicada, como depois do relay. `times` > 1 é a entrega repetida.
+export async function enqueue(world: QueueWorld, order: AcceptedOrder, options: { times?: number } = {}): Promise<void> {
+  const result = await world.pool.query<{ traceparent: string | null; correlation_id: string }>(
+    'select traceparent, correlation_id from outbox where order_id = $1',
+    [order.orderId],
   );
-  return result.rows[0]?.n ?? 0;
+  const row = result.rows[0];
+  if (!row) throw new Error(`outbox inexistente para ${order.orderId}`);
+  const body = JSON.stringify({ orderId: order.orderId, correlationId: row.correlation_id });
+  const times = options.times ?? 1;
+  const batch = Array.from({ length: times }, (_unused, index) => ({ id: `m${index}`, body, traceparent: row.traceparent }));
+  const sent = await world.queues.queue.send(batch);
+  expect(sent.failedIds).toEqual([]);
+  await world.pool.query('update outbox set published_at = coalesce(published_at, now()) where order_id = $1', [order.orderId]);
 }
 
-// Deixa a mensagem reivindicável de novo sem esperar: o lease vence e o atraso mínimo (45 s desde
-// a última chamada) está cumprido. Os prazos gravados correm no relógio do banco, então o teste os
-// semeia em vez de esperar.
-export async function makeClaimable(pool: pg.Pool, orderId: string): Promise<void> {
-  await pool.query(
-    `update outbox
-        set lease_until = now() - interval '1 second',
-            last_call_at = now() - interval '46 seconds',
-            next_attempt_at = now() - interval '1 second'
-      where order_id = $1 and status = 'pending'`,
-    [orderId],
-  );
+export interface SubmitOptions {
+  quantity?: number;
+  onHand?: number;
+  erpOnHand?: number;
+  priceCents?: number;
+  requestId?: string;
+  times?: number;
 }
 
-// Só o lease vence: o atraso mínimo continua contando da última chamada real.
-export async function expireLeaseOnly(pool: pg.Pool, orderId: string): Promise<void> {
-  await pool.query("update outbox set lease_until = now() - interval '1 second' where order_id = $1", [orderId]);
+// Checkout de verdade e a mensagem na fila deste teste.
+export async function submitOrder(suite: WorkerSuite, world: QueueWorld, options: SubmitOptions = {}): Promise<AcceptedOrder> {
+  const { times, ...acceptance } = options;
+  const order = await acceptOrder(suite, acceptance);
+  await enqueue(world, order, times === undefined ? {} : { times });
+  return order;
+}
+
+// Mensagem que o worker não pode entender: entra na fila como qualquer outra.
+export async function enqueueRaw(world: QueueWorld, body: string, traceparent?: string): Promise<void> {
+  await sendRaw(world.emq, world.queues.queueUrl, body, traceparent);
+}
+
+// Devolve a mensagem do pedido à fila na hora (`ChangeMessageVisibility` com 0), como a visibilidade
+// vencida, sem esperar o relógio do emulador. Vale para o último recebimento do pedido.
+export async function releaseMessage(world: QueueWorld, orderId: string): Promise<void> {
+  expect(await world.queues.queue.changeVisibility(world.queue.latestHandle(orderId), 0)).toBe('ok');
+}
+
+// O início da última chamada fica velho o bastante para o atraso mínimo (45 s) ter passado. Os prazos
+// gravados correm no relógio do banco, então o teste os semeia em vez de esperar.
+export async function ageLastCall(pool: pg.Pool, orderId: string, seconds = 46): Promise<void> {
+  await pool.query("update outbox set last_call_at = now() - make_interval(secs => $2) where order_id = $1 and last_call_at is not null", [
+    orderId,
+    seconds,
+  ]);
+}
+
+// A mensagem volta a ficar visível e o atraso mínimo está cumprido: a próxima tentativa pode chamar o ERP.
+export async function makeClaimable(world: QueueWorld, orderId: string): Promise<void> {
+  await ageLastCall(world.pool, orderId);
+  await releaseMessage(world, orderId);
+}
+
+// Outro consumidor recebe a mensagem: o receipt handle do worker passa a ser antigo (`stale`).
+export async function stealMessage(world: QueueWorld, orderId: string): Promise<void> {
+  await releaseMessage(world, orderId);
+  const taken = await world.queues.queue.receive({ max: 10, waitSeconds: 0, visibilitySeconds: 300 });
+  expect(taken.length, 'o outro consumidor recebeu a mensagem').toBeGreaterThanOrEqual(1);
 }
 
 // A mensagem já foi enviada antes (first_sent_at preenchido), há tempo suficiente para o atraso
@@ -449,23 +610,126 @@ export async function markSentBefore(pool: pg.Pool, orderId: string): Promise<vo
   await pool.query(
     `update outbox
         set first_sent_at = now() - interval '5 minutes',
-            last_call_at = now() - interval '5 minutes',
-            attempts = 1
+            last_call_at = now() - interval '5 minutes'
       where order_id = $1`,
     [orderId],
   );
 }
 
-// Espera do retry em ms: do início da última chamada ao `next_attempt_at` gravado.
-export async function retryDelayMs(pool: pg.Pool, orderId: string): Promise<number> {
-  const result = await pool.query<{ ms: number }>(
-    'select (extract(epoch from (next_attempt_at - last_call_at)) * 1000)::float8 as ms from outbox where order_id = $1',
-    [orderId],
-  );
-  const row = result.rows[0];
-  if (!row) throw new Error(`outbox inexistente para ${orderId}`);
-  return row.ms;
+export interface QueueSnapshot {
+  queue: QueueCounts;
+  dlq: QueueCounts;
 }
+
+export async function snapshotQueues(world: QueueWorld): Promise<QueueSnapshot> {
+  return { queue: await countsOf(world.emq, world.queues.queueUrl), dlq: await countsOf(world.emq, world.queues.dlqUrl) };
+}
+
+// A fila e a DLQ sem nenhuma mensagem, visível ou em voo: as visíveis sozinhas não veem a mensagem que um worker segura.
+export async function expectQueuesEmpty(world: QueueWorld): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      expect(await snapshotQueues(world)).toEqual({ queue: { visible: 0, notVisible: 0 }, dlq: { visible: 0, notVisible: 0 } });
+    },
+    { timeout: 5_000, interval: 50 },
+  );
+}
+
+// A mensagem do pedido segue na fila de origem, escondida (em voo): nem apagada nem na DLQ.
+export async function expectOneInFlight(world: QueueWorld): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      expect(await snapshotQueues(world)).toEqual({ queue: { visible: 0, notVisible: 1 }, dlq: { visible: 0, notVisible: 0 } });
+    },
+    { timeout: 5_000, interval: 50 },
+  );
+}
+
+// O SQS move a mensagem para a DLQ ao receber pela vez seguinte ao limite; a contagem chega pouco depois.
+export async function waitForDlq(world: QueueWorld, count: number): Promise<void> {
+  await vi.waitFor(async () => expect(await world.queues.dlq.approximateCount()).toBe(count), { timeout: 10_000, interval: 50 });
+}
+
+// A espera do retry que o design define para o `ChangeMessageVisibility`: atraso mínimo mais full
+// jitter sobre um exponencial com teto, em segundos inteiros e arredondado para cima.
+export function retrySeconds(options: { minDelayMs: number; baseMs: number; capMs: number; random: number; attempt: number }): number {
+  const ceiling = Math.min(options.capMs, options.baseMs * 2 ** (options.attempt - 1));
+  return Math.ceil((options.minDelayMs + options.random * ceiling) / 1000);
+}
+
+// ---------------------------------------------------------------- falha e atraso na fronteira do banco
+
+export interface PoolRule {
+  // Casa com o texto SQL do comando que o Kysely manda ao `pg`.
+  match: RegExp;
+  // Roda antes de o comando seguir: o teste avança o relógio manual no ponto exato, sem sleep.
+  before?: (sql: string) => void | Promise<void>;
+  // Faz o comando lançar este erro, sem chegar ao banco. Só falha; nunca devolve dado.
+  fail?: () => Error;
+  // Quantos comandos que casam sofrem o efeito; os outros passam (padrão: todos).
+  times?: number;
+}
+
+export interface PoolProbe {
+  pool: pg.Pool;
+  // Comandos que casaram, tenham ou não sofrido o efeito: conta as transações tentadas.
+  readonly matched: number;
+  // Comandos em que o efeito (`before` ou `fail`) de fato disparou: o teste confere que a injeção aconteceu.
+  readonly fired: number;
+  // Liga e desliga a regra, para o cenário armar a falha só depois da chamada ao ERP.
+  armed: boolean;
+}
+
+// Embrulha o pool do worker: a regra olha cada comando antes de ele seguir ao banco. O resto do caminho é o real.
+export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
+  const patched = new WeakSet<object>();
+  const state = { matched: 0, fired: 0 };
+  const probe: PoolProbe = {
+    pool,
+    armed: true,
+    get matched() {
+      return state.matched;
+    },
+    get fired() {
+      return state.fired;
+    },
+  };
+  probe.pool = new Proxy(pool, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property);
+      if (property !== 'connect') return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      return async () => {
+        const client = await target.connect();
+        if (!patched.has(client)) {
+          patched.add(client);
+          const raw = client as unknown as { query: (...args: unknown[]) => unknown };
+          const original = raw.query.bind(client);
+          raw.query = async (...args: unknown[]) => {
+            const first = args[0];
+            const text = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
+            if (probe.armed && rule.match.test(text)) {
+              state.matched += 1;
+              if (state.fired < (rule.times ?? Infinity)) {
+                state.fired += 1;
+                await rule.before?.(text);
+                if (rule.fail) throw rule.fail();
+              }
+            }
+            return original(...args);
+          };
+        }
+        return client;
+      };
+    },
+  });
+  return probe;
+}
+
+// O comando que grava o desfecho do pedido (a transição por compare-and-set): toda conclusão, de
+// fatura ou de rejeição, começa por ele.
+export const CONCLUSION_STATEMENT = /update\s+"orders"[\s\S]*"outcome_at"/i;
+// O UPDATE que toma a permissão de chamada (o que preenche first_sent_at) e o que a renova pelo token.
+export const TAKE_PERMIT_STATEMENT = /update\s+"outbox"[\s\S]*"first_sent_at"/i;
 
 export interface LedgerExpectation {
   onHand: number;
@@ -473,15 +737,16 @@ export interface LedgerExpectation {
   soldTotal: number;
 }
 
-// O desfecho feliz, visto de fora: pedido faturado, mensagem encerrada e a reserva virando venda.
-export async function expectInvoiced(pool: pg.Pool, order: AcceptedOrder): Promise<void> {
-  const row = await readOrder(pool, order.orderId);
+// O desfecho feliz, visto de fora: pedido faturado, a reserva virando venda e a mensagem apagada, sem
+// nada em voo nem na DLQ. `queueEmpty: false` é para o teste com mais de um pedido na mesma fila.
+export async function expectInvoiced(world: QueueWorld, order: AcceptedOrder, options: { queueEmpty?: boolean } = {}): Promise<void> {
+  const row = await readOrder(world.pool, order.orderId);
   expect(row.status).toBe('invoiced');
   expect(row.failureReason).toBeNull();
   expect(row.outcomeAt).not.toBeNull();
-  expect((await readOutbox(pool, order.orderId)).status).toBe('done');
-  const inventory = await readInventory(pool, order.sku);
+  const inventory = await readInventory(world.pool, order.sku);
   expect(ledgerViolations(inventory, { onHand: order.onHand - order.quantity, reserved: 0, soldTotal: order.quantity })).toEqual([]);
+  if (options.queueEmpty ?? true) await expectQueuesEmpty(world);
 }
 
 // A invariante da baixa (ORD-17): lista o que difere do esperado, para o teste real exigir a lista

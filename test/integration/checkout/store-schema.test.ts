@@ -252,10 +252,10 @@ function insertKey(key: string, orderId: string | null): Promise<unknown> {
   );
 }
 
-function insertOutbox(orderId: string | null, status = 'pending', attempts = 0): Promise<unknown> {
+function insertOutbox(orderId: string | null): Promise<unknown> {
   return database.pool.query(
-    "INSERT INTO public.outbox (order_id, status, attempts, correlation_id) VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, 'corr-1')",
-    [orderId, status, attempts],
+    "INSERT INTO public.outbox (order_id, correlation_id) VALUES (coalesce($1::uuid, gen_random_uuid()), 'corr-1')",
+    [orderId],
   );
 }
 
@@ -412,37 +412,18 @@ describe('CHK-03 o banco garante a chave de idempotência', () => {
 });
 
 describe('CHK-03 o banco garante uma só mensagem de outbox por pedido', () => {
-  it('CHK-03 attempts começa em 0 e status em pending', async () => {
+  // A fila é o SQS (AD-021): a outbox nasce não publicada e sem estado de chamada, e já não guarda status nem
+  // tentativas (os testes do status e do attempts provavam a fila na tabela).
+  it('CHK-03 a mensagem nasce não publicada, sem chamada ao ERP e sem marca de DLQ', async () => {
     const orderId = await createOrder('pending', null);
 
     await database.pool.query("INSERT INTO public.outbox (order_id, correlation_id) VALUES ($1, 'corr-1')", [orderId]);
 
-    const result = await database.pool.query('SELECT status, attempts FROM public.outbox WHERE order_id = $1', [orderId]);
-    expect(result.rows).toEqual([{ status: 'pending', attempts: 0 }]);
-  });
-
-  it.each(['pending', 'dead', 'done', 'cancelled'])('CHK-03 mensagem com o status %s é gravada', async (status) => {
-    const orderId = await createOrder('pending', null);
-
-    await insertOutbox(orderId, status);
-
-    const result = await database.pool.query('SELECT status FROM public.outbox WHERE order_id = $1', [orderId]);
-    expect(result.rows).toEqual([{ status }]);
-  });
-
-  it('CHK-03 mensagem com status fora dos quatro é recusada com check_violation', async () => {
-    const orderId = await createOrder('pending', null);
-
-    expect(await violation(insertOutbox(orderId, 'sent'))).toEqual({ code: '23514', constraint: 'outbox_status_check' });
-  });
-
-  it('CHK-03 mensagem com attempts negativo é recusada com check_violation', async () => {
-    const orderId = await createOrder('pending', null);
-
-    expect(await violation(insertOutbox(orderId, 'pending', -1))).toEqual({
-      code: '23514',
-      constraint: 'outbox_attempts_check',
-    });
+    const result = await database.pool.query(
+      'SELECT published_at, first_sent_at, last_call_at, call_token, dead_at FROM public.outbox WHERE order_id = $1',
+      [orderId],
+    );
+    expect(result.rows).toEqual([{ published_at: null, first_sent_at: null, last_call_at: null, call_token: null, dead_at: null }]);
   });
 
   it('CHK-03 uma segunda mensagem para o mesmo pedido é recusada com unique_violation', async () => {

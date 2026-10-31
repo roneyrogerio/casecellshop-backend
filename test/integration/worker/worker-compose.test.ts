@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CheckoutAccepted, OrderStatus } from '../../../src/contract/index.ts';
 import { expectMatchesContract, findRoute, observeFetchResponse, type ObservedResponse } from '../../helpers/contract.ts';
 import { parseExposition, valueOf } from '../../helpers/metrics.ts';
+import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
 // ORD-19 no sistema subido pelo `docker compose`: um checkout chega a invoiced pelo worker.
 
@@ -133,8 +134,19 @@ async function awaitInvoiced(orderId: string): Promise<void> {
   );
 }
 
+// O ElasticMQ não publica porta no host (fica na rede do compose): a leitura sai de dentro do contêiner do
+// worker, que fala com ele pela API de consulta do SQS. O `ApproximateNumberOfMessages` sozinho não vê a
+// mensagem em voo, então o teste lê também o `ApproximateNumberOfMessagesNotVisible`.
+async function queueCounts(queueName: string): Promise<QueueCounts> {
+  const url = `http://elasticmq:9324/000000000000/${queueName}?Action=GetQueueAttributes&AttributeName.1=All`;
+  const script = `fetch('${url}').then((r) => r.text()).then((t) => process.stdout.write(t))`;
+  const result = await environment.getContainer('worker-1').exec(['node', '-e', script]);
+  expect(result.exitCode, result.output).toBe(0);
+  return parseQueueCountsXml(result.stdout);
+}
+
 describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compose', () => {
-  it('ORD-19 o POST /checkout vira invoiced pelo worker: uma fatura no erp_sim, estoque baixado e mensagem encerrada', async () => {
+  it('ORD-19 o POST /checkout vira invoiced pelo relay, pelo SQS e pelo worker: uma fatura no erp_sim, estoque baixado, linha publicada e a fila e a DLQ vazias', async () => {
     const orderId = await placeOrder(SKU, QUANTITY, PRICE_CENTS);
 
     await awaitInvoiced(orderId);
@@ -143,7 +155,15 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
     expect(await psql(`select on_hand || ',' || reserved || ',' || sold_total from inventory where sku = '${SKU}'`)).toBe(
       `${STORE_ON_HAND - QUANTITY},0,${QUANTITY}`,
     );
-    expect(await psql(`select status from outbox where order_id = '${orderId}'`)).toBe('done');
+    expect(await psql(`select published_at is not null from outbox where order_id = '${orderId}'`)).toBe('t');
+    // O desfecho vai ao banco antes de a mensagem ser apagada: a fila esvazia logo depois, visíveis e em voo.
+    await vi.waitFor(
+      async () => {
+        expect(await queueCounts('billing')).toEqual({ visible: 0, notVisible: 0 });
+        expect(await queueCounts('billing-dlq')).toEqual({ visible: 0, notVisible: 0 });
+      },
+      { timeout: 30_000, interval: 500 },
+    );
   }, 120_000);
 
   it('OBS-02 o /metrics do processo do worker no compose expõe o desfecho invoiced e a chamada ao ERP depois do faturamento', async () => {

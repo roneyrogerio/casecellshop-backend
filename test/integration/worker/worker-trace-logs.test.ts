@@ -1,32 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ErpClient } from '../../../src/erp/erp-client.ts';
 import { resolveServiceIdentity } from '../../../src/service-identity.ts';
 import type { WorkerConfig } from '../../../src/worker.ts';
 import { countInvoices } from '../../helpers/erp.ts';
 import { captureLogs, type LogLine } from '../../helpers/logs.ts';
 import {
-  acceptOrder,
+  ageLastCall,
   buildWorker,
-  cancelLeftoverMessages,
-  createErpWorld,
+  CONCLUSION_STATEMENT,
+  createWorld,
+  enqueueRaw,
   expectInvoiced,
+  interceptPool,
   makeClaimable,
-  readOutbox,
+  markSentBefore,
+  readOrder,
   startWorkerSuite,
+  stealMessage,
+  stopAdvancing,
+  submitOrder,
   type AcceptedOrder,
-  type ErpWorld,
+  type QueueWorld,
   type WorkerSuite,
 } from '../../helpers/worker.ts';
 
-// Trace e logs do worker (ORD-18, OBS-01 do M3): a tentativa continua o trace do checkout e cada log dela
-// leva os campos do design.
+// Trace e logs do worker (ORD-18, OBS-01 do M3): a tentativa continua o trace do checkout, que vem no
+// atributo `traceparent` da mensagem do SQS, e cada log dela leva os campos do design.
 
 let suite: WorkerSuite;
 
 beforeAll(async () => {
   suite = await startWorkerSuite();
-}, 120_000);
+}, 180_000);
 
 afterAll(async () => {
   await suite?.stop();
@@ -37,8 +44,8 @@ beforeEach(async () => {
   suite.checkout.exporter.reset();
 });
 
-afterEach(async () => {
-  await cancelLeftoverMessages(suite.pool);
+afterEach(() => {
+  suite.releaseWorlds();
 });
 
 interface Recorded {
@@ -47,7 +54,7 @@ interface Recorded {
   correlationId: string;
 }
 
-// O traceparent e o correlationId que o checkout gravou na linha da outbox.
+// O traceparent e o correlationId que o checkout gravou na linha da outbox (e o relay levou à mensagem).
 async function recordedContext(orderId: string): Promise<Recorded> {
   const result = await suite.pool.query<{ traceparent: string | null; correlation_id: string }>(
     'select traceparent, correlation_id from outbox where order_id = $1',
@@ -59,14 +66,19 @@ async function recordedContext(orderId: string): Promise<Recorded> {
   return { traceId: match?.[1] ?? '', spanId: match?.[2] ?? '', correlationId: row?.correlation_id ?? '' };
 }
 
-describe('ORD-18 o span da tentativa é filho do span do checkout', () => {
-  it('ORD-18 a tentativa tem o traceId do checkout e é filha do span gravado no traceparent da outbox, com orderId e o número da tentativa', async () => {
-    const { telemetry, exporter } = suite.checkout;
-    const order = await acceptOrder(suite);
-    const recorded = await recordedContext(order.orderId);
-    const world = createErpWorld(suite.database.erpPool, { telemetry });
+// Mundo com a telemetria do checkout, para os spans da tentativa e os do checkout irem ao mesmo exportador.
+function traceWorld(): Promise<QueueWorld> {
+  return createWorld(suite, { telemetry: suite.checkout.telemetry });
+}
 
-    expect(await buildWorker(world, { pool: suite.pool, telemetry }).pollOnce()).toBe(1);
+describe('ORD-18 o span da tentativa é filho do span do checkout', () => {
+  it('ORD-18 a tentativa tem o traceId do checkout e é filha do span levado no atributo traceparent da mensagem, com orderId e o número da tentativa', async () => {
+    const { telemetry, exporter } = suite.checkout;
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world);
+    const recorded = await recordedContext(order.orderId);
+
+    expect(await buildWorker(world).pollOnce()).toBe(1);
     await telemetry.forceFlush();
 
     const spans = exporter.getFinishedSpans();
@@ -80,20 +92,21 @@ describe('ORD-18 o span da tentativa é filho do span do checkout', () => {
     const attempts = spans.filter((span) => span.attributes['orderId'] === order.orderId && span.parentSpanContext?.spanId === recorded.spanId);
     expect(attempts, 'um span de tentativa filho do span do traceparent').toHaveLength(1);
     const attempt = attempts[0];
+    expect(attempt?.name).toBe('outbox.attempt');
     expect(attempt?.spanContext().traceId).toBe(checkout?.spanContext().traceId);
     expect(attempt?.attributes['attempt']).toBe(1);
   });
 
-  it('ORD-18 cada tentativa é um span filho do mesmo span do checkout, com o número da tentativa: 1 e 2', async () => {
+  it('ORD-18 cada tentativa é um span filho do mesmo span do checkout, com o número de recebimentos da mensagem: 1 e 2', async () => {
     const { telemetry, exporter } = suite.checkout;
-    const order = await acceptOrder(suite);
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world);
     const recorded = await recordedContext(order.orderId);
-    const world = createErpWorld(suite.database.erpPool, { telemetry });
     world.sim.script.enqueue({ mode: 'unavailable' }, { op: 'createOrder', reference: order.orderId });
-    const worker = buildWorker(world, { pool: suite.pool, telemetry });
+    const worker = buildWorker(world);
 
     expect(await worker.pollOnce()).toBe(1);
-    await makeClaimable(suite.pool, order.orderId);
+    await makeClaimable(world, order.orderId);
     expect(await worker.pollOnce()).toBe(1);
     await telemetry.forceFlush();
 
@@ -125,65 +138,151 @@ function expectAttemptLine(line: LogLine, order: AcceptedOrder, recorded: Record
   for (const marker of BODY_MARKERS) expect(JSON.stringify(line), label).not.toContain(marker);
 }
 
+interface Prepared {
+  // O pool, a configuração ou o ERP que o cenário troca (a falha injetada na fronteira).
+  pool?: pg.Pool;
+  erp?: ErpClient;
+  // Quantas vezes a injeção do cenário tem de ter disparado.
+  fired?: () => number;
+}
+
 interface Scenario {
   name: string;
   event: string;
   level: 'info' | 'warn' | 'error';
   extra: Record<string, unknown>;
   config?: Partial<WorkerConfig>;
-  // Evento que não pode sair no cenário (a mensagem que vai para `dead` não volta à fila).
+  // Evento que não pode sair no cenário.
   absent?: string;
-  script: (world: ErpWorld, orderId: string) => void;
+  prepare: (world: QueueWorld, order: AcceptedOrder) => Prepared | Promise<Prepared>;
 }
 
 const SCENARIOS: Scenario[] = [
-  { name: 'faturado', event: 'order.invoiced', level: 'info', extra: {}, script: () => undefined },
+  { name: 'faturado', event: 'order.invoiced', level: 'info', extra: {}, prepare: () => ({}) },
   {
     name: 'retry por erro transitório do ERP',
     event: 'outbox.retry',
     level: 'warn',
     extra: { outcome: 'transient' },
-    script: (world, orderId) => world.sim.script.enqueue({ mode: 'unavailable' }, { op: 'createOrder', reference: orderId }),
+    prepare: (world, order) => {
+      world.sim.script.enqueue({ mode: 'unavailable' }, { op: 'createOrder', reference: order.orderId });
+      return {};
+    },
   },
   {
     name: 'pedido falho por rejeição do ERP',
     event: 'order.failed',
     level: 'warn',
     extra: { reason: 'erp_rejected' },
-    script: (world, orderId) => world.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: orderId }),
+    prepare: (world, order) => {
+      world.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: order.orderId });
+      return {};
+    },
   },
   {
     name: 'erro de configuração do ERP (401)',
     event: 'erp.config_error',
     level: 'warn',
     extra: { status: 401 },
-    script: (world, orderId) => world.sim.script.enqueue({ mode: 'status', status: 401 }, { op: 'createOrder', reference: orderId }),
+    prepare: (world, order) => {
+      world.sim.script.enqueue({ mode: 'status', status: 401 }, { op: 'createOrder', reference: order.orderId });
+      return {};
+    },
   },
   {
-    name: 'mensagem na DLQ no limite de tentativas',
-    event: 'outbox.dead',
+    name: 'permissão de chamada tomada por outra tentativa',
+    event: 'outbox.call_deferred',
+    level: 'info',
+    extra: {},
+    absent: 'order.invoiced',
+    prepare: async (_world, order) => {
+      await markSentBefore(suite.pool, order.orderId);
+      await ageLastCall(suite.pool, order.orderId, 10);
+      return {};
+    },
+  },
+  {
+    name: 'visibilidade curta demais para a chamada',
+    event: 'outbox.lease_short',
+    level: 'warn',
+    extra: {},
+    config: { visibilitySeconds: 11 },
+    absent: 'order.invoiced',
+    prepare: () => ({}),
+  },
+  {
+    name: 'o SQS recusa o receipt handle na conclusão',
+    event: 'outbox.conclusion_no_row',
+    level: 'warn',
+    extra: {},
+    prepare: (world, order) => {
+      world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, () => stealMessage(world, order.orderId));
+      return {};
+    },
+  },
+  {
+    name: 'falha do SQS ao apagar a mensagem',
+    event: 'outbox.queue_error',
+    level: 'warn',
+    extra: {},
+    prepare: (world) => {
+      const injection = world.queue.inject('delete');
+      return { fired: () => injection.fired };
+    },
+  },
+  {
+    name: 'falha do banco ao gravar o desfecho, antes de repetir',
+    event: 'outbox.conclusion_failed',
+    level: 'warn',
+    extra: {},
+    prepare: () => {
+      const probe = interceptPool(suite.pool, {
+        match: CONCLUSION_STATEMENT,
+        times: 1,
+        fail: () => Object.assign(new Error('falha injetada ao gravar o desfecho'), { code: '40001' }),
+      });
+      return { pool: probe.pool, fired: () => probe.fired };
+    },
+  },
+  {
+    name: 'erro inesperado na tentativa',
+    event: 'outbox.attempt_error',
     level: 'error',
     extra: {},
-    config: { maxAttempts: 1 },
-    absent: 'outbox.retry',
-    script: (world, orderId) => world.sim.script.enqueue({ mode: 'unavailable' }, { op: 'createOrder', reference: orderId }),
+    prepare: (world) => {
+      let thrown = 0;
+      const erp: ErpClient = {
+        ...world.erp,
+        createOrder: () => {
+          thrown += 1;
+          throw new Error('erro inesperado injetado na porta do ERP');
+        },
+      };
+      return { erp, fired: () => thrown };
+    },
   },
 ];
 
 describe('OBS-01 logs do worker', () => {
   it.each(SCENARIOS)(
-    'OBS-01 $name: o log $event ($level) traz os campos obrigatórios, orderId, attempt e o correlationId da outbox, e nenhum log leva o corpo',
-    async ({ event, level, extra, config, absent, script }) => {
+    'OBS-01 $name: o log $event ($level) traz os campos obrigatórios, orderId, attempt e o correlationId da mensagem, e nenhum log leva o corpo',
+    async ({ event, level, extra, config, absent, prepare }) => {
       const logs = captureLogs();
-      const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+      const world = await traceWorld();
+      const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
       const recorded = await recordedContext(order.orderId);
-      const world = createErpWorld(suite.database.erpPool);
-      script(world, order.orderId);
+      const prepared = await prepare(world, order);
 
       expect(
-        await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger, ...(config ? { config } : {}) }).pollOnce(),
+        await buildWorker(world, {
+          logger: logs.logger,
+          ...(prepared.pool ? { pool: prepared.pool } : {}),
+          ...(prepared.erp ? { erp: prepared.erp } : {}),
+          ...(config ? { config } : {}),
+        }).pollOnce(),
       ).toBe(1);
 
+      expect(prepared.fired?.() ?? 1, 'a falha injetada disparou').toBeGreaterThanOrEqual(1);
       const lines = logs.ofOrder(order.orderId);
       const wanted = lines.filter((line) => line['event'] === event);
       expect(wanted, `evento ${event} entre ${JSON.stringify(lines.map((line) => line['event']))}`).toHaveLength(1);
@@ -194,21 +293,22 @@ describe('OBS-01 logs do worker', () => {
     },
   );
 
-  // Os dois eventos que a reivindicação decide, sem chamar o ERP, também levam o contexto da outbox.
-  it('OBS-01 outbox.closed (pedido que já não estava pending) traz os campos obrigatórios, orderId, attempt e o correlationId do checkout', async () => {
+  // A mensagem cujo pedido já não está pending é encerrada sem chamar o ERP; o log leva o contexto da mensagem.
+  it('OBS-01 outbox.closed (pedido que já não estava pending) traz os campos obrigatórios, orderId, attempt (os recebimentos da mensagem) e o correlationId do checkout', async () => {
     const logs = captureLogs();
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
     const recorded = await recordedContext(order.orderId);
     await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
-    const world = createErpWorld(suite.database.erpPool);
 
-    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger }).pollOnce();
+    await buildWorker(world, { logger: logs.logger }).pollOnce();
 
     const lines = logs.eventsOf('outbox.closed', order.orderId);
     expect(lines).toHaveLength(1);
     expect(lines[0]?.['level']).toBe('info');
-    expectAttemptLine(lines[0] ?? {}, order, recorded, (await readOutbox(suite.pool, order.orderId)).attempts);
+    expectAttemptLine(lines[0] ?? {}, order, recorded, 1);
     expect(world.transport.sends).toHaveLength(0);
+    expect(world.queue.deletesOf(order.orderId).map((call) => call.result)).toEqual(['ok']);
   });
 
   it.each([
@@ -220,9 +320,9 @@ describe('OBS-01 logs do worker', () => {
     'OBS-01 conclusão por %s com o pedido já %s fora do fluxo: sai outbox.closed com os campos obrigatórios e o correlationId, e nenhum order.invoiced nem order.failed',
     async (result, externalStatus) => {
       const logs = captureLogs();
-      const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+      const world = await traceWorld();
+      const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
       const recorded = await recordedContext(order.orderId);
-      const world = createErpWorld(suite.database.erpPool);
       if (result === 'rejeição') world.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: order.orderId });
       world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, async () => {
         await suite.pool.query(
@@ -233,7 +333,7 @@ describe('OBS-01 logs do worker', () => {
         );
       });
 
-      await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger }).pollOnce();
+      await buildWorker(world, { logger: logs.logger }).pollOnce();
 
       const closed = logs.eventsOf('outbox.closed', order.orderId);
       expect(closed).toHaveLength(1);
@@ -244,33 +344,13 @@ describe('OBS-01 logs do worker', () => {
     },
   );
 
-  it('OBS-01 outbox.dead do limite já gasto traz os campos obrigatórios, orderId, attempt e o correlationId do checkout', async () => {
-    const maxAttempts = 3;
+  it('OBS-01 o retry por erro de configuração traz o outcome config_error, e o attempt acompanha o segundo recebimento da mensagem', async () => {
     const logs = captureLogs();
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
     const recorded = await recordedContext(order.orderId);
-    await suite.pool.query('update outbox set attempts = $2 where order_id = $1', [order.orderId, maxAttempts]);
-    await makeClaimable(suite.pool, order.orderId);
-    const world = createErpWorld(suite.database.erpPool);
-
-    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger, config: { maxAttempts } }).pollOnce();
-
-    const row = await readOutbox(suite.pool, order.orderId);
-    expect(row.status).toBe('dead');
-    const lines = logs.eventsOf('outbox.dead', order.orderId);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]?.['level']).toBe('error');
-    expectAttemptLine(lines[0] ?? {}, order, recorded, row.attempts);
-    expect(world.transport.sends).toHaveLength(0);
-  });
-
-  it('OBS-01 o retry por erro de configuração traz o outcome config_error, e o attempt acompanha a segunda tentativa', async () => {
-    const logs = captureLogs();
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
-    const recorded = await recordedContext(order.orderId);
-    const world = createErpWorld(suite.database.erpPool);
     world.sim.script.enqueue({ mode: 'status', status: 400 }, { op: 'createOrder', reference: order.orderId });
-    const worker = buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger });
+    const worker = buildWorker(world, { logger: logs.logger });
 
     await worker.pollOnce();
     const retry = logs.eventsOf('outbox.retry', order.orderId);
@@ -278,7 +358,7 @@ describe('OBS-01 logs do worker', () => {
     expect(retry[0]).toMatchObject({ level: 'warn', outcome: 'config_error' });
     expect(logs.eventsOf('erp.config_error', order.orderId)[0]).toMatchObject({ level: 'warn', status: 400 });
 
-    await makeClaimable(suite.pool, order.orderId);
+    await makeClaimable(world, order.orderId);
     await worker.pollOnce();
     const invoiced = logs.eventsOf('order.invoiced', order.orderId);
     expect(invoiced).toHaveLength(1);
@@ -288,11 +368,11 @@ describe('OBS-01 logs do worker', () => {
   it('OBS-01 os logs do worker usam o span da tentativa: o span_id é o do span exportado, filho do span do checkout', async () => {
     const { telemetry, exporter } = suite.checkout;
     const logs = captureLogs();
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
     const recorded = await recordedContext(order.orderId);
-    const world = createErpWorld(suite.database.erpPool);
 
-    await buildWorker(world, { pool: suite.pool, telemetry, logger: logs.logger }).pollOnce();
+    await buildWorker(world, { logger: logs.logger }).pollOnce();
     await telemetry.forceFlush();
 
     const attempt = exporter.getFinishedSpans().find((span) => span.attributes['orderId'] === order.orderId && span.parentSpanContext?.spanId === recorded.spanId);
@@ -302,119 +382,111 @@ describe('OBS-01 logs do worker', () => {
     expect(invoiced[0]?.['span_id']).toBe(attempt?.spanContext().spanId);
     expect(invoiced[0]?.['trace_id']).toBe(attempt?.spanContext().traceId);
   });
+
+  it.each([
+    ['sem orderId', '{"correlationId":"req-1"}', false],
+    ['com orderId e um campo a mais', `{"orderId":"${randomUUID()}","correlationId":"req-1","extra":1}`, true],
+  ] as const)('OBS-01 outbox.invalid_message (error) de um corpo %s: loga com a tentativa, sem o orderId quando o corpo não o tem, e não chama o ERP', async (_label, body, hasOrderId) => {
+    const logs = captureLogs();
+    const world = await traceWorld();
+
+    await enqueueRaw(world, body);
+    expect(await buildWorker(world, { logger: logs.logger }).pollOnce()).toBe(1);
+
+    const invalid = logs.eventsOf('outbox.invalid_message');
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]).toMatchObject({ level: 'error', event: 'outbox.invalid_message', attempt: 1 });
+    expect('orderId' in (invalid[0] ?? {})).toBe(hasOrderId);
+    expect(world.transport.sends).toHaveLength(0);
+    expect(world.queue.deletes).toEqual([]);
+    expect(world.queue.visibilityChanges).toEqual([]);
+  });
 });
 
-describe('OBS-01 os eventos decididos na reivindicação saem num span outbox.settle, não num outbox.attempt', () => {
-  async function settleSpansOf(orderId: string, recorded: Recorded) {
-    const { telemetry, exporter } = suite.checkout;
-    await telemetry.forceFlush();
-    const spans = exporter.getFinishedSpans().filter((span) => span.attributes['orderId'] === orderId);
-    return {
-      settle: spans.filter((span) => span.name === 'outbox.settle' && span.parentSpanContext?.spanId === recorded.spanId),
-      attempts: spans.filter((span) => span.name === 'outbox.attempt'),
-    };
-  }
+describe('OBS-01 worker.poll_error', () => {
+  it('OBS-01 a falha do recebimento no laço do start() é logada em error (worker.poll_error) e não para o laço: a mensagem seguinte é faturada', async () => {
+    const logs = captureLogs();
+    const world = await traceWorld();
+    const injection = world.queue.inject('receive');
+    const worker = buildWorker(world, { logger: logs.logger, config: { receiveWaitSeconds: 1 } });
 
-  it('OBS-01 outbox.closed: um span outbox.settle filho do traceparent da outbox, com orderId, attempt e outcome closed, e nenhum outbox.attempt', async () => {
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    await worker.start();
+    // O laço pode esperar um intervalo no relógio injetável depois do erro: o teste o avança junto com a espera.
+    await vi.waitFor(
+      () => {
+        world.clock.advance(500);
+        expect(logs.eventsOf('worker.poll_error')).toHaveLength(1);
+      },
+      { timeout: 20_000, interval: 20 },
+    );
+    expect(injection.fired, 'a falha injetada disparou').toBe(1);
+    expect(logs.eventsOf('worker.poll_error')[0]).toMatchObject({ level: 'error', event: 'worker.poll_error' });
+
+    const order = await submitOrder(suite, world);
+    await vi.waitFor(
+      async () => {
+        world.clock.advance(500);
+        expect((await readOrder(world.pool, order.orderId)).status).toBe('invoiced');
+      },
+      { timeout: 20_000, interval: 20 },
+    );
+    await stopAdvancing(worker, world);
+    await expectInvoiced(world, order);
+  });
+});
+
+describe('OBS-01 os eventos que encerram a mensagem sem chamar o ERP saem num span outbox.settle, não num outbox.attempt', () => {
+  it('OBS-01 outbox.closed: um span outbox.settle filho do traceparent da mensagem, com orderId, attempt e outcome closed, e nenhum outbox.attempt', async () => {
+    const { telemetry, exporter } = suite.checkout;
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
     const recorded = await recordedContext(order.orderId);
     await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
-    const world = createErpWorld(suite.database.erpPool);
 
-    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry }).pollOnce();
+    await buildWorker(world).pollOnce();
+    await telemetry.forceFlush();
 
-    const { settle, attempts } = await settleSpansOf(order.orderId, recorded);
+    const spans = exporter.getFinishedSpans().filter((span) => span.attributes['orderId'] === order.orderId);
+    const settle = spans.filter((span) => span.name === 'outbox.settle' && span.parentSpanContext?.spanId === recorded.spanId);
+    const attempts = spans.filter((span) => span.name === 'outbox.attempt');
     expect(settle).toHaveLength(1);
     expect(settle[0]?.spanContext().traceId).toBe(recorded.traceId);
-    expect(settle[0]?.attributes).toMatchObject({
-      orderId: order.orderId,
-      attempt: (await readOutbox(suite.pool, order.orderId)).attempts,
-      outcome: 'closed',
-    });
-    expect(attempts).toEqual([]);
-  });
-
-  it('OBS-01 outbox.dead do limite já gasto: um span outbox.settle com outcome dead, e nenhum outbox.attempt', async () => {
-    const maxAttempts = 3;
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
-    const recorded = await recordedContext(order.orderId);
-    await suite.pool.query('update outbox set attempts = $2 where order_id = $1', [order.orderId, maxAttempts]);
-    await makeClaimable(suite.pool, order.orderId);
-    const world = createErpWorld(suite.database.erpPool);
-
-    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, config: { maxAttempts } }).pollOnce();
-
-    const { settle, attempts } = await settleSpansOf(order.orderId, recorded);
-    expect(settle).toHaveLength(1);
-    expect(settle[0]?.spanContext().traceId).toBe(recorded.traceId);
-    expect(settle[0]?.attributes).toMatchObject({
-      orderId: order.orderId,
-      attempt: (await readOutbox(suite.pool, order.orderId)).attempts,
-      outcome: 'dead',
-    });
+    expect(settle[0]?.attributes).toMatchObject({ orderId: order.orderId, attempt: 1, outcome: 'closed' });
     expect(attempts).toEqual([]);
   });
 });
 
 // Pool que falha, uma vez e só depois de armado, a consulta de guarda que o invólucro de transação faz
 // antes do COMMIT, com o erro `25P02` que o PostgreSQL devolve numa transação abortada.
-interface AbortSwitch {
-  armed: boolean;
-  fired: number;
-}
-
-function poolAbortingGuard(pool: pg.Pool, control: AbortSwitch): pg.Pool {
-  const patched = new WeakSet<object>();
-  return new Proxy(pool, {
-    get(target, property) {
-      const value: unknown = Reflect.get(target, property);
-      if (property !== 'connect') return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      return async () => {
-        const client = await target.connect();
-        if (!patched.has(client)) {
-          patched.add(client);
-          const raw = client as unknown as { query: (...args: unknown[]) => unknown };
-          const original = raw.query.bind(client);
-          raw.query = (...args: unknown[]) => {
-            const first = args[0];
-            const text = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
-            // O alias "guard" é o da consulta do invólucro; outro `select 1` não é a guarda.
-            if (control.armed && /^\s*select\s+1\s+as\s+"guard"\s*$/i.test(text)) {
-              control.armed = false;
-              control.fired += 1;
-              return Promise.reject(Object.assign(new Error('current transaction is aborted, commands ignored until end of transaction block'), { code: '25P02' }));
-            }
-            return original(...args);
-          };
-        }
-        return client;
-      };
-    },
-  });
-}
-
 describe('OBS-01 db.transaction_aborted também sai do worker', () => {
   it('OBS-01 uma conclusão cuja transação aborta antes do COMMIT grava o log error db.transaction_aborted com orderId, attempt e correlationId', async () => {
     const logs = captureLogs();
-    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const world = await traceWorld();
+    const order = await submitOrder(suite, world, { requestId: `obs01-${randomUUID()}` });
     const recorded = await recordedContext(order.orderId);
-    const control: AbortSwitch = { armed: false, fired: 0 };
-    const world = createErpWorld(suite.database.erpPool);
-    // A reivindicação já terminou: só a conclusão, que vem depois da resposta do ERP, encontra a guarda armada.
+    // O alias "guard" é o da consulta do invólucro; outro `select 1` não é a guarda.
+    const probe = interceptPool(suite.pool, {
+      match: /^\s*select\s+1\s+as\s+"guard"\s*$/i,
+      times: 1,
+      fail: () =>
+        Object.assign(new Error('current transaction is aborted, commands ignored until end of transaction block'), { code: '25P02' }),
+    });
+    probe.armed = false;
+    // A tomada da permissão já terminou: só a conclusão, que vem depois da resposta do ERP, encontra a guarda armada.
     world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, () => {
-      control.armed = true;
+      probe.armed = true;
       return Promise.resolve();
     });
-    const worker = buildWorker(world, { pool: poolAbortingGuard(suite.pool, control), telemetry: suite.checkout.telemetry, logger: logs.logger });
+    const worker = buildWorker(world, { pool: probe.pool, logger: logs.logger });
 
     await worker.pollOnce();
 
-    expect(control.fired, 'a guarda da conclusão foi falhada uma vez').toBe(1);
+    expect(probe.fired, 'a guarda da conclusão foi falhada uma vez').toBe(1);
     const aborted = logs.eventsOf('db.transaction_aborted', order.orderId);
     expect(aborted).toHaveLength(1);
     expect(aborted[0]).toMatchObject({ level: 'error', orderId: order.orderId, attempt: 1, correlationId: recorded.correlationId });
     // A conclusão abortada não grava nada; a repetida fecha a mensagem, fatura o pedido e baixa o estoque uma vez só.
     expect(await countInvoices(suite.database.pool, order.orderId)).toBe(1);
-    await expectInvoiced(suite.pool, order);
+    await expectInvoiced(world, order);
   });
 });
