@@ -32,10 +32,13 @@ export async function up(db: Kysely<any>): Promise<void> {
         .check(sql`status in ('pending', 'invoiced', 'failed')`),
     )
     // O banco garante: só pedido `failed` tem motivo, todo `failed` tem um, e é um dos três.
+    // Um CHECK só, com as duas condições: o Kysely guarda um CHECK por coluna, e um segundo
+    // `.check()` substitui o primeiro em silêncio. Motivo nulo passa no `in` (resultado nulo),
+    // e a primeira condição já exige o nulo fora do `failed`.
     .addColumn('failure_reason', 'text', (col) =>
-      col
-        .check(sql`(status = 'failed') = (failure_reason is not null)`)
-        .check(sql`failure_reason in ('erp_rejected', 'erp_out_of_stock', 'cancelled')`),
+      col.check(
+        sql`(status = 'failed') = (failure_reason is not null) and failure_reason in ('erp_rejected', 'erp_out_of_stock', 'cancelled')`,
+      ),
     )
     .addColumn('accepted_at', 'timestamptz', (col) => col.notNull().defaultTo(sql`now()`))
     .addColumn('outcome_at', 'timestamptz')
