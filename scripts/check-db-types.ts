@@ -6,7 +6,7 @@
 // Todas as opções do gerador vão por flag, e o Cli recebe `config: {}`: com uma
 // configuração dada, ele nem procura `.kysely-codegenrc*` ou a chave do
 // package.json, que o implementer pode editar e mudariam os tipos em silêncio.
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -88,6 +88,13 @@ export async function checkDbTypes({
     }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
+  }
+  // Um arquivo a mais na pasta seria um tipo do banco escrito à mão, fora da conferência.
+  const expected = new Set<string>(SCHEMAS.map(({ file }) => file));
+  for (const name of readdirSync(outDir)) {
+    if (!expected.has(name)) {
+      divergences.push(`${name} está na pasta dos tipos do banco, mas não sai do gerador; apague-o ou gere os tipos de novo`);
+    }
   }
   return divergences;
 }

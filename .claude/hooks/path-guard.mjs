@@ -38,6 +38,8 @@ const PROTECTED_NAMES = [
   /^vitest\.workspace\./,
   /^commitlint\.config\./,
   /^redocly\.yaml$/,
+  // O kysely-codegen lê esta configuração; ela mudaria os tipos gerados (FND-09).
+  /^\.kysely-codegenrc(\..+)?$/,
   /^\.npmrc$/,
   /^\.nvmrc$/,
   /^\.gitignore$/,

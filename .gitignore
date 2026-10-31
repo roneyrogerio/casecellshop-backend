@@ -8,3 +8,4 @@ dist/
 .vitest/
 .claude/state/
 .claude/reviews/
+.claude/settings.local.json
