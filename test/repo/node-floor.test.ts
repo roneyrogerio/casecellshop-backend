@@ -154,6 +154,29 @@ function excludesOf(command: string): string[] {
 // Os argumentos de relatório que o CI já usa no passo de teste (AI-18).
 const REPORTER_ARGS = ['--reporter=default', '--reporter=json', '--outputFile.json=$RUNNER_TEMP/vitest-report.json'];
 
+// Tira `--exclude=<arquivo>` e o par `--exclude <arquivo>`; o que sobra é o resto do comando.
+function withoutExcludes(all: string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < all.length; index += 1) {
+    const token = all[index] ?? '';
+    if (token === '--exclude') index += 1;
+    else if (!token.startsWith('--exclude=')) kept.push(token);
+  }
+  return kept;
+}
+
+// O comando tem de ser, token a token, `npm test --` mais os argumentos de relatório, em qualquer ordem.
+function closedArgsViolation(rest: string[]): string | null {
+  const prefix = ['npm', 'test', '--'];
+  if (JSON.stringify(rest.slice(0, prefix.length)) !== JSON.stringify(prefix)) return 'não começa por `npm test --`';
+  const args = rest.slice(prefix.length);
+  const expected = [...REPORTER_ARGS].sort();
+  if (JSON.stringify([...args].sort()) !== JSON.stringify(expected)) {
+    return `argumentos ${JSON.stringify(args)} fora da lista fechada ${JSON.stringify(expected)}`;
+  }
+  return null;
+}
+
 function ciViolations(workflow: Workflow, pkg: Pkg, composeTests: string[]): string[] {
   const matrix = matrixJob(workflow)?.strategy?.matrix?.node ?? [];
   const floor = floorOf(pkg);
@@ -171,6 +194,10 @@ function ciViolations(workflow: Workflow, pkg: Pkg, composeTests: string[]): str
     for (const arg of REPORTER_ARGS) {
       if (!tokens(command).includes(arg)) violations.push(`perna ${leg}: falta o argumento ${arg}`);
     }
+    // Lista fechada: depois de tirar os pares --exclude (que a perna do piso pode ter), sobra `npm test --` e os
+    // argumentos de relatório, nada mais. Um `--project`, um filtro posicional ou um `-t` deixaria de rodar testes.
+    const closed = closedArgsViolation(withoutExcludes(tokens(command)));
+    if (closed !== null) violations.push(`perna ${leg}: ${closed}: ${command}`);
     const excludes = excludesOf(command);
     if (leg === 'nvmrc') {
       if (command.includes('--exclude')) violations.push(`perna nvmrc: roda com --exclude: ${command}`);
@@ -281,6 +308,9 @@ describe('FND-12 o package.json impõe o piso do Node pelo devEngines', () => {
       );
       expect(result.code).not.toBe(0);
       expect(result.output).toContain('EBADDEVENGINES');
+      // O critério pede a versão atual e a exigida na mensagem.
+      expect(result.output).toContain('>=999.0.0');
+      expect(result.output).toContain(process.versions.node);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -345,6 +375,31 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
     expect(ciViolations(oneStep, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
     const twoSteps = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', `run: npm test -- --exclude ${COMPOSE_A} --reporter=default`));
     expect(ciViolations(twoSteps, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
+  });
+
+  it('FND-12 controle negativo: argumento a mais em qualquer perna (--project, filtro posicional, -t) para de rodar testes e reprova', () => {
+    const extras = ['--project unit', '--project=unit', 'src', '-t slow', '--testNamePattern slow', '--testNamePattern=slow'];
+    const escaped: string[] = [];
+    for (const extra of extras) {
+      const cases: Record<string, Workflow> = {
+        'um passo, perna nvmrc': variant(ONE_STEP, (t) => t.replace("|| '' }}", `|| '${extra}' }}`)),
+        'um passo, perna do piso': variant(ONE_STEP, (t) => t.replace(`--exclude ${COMPOSE_B}'`, `--exclude ${COMPOSE_B} ${extra}'`)),
+        'dois passos, perna nvmrc': variant(TWO_STEPS, (t) => t.replace(`run: npm test -- ${REPORTER}`, `run: npm test -- ${extra} ${REPORTER}`)),
+        'dois passos, perna do piso': variant(TWO_STEPS, (t) => t.replace(`--exclude=${COMPOSE_B} ${REPORTER}`, `--exclude=${COMPOSE_B} ${extra} ${REPORTER}`)),
+      };
+      for (const [name, workflow] of Object.entries(cases)) {
+        if (ciViolations(workflow, BASE_PKG, BASE_COMPOSE).length === 0) escaped.push(`${name} com "${extra}"`);
+      }
+    }
+    // Junta todos os casos que passaram sem reprovar, para a mensagem de falha listar cada um.
+    expect(escaped).toEqual([]);
+  });
+
+  it('FND-12 controle negativo: o comando que não é exatamente `npm test --` seguido dos argumentos de relatório reprova', () => {
+    const asRun = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', 'run: npm run test -- --reporter=default'));
+    expect(ciViolations(asRun, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
+    const noSeparator = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', 'run: npm test --reporter=default'));
+    expect(ciViolations(noSeparator, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
   });
 
   it('FND-12 controle negativo: o passo de teste sem os argumentos de relatório, ou rodando duas vezes numa perna, reprova', () => {
