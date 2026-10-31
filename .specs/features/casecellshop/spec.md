@@ -129,8 +129,9 @@ Com falhas injetadas pelo ERP simulado, contando **faturas no ERP**:
 - **ORD-16** Uma falha do banco ao gravar o desfecho não manda a mensagem para a DLQ.
 - **ORD-17** Duas conclusões simultâneas do mesmo pedido baixam o estoque uma vez só.
 - **ORD-18** O span da tentativa é filho do span do checkout.
-- **ORD-19** Depois de o worker faturar o pedido, `GET /orders/{orderId}/status` devolve `invoiced`; depois de uma rejeição permanente, `failed` com o motivo; com a mensagem na DLQ, `pending`; sempre validado pelo schema do contrato.
+- **ORD-19** Depois de o worker faturar o pedido, `GET /orders/{orderId}/status` devolve `invoiced`; depois de uma rejeição permanente, `failed` com o motivo; com a mensagem na DLQ, `pending`; sempre validado pelo schema do contrato. No sistema subido pelo `docker compose`, um checkout chega a `invoiced` pelo worker, com uma fatura no ERP simulado, o estoque baixado e a mensagem encerrada.
 - **ORD-20** O worker nunca tem mais chamadas simultâneas ao ERP que o limite configurado, e uma mensagem só é reivindicada depois de a tentativa ter a permissão do semáforo, para o lease não correr enquanto ela espera a vez.
+- **ORD-21** A camada anticorrupção e o ERP simulado cumprem o contrato do design: cada resposta é classificada pela tabela, por operação; o timeout corre no relógio injetável e aborta a chamada; nenhuma chamada é repetida dentro da camada; o simulado implementa H1a, H1b, H2 e H3, o modo sem a H1b e cada comportamento do roteiro, uma chamada por comportamento; um atraso do simulado não ocupa conexão do banco.
 
 ## Vitrine e sincronização
 

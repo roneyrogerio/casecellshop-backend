@@ -205,11 +205,11 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - consulta: `200` com o pedido, ou `404` com `{ code: 'order_not_found' }`;
   - catálogo: `200` com `{ items, hasNext }`.
 
-  Na camada anticorrupção, `422` com `out_of_stock` é `permanent` por falta de estoque, e qualquer outro `422` é `permanent` por rejeição.
+  Os itens do catálogo vêm com os nomes da porta (`sku`, `name`, `priceCents`, `onHand`). Na camada anticorrupção, `422` com `out_of_stock` é `permanent` por falta de estoque, e qualquer outro `422` é `permanent` por rejeição. Na criação e no catálogo, todo `404` é `config_error`, com ou sem corpo: o corpo `order_not_found` só tem sentido na consulta. Uma criação devolvida pela H1b não baixa o estoque de novo.
 - **Camada anticorrupção (`src/erp/acl.ts`):** `createErpClient({ transport, clock, timeoutMs })` devolve a porta. O timeout aborta o sinal da chamada pelo `clock.sleep`, e a chamada abortada é ambígua na criação e transitória na consulta e no catálogo.
 - **Roteiro do ERP simulado (`src/erp/sim/index.ts`):** `createSimulatedErp({ pool, clock, withoutH1b? })` devolve `{ transport, script }`. O `script.enqueue(behavior, match?)` põe na fila um comportamento para a próxima chamada que casar com `match` (`op`: `createOrder`, `findOrder` ou `listCatalog`; `reference`, na criação e na consulta), e cada comportamento vale para uma chamada só. Sem comportamento na fila, vale o padrão (`script.setDefault`, inicialmente `normal`); o `src/main/worker.ts` o lê de `ERP_SIM_MODE` (`normal`, `slow` ou `unavailable`). Os atrasos correm no relógio injetável, fora de transação. Comportamentos:
   - `normal`;
-  - `slow` (`delayMs`): espera e responde como no `normal`;
+  - `slow` (`delayMs`): espera e depois processa e responde como no `normal`; abortada durante a espera, não processa;
   - `unavailable`: rejeita com `ECONNREFUSED`, sem processar;
   - `reject`: `422` com `rejected`, sem processar;
   - `status` (`status`, `body?`): responde esse status, sem processar; cobre `400`, `401`, `403`, o `404` sem o corpo esperado, `429`, `500`, `503` e `504`;
@@ -218,7 +218,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `fast_502_then_invoice` (`delayMs`): responde `502` na hora e grava a fatura `delayMs` depois;
   - `hang`: nunca responde nem fatura.
 
-  A falta de estoque (H2) e o SKU desconhecido vêm do estado do `erp_sim`, não do roteiro. O `script.drain()` espera terminar de gravar as faturas adiadas cujo prazo o relógio já alcançou, para o teste contar as faturas sem `sleep`.
+  A falta de estoque (H2) e o SKU desconhecido vêm do estado do `erp_sim`, não do roteiro. O `script.drain()` espera terminar toda gravação de fatura já iniciada, a imediata do `invoice_no_response` e as adiadas cujo prazo o relógio já alcançou, para o teste contar as faturas sem `sleep`.
 - **Modo sem a H1b:** uma migração nova do `erp_sim` troca a unicidade de `invoices.reference` por uma coluna `dedup_key`, única e anulável, com índice simples em `reference`. Com a H1b, a criação grava `dedup_key = reference` e usa `ON CONFLICT (dedup_key) DO NOTHING`; sem ela, grava `NULL`, e cada criação vira uma fatura nova. A consulta pela referência devolve a fatura mais antiga.
 
 ## Observabilidade (AD-008)
