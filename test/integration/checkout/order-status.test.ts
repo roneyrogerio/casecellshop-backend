@@ -7,6 +7,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { OrderStatus, PROBLEM_MEDIA_TYPE, Problem } from '../../../src/contract/index.ts';
+import { createLogger } from '../../../src/logging.ts';
 import { createTelemetry } from '../../../src/telemetry.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
@@ -190,7 +191,8 @@ function brokenPool(failure: () => Error, mode: 'reject' | 'throw'): Pool {
 function appWithPool(pool: Pool) {
   return createApp({
     pool,
-    logger: pino({ level: 'info' }, logSink),
+    // O logger de produção: o nível sai em texto, como o `level: 'error'` que o teste confere.
+    logger: createLogger({ serviceName: 'casecellshop-api', destination: logSink }),
     telemetry: createTelemetry({ spanExporter: new InMemorySpanExporter() }),
   });
 }
