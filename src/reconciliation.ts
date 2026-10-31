@@ -66,6 +66,11 @@ export function createReconciler({ pool, dlq, erp, semaphore, logger, telemetry,
   let stopped: Promise<void> | undefined;
   let wake: (() => void) | undefined;
 
+  // Função à parte: o estado muda durante os awaits e o TypeScript estreitaria a comparação direta.
+  function isStopping(): boolean {
+    return state === 'stopping';
+  }
+
   // Uma consulta ao ERP por vez, sob uma permissão do semáforo: o limite vale para todo o processo.
   async function withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
     const permits = await semaphore.acquireFree();
@@ -118,8 +123,13 @@ export function createReconciler({ pool, dlq, erp, semaphore, logger, telemetry,
     const parent = propagator.extract(ROOT_CONTEXT, received.traceparent ? { traceparent: received.traceparent } : {}, defaultTextMapGetter);
     return logContext.run({ correlationId: message.correlationId }, () =>
       telemetry.tracer.startActiveSpan('outbox.settle', { kind: SpanKind.CONSUMER, attributes: { orderId: message.orderId } }, parent, async (span) => {
+        const log = logger.child({ orderId: message.orderId, correlationId: message.correlationId });
         try {
-          return await settleMessage(received, message, logger.child({ orderId: message.orderId, correlationId: message.correlationId }));
+          return await settleMessage(received, message, log);
+        } catch (error) {
+          // Uma mensagem com problema não impede as outras da rodada; logada aqui, leva correlationId e trace.
+          log.warn({ event: 'outbox.reconcile_error', err: error }, 'falha ao reconciliar a mensagem');
+          return 'kept';
         } finally {
           span.end();
         }
@@ -129,7 +139,8 @@ export function createReconciler({ pool, dlq, erp, semaphore, logger, telemetry,
 
   async function reconcileOnce(): Promise<ReconcileResult> {
     const result: ReconcileResult = { seen: 0, invoiced: 0, closed: 0 };
-    while (result.seen < settings.maxMessages) {
+    // Só o stop() marca 'stopping': uma chamada direta com o reconciliador parado processa tudo.
+    while (result.seen < settings.maxMessages && !isStopping()) {
       const batch = await dlq.receive({
         max: Math.min(MAX_RECEIVE_BATCH, settings.maxMessages - result.seen),
         waitSeconds: 0,
@@ -138,6 +149,7 @@ export function createReconciler({ pool, dlq, erp, semaphore, logger, telemetry,
       if (batch.length === 0) break;
       result.seen += batch.length;
       for (const received of batch) {
+        if (isStopping()) return result;
         let body: unknown;
         try {
           body = JSON.parse(received.body);
@@ -147,13 +159,8 @@ export function createReconciler({ pool, dlq, erp, semaphore, logger, telemetry,
         const parsed = BillingMessage.safeParse(body);
         // Corpo fora do schema fica na DLQ para o runbook.
         if (!parsed.success) continue;
-        try {
-          const outcome = await inSettleSpan(received, parsed.data);
-          if (outcome !== 'kept') result[outcome] += 1;
-        } catch (error) {
-          // Uma mensagem com problema não impede as outras da rodada.
-          logger.warn({ event: 'outbox.reconcile_error', orderId: parsed.data.orderId, err: error }, 'falha ao reconciliar a mensagem');
-        }
+        const outcome = await inSettleSpan(received, parsed.data);
+        if (outcome !== 'kept') result[outcome] += 1;
       }
     }
     return result;

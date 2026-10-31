@@ -71,9 +71,8 @@ metricsServer.listen(metricsPort, () => {
 installGracefulShutdown({
   logger,
   stop: async () => {
-    await relay.stop();
-    await reconciler.stop();
-    await worker.stop();
+    // Em conjunto: parar em sequência somaria as esperas e estouraria o prazo de encerramento.
+    await Promise.all([relay.stop(), reconciler.stop(), worker.stop()]);
     sqsClient.destroy();
     await new Promise<void>((resolve, reject) => {
       metricsServer.close((error) => {
