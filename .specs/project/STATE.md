@@ -422,7 +422,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-015 · A revisão para quando não sobra achado alto nem médio
 
-**Status:** aceita (30/10/2026, PR #6). Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco.
+**Status:** aceita (30/10/2026, PR #6). Substitui, na AD-012, o teto fixo de 3 rodadas por fatia e 5 por marco. O destino dos achados `baixa` de texto é substituído pela AD-022.
 
 **Contexto.** O teto fixo da AD-012 contava igual uma rodada que achava um problema de desenho e uma que só confirmava correções. No PR #4, as duas últimas de cinco rodadas só acharam problemas criados pelas correções anteriores. No PR #5, a Revisão 3 achou uma regressão média criada pela correção da Revisão 2, e a Revisão 4, restrita ao delta, fechou sem achado alto ou médio. Parar pelo número deixaria um achado médio aberto; revisar sem regra de parada repete rodadas que não acham nada novo.
 
@@ -605,11 +605,30 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 - **Moto e MiniStack:** não implementam o `StartMessageMoveTask` de que o *redrive* precisa.
 - **Mock do SDK:** não há fila de verdade, então não prova retry, DLQ nem *redrive* (linha "Testes" da tabela de ferramentas).
 
-**Trade-off.** Um contêiner e uma dependência a mais, e os testes do worker passam a esperar o relógio real do emulador para o *visibility timeout*, com prazos curtos configuráveis. Em troca, a fila do faturamento é a mesma que iria para a AWS.
+**Trade-off.** Um contêiner e uma dependência a mais, e o *visibility timeout* corre no relógio real do emulador, fora do relógio injetável. Os testes não esperam esse relógio: provocam a volta da mensagem com `ChangeMessageVisibility` e `VisibilityTimeout = 0`, como hoje semeiam o `lease_until`, e o atraso mínimo da H4 continua vindo do início da última chamada semeado no banco. Em troca, a fila do faturamento é a mesma que iria para a AWS.
 
 **Rever quando:** surgir um segundo consumidor dos eventos de pedido (entram o EventBridge e um emulador que o cubra), ou o ElasticMQ deixar de acompanhar a API do SQS que o projeto usa.
 
 **Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Polling publisher](https://microservices.io/patterns/data/polling-publisher.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html), [filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) e [redrive](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html); [ElasticMQ](https://github.com/softwaremill/elasticmq); [bbc/sqs-consumer, testes com ElasticMQ](https://github.com/bbc/sqs-consumer); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/).
+
+### AD-022 · Achado baixo de texto se corrige no mesmo PR
+
+**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os achados de texto.
+
+**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte. No M3, vários eram só de texto (uma frase da spec que contradizia o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) e ficariam valendo no repositório enquanto o próximo PR não chega, lidos pelos agentes e por quem avalia o desafio.
+
+**Decisão.** Um achado `baixa` de texto ou documentação (spec, design, ADs, `ARCHITECTURE.md`, README, instruções dos agentes) é corrigido pela sessão principal no mesmo PR, juntando os de uma rodada num commit só, que passa pela rodada seguinte com o resto do delta. Um achado `baixa` de código ou de teste continua indo para o próximo plano, e nenhum `baixa` bloqueia o PR. Decidido pelo mantenedor no M3.
+
+**Alternativas consideradas:**
+
+- **Manter tudo no próximo plano (AD-015):** o texto errado fica publicado até o PR seguinte.
+- **Corrigir também o `baixa` de código no mesmo PR:** cada correção de código pede teste antes e uma rodada nova, o laço que a L-007 registra.
+
+**Trade-off.** Uma rodada curta a mais, só de texto, quando a última rodada deixa achados de texto.
+
+**Rever quando:** as rodadas só de texto passarem a somar mais tempo do que a correção economiza, ou um achado de texto voltar a aparecer depois de corrigido.
+
+**Referências:** AD-015; L-007.
 
 ## Escolhas de ferramenta
 

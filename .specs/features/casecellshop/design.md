@@ -150,6 +150,8 @@ Esta seção descreve a primeira parte do M3, com a fila na própria tabela da o
 
 ## Worker: reconciliação e runbook (AD-003)
 
+Como "Worker: envio", esta seção descreve o desenho com a fila na tabela da outbox; a segunda parte do M3 a reescreve sobre a DLQ do SQS e o *redrive* (AD-021).
+
 - **Reconciliação, periódica:** consulta pela referência as mensagens em `dead` cujo atraso mínimo passou, em lotes ordenados por `reconciled_at`. Se o ERP tem o pedido, conclui como faturado e encerra a mensagem com `WHERE status = 'dead'`. Se não tem, ou se a consulta falhar, a mensagem fica para o runbook.
 - **Reprocessar em lote:** um SQL devolve à fila as mensagens em `dead` (por exemplo, as do período de uma queda), zera as tentativas e preserva `first_sent_at`. É seguro, porque cada uma é consultada no ERP antes de qualquer criação, e só depois do atraso mínimo.
 - **Cancelar:** depois de o operador confirmar no ERP que o pedido não existe, um SQL, na ordem de lock, encerra a mensagem (`WHERE status = 'dead'`; zero linhas, nada muda), marca o pedido como `failed` e libera a reserva.
@@ -162,7 +164,7 @@ Esta seção descreve a primeira parte do M3, com a fila na própria tabela da o
 | `dead` | DLQ |
 | SQL de reprocessar em lote | redrive |
 
-Ficam no banco, sem par no SQS (AD-021): o atraso mínimo contado do início da última chamada, o `first_sent_at`, a consulta ao ERP antes de criar e a espera com *full jitter* por mensagem.
+Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o atraso mínimo da H4), o `first_sent_at` e o resultado da consulta ao ERP antes de criar. A espera de cada retry (atraso mínimo mais *full jitter*) é calculada no worker e aplicada pela visibilidade da mensagem (`ChangeMessageVisibility`).
 
 ## Sincronização (AD-009)
 

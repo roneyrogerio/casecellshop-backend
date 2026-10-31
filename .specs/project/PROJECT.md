@@ -56,7 +56,7 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 | Redrive automático e várias réplicas do worker | O reprocessamento em lote basta para uma DLQ restrita a quedas longas; a fila já tolera várias réplicas (`SKIP LOCKED` e token), mas a coordenação entre elas fica na arquitetura alvo (AD-003, AD-009) |
 | ERP real | Substituído por um simulador atrás da porta `ErpClient` (AD-004) |
 | Leitura direta do MySQL do ERP | As tabelas internas do ERP não são contrato; a loja usa a API. Exceção: o plano B da H1a (R6). CDC fica na arquitetura alvo (AD-009) |
-| Redis, SQS, EventBridge reais | Arquitetura alvo; aqui o PostgreSQL resolve banco e fila numa transação (AD-003), e o cache em memória basta para uma instância (AD-005) |
+| Redis, EventBridge e o SQS gerenciado da AWS | Arquitetura alvo. Aqui o SQS roda localmente no ElasticMQ, alimentado pela outbox do PostgreSQL (AD-021), e o cache em memória basta para uma instância (AD-005) |
 
 ## Restrições
 
