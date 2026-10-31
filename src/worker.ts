@@ -56,6 +56,8 @@ export interface Worker {
   pollOnce(): Promise<number>;
 }
 
+const MAX_CONCLUSION_TRIES = 5;
+
 // Por que a mensagem volta à fila: o resultado do ERP (ou o erro inesperado) que a causou.
 type RetryCause = 'transient' | 'ambiguous' | 'config_error' | 'unexpected';
 
@@ -64,6 +66,9 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
   const db = createDb(pool);
   const semaphore = createSemaphore(settings.erpConcurrency);
   let running = false;
+  // Só o stop() liga: um pollOnce direto continua reivindicando.
+  let stopping = false;
+  const inFlight = new Set<Promise<void>>();
   let loop: Promise<void> | undefined;
 
   // Esgotadas as tentativas, a mensagem vai para a DLQ; senão volta depois do atraso mínimo mais jitter.
@@ -85,17 +90,28 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
     return updated.numUpdatedRows > 0n;
   }
 
-  async function callErp(message: ClaimedMessage, log: Logger): Promise<Conclusion> {
-    const retry = (cause: RetryCause) => {
-      log.warn({ event: 'outbox.retry', outcome: cause }, 'a mensagem volta à fila');
-      return retryOrDead(message);
+  // Devolve undefined quando o lease é curto demais para uma das chamadas: desiste sem concluir.
+  async function callErp(message: ClaimedMessage, log: Logger): Promise<Conclusion | undefined> {
+    const retry = (cause: RetryCause): Conclusion => {
+      const conclusion = retryOrDead(message);
+      // Só registra o retry quando a mensagem de fato volta à fila.
+      if (conclusion.kind === 'retry') log.warn({ event: 'outbox.retry', outcome: cause }, 'a mensagem volta à fila');
+      return conclusion;
     };
     const configError = (status: number) => {
       log.warn({ event: 'erp.config_error', status }, 'erro de configuração no ERP');
       return retry('config_error');
     };
+    // Antes de cada chamada: uma consulta lenta não pode deixar o last_call_at da criação velho
+    // nem a criação sair com o lease já curto.
+    const leaseShort = async (): Promise<boolean> => {
+      if (await markCall(message)) return false;
+      log.warn({ event: 'outbox.lease_short' }, 'lease curto demais para a chamada: a mensagem volta quando vencer');
+      return true;
+    };
 
     if (message.sentBefore) {
+      if (await leaseShort()) return undefined;
       // Já pode ter chegado ao ERP: só um "não existe" explícito autoriza criar de novo.
       const found = await erp.findOrderByReference(message.orderId);
       if (found.kind === 'found') return { kind: 'invoiced' };
@@ -103,6 +119,7 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
       if (found.kind !== 'not_found') return retry('transient');
     }
 
+    if (await leaseShort()) return undefined;
     const created = await erp.createOrder({ reference: message.orderId, items: message.items });
     if (created.kind === 'ok') return { kind: 'invoiced' };
     if (created.kind === 'permanent') return { kind: 'failed', reason: created.reason === 'rejected' ? 'erp_rejected' : 'erp_out_of_stock' };
@@ -111,7 +128,8 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
   }
 
   async function finish(message: ClaimedMessage, conclusion: Conclusion, log: Logger): Promise<void> {
-    for (;;) {
+    // O teto impede que um erro rápido e persistente vire um laço contra o banco.
+    for (let tries = 1; tries <= MAX_CONCLUSION_TRIES; tries += 1) {
       try {
         const applied = await concludeMessage(db, message.orderId, message.token, conclusion);
         if (!applied) log.warn({ event: 'outbox.conclusion_no_row' }, 'o token já não vale: a conclusão não mudou nada');
@@ -132,13 +150,10 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
   // Nunca rejeita: o erro de uma tentativa não pode interromper as outras da rodada.
   async function attempt(message: ClaimedMessage): Promise<void> {
     const log = logger.child({ orderId: message.orderId, attempt: message.attempts });
-    let conclusion: Conclusion;
+    let conclusion: Conclusion | undefined;
     try {
-      if (!(await markCall(message))) {
-        log.warn({ event: 'outbox.lease_short' }, 'lease curto demais para a chamada: a mensagem volta quando vencer');
-        return;
-      }
       conclusion = await callErp(message, log);
+      if (!conclusion) return;
     } catch (error) {
       log.error({ event: 'outbox.attempt_error', err: error }, 'erro inesperado na tentativa');
       conclusion = retryOrDead(message);
@@ -150,8 +165,14 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
     }
   }
 
-  async function pollOnce(): Promise<number> {
+  // Reivindica até as permissões livres e dispara as tentativas sem esperá-las: `done` resolve
+  // quando todas terminam. Cada tentativa devolve a sua permissão ao fim.
+  async function claimRound(): Promise<{ count: number; done: Promise<void> }> {
     const permits = await semaphore.acquireFree();
+    if (stopping) {
+      semaphore.release(permits);
+      return { count: 0, done: Promise.resolve() };
+    }
     let result;
     try {
       result = await claimMessages(db, { ...settings, limit: permits });
@@ -166,17 +187,31 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
     for (const { orderId, attempts } of result.dead) {
       logger.error({ event: 'outbox.dead', orderId, attempt: attempts }, 'limite de tentativas gasto: mensagem na DLQ');
     }
-    await Promise.all(result.claimed.map((message) => attempt(message).finally(() => semaphore.release(1))));
-    return result.claimed.length;
+    const done = Promise.all(result.claimed.map((message) => attempt(message).finally(() => semaphore.release(1)))).then(() => undefined);
+    return { count: result.claimed.length, done };
   }
 
+  // Uma rodada completa: resolve depois de todas as tentativas terminarem.
+  async function pollOnce(): Promise<number> {
+    const { count, done } = await claimRound();
+    await done;
+    return count;
+  }
+
+  // Não espera a rodada: uma chamada lenta não segura a vazão das outras, e a reivindicação
+  // seguinte já espera por uma permissão livre.
   async function run(): Promise<void> {
-    while (running) {
-      const claimed = await pollOnce().catch((error: unknown) => {
+    while (!stopping) {
+      let count = 0;
+      try {
+        const round = await claimRound();
+        count = round.count;
+        inFlight.add(round.done);
+        void round.done.finally(() => inFlight.delete(round.done));
+      } catch (error) {
         logger.error({ event: 'worker.poll_error', err: error }, 'falha na rodada do worker');
-        return 0;
-      });
-      if (claimed === 0 && running) await clock.sleep(settings.pollIntervalMs);
+      }
+      if (count === 0 && !stopping) await clock.sleep(settings.pollIntervalMs);
     }
   }
 
@@ -192,8 +227,10 @@ export function createWorker({ pool, erp, logger, clock, random = Math.random, c
     async stop() {
       if (running) {
         running = false;
+        stopping = true;
         // Para de reivindicar e espera as tentativas em andamento; o prazo é do lifecycle.
         await loop;
+        await Promise.all(inFlight);
         logger.info({ event: 'worker_stopped' }, 'worker encerrado');
       }
     },

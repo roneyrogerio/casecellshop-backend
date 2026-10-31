@@ -8,23 +8,28 @@ export interface Semaphore {
 
 export function createSemaphore(size: number): Semaphore {
   let free = size;
-  const waiters: (() => void)[] = [];
+  const waiters: ((count: number) => void)[] = [];
 
   return {
-    async acquireFree() {
-      // Quem chega com permissões livres e fila não passa à frente de quem já espera.
-      while (free === 0 || waiters.length > 0) {
-        await new Promise<void>((resolve) => waiters.push(resolve));
-        if (free > 0) break;
+    acquireFree() {
+      // Com fila, quem chega espera atrás dela, mesmo havendo permissão livre.
+      if (free > 0 && waiters.length === 0) {
+        const taken = free;
+        free = 0;
+        return Promise.resolve(taken);
       }
-      const taken = free;
-      free = 0;
-      return taken;
+      return new Promise<number>((resolve) => waiters.push(resolve));
     },
     release(count) {
       if (count <= 0) return;
-      free += count;
-      waiters.shift()?.();
+      // Entrega direta ao primeiro da fila: quem chega no mesmo tique não passa à frente.
+      const next = waiters.shift();
+      if (next) {
+        next(free + count);
+        free = 0;
+      } else {
+        free += count;
+      }
     },
   };
 }
