@@ -615,12 +615,12 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
 
-**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, cada uma achando mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
+**Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, e da 6 à 8 cada uma achou mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
 
 **Decisão.**
 
-- **Pela origem:** um erro de texto em linha que o PR alterou é corrigido no mesmo PR, sem teto. Uma melhoria em texto que o PR não tocou, e qualquer `baixa` de código ou de teste, vai para o próximo plano. Erro de texto é fato errado, contradição com a spec, o design ou uma AD, referência ou ID quebrado, ou termo divergente; preferência de redação não é achado.
-- **Conferência só do delta, na mesma rodada:** o `reviewer` recebe o diff do commit de ajuste e diz se cada achado fechou e se as linhas novas criam erro. Achado em linha que o ajuste não tocou fica fora da conferência e segue a regra acima, então o escopo encolhe a cada conferência e converge. Uma linha refeita várias vezes sem convergir vai ao mantenedor, não ao próximo plano.
+- **Pela origem:** um erro de texto em linha que o PR alterou é corrigido no mesmo PR, nunca mandado para o próximo plano. Uma melhoria em texto que o PR não tocou, e qualquer `baixa` de código ou de teste, vai para o próximo plano. Erro de texto é fato errado, contradição com a spec, o design ou uma AD, referência ou ID quebrado, ou termo divergente; preferência de redação não é achado.
+- **Conferência só do delta, na mesma rodada:** o `reviewer` recebe o diff do commit de ajuste e diz se cada achado fechou e se as linhas novas criam erro. Achado em linha que o ajuste não tocou fica fora da conferência e segue a regra acima, então o escopo encolhe a cada conferência e converge. A mesma linha numa terceira conferência vai ao mantenedor, não ao próximo plano, como a terceira rodada sobre o mesmo achado na AD-015.
 - **Uma rodada, um relatório:** o PR recebe um só comentário por rodada, o último relatório, com todos os achados da rodada numa tabela (origem, commit da correção, status: corrigido, sem mudança necessária ou adiado) e o resultado de cada conferência. Os commits de ajuste ficam separados, e o histórico guarda a prova de que a IA errou e foi corrigida.
 - Decidido pelo mantenedor no M3, depois de pesquisa.
 
@@ -633,7 +633,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Trade-off.** Conferências curtas a mais no fim da rodada, e o relatório final fica mais longo. Em troca, o erro não sai publicado e o PR mostra uma rodada, não quatro.
 
-**Rever quando:** as conferências de texto passarem a não convergir em duas ou três passadas, ou a soma delas passar do tempo de uma rodada de código.
+**Rever quando:** a soma das conferências de texto de uma rodada passar do tempo de uma rodada de código.
 
 **Referências:** AD-015; L-007; [Google, Code Review Developer Guide: "Cleaning It Up Later"](https://google.github.io/eng-practices/review/reviewer/pushback.html) e ["LGTM with comments"](https://google.github.io/eng-practices/review/reviewer/speed.html); [Claude Code, Code Review](https://code.claude.com/docs/en/code-review-pull-requests) (achados *nit* e *pre-existing*, re-revisão do que mudou); [Claude Code, boas práticas](https://code.claude.com/docs/en/best-practices) ("skip style").
 
