@@ -95,7 +95,7 @@ O que A entrega:
 | Consistência | Duplica pedido sob retry sem idempotência | O pedido e a mensagem nascem na mesma transação: sem pedido fantasma nem mensagem fantasma | Publicar antes de gravar gera mensagem fantasma; publicar depois gera pedido fantasma |
 | Esforço operacional | Baixo, mas cada lentidão do ERP vira incidente | Médio: a DLQ e o runbook | Médio a alto: o broker e a DLQ dele |
 
-**Por que B.** O checkout grava o pedido, a reserva e a mensagem de saída numa transação só e responde `202 Accepted` com `Location` e `Retry-After`. O cliente acompanha em `GET /orders/{orderId}/status`. O worker reivindica a mensagem com `FOR UPDATE SKIP LOCKED`, lease e token, e chama o ERP fora da transação. A resolve a latência só no papel e piora o problema de duplicação. C exige a mesma outbox para ser correto, porque o banco e o broker não têm uma transação comum; vale quando houver um segundo consumidor dos eventos, e aí um relay publica a outbox no broker.
+**Por que B.** O checkout grava o pedido, a reserva e a mensagem de saída numa transação só e responde `202 Accepted` com `Location` e `Retry-After`. O cliente acompanha em `GET /orders/{orderId}/status`. Um *Message Relay* publica a mensagem no SQS depois do commit, e o worker consome do SQS e chama o ERP fora da transação (AD-021). A resolve a latência só no papel e piora o problema de duplicação. C publicando direto no broker, sem outbox, não é correto, porque o banco e o broker não têm uma transação comum; por isso B usa o SQS atrás da outbox, e não no lugar dela.
 
 O que B entrega:
 
@@ -113,7 +113,7 @@ O que B entrega:
 
 - **Banco próprio da loja:** PostgreSQL com catálogo, preço, estoque, pedidos, chaves de idempotência e outbox **[M1 a M4]**.
 - **Checkout:** reserva atômica, idempotência e `202` **[implementado: `src/checkout/repository.ts`, `CHK-01` a `CHK-12`]**.
-- **Fila:** a outbox no próprio banco, sem broker externo **[M3]**.
+- **Fila:** SQS, alimentado pela outbox do banco por um *Message Relay*; localmente, o ElasticMQ no compose **[M3]**.
 - **Workers:** um worker para o envio ao ERP e para a sincronização **[M3, M4]**.
 - **Sincronização:** preço e estoque a cada 60 s, sem devolver unidade já vendida **[M4]**.
 - **Cache:** em processo, na vitrine **[M4]**.
@@ -129,7 +129,7 @@ O que B entrega:
 **Dias 60 a 90: escalar e reduzir a defasagem.**
 
 - **CDC** a partir de uma réplica do MySQL do ERP no lugar da sincronização por polling, se a defasagem medida pedir e o acesso de replicação for liberado **[alvo]**.
-- **Relay da outbox para uma fila gerenciada** (SQS), quando surgir um segundo consumidor dos eventos de pedido ou a vazão passar do que o polling sustenta **[alvo]**.
+- **EventBridge na saída do relay,** quando surgir um segundo consumidor dos eventos de pedido (aviso ao cliente, analytics), cada um com a sua fila SQS e a sua DLQ **[alvo]**.
 - **Várias réplicas do worker**, com a sincronização coordenada e o limite de chamadas ao ERP dividido entre elas **[alvo]**.
 - **Migração para a nuvem**, abaixo.
 
@@ -141,7 +141,7 @@ O que B entrega:
 | --- | --- | --- |
 | Banco da loja (PostgreSQL) | Amazon RDS ou Aurora PostgreSQL | Backup, failover entre zonas, atualização de versão e réplica de leitura |
 | API e worker (contêineres) | ECS no Fargate | Servidores, sistema operacional e escala por carga |
-| Fila | A outbox continua; um relay publica no SQS quando houver um segundo consumidor | DLQ e redrive gerenciados, sem perder a transação única do pedido |
+| Fila | Amazon SQS, o mesmo que o ElasticMQ emula no compose; a outbox continua na frente dele, e o EventBridge entra com um segundo consumidor | DLQ, redrive e escala gerenciados, sem perder a transação única do pedido |
 | Cache L2 | ElastiCache | Cluster, réplica e failover do Redis |
 | Observabilidade | Datadog, ou CloudWatch com Prometheus e Grafana gerenciados | Coleta, retenção e alertas sem operar a pilha |
 | Segredos | Secrets Manager | Rotação de credenciais do banco e do ERP |
@@ -162,7 +162,10 @@ flowchart LR
   api --> cache[Cache em processo]
   cache --> banco[(PostgreSQL da loja: catálogo, estoque, pedidos, outbox)]
   api -->|checkout: pedido, reserva e mensagem numa transação| banco
-  worker[Worker] -->|reivindica a outbox| banco
+  banco -->|outbox| relay[Message Relay]
+  relay -->|publica| sqs[Fila SQS e DLQ]
+  sqs -->|recebe| worker[Worker]
+  worker -->|desfecho do pedido| banco
   worker -->|envio, consulta e sincronização| acl[Camada anticorrupção]
   acl -->|API REST, por VPN ou link dedicado| erp[ERP no datacenter]
   erp --- mysql[(MySQL do ERP)]
@@ -171,7 +174,7 @@ flowchart LR
   cache -.-> l2[Cache L2 compartilhado]:::alvo
   mysql -.-> cdc[CDC da réplica do ERP]:::alvo
   cdc -.-> banco
-  banco -.-> relay[Relay para fila gerenciada]:::alvo
+  relay -.-> eb[EventBridge para outros consumidores]:::alvo
   classDef alvo stroke-dasharray: 5 5
 ```
 
@@ -217,7 +220,9 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 ## Mensageria e resiliência
 
-**Decisão:** o pedido e a mensagem de saída nascem na mesma transação, e a tabela da outbox, no próprio PostgreSQL da loja, é a fila. Um worker reivindica cada mensagem com lease e token, chama o ERP fora de qualquer transação, consulta o ERP pela referência antes de criar de novo, repete com espera crescente e manda para a DLQ depois do limite de tentativas. A reconciliação e o runbook tiram os pedidos da DLQ (AD-003, AD-004). **Rascunho do M3:** as marcas **[M3]** viram **[implementado]** quando o PR do marco entrar.
+**Decisão:** o pedido e a mensagem de saída nascem na mesma transação, numa tabela de outbox no PostgreSQL da loja (*Transactional Outbox*). Um *Message Relay* publica as mensagens no SQS, e o worker consome do SQS: chama o ERP fora de qualquer transação, consulta o ERP pela referência antes de criar de novo, repete com espera crescente pelo *visibility timeout*, e a mensagem vai para a DLQ do SQS depois do limite de recebimentos. A reconciliação e o runbook tiram os pedidos da DLQ (AD-003, AD-004, AD-021). Localmente, o SQS é o ElasticMQ, um emulador da API do SQS que roda no compose sem conta nem token.
+
+**Rascunho do M3, em duas partes:** a primeira (PR #13) implementou o worker com a fila na própria tabela da outbox (lease, token e status `dead`, AD-003); a segunda troca essa fila pelo SQS (AD-021) e traz a reconciliação e o runbook. As marcas **[M3]** viram **[implementado]** quando a segunda parte entrar; o que muda com o SQS está dito em cada ponto.
 
 ### Publicar antes ou depois de gravar o pedido
 
@@ -226,20 +231,20 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **publicar antes de gravar:** se a gravação falha, o worker fatura um pedido que a loja não tem (mensagem fantasma);
 - **publicar depois de gravar:** se o processo cai entre os dois passos, o pedido fica aceito e nunca é faturado (pedido fantasma).
 
-Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transação do pedido, da chave de idempotência e da reserva. Ou as quatro existem, ou nenhuma existe: os testes do checkout contam as mensagens da outbox antes e depois de cada recusa **[implementado: `src/checkout/repository.ts`, `CHK-06`, `CHK-10`; a linha com o `traceparent`, `CHK-12`]**. O worker lê a fila no mesmo banco **[M3]**. Uma fila externa (SQS) continuaria precisando da outbox para ser correta, e entra só como relay, quando houver um segundo consumidor **[alvo]**.
+Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transação do pedido, da chave de idempotência e da reserva. Ou as quatro existem, ou nenhuma existe: os testes do checkout contam as mensagens da outbox antes e depois de cada recusa **[implementado: `src/checkout/repository.ts`, `CHK-06`, `CHK-10`; a linha com o `traceparent`, `CHK-12`]**. Depois do commit, o *Message Relay* lê as linhas ainda não publicadas e as publica no SQS; se ele cair entre publicar e marcar a linha, publica de novo, e o consumidor tolera a repetição **[M3]**. É o desenho do guia de padrões de nuvem da AWS para a escrita dupla: a fila externa nunca participa da transação do banco (AD-021).
 
 ### Pedido fantasma, mensagem fantasma e fatura duplicada
 
 `DOC-MSG-02`.
 
 - **Pedido fantasma e mensagem fantasma:** não existem, pela transação única acima. Um pedido aceito sempre tem a mensagem, e a mensagem sempre tem o pedido (a chave estrangeira `outbox.order_id`) **[implementado: `migrations/store/20260102000000_create_store.ts`]**.
-- **Mensagem perdida no worker:** a reivindicação grava o lease, um token novo e a tentativa, com commit antes da chamada. Se o worker morre no meio, o lease vence e outro worker retoma a mensagem, depois do atraso mínimo **[M3, `ORD-02`]**.
+- **Mensagem perdida no worker:** a mensagem recebida do SQS fica invisível pelo *visibility timeout* e só é apagada depois de gravado o desfecho. Se o worker morre no meio, ela volta a ficar visível e outro worker a retoma, depois do atraso mínimo; na primeira parte, o mesmo papel é do lease e do token gravados na outbox **[M3, `ORD-02`]**.
 - **Fatura duplicada,** o risco que sobra numa entrega "pelo menos uma vez":
   - o pedido vai ao ERP com o `orderId` da loja como referência;
-  - `first_sent_at` é gravado na primeira reivindicação e nunca apagado. Daí em diante, toda tentativa consulta o ERP pela referência antes de criar (H1a), inclusive depois de um reprocessamento, que zera as tentativas (L-005) **[M3, `ORD-01`, `ORD-07`]**;
+  - `first_sent_at` é gravado no banco antes da primeira chamada e nunca apagado. Daí em diante, toda tentativa consulta o ERP pela referência antes de criar (H1a), inclusive depois de um reprocessamento, que zera as tentativas (L-005) **[M3, `ORD-01`, `ORD-07`]**;
   - a consulta só acontece 45 s depois do início da chamada anterior, quando o ERP já concluiu ou abandonou a criação (H4) **[M3, `ORD-03`, `ORD-04`, `ORD-05`]**;
   - se o ERP também recusa a segunda criação com a mesma referência (H1b), a duplicação fica impossível mesmo além da H4 **[M3, `ORD-06`]**.
-- **Worker atrasado:** toda conclusão exige o token da reivindicação (`WHERE claim_token = :t`), e o pedido muda de estado por compare-and-set. Um worker que perdeu o lease não sobrescreve o desfecho de outro, e o estoque baixa uma vez só **[M3, `ORD-16`, `ORD-17`]**.
+- **Worker atrasado:** o pedido muda de estado por compare-and-set (`WHERE status = 'pending'`), e o estoque só muda se a transição afetou a linha. Dois workers com a mesma mensagem, depois de um *visibility timeout* vencido, não faturam nem baixam o estoque duas vezes **[M3, `ORD-16`, `ORD-17`]**.
 
 **Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b **[M3]**, e o README o declara entre as limitações **[M6]**.
 
@@ -251,32 +256,37 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
   - **permanente** (`422`, falta de estoque): o pedido vira `failed` com o motivo, e a reserva é liberada **[M3, `ORD-08`]**;
   - **transitório** (a requisição não chegou, `429`, `503`) e **ambíguo** (timeout, conexão caída depois do envio, `500`, `502`, `504`): nova tentativa;
   - **erro de configuração** (`400`, `401`, `403`, `404` sem o corpo esperado): transitório e com alerta, para uma credencial vencida não falhar todos os pedidos de uma vez.
-- **Retry:** atraso mínimo de 45 s desde o início da última chamada, mais *full jitter* sobre um exponencial de base 5 s e teto de 5 min, até 12 tentativas. O jitter espalha os retries depois de uma falha que atingiu muitos pedidos ao mesmo tempo. Um semáforo de 30 chamadas protege o ERP **[M3, `ORD-13`, `ORD-20`]**.
-- **DLQ:** depois de 12 tentativas, a mensagem fica `dead`, e o pedido continua `pending` com a reserva, porque ainda pode ser faturado. A tentativa é contada na reivindicação, então uma mensagem que derruba o processo também chega à DLQ, sozinha, sem segurar as outras **[M3, `ORD-12`, `ORD-13`]**.
-- **Saída da DLQ:** a reconciliação consulta o ERP a cada 5 min e conclui como faturado o que ele já tem. O runbook reprocessa em lote ou cancela depois de o operador confirmar no ERP que o pedido não existe **[M3, `ORD-07`, `ORD-14`, `ORD-15`]**.
+- **Retry:** atraso mínimo de 45 s desde o início da última chamada, mais *full jitter* sobre um exponencial de base 5 s e teto de 5 min, até 12 tentativas, aplicado mudando a visibilidade da mensagem no SQS (`ChangeMessageVisibility`). O jitter espalha os retries depois de uma falha que atingiu muitos pedidos ao mesmo tempo. Um semáforo de 30 chamadas protege o ERP, e o worker só recebe do SQS tantas mensagens quantas permissões tem **[M3, `ORD-13`, `ORD-20`]**.
+- **DLQ:** a DLQ do SQS recebe a mensagem depois de 12 recebimentos (*redrive policy* com `maxReceiveCount`), e o pedido continua `pending` com a reserva, porque ainda pode ser faturado. O recebimento é contado pelo próprio SQS, então uma mensagem que derruba o processo também chega à DLQ, sozinha, sem segurar as outras **[M3, `ORD-12`, `ORD-13`]**.
+- **Saída da DLQ:** a reconciliação lê a DLQ a cada 5 min, consulta o ERP e conclui como faturado o que ele já tem. O runbook devolve as mensagens à fila (*redrive*, `StartMessageMoveTask`) ou cancela depois de o operador confirmar no ERP que o pedido não existe; o *redrive* é seguro porque cada mensagem é consultada no ERP antes de qualquer criação **[M3, `ORD-07`, `ORD-14`, `ORD-15`]**.
 - **OpenAPI:** o cliente acompanha o pedido em `GET /orders/{orderId}/status` (`pending`, `invoiced` ou `failed` com o motivo), com o schema gerado do mesmo contrato em zod que valida as respostas nos testes **[implementado: `src/contract/orders.ts`, `CHK-11`; o estado depois do worker, M3, `ORD-19`]**.
-- **Testes:** contam faturas no ERP simulado, não chamadas, contra o PostgreSQL real. As falhas são injetadas por um roteiro do simulado (lento, indisponível, fatura sem responder, fatura depois do timeout abaixo e acima da H4, `502` seguido de fatura, sem a H1b). O tempo corre num relógio manual e em horários semeados no banco, sem `sleep` **[M3, `ORD-01` a `ORD-20`]**.
-- **Rastreabilidade:** cada tentativa é um span filho do span do checkout, retomado pelo `traceparent` gravado na outbox, e os logs do worker levam `orderId`, `attempt` e o `correlationId` da requisição original **[M3, `ORD-18`, `OBS-01`]**.
+- **Testes:** contam faturas no ERP simulado, não chamadas, contra o PostgreSQL real e o ElasticMQ real, sem mock do SDK da AWS. As falhas são injetadas por um roteiro do simulado (lento, indisponível, fatura sem responder, fatura depois do timeout abaixo e acima da H4, `502` seguido de fatura, sem a H1b). O tempo do ERP corre num relógio manual; o do SQS é o relógio do emulador, com prazos curtos configuráveis nos testes **[M3, `ORD-01` a `ORD-21`]**.
+- **Rastreabilidade:** cada tentativa é um span filho do span do checkout, retomado pelo `traceparent` gravado na outbox e levado como atributo da mensagem no SQS, e os logs do worker levam `orderId`, `attempt` e o `correlationId` da requisição original **[M3, `ORD-18`, `OBS-01`]**.
 
-### Como isto vira SQS, SNS e EventBridge na AWS
+### Outbox, Message Relay e SQS: quem faz o quê
 
-A outbox continua sendo a fila mesmo com o SQS, porque o problema que ela resolve é a escrita dupla, e o SQS não participa da transação do banco. É o padrão que o guia de padrões de nuvem da AWS recomenda: gravar a mensagem numa tabela de outbox na mesma transação e publicar depois, por um relay (AD-021).
+A outbox e a fila têm papéis diferentes, e o desenho é o que o guia de padrões de nuvem da AWS publica para a escrita dupla (AD-021):
 
-- **Hoje:** a tabela `outbox` no PostgreSQL é a fila, consumida pelo worker com `FOR UPDATE SKIP LOCKED` **[M3: `src/outbox/claim.ts`; a reivindicação exclusiva é exercida pelo `ORD-17` e pelo `ORD-20`, e nenhum critério testa o `SKIP LOCKED` isolado]**.
-- **Na AWS:** o banco vai para o RDS, e o worker do faturamento continua lendo a outbox, porque o que ele decide por mensagem (abaixo) não tem par no SQS **[alvo]**.
-- **Um segundo consumidor** (notificação ao cliente, analytics): um relay lê a outbox (pelo mesmo `SKIP LOCKED`, ou por captura de mudanças) e publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS Standard e a sua DLQ. O SQS Standard entrega pelo menos uma vez e sem ordem garantida, então cada consumidor é idempotente; a fila FIFO só entraria se a ordem por pedido importasse, e a deduplicação dela cobre só 5 minutos **[alvo]**.
+| Peça | Papel | Aqui |
+| --- | --- | --- |
+| *Transactional Outbox* | garante que a mensagem nasce junto com o pedido, na mesma transação | tabela `outbox` no PostgreSQL **[implementado: `src/checkout/repository.ts`, `CHK-12`]** |
+| *Message Relay* (*Polling Publisher*) | lê a outbox depois do commit e publica na fila; pode publicar duas vezes, nunca perde | processo que lê com `SKIP LOCKED` e publica em lote **[M3]** |
+| Fila (SQS) | distribui o trabalho, esconde a mensagem em processamento, repete e manda para a DLQ | SQS, com o ElasticMQ no compose e nos testes **[M3]** |
+| *Idempotent Consumer* | tolera a mensagem repetida | o worker consulta o ERP pela referência antes de criar, e o pedido muda por compare-and-set **[M3, `ORD-01` a `ORD-06`]** |
 
-A tabela abaixo é uma correspondência de conceitos, para ler o desenho em termos de SQS; não é um plano de trocar a outbox pelo SQS.
+O SQS não guarda o que o worker decide por pedido, então isso fica no banco, na linha do pedido: o `first_sent_at`, o início da última chamada (para o atraso mínimo da H4) e o resultado da consulta ao ERP. A primeira parte do M3 guardou tudo na própria outbox, que também fazia o papel de fila; a correspondência entre as duas versões:
 
-| Outbox no PostgreSQL | SQS |
+| Primeira parte (tabela como fila, AD-003) | Segunda parte (SQS, AD-021) |
 | --- | --- |
-| lease (`lease_until`) | visibility timeout |
-| token da reivindicação (`claim_token`) | receipt handle |
-| 12 tentativas | `maxReceiveCount = 12` |
+| lease (`lease_until`) | *visibility timeout* |
+| token da reivindicação (`claim_token`) | *receipt handle* |
+| 12 tentativas contadas na reivindicação | `maxReceiveCount = 12` na *redrive policy* |
 | status `dead` | DLQ, com retenção maior que a da fila de origem |
-| reprocessamento em lote pelo runbook | redrive |
+| reprocessamento em lote por SQL | *redrive* (`StartMessageMoveTask`) |
 
-O que fica no banco mesmo com o SQS, porque não tem par nele: o atraso mínimo contado do início da última chamada (H4), o `first_sent_at`, a consulta ao ERP antes de criar e a espera com *full jitter* por mensagem. É por isso que pôr o SQS no caminho do worker aqui só duplicaria o retry e a DLQ. O SQS não roda no compose: o LocalStack exige token de conta desde a versão 2026.03.0, e o ElasticMQ, que roda sem token, entra como adicional, num relay fora do caminho crítico **[adicional, `ROADMAP.md`]**.
+**Na AWS:** o banco vai para o RDS, o relay roda como serviço ou tarefa, e o endereço do SQS passa a ser o real, sem mudar código. Um segundo consumidor dos eventos de pedido (aviso ao cliente, analytics) não lê a fila do faturamento: o relay publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS e a sua DLQ. O SQS Standard entrega pelo menos uma vez e sem ordem garantida, então cada consumidor é idempotente; a fila FIFO só entraria se a ordem por pedido importasse, e a deduplicação dela cobre só 5 minutos **[alvo]**.
+
+**Por que o ElasticMQ:** é o emulador que as bibliotecas de SQS mais usadas em Node rodam nos próprios testes, cobre o que o desafio avalia (*visibility timeout*, DLQ e *redrive*) e roda sem conta nem token. O LocalStack exige token desde a versão 2026.03.0, e os emuladores que também cobrem SNS e EventBridge são recentes demais; se o EventBridge precisar rodar, a troca é de imagem e de endereço (AD-021).
 
 ### Prompts de IA relevantes
 

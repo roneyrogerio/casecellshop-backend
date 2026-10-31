@@ -63,7 +63,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-003 · Outbox transacional como fila, no próprio PostgreSQL
 
-**Status:** aceita (29/10/2026); o motivo para não rodar SQS local é corrigido pela AD-021
+**Status:** aceita (29/10/2026); "a tabela da outbox é a fila" e o motivo para não rodar SQS local são substituídos pela AD-021
 
 **Contexto.** Publicar antes de gravar o pedido gera mensagem fantasma; publicar depois gera pedido fantasma se o processo cair entre os dois passos. Um worker atrasado não pode desfazer o que outro concluiu, e o ERP lento não pode receber mais chamadas do que aguenta.
 
@@ -581,29 +581,35 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
 
-### AD-021 · A outbox continua sendo a fila; o SQS entra por um relay
+### AD-021 · O SQS é a fila do faturamento; a outbox é a caixa de saída
 
-**Status:** proposta (31/10/2026, PR #13). Corrige, na AD-003, o motivo dado para não rodar SQS local.
+**Status:** proposta (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
 
-**Contexto.** A vaga pede SQS, SNS e EventBridge, e a AD-003 descartou "SQS no LocalStack" porque ele exige token de conta desde a versão 2026.03.0. Isso continua verdade, mas não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem token, e funciona com o `@aws-sdk/client-sqs` da versão 3. Então rodar um SQS no compose é viável, e a decisão precisa do motivo que vale.
+**Contexto.** A AD-003 fez da tabela da outbox a própria fila e descartou o SQS local porque o LocalStack exige token de conta desde a versão 2026.03.0. Esse motivo não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem conta nem token, e as bibliotecas de SQS mais usadas em Node (o `sqs-consumer` da BBC, o `nestjs-sqs`) o usam nos próprios testes com o `@aws-sdk/client-sqs` da versão 3. O PDF avalia retry, DLQ e reconciliação no fluxo do checkout e cita o LocalStack entre os serviços de apoio, e a vaga pede SQS: a fila do faturamento é o lugar onde o SQS mostra o que o desafio avalia.
 
 **Decisão.**
 
-- A outbox no PostgreSQL continua sendo a fila do worker, como na AD-003.
-- O motivo é a escrita dupla, não a ferramenta: gravar o pedido e publicar numa fila externa são duas escritas sem transação comum, então a outbox seria necessária mesmo com o SQS. E o que o worker decide por mensagem (o atraso mínimo contado do início da última chamada, o `first_sent_at`, a consulta ao ERP antes de criar, a espera com *full jitter*) continua no banco; pôr o SQS no caminho duplicaria o retry e a DLQ.
-- Em produção na AWS, o worker do faturamento continua lendo a outbox no RDS. Quando surgir um segundo consumidor dos eventos de pedido, um relay lê a outbox e publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS Standard e a sua DLQ; os consumidores são idempotentes, então a FIFO só entraria se a ordem por pedido importasse. A tabela entre a outbox e o SQS no `ARCHITECTURE.md` ("Mensageria e resiliência") é uma correspondência de conceitos, não um plano de troca.
-- Como adicional, depois do M6: um relay que publica o evento "pedido faturado" num ElasticMQ, num perfil opcional do compose, fora do caminho crítico (`ROADMAP.md`, "Adicionais"). Ele pede uma dependência nova e uma AD própria quando entrar.
+- **Transactional Outbox, só como caixa de saída:** o checkout grava o pedido e a linha da outbox na mesma transação, como hoje. A outbox deixa de ser consumida pelo worker.
+- **Message Relay (Polling Publisher):** um processo lê as linhas ainda não publicadas com `FOR UPDATE SKIP LOCKED`, publica em lote no SQS e marca a linha como publicada. Uma queda entre a publicação e a marcação publica de novo: a entrega é pelo menos uma vez.
+- **O SQS é a fila:** o worker consome com *long polling*, até as permissões livres do semáforo; o *visibility timeout* faz o papel do lease; o retry muda a visibilidade da mensagem (`ChangeMessageVisibility`) para o atraso mínimo mais o *full jitter*; a mensagem só é apagada depois de gravado o desfecho; a DLQ do SQS recebe a mensagem depois de `maxReceiveCount` = 12 recebimentos, e a reconciliação e o runbook trabalham sobre ela, com o *redrive* (`StartMessageMoveTask`).
+- **Idempotent Consumer:** o estado que o SQS não guarda continua no banco, na linha do pedido: o `first_sent_at`, o início da última chamada (para o atraso mínimo da H4) e a consulta ao ERP antes de criar. A conclusão continua por compare-and-set do pedido, e o estoque só muda se o pedido mudou.
+- **Emulador local:** o ElasticMQ (`softwaremill/elasticmq-native`, com a versão fixada) no compose e nos testes de integração, sem conta nem segredo. O código só usa o SDK oficial da AWS, então a AWS real é outro endereço. O `@aws-sdk/client-sqs` entra como dependência nova no PR 2 do M3, registrado na tabela de ferramentas.
+- **SNS e EventBridge:** ficam na arquitetura alvo, para um segundo consumidor dos eventos de pedido, cada um com a sua fila SQS e a sua DLQ (`ARCHITECTURE.md`, "Mensageria e resiliência"). O desafio tem um consumidor só.
 
 **Alternativas consideradas:**
 
-- **O worker consumir de um SQS local (ElasticMQ):** mostra o SQS rodando, mas a outbox continua necessária na frente dele, e o retry por mensagem teria de ser emulado com `ChangeMessageVisibility`.
-- **SQS no LocalStack:** exige token de conta desde a 2026.03.0, o que quebra o "executável sem credenciais"; a imagem antiga sem token está congelada.
+- **Manter a tabela da outbox como fila (AD-003):** correto e mais simples, mas deixa fora o SQS que a vaga pede e o emulador que o PDF sugere.
+- **O SQS só para eventos de outros consumidores, com o worker na outbox:** mostra o SQS rodando num caminho lateral, fora do retry, da DLQ e da reconciliação que o desafio avalia.
+- **Floci:** cobre também SNS e EventBridge, mas tem oito meses de vida e falhas de compatibilidade com o SQS corrigidas até outubro de 2026. Fica como troca de imagem se o EventBridge precisar rodar.
+- **LocalStack:** exige token desde a 2026.03.0, e a imagem antiga sem token está congelada, sem correções de segurança.
+- **Moto e MiniStack:** não implementam o `StartMessageMoveTask` de que o *redrive* precisa.
+- **Mock do SDK:** não há fila de verdade, então não prova retry, DLQ nem *redrive* (linha "Testes" da tabela de ferramentas).
 
-**Trade-off.** Quem lê o código não vê o SQS rodando; vê a correspondência e a evolução por escrito.
+**Trade-off.** Um contêiner e uma dependência a mais, e os testes do worker passam a esperar o relógio real do emulador para o *visibility timeout*, com prazos curtos configuráveis. Em troca, a fila do faturamento é a mesma que iria para a AWS.
 
-**Rever quando:** surgir um segundo consumidor dos eventos de pedido, ou a vazão passar do que o polling sustenta, como a AD-003 já diz.
+**Rever quando:** surgir um segundo consumidor dos eventos de pedido (entram o EventBridge e um emulador que o cubra), ou o ElasticMQ deixar de acompanhar a API do SQS que o projeto usa.
 
-**Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/); [ElasticMQ](https://github.com/softwaremill/elasticmq); [Amazon SQS, filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html).
+**Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Polling publisher](https://microservices.io/patterns/data/polling-publisher.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html), [filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) e [redrive](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html); [ElasticMQ](https://github.com/softwaremill/elasticmq); [bbc/sqs-consumer, testes com ElasticMQ](https://github.com/bbc/sqs-consumer); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/).
 
 ## Escolhas de ferramenta
 

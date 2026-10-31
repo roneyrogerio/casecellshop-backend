@@ -120,6 +120,8 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 ## Worker: envio (AD-003)
 
+Esta seção descreve a primeira parte do M3, com a fila na própria tabela da outbox. A AD-021 troca a fila pelo SQS na segunda parte: o Passo 0 dela reescreve a reivindicação, o lease, o retry, a DLQ e o reprocessamento em termos de SQS, e mantém a tentativa, a conclusão e os parâmetros.
+
 - **Limite:** um semáforo no processo, em ordem de chegada, para todas as chamadas ao ERP (envio, sincronização e reconciliação). A permissão devolvida vai direto ao primeiro da fila, para quem chega depois não passar à frente.
 - **Reivindicação:**
   - o worker adquire primeiro as permissões e só reivindica tantas mensagens quantas permissões tem; cada tentativa segura a sua até a conclusão, para a consulta e a criação não esperarem na fila no meio da tentativa e o lease não correr enquanto a mensagem espera a vez;

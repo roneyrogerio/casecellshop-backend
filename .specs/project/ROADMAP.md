@@ -88,8 +88,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de mensageria e resiliência (`DOC-MSG`).
 - Worker (envio, desfechos, reconciliação e runbook) e camada anticorrupção, conforme o design.
+- Em duas partes: a primeira (PR #13) entrega o worker com a fila na própria tabela da outbox; a segunda troca a fila pelo SQS, com o ElasticMQ no compose e nos testes, um *Message Relay* da outbox para o SQS e a DLQ do SQS, e traz a reconciliação e o runbook sobre essa DLQ (AD-021).
 
-**Pronto quando:** `ORD-*` passam, contando faturas no ERP com falhas injetadas pelo ERP simulado.
+**Pronto quando:** `ORD-*` passam, contando faturas no ERP com falhas injetadas pelo ERP simulado, com a fila do faturamento no SQS.
 
 ## M4 — Vitrine e frescor
 
@@ -147,14 +148,13 @@ Fora do escopo principal. Entram só depois que M1 a M6 estiverem completos, nes
 3. Plano de rollout por fase, com critério de saída e rollback.
 4. `/livez` e `/readyz` separados.
 5. Diagrama de sequência (Mermaid) do checkout ao faturamento.
-6. Relay da outbox para um SQS local (ElasticMQ), num perfil opcional do compose, publicando o evento "pedido faturado" fora do caminho crítico (AD-021); pede dependência nova e AD própria.
 
 ## Arquitetura alvo
 
 Descrita no `ARCHITECTURE.md`, fora deste escopo:
 
 - cache L2 compartilhado, CDN e cabeçalhos de cache HTTP;
-- fila gerenciada (SQS com DLQ e redrive policy) alimentada pela outbox;
+- o SQS gerenciado da AWS no lugar do ElasticMQ, e o EventBridge na saída do relay para um segundo consumidor dos eventos de pedido;
 - várias réplicas do worker, com a sincronização coordenada e o limite de chamadas e os pools divididos entre elas;
 - sincronização incremental e captura de mudanças (CDC) a partir de uma réplica do MySQL do ERP, se a replicação puder ser habilitada;
 - eventos de domínio;
