@@ -17,7 +17,7 @@
 Cada meta é provada pelos critérios de [`spec.md`](../features/casecellshop/spec.md).
 
 1. **Nenhum overselling sob concorrência,** com um teste que tem controle negativo (`CHK-01`, `CHK-02`).
-2. **A vitrine não depende do ERP e não fica parada no tempo.** Cache com single-flight e *stale-if-error*. Com o ERP respondendo, uma mudança de preço ou de estoque chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização. Quando o cliente informa o preço que viu, ele é o cobrado (`CAT-*`, `CHK-06`).
+2. **A vitrine não depende do ERP e não fica parada no tempo.** Cache com single-flight e *stale-if-error*. Com o ERP respondendo, uma mudança de preço ou de estoque chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização. O cliente envia o preço que viu, e, se ele divergir do banco, recebe `409` com o preço atual em vez de ser cobrado por outro valor (`CAT-*`, `CHK-06`).
 3. **O checkout não espera o ERP:** `202` com `Location` e `Retry-After`, e o pedido acompanhado em `GET /orders/{orderId}/status` (`CHK-*`).
 4. **Nenhum pedido fantasma, nenhuma mensagem fantasma e nenhuma fatura duplicada, nas condições das hipóteses.** Outbox na mesma transação, consulta pela referência antes de criar, DLQ, reconciliação e reprocessamento em lote. O limite sem a H1b está no R6 (`ORD-*`).
 5. **Todo pedido é rastreável:** um `orderId` leva aos logs e a um trace da requisição ao ERP (`OBS-05`).
@@ -29,7 +29,7 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 
 - **Runtime:** Node.js 26.13.0 LTS (a partir da 24.12), ESM, TypeScript por *type stripping*; TypeScript 7.0.2 só para checar tipos, e o oxlint para o lint
 - **HTTP:** Express 5.3.0, com o contrato em zod 4.6.7 e o OpenAPI 3.1 gerado pelo `@asteasolutions/zod-to-openapi` 9.1.0
-- **Banco e fila:** PostgreSQL 18.6 com `pg` 8.23.1; a outbox é a fila
+- **Banco e fila:** PostgreSQL 18.6 com `pg` 8.23.1 e as consultas pelo Kysely 0.29.7, com os tipos gerados do banco migrado pelo kysely-codegen 0.20.0; as migrações pelo `Migrator` do próprio Kysely; a outbox é a fila
 - **Observabilidade:** `pino` 10.4.0 e OpenTelemetry JS na linha 3 (API 1.10.0, SDK 3.0.0)
 - **Testes:** Vitest 5.0.5, supertest 7.3.1 e Testcontainers 12.2.1
 
@@ -37,12 +37,12 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 
 **Entra:**
 
-- **API:** `GET /products`, `POST /checkout` (com `Idempotency-Key` e, opcionalmente, o preço exibido), `GET /orders/{orderId}/status` e `/health`, cada rota no contrato antes do código.
+- **API:** `GET /products`, `POST /checkout` (com `Idempotency-Key` e o preço que o cliente viu em cada item), `GET /orders/{orderId}/status` e `/health`, cada rota no contrato antes do código.
 - **Banco da loja:** catálogo, preço e estoque sincronizados do ERP, reserva atômica e outbox.
 - **Worker** (uma réplica): envio ao ERP com retry e DLQ, reconciliação e sincronização.
 - **ERP simulado:** módulo atrás da porta `ErpClient`, com estado próprio, falhas configuráveis e as hipóteses abaixo.
 - **Observabilidade:** logs estruturados, métricas em `/metrics` e traces que atravessam a outbox.
-- **Documentação:** README (como rodar, garantias, decisões, limitações e operação), `ARCHITECTURE.md` (diagnóstico, arquitetura alvo e o porquê de cada bloco) e `PROMPTS.md` (onde estão os prompts que governam os agentes).
+- **Documentação:** README (como rodar, garantias, decisões, limitações e operação), `ARCHITECTURE.md` (diagnóstico, arquitetura alvo e o porquê de cada bloco) e `PROMPTS.md` (onde estão os prompts que governam os agentes); o texto de resposta às cinco perguntas, entregue com o link do repositório.
 - **Testes** de regras, concorrência, idempotência, cache, sincronização, contrato e falhas do ERP; os de falha contam faturas, não chamadas.
 
 **Fora, com o motivo:**
