@@ -365,3 +365,83 @@ describe('ORD-21 nenhum retry interno: cada operação chama o transporte uma ve
     expect(transport.calls).toHaveLength(1);
   });
 });
+
+describe('ORD-21 catálogo com corpo 200 malformado é transitório, nunca ok', () => {
+  const validItem = { sku: 'ACL-CAPA-AZUL', name: 'Capa azul', priceCents: 4990, onHand: 10 };
+
+  it.each([
+    { label: 'sem hasNext', body: { items: [validItem] } },
+    { label: 'com hasNext "true" (texto)', body: { items: [validItem], hasNext: 'true' } },
+    { label: 'com hasNext 1 (número)', body: { items: [validItem], hasNext: 1 } },
+    { label: 'com priceCents fracionário', body: { items: [{ ...validItem, priceCents: 49.9 }], hasNext: false } },
+    { label: 'com priceCents negativo', body: { items: [{ ...validItem, priceCents: -1 }], hasNext: false } },
+    { label: 'com onHand negativo', body: { items: [{ ...validItem, onHand: -3 }], hasNext: false } },
+    { label: 'com onHand fracionário', body: { items: [{ ...validItem, onHand: 2.5 }], hasNext: false } },
+    {
+      label: 'com priceCents fracionário e onHand negativo (reprodução do revisor)',
+      body: { items: [{ sku: 'A', name: 'x', priceCents: 49.9, onHand: -3 }] },
+    },
+  ])('ORD-21 catálogo 200 $label é transitório com http_200_invalid_body', async ({ body }) => {
+    const { client } = clientOver(responding(200, body));
+
+    expect(await client.listCatalog(1)).toEqual({ kind: 'transient', cause: 'http_200_invalid_body' });
+  });
+});
+
+describe('ORD-21 o timeout limita a chamada mesmo quando o transporte ignora o sinal', () => {
+  const lateResponses: Record<Operation, ErpResponse> = {
+    createOrder: { status: 201, body: erpOrder },
+    findOrder: { status: 200, body: erpOrder },
+    listCatalog: { status: 200, body: { items: [catalogItem], hasNext: false } },
+  };
+  const expectedOnTimeout = {
+    createOrder: { kind: 'ambiguous', cause: 'timeout' },
+    findOrder: { kind: 'transient', cause: 'timeout' },
+    listCatalog: { kind: 'transient', cause: 'timeout' },
+  } as const;
+  const operations: Operation[] = ['createOrder', 'findOrder', 'listCatalog'];
+
+  it.each(operations)('ORD-21 %s resolve no timeout, sem esperar o transporte, e ignora a resposta tardia', async (operation) => {
+    let respond: (response: ErpResponse) => void = () => undefined;
+    // Não olha o AbortSignal: só responde quando o teste mandar.
+    const transport = fakeTransport(
+      () =>
+        new Promise<ErpResponse>((resolve) => {
+          respond = resolve;
+        }),
+    );
+    const { client, clock } = clientOver(transport);
+
+    const pending: Promise<unknown> = callOperation(client, operation);
+    const call = track(pending);
+    await settle();
+    clock.advance(TIMEOUT_MS - 1);
+    await settle();
+    expect(call.settled).toBe(false);
+
+    clock.advance(1);
+    await settle();
+
+    expect(call.settled).toBe(true);
+    expect(await call.result).toEqual(expectedOnTimeout[operation]);
+
+    respond(lateResponses[operation]);
+    await settle();
+    expect(await call.result).toEqual(expectedOnTimeout[operation]);
+  });
+});
+
+describe('ORD-21 rejeição do transporte que não é de rede nem o aborto do timeout', () => {
+  const operations: Operation[] = ['createOrder', 'findOrder', 'listCatalog'];
+  const expected = {
+    createOrder: { kind: 'ambiguous', cause: 'transport_error' },
+    findOrder: { kind: 'transient', cause: 'transport_error' },
+    listCatalog: { kind: 'transient', cause: 'transport_error' },
+  } as const;
+
+  it.each(operations)('ORD-21 %s mantém a classificação com a causa transport_error, não timeout', async (operation) => {
+    const { client } = clientOver(fakeTransport(() => Promise.reject(new Error('connection terminated'))));
+
+    expect(await callOperation(client, operation)).toEqual(expected[operation]);
+  });
+});
