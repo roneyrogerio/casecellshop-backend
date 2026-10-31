@@ -20,7 +20,7 @@ Uma mudança de processo vai num PR próprio, com teto de tempo, antes do marco 
 | Requisito | Marco | Comprovado por |
 | --- | --- | --- |
 | `POST /checkout` → `202` com `orderId` e `status` | M2 | `CHK-*` |
-| `GET /orders/{orderId}/status` | M2 | `CHK-*` |
+| `GET /orders/{orderId}/status` | M2, M3 | `CHK-*`, `ORD-19` |
 | Sem venda além do estoque | M2 | `CHK-01`, `CHK-02` (controle negativo) |
 | Idempotência para retry e duplo clique | M2 | `CHK-*` |
 | Worker simulando o envio ao ERP; retry, DLQ e reconciliação | M3 | `ORD-*` |
@@ -29,10 +29,11 @@ Uma mudança de processo vai num PR próprio, com teto de tempo, antes do marco 
 | OpenAPI com schemas de sucesso e erro | M1 a M4 | validação de requisição e resposta em todos os testes; `FND-07` |
 | Logs com `correlationId` e `orderId`; métricas de cache, checkout e fila; trace ligando requisição, cache, repositório e worker | M1 a M5 | `OBS-*`, `FND-05`, `CAT-12`, `ORD-18` |
 | Dashboard, alertas e runbook | M5 | README e `OBS-03` |
-| Garantias do sistema; modos de falha com mitigação e instrumentação | M5, M6 | README, cada linha ligada a um teste |
+| Garantias do sistema; modos de falha com mitigação e instrumentação | M5, M6 | `DOC-OPS-01`: README, cada linha ligada a um teste |
 | Testes de regra de negócio, cache e concorrência | M2 a M4 | todos os critérios |
 | Design conceitual por tema | M1 a M6 | `ARCHITECTURE.md` e `DOC-*` |
 | README, `PROMPTS.md`, repositório público e executável | M6 | clone limpo pela URL pública, sem credenciais |
+| Respostas às cinco perguntas (Parte 1.A), com o link do repositório público no fim | M6 | `DOC-ENT-01` |
 
 ---
 
@@ -73,10 +74,13 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP.
 
 - Design de concorrência e idempotência (`DOC-CON`).
+- Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados com `--verify` no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` na regra nova e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
+  - Antes da conversão, a sessão principal ajusta o que o `implementer` não edita (AI-04): o `include` do `tsconfig.json` e o `overrides` do `.oxlintrc.json` (`FND-11`); a regra de migrações do `AGENTS.md` e do `implementer.md`; o comentário do `ci.yml`; e o `scripts/check-migrations.ts`, depois dos testes novos do `test-writer`.
+  - Depois disso, o `implementer` escreve a migração em TypeScript, apaga o `.sql` e troca o runner.
 - Transação do checkout, respostas, status do pedido e contrato das duas rotas, conforme o design.
 - `/security-review` no PR, porque é o marco que recebe dados do cliente.
 
-**Pronto quando:** `CHK-*` passam.
+**Pronto quando:** `CHK-*`, `FND-09`, `FND-10`, `FND-11` e `AI-19` passam, junto com as cláusulas novas do M2 nos critérios que já existiam: os arquivos `.ts` no `AI-01`, o `.kysely-codegenrc*` no `AI-04`, as duas conferências no `AI-05` e no `AI-17`, e os schemas de sucesso e de erro do `POST /checkout` e do `GET /orders/{orderId}/status` no `FND-07`.
 
 ## M3 — Processamento assíncrono
 
@@ -94,7 +98,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - Design de cache e performance da vitrine (`DOC-CAC`).
 - Catálogo com cache e sincronização, conforme o design.
 
-**Pronto quando:** `CAT-*` passam, com relógio controlado.
+**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro).
 
 ## M5 — Observabilidade e operação
 
@@ -114,9 +118,10 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** quem chega ao repositório entende, executa e confere tudo sem precisar perguntar.
 
 - Design de diagnóstico e arquitetura alvo, versão final (`DOC-DIA`), e a revisão do `ARCHITECTURE.md` pelos critérios `DOC-*` e contra o código.
-- README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese de que depende e o teste que a prova; decisões em uma linha, com link para as ADRs; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com o link para o `PROMPTS.md`, que aponta as instruções versionadas dos agentes como os prompts relevantes.
+- README de entrada: pré-requisitos e comandos; mapa requisito → arquivo → teste; garantias, cada uma com a hipótese e o teste que a prova, e a tabela de modos de falha (`DOC-OPS-01`); decisões em uma linha, cada uma com o trade-off aceito e o link para a ADR; riscos residuais e como são detectados; simplificações, limitações, hipóteses e premissas; "Como a IA foi usada", com o link para o `PROMPTS.md`.
+- O README de entrada começa por subir, testar e conferir, sem exigir a configuração da fábrica; a configuração de máquina dos agentes vai para um documento próprio, com link.
 - Índice das cinco perguntas no README e no topo do `ARCHITECTURE.md` (`DOC-IDX-01`).
-- O texto de resposta às cinco perguntas, entregue fora do repositório, com o link do repositório público no fim, como o desafio pede.
+- O texto de resposta às cinco perguntas, entregue fora do repositório, com o link do repositório público no fim, como o desafio pede, e uma cópia versionada no repositório (`DOC-ENT-01`).
 - `/security-review` final.
 - Verificação: repositório público; clone limpo pela URL pública, sem credenciais; compose, testes e CI verde.
 
@@ -128,12 +133,10 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 Se for preciso reduzir, os cortes vêm nesta ordem, sem tirar nenhum requisito da tabela acima. O que for cortado sai também das metas e vira limitação documentada no README.
 
-1. O zeramento de SKU ausente do ERP.
-2. O `expectedUnitPrice` e o `409 price-changed`.
-3. As métricas que não alimentam alerta nem SLO, exceto `hit`, `miss`, o desfecho do checkout e as de frescor do cache.
-4. A operação no README fica com um dashboard, os alertas e o runbook de DLQ.
-5. A tabela de modos de falha fica só com as linhas que têm teste.
-6. As fases de 30 e 90 dias viram um parágrafo.
+1. As métricas que não alimentam alerta nem SLO, exceto `hit`, `miss`, o desfecho do checkout, o processamento da fila e as de frescor do cache.
+2. A operação no README fica com um dashboard, os alertas e o runbook de DLQ.
+3. A tabela de modos de falha fica só com as linhas que têm teste.
+4. As fases de 30 e 90 dias viram um parágrafo, que ainda cita cache, fila, banco próprio da loja, workers, sincronização, observabilidade e reconciliação com o ERP (`DOC-DIA-04`).
 
 ## Adicionais
 
