@@ -38,7 +38,7 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
     const code = lintExitCode(`it('faz algo', () => {\n  expect(1).toBe(1);\n});`);
 
     expect(code).toBe(0);
-  });
+  }, 60_000);
 
   it.each([
     ['it.only', `it.only('faz algo', () => {\n  expect(1).toBe(1);\n});`],

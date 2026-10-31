@@ -1,13 +1,27 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
+import { checkoutRoute } from './checkout.ts';
 import { healthRoute } from './health.ts';
+import { orderStatusRoute } from './orders.ts';
 
+export {
+  AcceptedHeaders,
+  CheckoutAccepted,
+  CheckoutHeaders,
+  CheckoutItem,
+  CheckoutRequest,
+  checkoutRoute,
+  MAX_BODY_BYTES,
+  MAX_ITEMS,
+  MAX_QUANTITY,
+} from './checkout.ts';
 export { HealthQuery, HealthStatus, healthRoute } from './health.ts';
+export { FailureReason, OrderId, OrderStatus, OrderStatusValue, orderStatusRoute } from './orders.ts';
 export { RequestHeaders, ResponseHeaders, RetryAfterHeaders } from './headers.ts';
 export { CorrelationId, Problem, ProblemType } from './problem.ts';
 export { PROBLEM_MEDIA_TYPE } from './responses.ts';
 
 // A validação e os testes percorrem esta lista; o OpenAPI é gerado dela.
-export const routes = [healthRoute];
+export const routes = [healthRoute, checkoutRoute, orderStatusRoute];
 
 export function buildOpenApiDocument() {
   const registry = new OpenAPIRegistry();
@@ -22,6 +36,10 @@ export function buildOpenApiDocument() {
       license: { name: 'MIT', identifier: 'MIT' },
     },
     servers: [{ url: '/' }],
-    tags: [{ name: 'system', description: 'Operação do serviço.' }],
+    tags: [
+      { name: 'system', description: 'Operação do serviço.' },
+      { name: 'checkout', description: 'Compra assíncrona, sem esperar o ERP.' },
+      { name: 'orders', description: 'Acompanhamento do pedido.' },
+    ],
   });
 }

@@ -151,8 +151,8 @@ Com relógio controlado:
 
 ## Observabilidade
 
-- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs.
-- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado.
+- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs. No M2, os logs do checkout e do status do pedido levam o `orderId`.
+- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado. No M2, o counter de desfecho do checkout, com o label `outcome` da lista fechada do design e sem `orderId` nem `sku`.
 - **OBS-03** Um teste confere, na saída de `/metrics`, cada métrica usada nos alertas e no dashboard do README.
 - **OBS-04** Um pedido sem desfecho em 60 s é contado uma vez, mesmo com várias réplicas da API.
 - **OBS-05** Um `orderId` leva aos logs e a um trace da requisição ao ERP.

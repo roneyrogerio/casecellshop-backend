@@ -12,6 +12,10 @@ servers:
 tags:
   - name: system
     description: Operação do serviço.
+  - name: checkout
+    description: Compra assíncrona, sem esperar o ERP.
+  - name: orders
+    description: Acompanhamento do pedido.
 components:
   schemas:
     Problem:
@@ -53,6 +57,22 @@ components:
               - message
             additionalProperties: false
           description: Cada violação do contrato, só no invalid-request.
+        currentPrices:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+              unitPrice:
+                type: integer
+                minimum: 0
+                description: Preço unitário atual, em centavos.
+            required:
+              - sku
+              - unitPrice
+            additionalProperties: false
+          description: Preço atual de cada item com preço alterado, só no price-changed (AD-018).
       required:
         - type
         - title
@@ -68,6 +88,102 @@ components:
         errors:
           - path: query.verbose
             message: Parâmetro desconhecido
+    CheckoutAccepted:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: Identificador do pedido, um UUID gerado pela loja.
+        status:
+          type: string
+          enum:
+            - pending
+            - invoiced
+            - failed
+          description: pending até o ERP responder; invoiced quando faturado; failed com o motivo.
+        total:
+          type: integer
+          minimum: 0
+          description: Total do pedido em centavos, pelo preço do banco.
+      required:
+        - orderId
+        - status
+        - total
+      additionalProperties: false
+      description: Pedido aceito; o faturamento no ERP segue em segundo plano.
+    CheckoutRequest:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+                pattern: ^[A-Za-z0-9._-]{1,64}$
+                description: Código do produto.
+                example: CAPA-IP15-PRETA
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 10
+              expectedUnitPrice:
+                type: integer
+                minimum: 0
+                description: Preço unitário que o cliente viu, em centavos.
+            required:
+              - sku
+              - quantity
+              - expectedUnitPrice
+            additionalProperties: false
+          minItems: 1
+          maxItems: 20
+      required:
+        - items
+      additionalProperties: false
+      description: Itens do pedido; cada SKU aparece uma vez.
+    OrderStatus:
+      anyOf:
+        - type: object
+          properties:
+            orderId:
+              type: string
+              format: uuid
+              description: Identificador do pedido, um UUID gerado pela loja.
+            status:
+              type: string
+              enum:
+                - pending
+                - invoiced
+          required:
+            - orderId
+            - status
+          additionalProperties: false
+        - type: object
+          properties:
+            orderId:
+              type: string
+              format: uuid
+              description: Identificador do pedido, um UUID gerado pela loja.
+            status:
+              type: string
+              enum:
+                - failed
+            reason:
+              type: string
+              enum:
+                - erp_rejected
+                - erp_out_of_stock
+                - cancelled
+              description: Rejeição do ERP, falta de estoque no ERP ou cancelamento.
+          required:
+            - orderId
+            - status
+            - reason
+          additionalProperties: false
+      description: Estado atual do pedido.
   parameters: {}
 paths:
   /health:
@@ -111,6 +227,272 @@ paths:
                 additionalProperties: false
         "400":
           description: Requisição fora do contrato, como um parâmetro desconhecido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: O banco não respondeu.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            retry-after:
+              schema:
+                type: string
+                pattern: ^\d+$
+                description: Segundos até tentar de novo.
+              required: true
+              description: Segundos até tentar de novo.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        default:
+          description: Erro inesperado (500), sem detalhe interno.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /checkout:
+    post:
+      operationId: postCheckout
+      summary: Inicia uma compra
+      description: Reserva o estoque e grava o pedido numa transação, sem esperar o ERP, e responde 202. A mesma Idempotency-Key com o mesmo corpo devolve o mesmo pedido.
+      tags:
+        - checkout
+      security: []
+      parameters:
+        - schema:
+            type: string
+            description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          required: false
+          description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          name: x-request-id
+          in: header
+        - schema:
+            type: string
+            pattern: ^[\x21-\x7E]{1,128}$
+            description: Chave escolhida pelo cliente para repetir o mesmo pedido sem criar outro (1 a 128 caracteres ASCII visíveis).
+          required: true
+          description: Chave escolhida pelo cliente para repetir o mesmo pedido sem criar outro (1 a 128 caracteres ASCII visíveis).
+          name: idempotency-key
+          in: header
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutRequest"
+      responses:
+        "202":
+          description: Pedido aceito, ou o mesmo pedido de antes na repetição com a mesma chave.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            retry-after:
+              schema:
+                type: string
+                pattern: ^\d+$
+                description: Segundos até tentar de novo.
+              required: true
+              description: Segundos até tentar de novo.
+            location:
+              schema:
+                type: string
+                pattern: ^\/orders\/[0-9a-f-]{36}\/status$
+                description: Onde acompanhar o pedido.
+              required: true
+              description: Onde acompanhar o pedido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutAccepted"
+        "400":
+          description: Entrada fora do contrato, sem Idempotency-Key ou com SKU repetido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Sem estoque, preço alterado (com currentPrices) ou a mesma chave em andamento.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Corpo acima de 16 KiB.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: Conteúdo diferente de application/json.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: A mesma chave com outro corpo, ou SKU inexistente.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: O banco não respondeu ou um lock passou do prazo.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            retry-after:
+              schema:
+                type: string
+                pattern: ^\d+$
+                description: Segundos até tentar de novo.
+              required: true
+              description: Segundos até tentar de novo.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        default:
+          description: Erro inesperado (500), sem detalhe interno.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /orders/{orderId}/status:
+    get:
+      operationId: getOrderStatus
+      summary: Consulta o estado de um pedido
+      description: Acompanha o pedido criado pelo POST /checkout até o faturamento no ERP ou a falha.
+      tags:
+        - orders
+      security: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Identificador do pedido, um UUID gerado pela loja.
+          required: true
+          description: Identificador do pedido, um UUID gerado pela loja.
+          name: orderId
+          in: path
+        - schema:
+            type: string
+            description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          required: false
+          description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          name: x-request-id
+          in: header
+      responses:
+        "200":
+          description: Estado atual do pedido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderStatus"
+        "400":
+          description: Identificador fora do formato UUID ou parâmetro desconhecido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Pedido inexistente.
           headers:
             x-request-id:
               schema:

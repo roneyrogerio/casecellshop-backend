@@ -253,6 +253,172 @@ describe('AI-19 cada violação é uma frase com o caminho e a linha', () => {
   });
 });
 
+// A10: o `sql` com outro nome escaparia de todas as regras, que procuram a palavra `sql`.
+describe('AI-19 o sql com outro nome, atribuído a outra variável ou acessado por colchete reprova', () => {
+  it.each([
+    ['o import de sql com outro nome', "import { sql as s } from 'kysely';"],
+    ['o import de sql com outro nome entre outros nomes', "import { Kysely, sql as s, type Selectable } from 'kysely';"],
+    ['o import de sql com outro nome em várias linhas', "import {\n  Kysely,\n  sql as s,\n} from 'kysely';"],
+    ['a atribuição de sql a outra variável', 'const s = sql;'],
+    ['a atribuição de sql com let', 'let s = sql;'],
+    ['a atribuição de sql sem espaço', 'const s=sql;'],
+    ['o acesso por colchete a um método', "const q = sql['raw']('x');"],
+    ['o acesso por colchete com uma variável', 'const q = sql[method](x);'],
+  ])('AI-19 reprova %s', (_label, source) => {
+    expect(violationsIn(source)).toHaveLength(1);
+  });
+
+  it('AI-19 o sql renomeado no import reprova mesmo quando só é usado como tag, com a coluna escondida atrás do apelido', () => {
+    expect(violationsIn("import { sql as s } from 'kysely';\nconst q = s`on_hand - reserved`;").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['o import normal de sql', "import { sql } from 'kysely';"],
+    ['o import normal de sql entre outros nomes', "import { Kysely, sql, type Selectable } from 'kysely';"],
+    ['o import normal de sql em várias linhas', "import {\n  Kysely,\n  sql,\n} from 'kysely';"],
+    ['o apelido de outro nome do kysely', "import { Kysely as K, sql } from 'kysely';"],
+    ['o apelido de um nome parecido com sql', "import { sqlite as s } from 'kysely';"],
+    ['o sql com outro nome vindo de outro módulo', "import { sql as s } from './outro-modulo.ts';"],
+    ['o sql usado como tag, com função e literal', "import { sql } from 'kysely';\nconst q = sql`now()`;"],
+    ['o fragmento atribuído a uma variável', 'const s = sql`now()`;'],
+    ['o fragmento com o tipo genérico atribuído a uma variável', 'const s = sql<number>`1`;'],
+    ['o sql executado', 'await sql`now()`.execute(db);'],
+    ['um nome que só começa com sql', 'const s = sqlText;'],
+    ['um índice de um nome que só termina em sql', 'const first = mysql[0];'],
+    ['uma lista de fragmentos', 'const list = [sql`now()`];'],
+    ['o acesso por colchete a outro objeto', "const v = params['sql'];"],
+  ])('AI-19 passa %s', (_label, source) => {
+    expect(violationsIn(source)).toEqual([]);
+  });
+});
+
+// A11: o leitor léxico precisa reconhecer o regex literal, ou um `'`, um `//` ou uma crase dentro dele
+// abre uma string, um comentário ou um template e engole o código que vem depois.
+describe('AI-19 o regex literal não esconde o código que vem depois dele', () => {
+  it.each([
+    ['uma aspa simples no regex, e uma coluna no fragmento', "v.replace(/'/g, ''); const q = sql`on_hand`;"],
+    ['barras escapadas no regex (parecem um comentário), e um sql.raw depois', '/^https?:\\/\\//.test(u); const r = sql.raw(u);'],
+    ['uma crase no regex, e uma coluna no fragmento da linha seguinte', 'const re = /`/;\nconst q = sql`on_hand`;'],
+  ])('AI-19 reprova %s', (_label, source) => {
+    expect(violationsIn(source).length).toBeGreaterThan(0);
+  });
+
+  it('AI-19 a violação depois do regex com crase cita a linha do arquivo', () => {
+    const violations = violationsIn('const re = /`/;\nconst q = sql`on_hand`;');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.slice((violations[0]?.indexOf(APP_FILE) ?? 0) + APP_FILE.length)).toMatch(/^\D{0,14}2(?!\d)/);
+  });
+
+  it.each([
+    ['uma divisão entre variáveis', 'const x = a / b / c; const q = sql.raw(y);'],
+    ['uma divisão depois de parênteses', 'const x = (a + b) / 2 / c; const q = sql.raw(y);'],
+    ['uma divisão depois de um índice', 'const x = items[0] / 2 / c; const q = sql.raw(y);'],
+    ['uma divisão depois de um número', 'const x = 10 / 2 / 5; const q = sql.raw(y);'],
+  ])('AI-19 continua lendo %s como divisão: o sql.raw depois dela reprova', (_label, source) => {
+    expect(violationsIn(source)).toHaveLength(1);
+  });
+
+  it.each([
+    ['um regex com aspa simples, sem violação', "v.replace(/'/g, ''); const ok = 1;"],
+    ['um regex com barras escapadas, sem violação', '/^https?:\\/\\//.test(u); const ok = 1;'],
+    ['um regex com crase, sem violação', 'const re = /`/;\nconst ok = sql`now()`;'],
+    ['uma divisão, sem violação', 'const x = a / b / c; const q = sql`now()`;'],
+  ])('AI-19 passa %s', (_label, source) => {
+    expect(violationsIn(source)).toEqual([]);
+  });
+});
+
+// A12: a callback guardada numa variável e passada ao set, values ou doUpdateSet tem o mesmo defeito da inline.
+describe('AI-19 set, values e doUpdateSet com um identificador declarado como função no arquivo reprovam', () => {
+  it.each([
+    [
+      'set com arrow guardada em const',
+      "const cb = (eb) => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com arrow sem parênteses guardada em const',
+      "const cb = eb => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com arrow async guardada em const',
+      "const cb = async (eb) => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com function expression guardada em const',
+      "const cb = function (eb) { return { reserved: 1 }; };\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com function declarada',
+      "function cb(eb) { return { reserved: 1 }; }\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com function declarada depois do uso',
+      "db.updateTable('inventory').set(cb).execute();\nfunction cb(eb) { return { reserved: 1 }; }",
+    ],
+    [
+      'set com arrow exportada',
+      "export const cb = (eb) => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com arrow guardada em let',
+      "let cb = (eb) => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com a declaração na mesma linha, como na sonda',
+      "const cb = (eb) => ({ reserved: 1 }); db.updateTable('inventory').set(cb);",
+    ],
+    [
+      'values com arrow guardada em const',
+      "const cb = (eb) => ({ sku: 'a' });\ndb.insertInto('products').values(cb).execute();",
+    ],
+    [
+      'doUpdateSet com arrow guardada em const',
+      "const cb = (eb) => ({ reserved: eb.ref('excluded.reserved') });\ndb.insertInto('inventory').values({ sku: 'a' }).onConflict((oc) => oc.column('sku').doUpdateSet(cb)).execute();",
+    ],
+  ])('AI-19 reprova %s', (_label, source) => {
+    expect(violationsIn(source)).toHaveLength(1);
+  });
+
+  it.each([
+    ['set com um objeto guardado em const', "const patch = { reserved: 1 };\ndb.updateTable('inventory').set(patch).execute();"],
+    [
+      'set com um objeto que tem uma callback por coluna',
+      "const patch = { reserved: (eb) => eb('reserved', '+', q) };\ndb.updateTable('inventory').set(patch).execute();",
+    ],
+    [
+      'set com o resultado de uma chamada que recebe uma arrow',
+      "const patch = makePatch((x) => x);\ndb.updateTable('inventory').set(patch).execute();",
+    ],
+    [
+      'set com um identificador que não é declarado no arquivo (importado)',
+      "import { patch } from './patch.ts';\ndb.updateTable('inventory').set(patch).execute();",
+    ],
+    [
+      'set com um identificador cujo nome só aparece dentro do nome de uma função',
+      "const cbExtra = (eb) => ({ reserved: 1 });\ndb.updateTable('inventory').set(cb).execute();",
+    ],
+    [
+      'set com um objeto, enquanto outra função do arquivo tem outro nome',
+      "const build = (eb) => ({ reserved: 1 });\nconst patch = { reserved: 2 };\ndb.updateTable('inventory').set(patch).execute();",
+    ],
+    [
+      'values com uma lista guardada em const',
+      "const rows = [{ sku: 'a' }];\ndb.insertInto('products').values(rows).execute();",
+    ],
+    [
+      'doUpdateSet com um objeto guardado em const',
+      "const patch = { reserved: 1 };\ndb.insertInto('inventory').values({ sku: 'a' }).onConflict((oc) => oc.column('sku').doUpdateSet(patch)).execute();",
+    ],
+    [
+      'uma função declarada no arquivo que não vai a set, values nem doUpdateSet',
+      "const cb = (eb) => ({ reserved: 1 });\nconst out = cb(eb);\ndb.updateTable('inventory').set({ reserved: 1 }).execute();",
+    ],
+  ])('AI-19 passa %s', (_label, source) => {
+    expect(violationsIn(source)).toEqual([]);
+  });
+});
+
 const tempDirs: string[] = [];
 
 afterEach(() => {

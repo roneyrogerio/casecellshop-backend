@@ -58,8 +58,11 @@ export function requestContext(telemetry: Telemetry, logger: Logger): RequestHan
         status_class: statusClass(status),
       });
       // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
+      // O orderId entra só quando o handler o gravou (pedido existente).
+      const orderId = typeof res.locals['orderId'] === 'string' ? res.locals['orderId'] : undefined;
       logger[status >= 500 ? 'error' : 'info'](
         {
+          ...(orderId === undefined ? {} : { orderId }),
           event: 'http_request',
           correlationId,
           trace_id: spanContext.traceId,
