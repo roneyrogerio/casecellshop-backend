@@ -3,6 +3,8 @@ import express, { type Express, type RequestHandler } from 'express';
 import type { Pool } from 'pg';
 import type { Logger } from 'pino';
 import { checkoutRoute, healthRoute, orderStatusRoute, type HealthStatus, type OrderStatus } from './contract/index.ts';
+import { createCheckoutRepository } from './checkout/repository.ts';
+import { createCheckoutRoutes } from './checkout/routes.ts';
 import { createHealthRepository } from './health/repository.ts';
 import { createOrdersRepository } from './orders/repository.ts';
 import { createErrorHandler, notFoundHandler, ProblemError } from './http/problem.ts';
@@ -75,11 +77,8 @@ export function createApp({ pool, logger, telemetry }: AppDependencies): Express
   };
   get(orderStatusRoute, getOrderStatus);
 
-  // Stubs do M2: as rotas existem no contrato e respondem 501 até a implementação.
-  const notImplemented: RequestHandler = (_req, _res, next) => {
-    next(new ProblemError({ status: 501, cause: 'not-implemented', title: 'Rota ainda não implementada' }));
-  };
-  app.post(toExpressPath(checkoutRoute.path), notImplemented);
+  const checkoutRoutes = createCheckoutRoutes(createCheckoutRepository(pool, telemetry, logger), telemetry, logger);
+  app.post(toExpressPath(checkoutRoute.path), ...checkoutRoutes.handlers);
 
   // Fora do contrato: o /metrics é do Prometheus, não da API.
   app.get('/metrics', (req, res) => {

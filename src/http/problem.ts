@@ -13,6 +13,8 @@ export interface ProblemInit {
   title: string;
   detail?: string;
   errors?: { path: string; message: string }[];
+  // Só no price-changed (AD-018): o preço atual de cada item que mudou.
+  currentPrices?: { sku: string; unitPrice: number }[];
   headers?: Record<string, string>;
 }
 
@@ -56,6 +58,7 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
       correlationId,
       ...(init.detail ? { detail: init.detail } : {}),
       ...(init.errors ? { errors: init.errors } : {}),
+      ...(init.currentPrices ? { currentPrices: init.currentPrices } : {}),
     };
 
     res.status(init.status);

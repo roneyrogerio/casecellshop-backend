@@ -1,4 +1,13 @@
-import { context, SpanKind, SpanStatusCode, type Attributes, type Histogram, type Span, type Tracer } from '@opentelemetry/api';
+import {
+  context,
+  SpanKind,
+  SpanStatusCode,
+  type Attributes,
+  type Counter,
+  type Histogram,
+  type Span,
+  type Tracer,
+} from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
@@ -24,6 +33,8 @@ export interface Telemetry {
   tracer: Tracer;
   // Duração HTTP em segundos; labels: route (template), method e status_class.
   httpRequestDuration: Histogram;
+  // Desfecho de cada checkout; único label: outcome, de lista fechada (OBS-02).
+  checkoutOutcome: Counter;
   // Abre um span ativo, o fecha ao fim da função e registra a falha, se houver.
   withSpan<T>(name: string, options: { kind: SpanKind; attributes?: Attributes }, fn: (span: Span) => Promise<T>): Promise<T>;
   metricsHandler(request: IncomingMessage, response: ServerResponse): void;
@@ -78,9 +89,14 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
     advice: { explicitBucketBoundaries: DURATION_BUCKETS_SECONDS },
   });
 
+  const checkoutOutcome = meter.createCounter('checkout_outcome_total', {
+    description: 'Checkouts por desfecho: accepted, replay, out_of_stock, price_changed, invalid ou unavailable.',
+  });
+
   return {
     tracer,
     httpRequestDuration,
+    checkoutOutcome,
     async withSpan(name, spanOptions, fn) {
       return tracer.startActiveSpan(name, spanOptions, async (span) => {
         try {
