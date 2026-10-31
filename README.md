@@ -7,7 +7,7 @@ Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser 
 ## Pré-requisitos
 
 - Docker, com o Compose v2.20.2 ou mais novo;
-- Node.js a partir da 24.12; a versão de referência é a do [`.nvmrc`](.nvmrc) (26.13.0). O Node roda o TypeScript direto, sem build.
+- Node.js a partir da 24.12; a versão de referência é a do [`.nvmrc`](.nvmrc) (26.13.0), que o `nvm use` escolhe sozinho. Abaixo do piso, `npm install` e `npm test` param com o erro `EBADDEVENGINES`, que diz a versão exigida. O Node roda o TypeScript direto, sem build. O `docker compose up` não depende do Node da máquina.
 
 ## Subir
 
@@ -39,7 +39,7 @@ Os testes que tocam o banco rodam contra um PostgreSQL real, pelo Testcontainers
 
 A partir do M2, as consultas e as migrações são escritas pelo Kysely, com os tipos gerados do banco migrado: uma coluna apagada ou renomeada numa migração quebra o `npm run typecheck`, e o CI confere que os tipos estão em dia (`FND-09`).
 
-Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos, no Node do `.nvmrc` e na 24.12. `npm run verify` roda o mesmo sem os testes de integração, em cerca de um minuto, e é o que o `pre-push` do repositório executa; `npm run verify:full` inclui a integração, com o Docker.
+Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos no Node do `.nvmrc`, e de novo na 24.12, menos os testes que sobem o `docker compose`, cuja imagem já fixa o Node 26. `npm run verify` roda o mesmo sem os testes de integração, em cerca de um minuto, e é o que o `pre-push` do repositório executa; `npm run verify:full` inclui a integração, com o Docker.
 
 ## Critérios do M1
 
