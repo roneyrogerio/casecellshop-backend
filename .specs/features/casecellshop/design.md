@@ -91,7 +91,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, objetos estritos (`.strict()`, que vira `additionalProperties: false` no OpenAPI).
 - **`X-Request-Id`:** aceito se for válido, gerado se não. É o `correlationId` dos logs e volta em toda resposta, inclusive no `202`, e no problem+json. Um `traceparent` de entrada continua o trace.
 - **Fluxo assíncrono:** o `202` traz `Location` e `Retry-After`; o `503` também traz `Retry-After`.
-- **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento). Um pedido na DLQ continua `pending`.
+- **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento: `erp_rejected`, `erp_out_of_stock` ou `cancelled`). O banco garante que só um pedido `failed` tem motivo, que todo `failed` tem um, e que o motivo é um dos três. Um pedido na DLQ continua `pending`.
 - **Preço:** em centavos, como inteiros. O checkout usa o preço do banco, nunca o da requisição, envia-o ao ERP (H3) e devolve o total no `202`. O `expectedUnitPrice`, o preço que o cliente viu, é obrigatório em cada item (AD-018): igual ao do banco, o pedido segue; diferente, `409` com o preço atual, e o cliente confirma de novo.
 - **Erros por rota:**
   - `POST /checkout`: `400` (entrada inválida, sem chave, SKU repetido); `409` (sem estoque, preço alterado, mesma chave em andamento); `413` (corpo acima do limite); `415` (conteúdo diferente de JSON); `422` (chave com outro corpo, SKU inexistente); `503`;
