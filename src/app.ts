@@ -2,8 +2,9 @@ import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import express, { type Express, type RequestHandler } from 'express';
 import type { Pool } from 'pg';
 import type { Logger } from 'pino';
-import { checkoutRoute, healthRoute, orderStatusRoute, type HealthStatus } from './contract/index.ts';
+import { checkoutRoute, healthRoute, orderStatusRoute, type HealthStatus, type OrderStatus } from './contract/index.ts';
 import { createHealthRepository } from './health/repository.ts';
+import { createOrdersRepository } from './orders/repository.ts';
 import { createErrorHandler, notFoundHandler, ProblemError } from './http/problem.ts';
 import { requestContext } from './http/request-context.ts';
 import { validateRequest } from './http/validate.ts';
@@ -30,6 +31,7 @@ export function createApp({ pool, logger, telemetry }: AppDependencies): Express
   app.use(requestContext(telemetry, logger));
 
   const health = createHealthRepository(pool, telemetry);
+  const orders = createOrdersRepository(pool, telemetry);
 
   const getHealth: RequestHandler = async (_req, res) => {
     try {
@@ -52,12 +54,32 @@ export function createApp({ pool, logger, telemetry }: AppDependencies): Express
   };
   get(healthRoute, getHealth);
 
+  const getOrderStatus: RequestHandler = async (req, res) => {
+    const orderId = req.params['orderId'] as string;
+    let found: OrderStatus | null;
+    try {
+      found = await orders.findStatus(orderId);
+    } catch (error) {
+      logger.warn({ event: 'order_status_failed', err: error }, 'o banco não respondeu à consulta do pedido');
+      throw new ProblemError({
+        status: 503,
+        cause: 'service-unavailable',
+        title: 'Banco indisponível',
+        headers: { 'Retry-After': HEALTH_RETRY_AFTER_SECONDS },
+      });
+    }
+    // O id fica fora do corpo do 404; o log só o recebe quando o pedido existe.
+    if (!found) throw new ProblemError({ status: 404, cause: 'not-found', title: 'Pedido não encontrado' });
+    res.locals['orderId'] = found.orderId;
+    res.json(found);
+  };
+  get(orderStatusRoute, getOrderStatus);
+
   // Stubs do M2: as rotas existem no contrato e respondem 501 até a implementação.
   const notImplemented: RequestHandler = (_req, _res, next) => {
     next(new ProblemError({ status: 501, cause: 'not-implemented', title: 'Rota ainda não implementada' }));
   };
   app.post(toExpressPath(checkoutRoute.path), notImplemented);
-  app.get(toExpressPath(orderStatusRoute.path), notImplemented);
 
   // Fora do contrato: o /metrics é do Prometheus, não da API.
   app.get('/metrics', (req, res) => {
