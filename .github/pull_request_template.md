@@ -1,23 +1,27 @@
-## O que muda
+## Resumo de decisão
 
-<!-- Marco e resumo em até três linhas. -->
+<!-- Até ~300 palavras. O mantenedor lê só este bloco, em 2 a 5 minutos (AD-023). -->
 
-**Marco:**
-**Critérios:** <!-- por exemplo, CHK-01 a CHK-12 -->
+**Entrega:** <!-- uma frase: marco, critérios e o que fica de fora -->
+
+**Precisa do seu julgamento:** <!-- ADs novas ou substituídas, exceções, SPEC_DEVIATION, o trecho alterado de uma resposta DOC-*, riscos residuais; ou "nada" -->
+
+**Evidência de máquina:**
+
+- CI:
+- critérios com teste: <!-- N de N; critério sem teste ou teste alterado, listado -->
+- última revisão: <!-- APROVADO, 0 alta e 0 média -->
+- `/security-review`:
+- `app-check`:
+- testes apagados, pulados ou afrouxados: <!-- não -->
+
+**Áreas de risco tocadas:** migração <!-- sim/não --> · concorrência · contrato · CI e permissões <!-- cada "sim" com link para o trecho -->
 
 ## Plano
 
 <!-- O plano aprovado, uma linha por fatia, marcada quando o feat: dela fica verde e uma rodada de revisão a cobre. -->
 
 - [ ] 
-
-## Para o mantenedor ler (~10 min)
-
-<!-- Só o que a máquina não decide por você. O resto está nos checks e no ruleset. -->
-
-- A tabela critério × teste no resumo do CI: cada critério tem um teste cujo nome o prove?
-- O texto das respostas do desafio que este marco tocou (as seções do `ARCHITECTURE.md` ligadas aos critérios `DOC-*`).
-- Mudanças em specs, ADs, migrações e CI, se houver.
 
 ## O que a IA gerou
 

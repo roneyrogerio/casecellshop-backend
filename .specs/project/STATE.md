@@ -286,7 +286,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-012 · Fábrica v2: quatro nós, oráculo fora do alcance de quem implementa e humano só onde decide
 
-**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, e o destino dos achados `baixa` de texto, pela AD-022.
+**Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, o destino dos achados `baixa` de texto, pela AD-022, e a leitura de uns 10 minutos do mantenedor, pela AD-023.
 
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
@@ -583,7 +583,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-021 · O SQS é a fila do faturamento; a outbox é a caixa de saída
 
-**Status:** proposta (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
+**Status:** aceita (31/10/2026, PR #13; implementação no PR 2 do M3). Substitui, na AD-003, "a tabela da outbox é a fila" e o motivo dado para não rodar SQS local.
 
 **Contexto.** A AD-003 fez da tabela da outbox a própria fila e descartou o SQS local porque o LocalStack exige token de conta desde a versão 2026.03.0. Esse motivo não fecha a questão: o ElasticMQ roda a API do SQS localmente, sem conta nem token, e as bibliotecas de SQS mais usadas em Node (o `sqs-consumer` da BBC, o `nestjs-sqs`) o usam nos próprios testes com o `@aws-sdk/client-sqs` da versão 3. O PDF avalia retry, DLQ e reconciliação no fluxo do checkout e cita o LocalStack entre os serviços de apoio, e a vaga pede SQS: a fila do faturamento é o lugar onde o SQS mostra o que o desafio avalia.
 
@@ -613,7 +613,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-022 · Erro de texto do próprio PR se corrige no PR, numa rodada só
 
-**Status:** proposta (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
+**Status:** aceita (31/10/2026, PR #13). Substitui, na AD-015, "achado `baixa` nunca bloqueia: vira item do próximo plano" para os erros de texto que o PR introduz.
 
 **Contexto.** Pela AD-015, todo achado `baixa` vai para o plano seguinte, e um erro de texto que o PR introduziu (uma frase da spec que contradiz o design, uma marca errada no `ARCHITECTURE.md`, uma regra com duas leituras) fica publicado até o PR seguinte, lido pelos agentes e por quem avalia o desafio. Quando o M3 passou a corrigir esses erros no mesmo PR, cada correção abriu uma rodada nova, com revisão aberta e um comentário no PR: as Revisões 6 a 9 foram só de texto, e da 6 à 8 cada uma achou mais um ajuste, às vezes criado pela correção anterior. A causa do laço era a revisão aberta a cada correção, não a correção em si.
 
@@ -636,6 +636,31 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Rever quando:** a soma das conferências de texto de uma rodada passar do tempo de uma rodada de código.
 
 **Referências:** AD-015; L-007; [Google, Code Review Developer Guide: "Cleaning It Up Later"](https://google.github.io/eng-practices/review/reviewer/pushback.html) e ["LGTM with comments"](https://google.github.io/eng-practices/review/reviewer/speed.html); [Claude Code, Code Review](https://code.claude.com/docs/en/code-review-pull-requests) (achados *nit* e *pre-existing*, re-revisão do que mudou); [Claude Code, boas práticas](https://code.claude.com/docs/en/best-practices) ("skip style").
+
+### AD-023 · Relatório curto e resumo de decisão: o mantenedor lê em 2 a 5 minutos
+
+**Status:** proposta (31/10/2026). Substitui, na AD-012, a leitura de "uns 10 minutos por marco" da matriz critério × teste e do texto das respostas.
+
+**Contexto.** No M3, os relatórios do `reviewer` tinham de 60 a 110 linhas, com o veredito e os achados misturados ao que foi conferido sem problema e os mesmos achados repetidos em mais de uma seção. A leitura reservada ao mantenedor era de uns 10 minutos por PR, sobre a tabela critério × teste e as seções inteiras do `ARCHITECTURE.md`, e o mantenedor achou isso muito. A sessão principal e o próprio `reviewer` também releem o relatório anterior a cada rodada.
+
+**Decisão.**
+
+- **Relatório do `reviewer`:** veredito e contagens no topo, uma linha por achado aberto numa tabela, o bloco completo (falha, reprodução, correção) só para `alta` e `média`, a rodada anterior numa linha de ID e status, "Conferido sem achado" e "CI e comandos" recolhidos em `<details>`, e um comentário HTML final com as contagens em JSON. Nada que o processo exige sai: a reprodução, o `path:line`, o critério, a numeração estável, o que ficou "a confirmar" e os critérios sem teste, mesmo quando "nenhum". O esqueleto vai como exemplo nas instruções do `reviewer`, junto com a instrução de ajustar o tamanho ao que a tarefa pede.
+- **Resumo de decisão no topo do PR,** até ~300 palavras: o que o PR entrega; o que precisa do julgamento do mantenedor (ADs, exceções, `SPEC_DEVIATION`, o trecho alterado de uma resposta `DOC-*`, riscos residuais) ou "nada"; a evidência de máquina, uma linha cada, nesta lista fechada: CI, critérios com teste (N de N, com cada critério sem teste ou teste alterado listado), última revisão, `/security-review`, `app-check` e testes apagados, pulados ou afrouxados; e as áreas de risco tocadas (migração, concorrência, contrato, CI e permissões), com link para o trecho.
+- **Leitura do mantenedor:** só o resumo. Uns 2 minutos quando nada pede decisão, mais ~1 minuto por item que pede; alvo de até 5 minutos. Acima disso, o PR deveria ter sido dividido. A tabela critério × teste deixa de ser leitura obrigatória: a máquina a confere, e o resumo mostra só as exceções.
+- Decidido pelo mantenedor depois de pesquisa.
+
+**Alternativas consideradas:**
+
+- **Manter o relatório e a leitura de 10 minutos (AD-012):** o veredito fica no meio do texto, e o mantenedor relê o que a máquina já conferiu.
+- **Só encurtar o relatório:** reduz tokens, mas a leitura do mantenedor continua sendo a das seções inteiras.
+- **Recolher também os achados `alta` e `média`:** esconde justamente o que pede ação.
+
+**Trade-off.** O resumo depende de a sessão principal listar com honestidade o que pede julgamento; se algo que pede decisão ficar fora dele, o mantenedor não o vê. Por isso a evidência de máquina e as áreas de risco são listas fechadas, com "sim" ou "não" para cada item.
+
+**Rever quando:** a leitura passar de 5 minutos em dois PRs seguidos, ou um problema chegar à `main` por um item que o resumo deixou de fora.
+
+**Referências:** [Claude Code, Code Review](https://code.claude.com/docs/en/code-review-pull-requests) (severidades, tabela no check run, raciocínio recolhido, contagens em comentário HTML); [Claude Code, boas práticas](https://code.claude.com/docs/en/best-practices) (o humano aprova o merge com a evidência); [Anthropic, contexto para agentes](https://www.anthropic.com/engineering/effective-context-engineering-for-AI-agents) ("smallest possible set of high-signal tokens"); [GitHub, seções recolhidas](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-collapsed-sections); [Google, Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html); [Nielsen Norman Group, pirâmide invertida](https://www.nngroup.com/articles/inverted-pyramid/).
 
 ## Escolhas de ferramenta
 

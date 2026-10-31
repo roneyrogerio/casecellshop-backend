@@ -46,10 +46,51 @@ Use Bash for read-only commands: run `grep` and `find` to search (this version h
 
 ## Report
 
+Write the report in this shape (AD-023). The maintainer reads the top; the main session and the next round read all of it. Match its length to what the task needs: cover the substance, without filler sections or a summary that repeats the table.
+
+```markdown
+## Revisão <n> — APROVADO | REPROVADO
+Base `<base7>` · head `<head7>` · <k> commits
+Abertos: <n> alta, <n> média, <n> baixa · CI: verde | vermelho | não recebido · Critérios sem teste: nenhum | <IDs>
+
+> [!WARNING]
+> Precisa do mantenedor: <only for an exception, a SPEC_DEVIATION or an escalation; otherwise drop this block>
+
+### Achados abertos
+| ID | Severidade | Onde | Critério | Problema |
+| --- | --- | --- | --- | --- |
+| A41 | média | `src/x.ts:42` | CHK-03 | <one line> |
+| A42 | baixa | `docs/y.md:7` | AD-021 | <one line> → corrige neste PR \| próximo plano |
+
+#### A41 · média · `src/x.ts:42` · CHK-03
+- **Falha:** <input or state → wrong result>
+- **Reprodução:** `<command you ran>` → <the output lines that show it>
+- **Correção:** <suggested fix>
+
+Rodada anterior: A37 corrigido · A38 não corrigido (rodada 2) · A28 adiado
+
+<details>
+<summary>Conferido sem achado</summary>
+
+- <one line per check, with `path:line`>
+</details>
+
+<details>
+<summary>CI e comandos</summary>
+
+- <the CI summary you received, and each command you ran with its outcome>
+</details>
+
+<!-- {"rodada": <n>, "veredito": "APROVADO", "alta": 0, "media": 0, "baixa": 0, "abertos": []} -->
+```
+
+- Only an open `alta` or `média` finding gets the full block under the table (falha, reprodução, correção); a `baixa` stays in its table row, with its destination. A finding closed in an earlier round appears only in the "Rodada anterior" line.
+- Nothing the process needs is dropped: the reproduction of each `alta` and `média`, the `path:line` and the criterion or AD of each finding, anything "a confirmar" (in its row or in "Conferido sem achado"), and the criteria without a test (write "nenhum" when there are none).
+- The last line is the HTML comment with the counts in JSON, so the main session routes without parsing prose.
 - Start with the heading `## Revisão <n>`, where n is the review round of this PR.
 - **Veredito:** `REPROVADO` while any `alta` or `média` finding is open, from this round or an earlier one; otherwise `APROVADO`. `baixa` findings never block. A text error (a wrong fact, a contradiction with the spec, the design or an AD, a broken reference or ID, a diverging term) in lines this PR changed is fixed in the same PR; a text improvement in lines the PR did not touch, and any code or test `baixa`, becomes a checklist item of the next plan (AD-022). A wording preference is not a finding.
-- **Text-fix check:** when the main session sends the diff of a text-fix commit inside the same round, review only the lines that commit changed: for each finding it addresses, say whether it is closed, and say whether the new lines introduce an error. A finding in lines the fix did not touch is out of scope for the check. Keep the round number and write the round's consolidated report: every finding of the round in a table (finding, severity, origin: PR delta or pre-existing, fix commit, status: corrigido, sem mudança necessária or adiado with its destination), plus the result of each check. The last report of the round replaces the earlier ones.
-- **Achados**, most severe first, numbered `A1`, `A2`… For each: severity, `path:line`, the criterion or AD involved, a concrete failure scenario (input or state → wrong result) and the suggested fix. Severity (AD-015):
+- **Text-fix check:** when the main session sends the diff of a text-fix commit inside the same round, review only the lines that commit changed: for each finding it addresses, say whether it is closed, and say whether the new lines introduce an error. A finding in lines the fix did not touch is out of scope for the check. Keep the round number and write the round's consolidated report in the same shape, with the table of "Achados abertos" replaced by "Achados da rodada": every finding of the round (finding, severity, origin: PR delta or pre-existing, fix commit, status: corrigido, sem mudança necessária or adiado with its destination), plus the result of each check. The last report of the round replaces the earlier ones.
+- **Achados**, most severe first, numbered `A1`, `A2`…, each in a table row with severity, `path:line`, the criterion or AD and the problem; a `baixa` row also carries the suggested fix in that line, and an open `alta` or `média` gets the full block below the table (a concrete failure scenario, input or state → wrong result, the reproduction and the fix). Severity (AD-015):
   - `alta`: breaks a criterion in its main path, loses or corrupts data, opens an exploitable security flaw, or lets a guardrail be bypassed in a way an agent would plausibly hit;
   - `média`: wrong behavior you reproduced in a realistic case, or a criterion in scope without a test that would fail;
   - `baixa`: rare trigger, defense in depth, or wording.
