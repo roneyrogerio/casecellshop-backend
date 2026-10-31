@@ -7,7 +7,7 @@ Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser 
 ## Pré-requisitos
 
 - Docker, com o Compose v2.20.2 ou mais novo;
-- Node.js a partir da 24.12; a versão de referência é a do [`.nvmrc`](.nvmrc) (26.13.0), que o `nvm use` escolhe sozinho. Abaixo do piso, `npm install` e `npm test` param com o erro `EBADDEVENGINES`, que diz a versão exigida. O Node roda o TypeScript direto, sem build. O `docker compose up` não depende do Node da máquina.
+- Node.js a partir da 24.12; a versão de referência é a do [`.nvmrc`](.nvmrc) (26.13.0), que o `nvm use` escolhe sozinho. Abaixo do piso, `npm install` e `npm test` param com o erro `EBADDEVENGINES`, que diz a versão exigida (com o npm 10.9 ou mais novo; um npm mais antigo só avisa). O Node roda o TypeScript direto, sem build. O `docker compose up` não depende do Node da máquina.
 
 ## Subir
 
