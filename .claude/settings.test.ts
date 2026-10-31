@@ -258,3 +258,27 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     );
   });
 });
+
+// O Claude Code compara o nome do estilo com maiúsculas e minúsculas e cai em silêncio no estilo padrão quando
+// não bate; por isso a conferência é por igualdade exata, e não por comparação sem distinção de caixa.
+function isConciseOutputStyle(value: unknown): boolean {
+  return value === 'Concise';
+}
+
+describe('AI-21 estilo de resposta do .claude/settings.json', () => {
+  it('AI-21 o settings.json define outputStyle exatamente como "Concise"', () => {
+    const { outputStyle } = settings as Settings & { outputStyle?: unknown };
+
+    expect(outputStyle).toBe('Concise');
+    expect(isConciseOutputStyle(outputStyle)).toBe(true);
+  });
+
+  // Controles negativos: a conferência reprova o nome com a caixa errada e o valor ausente.
+  it('AI-21 a conferência reprova "concise" em minúsculas', () => {
+    expect(isConciseOutputStyle('concise')).toBe(false);
+  });
+
+  it('AI-21 a conferência reprova outputStyle ausente', () => {
+    expect(isConciseOutputStyle(undefined)).toBe(false);
+  });
+});
