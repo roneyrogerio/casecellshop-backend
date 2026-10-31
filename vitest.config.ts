@@ -23,13 +23,6 @@ export default defineConfig({
           include: ['test/integration/**/*.test.ts'],
           testTimeout: 60_000,
           hookTimeout: 120_000,
-          // Cada arquivo sobe o próprio contêiner. Com o padrão (núcleos - 1), uma
-          // máquina de 12 núcleos subia dez de uma vez num Docker de 4 CPUs, e o
-          // compose passava do prazo do healthcheck. O Vitest exige outro groupOrder
-          // para um projeto com maxWorkers diferente; a integração roda depois dos
-          // unitários.
-          maxWorkers: 4,
-          sequence: { groupOrder: 1 },
         },
       },
     ],
