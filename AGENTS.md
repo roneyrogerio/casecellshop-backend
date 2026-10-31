@@ -13,12 +13,14 @@ The spec wins over the code. Read only the sections your task needs, by heading;
 | File | Holds |
 | --- | --- |
 | [`.specs/project/PROJECT.md`](.specs/project/PROJECT.md) | Vision, scope, ERP hypotheses (H1a–H4), load assumptions |
-| [`.specs/project/ROADMAP.md`](.specs/project/ROADMAP.md) | Current milestone and done criteria |
+| [`.specs/project/ROADMAP.md`](.specs/project/ROADMAP.md) | Current milestone, done criteria and pending items |
 | [`.specs/project/STATE.md`](.specs/project/STATE.md) | Decisions (`### AD-NNN`, read only the ones cited), tool choices, risks, lessons |
 | [`.specs/features/casecellshop/spec.md`](.specs/features/casecellshop/spec.md) | Acceptance criteria with IDs |
 | [`.specs/features/casecellshop/design.md`](.specs/features/casecellshop/design.md) | How each part is built, and every parameter |
 
 When the code and the spec disagree, do not silently pick one: report it as `SPEC_DEVIATION` with the evidence.
+
+Every decision, pending item and maintainer preference that affects the project lives in the repository (`STATE.md`, `ROADMAP.md`, this file), so any session, local or in the cloud, starts from the same place. The agent's local memory is only a shortcut to them, never their only record.
 
 ## Language
 
