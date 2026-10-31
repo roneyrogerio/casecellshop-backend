@@ -242,7 +242,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Nomes das métricas do worker (M3),** no `/metrics` dele:
   - `outbox_attempt_outcome_total` (counter, label `outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed` ou `lease_short`), contado quando o desfecho é gravado: `closed` e o `dead` do limite já gasto na reivindicação, `lease_short` quando a tentativa desiste; a conclusão sem linha afetada não conta aqui, só no counter dela;
   - `outbox_conclusion_no_row_total` (counter, sem label);
-  - `order_accept_to_invoice_seconds` (histogram, sem label, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` do `outbox_attempt_outcome_total` também só conta nesse caso;
+  - `order_accept_to_invoice_seconds` (histogram, sem label, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` e o `failed` do `outbox_attempt_outcome_total`, e os logs `order.invoiced` e `order.failed`, também só saem nesse caso;
   - `erp_request_duration_seconds` (histogram) e `erp_request_total` (counter), com os labels `operation` (`create_order`, `find_order` ou `list_catalog`) e `outcome` (`ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous` ou `config_error`), com fronteiras até 30 s, a última em 30;
   - `erp_requests_in_flight` (gauge, sem label);
   - `erp_config_error_total` (counter, label `operation`) e `erp_out_of_stock_rejection_total` (counter, sem label).
