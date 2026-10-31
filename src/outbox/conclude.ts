@@ -5,7 +5,7 @@ import { runInTransaction, type StoreDb } from '../db/database.ts';
 const inventory = expressionBuilder<StoreDb, 'inventory'>();
 
 // O desfecho que muda o pedido; o retry não passa por aqui, porque só mexe na visibilidade no SQS.
-export type OrderConclusion = { kind: 'invoiced' } | { kind: 'failed'; reason: 'erp_rejected' | 'erp_out_of_stock' };
+export type OrderConclusion = { kind: 'invoiced' } | { kind: 'failed'; reason: 'erp_rejected' | 'erp_out_of_stock' | 'cancelled' };
 
 export interface ConclusionResult {
   // O pedido mudou de estado nesta transação; se não, o desfecho já era outro.
@@ -22,37 +22,42 @@ export async function concludeOrder(db: Kysely<StoreDb>, orderId: string, conclu
     // A linha da outbox abre a ordem de lock (AGENTS.md): serializa com o relay e com a reconciliação,
     // que também a tocam, e não deixa duas conclusões do mesmo pedido entrelaçarem os locks.
     await trx.selectFrom('outbox').select('order_id').where('order_id', '=', orderId).forUpdate().execute();
-    const order = await trx
-      .updateTable('orders')
+    return applyConclusion(trx, orderId, conclusion);
+  });
+}
+
+// Pedido e estoque, para quem já travou a linha da outbox na própria transação (o cancelamento do runbook).
+export async function applyConclusion(trx: Kysely<StoreDb>, orderId: string, conclusion: OrderConclusion): Promise<ConclusionResult> {
+  const order = await trx
+    .updateTable('orders')
+    .set(
+      conclusion.kind === 'invoiced'
+        ? { status: 'invoiced', outcome_at: sql<Date>`now()` }
+        : { status: 'failed', failure_reason: conclusion.reason, outcome_at: sql<Date>`now()` },
+    )
+    .where('id', '=', orderId)
+    .where('status', '=', 'pending')
+    .returning(['accepted_at', 'outcome_at'])
+    .executeTakeFirst();
+  if (!order) return { orderChanged: false };
+
+  const items = await trx.selectFrom('order_items').select(['sku', 'quantity']).where('order_id', '=', orderId).orderBy('sku').execute();
+  for (const { sku, quantity } of items) {
+    await trx
+      .updateTable('inventory')
       .set(
         conclusion.kind === 'invoiced'
-          ? { status: 'invoiced', outcome_at: sql<Date>`now()` }
-          : { status: 'failed', failure_reason: conclusion.reason, outcome_at: sql<Date>`now()` },
+          ? {
+              // O GREATEST segura o on_hand quando a sincronização já descontou esta venda.
+              on_hand: inventory.fn<number>('greatest', [inventory('on_hand', '-', quantity), inventory.val(0)]),
+              reserved: inventory('reserved', '-', quantity),
+              sold_total: inventory('sold_total', '+', quantity),
+            }
+          : { reserved: inventory('reserved', '-', quantity) },
       )
-      .where('id', '=', orderId)
-      .where('status', '=', 'pending')
-      .returning(['accepted_at', 'outcome_at'])
-      .executeTakeFirst();
-    if (!order) return { orderChanged: false };
-
-    const items = await trx.selectFrom('order_items').select(['sku', 'quantity']).where('order_id', '=', orderId).orderBy('sku').execute();
-    for (const { sku, quantity } of items) {
-      await trx
-        .updateTable('inventory')
-        .set(
-          conclusion.kind === 'invoiced'
-            ? {
-                // O GREATEST segura o on_hand quando a sincronização já descontou esta venda.
-                on_hand: inventory.fn<number>('greatest', [inventory('on_hand', '-', quantity), inventory.val(0)]),
-                reserved: inventory('reserved', '-', quantity),
-                sold_total: inventory('sold_total', '+', quantity),
-              }
-            : { reserved: inventory('reserved', '-', quantity) },
-        )
-        .where('sku', '=', sku)
-        .execute();
-    }
-    const acceptToOutcomeSeconds = order.outcome_at ? (order.outcome_at.getTime() - order.accepted_at.getTime()) / 1000 : undefined;
-    return acceptToOutcomeSeconds === undefined ? { orderChanged: true } : { orderChanged: true, acceptToOutcomeSeconds };
-  });
+      .where('sku', '=', sku)
+      .execute();
+  }
+  const acceptToOutcomeSeconds = order.outcome_at ? (order.outcome_at.getTime() - order.accepted_at.getTime()) / 1000 : undefined;
+  return acceptToOutcomeSeconds === undefined ? { orderChanged: true } : { orderChanged: true, acceptToOutcomeSeconds };
 }

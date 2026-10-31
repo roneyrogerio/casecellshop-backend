@@ -138,14 +138,17 @@ export function createWorker({ pool, queue, erp, semaphore: injected, logger, te
       return undefined;
     };
 
+    // Os itens vêm antes da permissão: nenhuma consulta ao banco pode ficar entre a última
+    // conferência de prazo e a chamada ao ERP.
+    const items = await loadItems(message.orderId);
     if (tooLate(message)) return giveUp();
     // Lido antes do UPDATE: a idade medida nunca fica abaixo da real, que conta do now() do banco.
     let permitReadAt = clock.now();
     const permit = await takeCallPermit(db, message.orderId, { minDelayMs: settings.minDelayMs, clearDead: true });
     if (!permit.granted) return { kind: 'deferred', seconds: Math.ceil(permit.retryInMs / 1000) + 1 };
-    if (tooLate(message, permitReadAt)) return giveUp();
 
-    const items = await loadItems(message.orderId);
+    // Conferência imediata antes de cada chamada ao ERP, a primeira e a que vem depois da renovação.
+    if (tooLate(message, permitReadAt)) return giveUp();
     if (permit.sentBefore) {
       // Já pode ter chegado ao ERP: só um "não existe" explícito autoriza criar de novo.
       const found = await erp.findOrderByReference(message.orderId);
@@ -159,6 +162,7 @@ export function createWorker({ pool, queue, erp, semaphore: injected, logger, te
       if (!(await renewCallPermit(db, message.orderId, permit.token))) return giveUp();
     }
 
+    if (tooLate(message, permitReadAt)) return giveUp();
     const created = await erp.createOrder({ reference: message.orderId, items });
     if (created.kind === 'ok') return { kind: 'invoiced' };
     if (created.kind === 'permanent') return { kind: 'failed', reason: created.reason === 'rejected' ? 'erp_rejected' : 'erp_out_of_stock' };
@@ -183,9 +187,11 @@ export function createWorker({ pool, queue, erp, semaphore: injected, logger, te
 
   // Encerra a mensagem de um pedido que já tinha desfecho.
   async function close(message: Attempt, log: Logger): Promise<void> {
+    // Só conta quando o SQS apagou: com o handle antigo (stale), outro recebimento é quem encerra.
+    const result = await respond(() => queue.delete(message.receiptHandle), log);
+    if (result !== 'ok') return;
     telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
     log.info({ event: 'outbox.closed' }, 'pedido já tinha desfecho: mensagem encerrada');
-    await respond(() => queue.delete(message.receiptHandle), log);
   }
 
   // Grava o desfecho no banco; undefined quando desiste (prazo vencido ou repetições esgotadas).
