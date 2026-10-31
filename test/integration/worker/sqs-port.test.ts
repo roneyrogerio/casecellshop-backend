@@ -1,11 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createQueue, startRedrive } from '../../../src/queue/sqs.ts';
+import { createQueue, createSqsClient, startRedrive } from '../../../src/queue/sqs.ts';
 import {
   drain,
+  observe,
   openBillingQueues,
   sendRaw,
+  startBlackHole,
   startElasticMq,
+  TEST_REGION,
   visibleCount,
+  type BlackHole,
   type OpenedQueues,
   type QueueOptions,
   type TestElasticMq,
@@ -16,10 +20,12 @@ import {
 // traceparent) e a DLQ e o redrive provam o ORD-13. Cada teste cria o próprio par de filas.
 
 let emq: TestElasticMq;
+let blackHole: BlackHole;
 const opened: OpenedQueues[] = [];
 
 beforeAll(async () => {
   emq = await startElasticMq();
+  blackHole = await startBlackHole();
 }, 120_000);
 
 afterEach(() => {
@@ -27,6 +33,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  await blackHole?.close();
   await emq?.stop();
 });
 
@@ -80,6 +87,24 @@ describe('ORD-22 porta do SQS: envio', () => {
 
     await expect(ghost.send([{ id: 'm1', body: 'x', traceparent: null }])).rejects.toBeInstanceOf(Error);
   });
+
+  it('ORD-22 send contra um servidor que aceita a conexão e nunca responde rejeita em torno de 5 s, em vez de ficar pendente', async () => {
+    const client = createSqsClient({ endpoint: blackHole.url, region: TEST_REGION });
+    const queue = createQueue(client, `${blackHole.url}/queue/billing`);
+    const requestsBefore = blackHole.requestCount();
+    try {
+      // O prazo de 5 s corre em tempo real dentro do SDK, não no relógio injetável: o teste mede o tempo decorrido.
+      const outcome = await observe(queue.send([{ id: 'm1', body: 'x', traceparent: null }]), 12_000);
+
+      expect(blackHole.requestCount(), 'a requisição não chegou ao servidor que não responde').toBeGreaterThan(requestsBefore);
+      expect(outcome.state).toBe('rejected');
+      expect(outcome.elapsedMs).toBeGreaterThanOrEqual(4_000);
+      expect(outcome.elapsedMs).toBeLessThanOrEqual(9_000);
+    } finally {
+      // Solta a requisição pendente, se a porta não tiver prazo, para não vazar para os outros testes.
+      client.destroy();
+    }
+  }, 30_000);
 });
 
 describe('ORD-22 porta do SQS: recebimento', () => {

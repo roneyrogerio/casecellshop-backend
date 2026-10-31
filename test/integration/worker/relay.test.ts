@@ -5,7 +5,7 @@ import { pino, type Logger } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BillingMessage, CheckoutAccepted, TRACEPARENT_ATTRIBUTE } from '../../../src/contract/index.ts';
 import { createRelay, DEFAULT_RELAY_CONFIG, type Relay, type RelayConfig } from '../../../src/outbox/relay.ts';
-import type { Queue } from '../../../src/queue/sqs.ts';
+import { createQueue, createSqsClient, type Queue } from '../../../src/queue/sqs.ts';
 import { createTelemetry, type Telemetry } from '../../../src/telemetry.ts';
 import { settle } from '../../helpers/async.ts';
 import {
@@ -26,9 +26,13 @@ import { scrapeMetrics, valueOf } from '../../helpers/metrics.ts';
 import {
   drain,
   duplicatedOrderIds,
+  observe,
   openBillingQueues,
+  startBlackHole,
   startElasticMq,
+  TEST_REGION,
   visibleCount,
+  type BlackHole,
   type OpenedQueues,
   type RawMessage,
   type TestElasticMq,
@@ -42,6 +46,7 @@ let database: TestDatabase;
 let harness: CheckoutHarness;
 let relayPool: pg.Pool;
 let emq: TestElasticMq;
+let blackHole: BlackHole;
 let sharedTelemetry: Telemetry;
 const opened: OpenedQueues[] = [];
 
@@ -51,6 +56,7 @@ beforeAll(async () => {
   relayPool = createAppPool(database.uri, 10);
   sharedTelemetry = createTelemetry({ spanExporter: new InMemorySpanExporter() });
   emq = await startElasticMq();
+  blackHole = await startBlackHole();
 }, 180_000);
 
 // O banco é dividido entre os testes: uma linha que sobra de um seria publicada na fila do seguinte.
@@ -63,6 +69,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
+  await blackHole?.close();
   await emq?.stop();
   await sharedTelemetry?.shutdown();
   await relayPool?.end();
@@ -552,4 +559,152 @@ describe('ORD-22 laço do relay (start e stop)', () => {
     expect(sleeps.length).toBe(sleepsAtStop);
     expect(await visibleCount(emq, queues.queueUrl)).toBe(0);
   });
+});
+
+// ---------------------------------------------------------------- SQS que não responde (A1)
+
+// Uma fila de verdade (porta e SDK de produção) cujo endpoint aceita a conexão e nunca responde.
+function blackHoleQueue(): { queue: Queue; destroy: () => void } {
+  const client = createSqsClient({ endpoint: blackHole.url, region: TEST_REGION });
+  return { queue: createQueue(client, `${blackHole.url}/queue/billing`), destroy: () => client.destroy() };
+}
+
+// Outra conexão tenta o mesmo bloqueio que o relay tomou: NOWAIT falha na hora se a linha ainda está presa.
+async function rowLockIsFree(orderId: string): Promise<boolean> {
+  const connection = await database.pool.connect();
+  try {
+    await connection.query('begin');
+    await connection.query('select 1 from outbox where order_id = $1 for update nowait', [orderId]);
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === '55P03') return false;
+    throw error;
+  } finally {
+    await connection.query('rollback');
+    connection.release();
+  }
+}
+
+// Para o laço sem depender de a espera já ter começado: anda o relógio até o stop terminar.
+async function stopRelay(relay: Relay, clock: ManualClock): Promise<void> {
+  let stopped = false;
+  const stopping = relay.stop().finally(() => {
+    stopped = true;
+  });
+  for (let attempt = 0; attempt < 5_000 && !stopped; attempt += 1) {
+    clock.advance(500);
+    await settle(2);
+  }
+  await stopping;
+}
+
+describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
+  it('ORD-22 publishOnce rejeita em torno de 5 s, solta o bloqueio da linha e deixa published_at nulo', async () => {
+    const { orderId } = await acceptCheckout();
+    const hole = blackHoleQueue();
+    const relay = newRelay(hole.queue);
+    const requestsBefore = blackHole.requestCount();
+    const round = relay.publishOnce();
+    try {
+      // O prazo de 5 s corre em tempo real dentro do SDK, não no relógio injetável: o teste mede o tempo decorrido.
+      const outcome = await observe(round, 12_000);
+
+      expect(blackHole.requestCount(), 'o send não chegou ao servidor que não responde').toBeGreaterThan(requestsBefore);
+      expect(outcome.state).toBe('rejected');
+      expect(outcome.elapsedMs).toBeGreaterThanOrEqual(4_000);
+      expect(outcome.elapsedMs).toBeLessThanOrEqual(9_000);
+      expect((await readState(orderId)).publishedAt).toBeNull();
+      expect(await rowLockIsFree(orderId), 'a linha continuou bloqueada FOR UPDATE depois da rodada').toBe(true);
+    } finally {
+      // Sem prazo na porta a rodada nunca termina; soltar a conexão evita que ela trave os testes seguintes.
+      hole.destroy();
+      await observe(round, 10_000);
+    }
+  }, 40_000);
+
+  it('ORD-22 sob start() o send sem resposta vira outbox.relay_error na rodada, e o stop não trava', async () => {
+    const { orderId } = await acceptCheckout();
+    const hole = blackHoleQueue();
+    const logs = captureLogs();
+    const { clock, sleeps } = watchSleeps();
+    const relay = newRelay(hole.queue, { clock, logger: logs.logger });
+    const requestsBefore = blackHole.requestCount();
+    void relay.start();
+    try {
+      await vi.waitFor(() => expect(logs.eventsOf('outbox.relay_error')).toHaveLength(1), { timeout: 15_000, interval: 50 });
+
+      expect(blackHole.requestCount(), 'o send não chegou ao servidor que não responde').toBeGreaterThan(requestsBefore);
+      expect(logs.eventsOf('outbox.relay_error')[0]?.['level']).toBe('error');
+      expect((await readState(orderId)).publishedAt).toBeNull();
+      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), { timeout: 5_000, interval: 10 });
+      expect(sleeps[0]).toBe(500);
+    } finally {
+      hole.destroy();
+      await stopRelay(relay, clock);
+    }
+  }, 40_000);
+});
+
+// ---------------------------------------------------------------- linha inválida e espera sem publicação (A3, A4)
+
+// Linha escrita direto no SQL, fora da API: é a única forma de uma linha que o BillingMessage recusa chegar à outbox.
+// `ageSeconds` define a ordem do relay: quanto maior, mais antiga.
+async function insertOutboxRow(correlationId: string, ageSeconds: number): Promise<string> {
+  const order = await database.pool.query<{ id: string }>('insert into orders default values returning id');
+  const orderId = order.rows[0]?.id ?? '';
+  await database.pool.query(
+    "insert into outbox (order_id, correlation_id, created_at) values ($1, $2, now() - make_interval(secs => $3::double precision))",
+    [orderId, correlationId, ageSeconds],
+  );
+  return orderId;
+}
+
+describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', () => {
+  it('ORD-22 a linha inválida (a mais antiga) é logada como outbox.invalid_row com o orderId e não impede as outras de saírem', async () => {
+    const queues = await freshQueues();
+    const invalidId = await insertOutboxRow('req com espaço', 100);
+    const validIds = [
+      await insertOutboxRow(`req-${randomUUID()}`, 30),
+      await insertOutboxRow(`req-${randomUUID()}`, 20),
+      await insertOutboxRow(`req-${randomUUID()}`, 10),
+    ];
+    const logs = captureLogs();
+    const relay = newRelay(queues.queue, { logger: logs.logger });
+
+    await expect(relay.publishOnce()).resolves.toBe(3);
+
+    expect(await publishedOrderIds([invalidId, ...validIds])).toEqual([...validIds].sort());
+    expect(orderIdsIn(await drain(emq, queues.queueUrl))).toEqual([...validIds].sort());
+    const invalid = logs.eventsOf('outbox.invalid_row');
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]?.['level']).toBe('error');
+    expect(invalid[0]?.['orderId']).toBe(invalidId);
+    expect(logs.eventsOf('outbox.relay_error')).toEqual([]);
+  });
+
+  it('ORD-22 uma rodada que leu um lote cheio de linhas inválidas e não publicou nada espera 500 ms pelo relógio, sem girar', async () => {
+    const queues = await freshQueues();
+    // Mais de batchSize (10) linhas inválidas e as mais antigas: o lote lido é cheio, mas nada é publicável.
+    const invalidIds: string[] = [];
+    for (let index = 0; index < DEFAULT_RELAY_CONFIG.batchSize; index += 1) {
+      invalidIds.push(await insertOutboxRow(index % 2 === 0 ? 'req com espaço' : 'req-não-ascii-ç', 1_000 - index));
+    }
+    const logs = captureLogs();
+    const { clock, sleeps } = watchSleeps();
+    const relay = newRelay(queues.queue, { clock, logger: logs.logger });
+    void relay.start();
+    try {
+      // Se o laço girasse sem esperar, o relógio nunca seria pedido e a espera abaixo estouraria o prazo.
+      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), { timeout: 5_000, interval: 10 });
+
+      expect(sleeps[0]).toBe(500);
+      expect(logs.eventsOf('outbox.relay_error'), 'a linha inválida derrubou a rodada em vez de ficar fora do lote').toEqual([]);
+      const logged = new Set(logs.eventsOf('outbox.invalid_row').map((line) => line['orderId']));
+      expect(logged).toEqual(new Set(invalidIds));
+      expect(await publishedOrderIds(invalidIds)).toEqual([]);
+      expect(await visibleCount(emq, queues.queueUrl)).toBe(0);
+    } finally {
+      await stopRelay(relay, clock);
+    }
+  }, 20_000);
 });

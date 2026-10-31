@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import {
   CreateQueueCommand,
   GetQueueAttributesCommand,
@@ -104,6 +105,64 @@ export async function openBillingQueues(emq: TestElasticMq, options: QueueOption
       client.destroy();
     },
   };
+}
+
+// ---------------------------------------------------------------- servidor que não responde
+
+export interface BlackHole {
+  // Endereço http://127.0.0.1:porta, para o endpoint do SDK e para a URL da fila.
+  url: string;
+  // Requisições cujo cabeçalho chegou ao servidor: prova que a falha injetada disparou.
+  requestCount(): number;
+  close(): Promise<void>;
+}
+
+// Aceita a conexão, lê a requisição e nunca responde: a falha de rede que o ElasticMQ não produz
+// sob demanda. É a única coisa injetada, na fronteira; o resto do caminho é o real.
+export async function startBlackHole(): Promise<BlackHole> {
+  let requests = 0;
+  const server = createServer((request) => {
+    requests += 1;
+    request.resume();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('o servidor não respondeu a porta');
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    requestCount: () => requests,
+    close() {
+      return new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        // Sem isto o close esperaria para sempre as conexões que nunca terminam.
+        server.closeAllConnections();
+      });
+    },
+  };
+}
+
+export interface Observed {
+  state: 'resolved' | 'rejected' | 'pending';
+  elapsedMs: number;
+}
+
+// Espera a promessa por no máximo `guardMs` de tempo real. O prazo é do teste: uma promessa que não
+// termina vira `pending` (falha por asserção) em vez de travar o teste até o timeout do vitest.
+export async function observe(promise: Promise<unknown>, guardMs: number): Promise<Observed> {
+  const startedAt = performance.now();
+  let timer: NodeJS.Timeout | undefined;
+  const guard = new Promise<Observed['state']>((resolve) => {
+    timer = setTimeout(() => resolve('pending'), guardMs);
+  });
+  const settled = promise.then(
+    (): Observed['state'] => 'resolved',
+    (): Observed['state'] => 'rejected',
+  );
+  const state = await Promise.race([settled, guard]);
+  clearTimeout(timer);
+  return { state, elapsedMs: performance.now() - startedAt };
 }
 
 // ---------------------------------------------------------------- inspeção crua
