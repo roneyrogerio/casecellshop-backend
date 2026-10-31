@@ -31,7 +31,12 @@ export async function up(db: Kysely<any>): Promise<void> {
         .defaultTo('pending')
         .check(sql`status in ('pending', 'invoiced', 'failed')`),
     )
-    .addColumn('failure_reason', 'text', (col) => col.check(sql`failure_reason is null or status = 'failed'`))
+    // O banco garante: só pedido `failed` tem motivo, todo `failed` tem um, e é um dos três.
+    .addColumn('failure_reason', 'text', (col) =>
+      col
+        .check(sql`(status = 'failed') = (failure_reason is not null)`)
+        .check(sql`failure_reason in ('erp_rejected', 'erp_out_of_stock', 'cancelled')`),
+    )
     .addColumn('accepted_at', 'timestamptz', (col) => col.notNull().defaultTo(sql`now()`))
     .addColumn('outcome_at', 'timestamptz')
     // Marca do SLI de 60 s: preenchida quando o pedido passa do prazo sem desfecho.
