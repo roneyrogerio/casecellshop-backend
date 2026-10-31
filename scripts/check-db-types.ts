@@ -62,6 +62,9 @@ export async function checkDbTypes({
   write = false,
 }: CheckDbTypesOptions): Promise<string[]> {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  // Sem ouvinte, a queda de uma conexão ociosa viraria exceção não capturada; o
+  // erro da migração em si chega pelo migrate.
+  pool.on('error', () => undefined);
   try {
     await migrate(pool, folders);
   } finally {
