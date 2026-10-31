@@ -130,6 +130,7 @@ Com falhas injetadas pelo ERP simulado, contando **faturas no ERP**:
 - **ORD-17** Duas conclusões simultâneas do mesmo pedido baixam o estoque uma vez só.
 - **ORD-18** O span da tentativa é filho do span do checkout.
 - **ORD-19** Depois de o worker faturar o pedido, `GET /orders/{orderId}/status` devolve `invoiced`; depois de uma rejeição permanente, `failed` com o motivo; com a mensagem na DLQ, `pending`; sempre validado pelo schema do contrato.
+- **ORD-20** O worker nunca tem mais chamadas simultâneas ao ERP que o limite configurado, e uma mensagem só é reivindicada depois de a tentativa ter a permissão do semáforo, para o lease não correr enquanto ela espera a vez.
 
 ## Vitrine e sincronização
 
@@ -151,8 +152,8 @@ Com relógio controlado:
 
 ## Observabilidade
 
-- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs. No M2, os logs do checkout e do status do pedido levam o `orderId`.
-- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado. No M2, o counter de desfecho do checkout, com o label `outcome` da lista fechada do design e sem `orderId` nem `sku`.
+- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs. No M2, os logs do checkout e do status do pedido levam o `orderId`. No M3, os logs do worker levam o `orderId`, a tentativa (`attempt`), o desfecho (`outcome`) e o `correlationId` gravado na outbox, com os eventos do design, e o `db.transaction_aborted` também sai do worker.
+- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado. No M2, o counter de desfecho do checkout, com o label `outcome` da lista fechada do design e sem `orderId` nem `sku`. No M3, o `/metrics` do worker expõe as métricas de fila e de ERP que o worker produz, com os nomes e labels do design: desfecho da tentativa, conclusões sem linha afetada, aceite ao faturamento, duração, desfecho e chamadas em andamento ao ERP, erros de configuração e rejeições por falta de estoque.
 - **OBS-03** Um teste confere, na saída de `/metrics`, cada métrica usada nos alertas e no dashboard do README.
 - **OBS-04** Um pedido sem desfecho em 60 s é contado uma vez, mesmo com várias réplicas da API.
 - **OBS-05** Um `orderId` leva aos logs e a um trace da requisição ao ERP.

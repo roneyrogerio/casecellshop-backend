@@ -214,3 +214,80 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **controle negativo:** uma versão ingênua, que lê e grava em duas instruções com uma janela forçada entre elas, vende além do estoque no mesmo teste. Sem esse controle, um teste verde poderia não provar nada (`CHK-02`);
 - **a mesma chave em paralelo para um item com estoque 1** gera um único pedido (`CHK-03`), e **pedidos com os SKUs em ordens opostas, em laço,** terminam sem deadlock (`CHK-07`);
 - **um lock segurado pelo teste:** na linha do estoque, a espera vira `503`; na chave, vira `409` (`CHK-08`).
+
+## Mensageria e resiliência
+
+**Decisão:** o pedido e a mensagem de saída nascem na mesma transação, e a tabela da outbox, no próprio PostgreSQL da loja, é a fila. Um worker reivindica cada mensagem com lease e token, chama o ERP fora de qualquer transação, consulta o ERP pela referência antes de criar de novo, repete com espera crescente e manda para a DLQ depois do limite de tentativas. A reconciliação e o runbook tiram os pedidos da DLQ (AD-003, AD-004). **Rascunho do M3:** as marcas **[M3]** viram **[implementado]** quando o PR do marco entrar.
+
+### Publicar antes ou depois de gravar o pedido
+
+`DOC-MSG-01`. Nenhum dos dois. Gravar o pedido e publicar numa fila são duas escritas em sistemas diferentes, sem transação comum:
+
+- **publicar antes de gravar:** se a gravação falha, o worker fatura um pedido que a loja não tem (mensagem fantasma);
+- **publicar depois de gravar:** se o processo cai entre os dois passos, o pedido fica aceito e nunca é faturado (pedido fantasma).
+
+Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transação do pedido, da chave de idempotência e da reserva. Ou as quatro existem, ou nenhuma existe: os testes do checkout contam as mensagens da outbox antes e depois de cada recusa **[implementado: `src/checkout/repository.ts`, `CHK-06`, `CHK-10`; a linha com o `traceparent`, `CHK-12`]**. O worker lê a fila no mesmo banco **[M3]**. Uma fila externa (SQS) continuaria precisando da outbox para ser correta, e entra só como relay, quando houver um segundo consumidor **[alvo]**.
+
+### Pedido fantasma, mensagem fantasma e fatura duplicada
+
+`DOC-MSG-02`.
+
+- **Pedido fantasma e mensagem fantasma:** não existem, pela transação única acima. Um pedido aceito sempre tem a mensagem, e a mensagem sempre tem o pedido (a chave estrangeira `outbox.order_id`) **[implementado: `migrations/store/20260102000000_create_store.ts`]**.
+- **Mensagem perdida no worker:** a reivindicação grava o lease, um token novo e a tentativa, com commit antes da chamada. Se o worker morre no meio, o lease vence e outro worker retoma a mensagem, depois do atraso mínimo **[M3, `ORD-02`]**.
+- **Fatura duplicada,** o risco que sobra numa entrega "pelo menos uma vez":
+  - o pedido vai ao ERP com o `orderId` da loja como referência;
+  - `first_sent_at` é gravado na primeira reivindicação e nunca apagado. Daí em diante, toda tentativa consulta o ERP pela referência antes de criar (H1a), inclusive depois de um reprocessamento, que zera as tentativas (L-005) **[M3, `ORD-01`, `ORD-07`]**;
+  - a consulta só acontece 45 s depois do início da chamada anterior, quando o ERP já concluiu ou abandonou a criação (H4) **[M3, `ORD-03`, `ORD-04`, `ORD-05`]**;
+  - se o ERP também recusa a segunda criação com a mesma referência (H1b), a duplicação fica impossível mesmo além da H4 **[M3, `ORD-06`]**.
+- **Worker atrasado:** toda conclusão exige o token da reivindicação (`WHERE claim_token = :t`), e o pedido muda de estado por compare-and-set. Um worker que perdeu o lease não sobrescreve o desfecho de outro, e o estoque baixa uma vez só **[M3, `ORD-16`, `ORD-17`]**.
+
+**Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b, e o README o declara.
+
+### Retry, DLQ, OpenAPI e testes
+
+`DOC-MSG-03`.
+
+- **Classificação antes do retry:** a camada anticorrupção traduz cada resposta do ERP numa lista fechada, por operação, sem retry interno **[M3, `ORD-09`, `ORD-10`]**:
+  - **permanente** (`422`, falta de estoque): o pedido vira `failed` com o motivo, e a reserva é liberada **[M3, `ORD-08`]**;
+  - **transitório** (a requisição não chegou, `429`, `503`) e **ambíguo** (timeout, conexão caída depois do envio, `500`, `502`, `504`): nova tentativa;
+  - **erro de configuração** (`400`, `401`, `403`, `404` sem o corpo esperado): transitório e com alerta, para uma credencial vencida não falhar todos os pedidos de uma vez.
+- **Retry:** atraso mínimo de 45 s desde o início da última chamada, mais *full jitter* sobre um exponencial de base 5 s e teto de 5 min, até 12 tentativas. O jitter espalha os retries depois de uma falha que atingiu muitos pedidos ao mesmo tempo. Um semáforo de 30 chamadas protege o ERP **[M3, `ORD-13`, `ORD-20`]**.
+- **DLQ:** depois de 12 tentativas, a mensagem fica `dead`, e o pedido continua `pending` com a reserva, porque ainda pode ser faturado. A tentativa é contada na reivindicação, então uma mensagem que derruba o processo também chega à DLQ, sozinha, sem segurar as outras **[M3, `ORD-12`, `ORD-13`]**.
+- **Saída da DLQ:** a reconciliação consulta o ERP a cada 5 min e conclui como faturado o que ele já tem. O runbook reprocessa em lote ou cancela depois de o operador confirmar no ERP que o pedido não existe **[M3, `ORD-07`, `ORD-14`, `ORD-15`]**.
+- **OpenAPI:** o cliente acompanha o pedido em `GET /orders/{orderId}/status` (`pending`, `invoiced` ou `failed` com o motivo), com o schema gerado do mesmo contrato em zod que valida as respostas nos testes **[implementado: `src/contract/orders.ts`, `CHK-11`; o estado depois do worker, M3, `ORD-19`]**.
+- **Testes:** contam faturas no ERP simulado, não chamadas, contra o PostgreSQL real. As falhas são injetadas por um roteiro do simulado (lento, indisponível, fatura sem responder, fatura depois do timeout abaixo e acima da H4, `502` seguido de fatura, sem a H1b). O tempo corre num relógio manual e em horários semeados no banco, sem `sleep` **[M3, `ORD-01` a `ORD-20`]**.
+- **Rastreabilidade:** cada tentativa é um span filho do span do checkout, retomado pelo `traceparent` gravado na outbox, e os logs do worker levam `orderId`, `attempt` e o `correlationId` da requisição original **[M3, `ORD-18`, `OBS-01`]**.
+
+### Prompts de IA relevantes
+
+`DOC-MSG-04`. O projeto não guarda um diário de prompts: os prompts que decidem cada passo são as instruções versionadas dos agentes, listadas no [`PROMPTS.md`](PROMPTS.md). Os trechos que governam esta área, citados literalmente:
+
+- quem faz o quê, na skill do marco ([`.claude/skills/marco/SKILL.md`](.claude/skills/marco/SKILL.md)):
+
+  ```text
+  Tests come only from `test-writer`, production code only from `implementer`, and the review only from `reviewer`.
+  ```
+
+- as regras da fila, em [`AGENTS.md`](AGENTS.md), que todo agente lê:
+
+  ```text
+  - Never call the ERP inside a database transaction.
+  - Lock order between existing rows: outbox message, order, stock by SKU, one `UPDATE` per row.
+  - Order transitions by compare-and-set; stock changes only if the transition affected a row.
+  - Every outbox transition is conditioned on the claim token.
+  - Deadlines stored in the database use the database clock; process timers use the injectable clock.
+  ```
+
+- como os testes provam a fila, em [`.claude/rules/tests.md`](.claude/rules/tests.md):
+
+  ```text
+  No `sleep`: use the injectable clock and timestamps seeded in the database. ERP failure tests count invoices in the simulated ERP, not calls.
+  ```
+
+Respostas da IA recusadas ou corrigidas, e onde foram pegas:
+
+- **Uma garantia falsa no texto de arquitetura:** a sessão principal escreveu que os CHECKs do banco barram a reserva acima do estoque. O `reviewer` reproduziu o contrário com o próprio controle negativo do `CHK-02` e reprovou a revisão (achado A1, `média`) ([PR #12, Revisão 1](https://github.com/roneyrogerio/casecellshop-backend/pull/12#issuecomment-6540136376)).
+- **Um design que divergiu de uma decisão aceita:** a ordem da transação passou a gravar o pedido antes da chave, contra o texto da AD-006. O mesmo relatório apontou a divergência (A3), e ela virou a AD-020, em vez de uma edição silenciosa.
+- **Um erro engolido pelo código do `implementer`:** o migrador aceitava uma migração que lança um valor falsy como sucesso. O `reviewer` reproduziu com uma migração `throw null` (A1 da [PR #11, Revisão 1](https://github.com/roneyrogerio/casecellshop-backend/pull/11#issuecomment-6537842382)).
+
+Os exemplos do M3 entram aqui quando o PR do marco for revisado.

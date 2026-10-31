@@ -1,20 +1,75 @@
 import type { Pool } from 'pg';
 import type { Clock } from '../../clock.ts';
 import { createErpDb, runInTransaction } from '../../db/database.ts';
-import {
-  ErpRejectedError,
-  type ErpCatalogItem,
-  type ErpClient,
-  type ErpOrder,
-  type ErpOrderRequest,
-} from '../erp-client.ts';
+import type { ErpCatalogItem, ErpCatalogPage, ErpOrder, ErpOrderRequest } from '../erp-client.ts';
+import type { ErpRequest, ErpTransport } from '../transport.ts';
 
 const CATALOG_PAGE_SIZE = 50;
 
 export interface SimulatedErpOptions {
   pool: Pool;
-  // Reservado aos modos lento e de falha (M3); o modo normal responde na hora.
+  // Atrasos do roteiro (lento, fatura adiada) correm neste relógio, fora de transação.
   clock: Clock;
+  // Sem a H1b, cada criação vira uma fatura nova, mesmo com a referência repetida.
+  withoutH1b?: boolean;
+}
+
+export type ErpSimOperation = ErpRequest['op'];
+
+// Cada comportamento vale para uma chamada só (design.md, "Roteiro do ERP simulado").
+export type ErpSimBehavior =
+  | { mode: 'normal' }
+  | { mode: 'slow'; delayMs: number }
+  | { mode: 'unavailable' }
+  | { mode: 'reject' }
+  | { mode: 'status'; status: number; body?: unknown }
+  | { mode: 'invoice_no_response' }
+  | { mode: 'invoice_after'; delayMs: number }
+  | { mode: 'fast_502_then_invoice'; delayMs: number }
+  | { mode: 'hang' };
+
+export interface ErpSimMatch {
+  op?: ErpSimOperation;
+  // Só na criação e na consulta, que têm referência.
+  reference?: string;
+}
+
+export interface ErpSimScript {
+  enqueue(behavior: ErpSimBehavior, match?: ErpSimMatch): void;
+  // Vale quando nenhum comportamento da fila casa com a chamada; começa em `normal`.
+  setDefault(behavior: ErpSimBehavior): void;
+  // Espera as faturas adiadas cujo prazo o relógio já alcançou terminarem de gravar.
+  drain(): Promise<void>;
+}
+
+export interface SimulatedErp {
+  transport: ErpTransport;
+  script: ErpSimScript;
+}
+
+// ERP simulado com transporte e roteiro de falhas (M3).
+export function createSimulatedErp(_options: SimulatedErpOptions): SimulatedErp {
+  throw new Error('não implementado');
+}
+
+// --- Cliente direto do M1, mantido só até a Fatia 1 do M3 migrar o teste do FND-04
+// para createSimulatedErp; a porta ErpClient não lança mais exceção de negócio. ---
+
+class ErpRejectedError extends Error {
+  readonly reason: 'out_of_stock' | 'unknown_product';
+  readonly sku: string;
+
+  constructor(reason: 'out_of_stock' | 'unknown_product', sku: string) {
+    super(reason === 'out_of_stock' ? `Sem estoque no ERP: ${sku}` : `Produto desconhecido no ERP: ${sku}`);
+    this.reason = reason;
+    this.sku = sku;
+  }
+}
+
+interface LegacySimulatedErpClient {
+  listCatalog(page: number): Promise<ErpCatalogPage>;
+  createOrder(request: ErpOrderRequest): Promise<ErpOrder>;
+  findOrderByReference(reference: string): Promise<ErpOrder | null>;
 }
 
 interface InvoiceRow {
@@ -29,7 +84,7 @@ function toOrder(row: InvoiceRow): ErpOrder {
 // ERP simulado só no modo normal: H1a (consulta pela referência), H1b (fatura
 // idempotente pela referência), H2 (recusa sem estoque) e H3 (fatura pelo
 // preço enviado). Tudo no schema erp_sim, que sobrevive ao reinício do worker.
-export function createSimulatedErpClient({ pool }: SimulatedErpOptions): ErpClient {
+export function createSimulatedErpClient({ pool }: SimulatedErpOptions): LegacySimulatedErpClient {
   const db = createErpDb(pool);
 
   return {
