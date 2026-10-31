@@ -21,3 +21,9 @@ export function createPool(connectionString: string, logger: Logger): pg.Pool {
   });
   return pool;
 }
+
+// Pool só do serviço de migração, sem os limites das requisições. Stub: o
+// implementer escreve o corpo.
+export function createMigrationPool(_connectionString: string, _logger: Logger): pg.Pool {
+  throw new Error('não implementado');
+}

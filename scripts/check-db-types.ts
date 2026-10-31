@@ -62,9 +62,11 @@ export async function checkDbTypes({
   write = false,
 }: CheckDbTypesOptions): Promise<string[]> {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
-  // Sem ouvinte, a queda de uma conexão ociosa viraria exceção não capturada; o
-  // erro da migração em si chega pelo migrate.
-  pool.on('error', () => undefined);
+  // Sem ouvinte, a queda de uma conexão ociosa viraria exceção não capturada
+  // (node-postgres, evento error do Pool); o erro fica visível na saída.
+  pool.on('error', (error) => {
+    console.error(`conexão ociosa com o banco caiu: ${error.message}`);
+  });
   try {
     await migrate(pool, folders);
   } finally {
