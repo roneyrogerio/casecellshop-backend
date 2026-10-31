@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-type VitestReport = { testResults: Array<{ assertionResults: Array<{ title: string; status: string }> }> };
+interface VitestReport {
+  testResults: Array<{ assertionResults: Array<{ title: string; status: string }> }>;
+}
 
 let criteriaIds: (specText: string) => string[];
 let testIdOf: (title: string) => string | null;

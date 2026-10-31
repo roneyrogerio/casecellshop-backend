@@ -101,7 +101,13 @@ type Run = (cmd: string, args: string[]) => { status: number | null; stderr: str
 
 const defaultRun: Run = (cmd, args) => {
   const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5000 });
-  return { status: result.status, stderr: result.stderr ?? '', error: result.error as { code?: string } | undefined };
+  // Sem a chave quando não houve erro: com exactOptionalPropertyTypes, `error`
+  // opcional não aceita `undefined` explícito.
+  return {
+    status: result.status,
+    stderr: result.stderr ?? '',
+    ...(result.error ? { error: result.error as { code?: string } } : {}),
+  };
 };
 
 // No Linux, o Secret Service só existe numa sessão com D-Bus e um provedor

@@ -10,5 +10,5 @@ A change earns its place by making the flow more reliable, faster to run, faster
 4. **Respect the documented size limits:** `CLAUDE.md`/`AGENTS.md` and each rule under 200 lines, each `SKILL.md` under 500 lines and 12,000 bytes (what compaction re-attaches), each rule under 40,000 characters. The CI checks them (`FND-06`).
 5. **Same flow as a milestone:** criteria, failing tests from `test-writer` with a negative control for each guard, the change, a green CI and an independent review round on the delta.
 6. **Use the dedicated tools:** read files with Read and change them with Edit or Write; Bash runs commands, never edits files.
-7. **Prove it live when you can** (the hook fired, the guard denied, the script ran in a clean environment), and say what could not run.
+7. **Prove it live when you can** (the hook fired, the guard denied, the script ran in a clean environment), and say what could not run. A change that claims to save tokens or time measures it: the same task before and after, with the numbers from `/usage` or the run time in the PR.
 8. **Record it:** the decision in `STATE.md` in the project's terms, and the item checked off or moved to the next plan.

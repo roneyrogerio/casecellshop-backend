@@ -10,7 +10,11 @@ type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode
 type TokenStore = 'system' | 'file';
 type Env = Record<string, string | undefined>;
 type KeychainStatus = 'ok' | 'missing-tool' | 'no-service';
-type RunResult = { status: number | null; stderr: string; error?: { code?: string } };
+interface RunResult {
+  status: number | null;
+  stderr: string;
+  error?: { code?: string };
+}
 
 interface IdentityModule {
   readTokenStore: (root: string) => TokenStore;
