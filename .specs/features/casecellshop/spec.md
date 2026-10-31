@@ -44,7 +44,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
     - um `.sql` na pasta faz o `migrate` rejeitar; sem o `onFileIgnored`, o arquivo é pulado e o `migrate` resolve;
     - um `.mjs` e um `.ts` sem `down` fazem o `migrate` rejeitar; sem o `import` próprio, os dois são aplicados;
     - uma segunda migração que lança erro faz o `migrate` rejeitar sem deixar nada da primeira, porque as pendentes de um schema rodam numa transação só; com `disableTransactions`, a primeira fica gravada;
-    - duas chamadas simultâneas terminam sem erro, com cada migração aplicada uma vez; com um adaptador cujo `acquireMigrationLock` não faz nada, uma delas falha no `CREATE TABLE` repetido.
+    - duas chamadas simultâneas terminam sem erro, com cada migração aplicada uma vez, também sobre um pool com `statement_timeout` menor que a migração mais lenta, como o de produção: o `migrate` roda sem `statement_timeout`, para a espera pelo lock e uma migração longa não serem cortadas pelo limite das requisições; com um adaptador cujo `acquireMigrationLock` não faz nada, uma delas falha no `CREATE TABLE` repetido. A sobreposição das duas chamadas vem de uma condição (as duas esperando o lock), e não de uma pausa.
   - Uma migração com erro de tipo reprova o typecheck, e a mesma migração corrigida passa, numa pasta temporária que herda o `tsconfig.json`, como no `AI-20`.
 
 ## Fábrica agêntica
