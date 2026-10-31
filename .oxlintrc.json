@@ -131,6 +131,14 @@
         "typescript/prefer-readonly": "off",
         "typescript/return-await": "off"
       }
+    },
+    {
+      "files": [
+        "**/migrations/**/*.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
     }
   ]
 }
