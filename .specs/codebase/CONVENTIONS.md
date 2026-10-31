@@ -15,7 +15,21 @@ Valem para todo o repositório, desde o primeiro commit.
   - Título, descrição e comentários ficam em português, com identificadores, caminhos, comandos e IDs como estão.
   - O passo a passo de cada marco está na skill `/marco`.
 - **Branches:** `<tipo>/<assunto>`, em inglês, como `feat/checkout` ou `chore/ai-workflow`.
-- **Testes:** arquivos `*.test.ts`, os unitários ao lado do arquivo que testam e os de integração em `test/integration/<área>/`, com o nome começando pelo ID do critério. As regras completas estão em `.claude/rules/tests.md`, que o Claude Code carrega quando um teste é lido ou escrito.
+- **Pastas do código (AD-025):** uma pasta por capacidade do negócio, uma por tecnologia de fronteira, uma para o que todo o código usa, e uma entrada por processo.
+
+  | Pasta | Tipo | O que guarda |
+  | --- | --- | --- |
+  | `src/main/` | entradas | Um arquivo por processo (`api.ts`, `worker.ts`, `runbook.ts`, `migrate.ts`): lê a configuração, monta as dependências e liga o processo. Nenhuma regra de negócio |
+  | `src/app.ts` | composição | A fábrica do app HTTP, sem abrir porta, que a API e os testes usam |
+  | `src/checkout/`, `src/orders/`, `src/health/`, `src/billing/`, `src/catalog/` (M4) | negócio | Tudo de uma capacidade: rotas, consultas, e os laços e comandos que rodam fora da requisição (o relay, o worker, a reconciliação e o runbook ficam em `billing/`) |
+  | `src/erp/`, `src/db/`, `src/queue/`, `src/http/`, `src/cache/` (M4) | fronteira | A porta e o adaptador de cada tecnologia: o ERP (com o simulado em `erp/sim/`), o PostgreSQL, o SQS, o Express e o cache em processo |
+  | `src/contract/` | contrato | Os schemas em zod da API e da mensagem do faturamento; o `openapi.yaml` sai daqui |
+  | `src/shared/` | transversal | Relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo |
+
+  - As dependências seguem um sentido só: `main/` e `app.ts` montam tudo; o negócio usa a fronteira, o contrato e o `shared/`; a fronteira e o `shared/` não importam pastas de negócio, e uma pasta de negócio não importa o interior de outra.
+  - Arquivo novo entra na pasta da capacidade ou da tecnologia que ele serve. Uma pasta nova de negócio nasce com o marco que traz a capacidade, nunca uma pasta por camada (`services/`, `repositories/`) ou genérica (`utils/`).
+  - As migrações ficam fora de `src/`, em `migrations/<schema>/`, e os scripts do repositório em `scripts/`.
+- **Testes:** arquivos `*.test.ts`, os unitários ao lado do arquivo que testam e os de integração em `test/integration/<área>/`, com o nome começando pelo ID do critério. A pasta é a área do `spec.md` em inglês: `foundation/` (Fundação), `checkout/` (Checkout), `billing/` (Processamento assíncrono), `catalog/` (Vitrine e sincronização) e `observability/` (Observabilidade); os testes da Fábrica agêntica ficam ao lado do script ou do hook que testam, ou em `test/repo/` quando testam a configuração do repositório. Ajudantes ficam em `test/helpers/` e dados de teste em `test/fixtures/`, com nomes em inglês como o resto dos arquivos. As regras completas estão em `.claude/rules/tests.md`, que o Claude Code carrega quando um teste é lido ou escrito.
 - **Instruções da IA:** o `AGENTS.md` traz só o que toda tarefa usa e chega aos agentes pelo `CLAUDE.md`; o roteiro do marco fica na skill `/marco`, carregada sob demanda; os trilhos (guardas, hook de parada, permissões, GitHub pelo MCP) estão no `.claude/settings.json` e nas AD-012 e AD-013.
 - **Idioma:**
   - **inglês** para o que é identificador ou instrução de máquina: nomes de arquivos, variáveis, funções, classes, métricas e eventos de log, códigos de erro da API, e as instruções lidas pela IA (`AGENTS.md`). Assim, os nomes do código ficam no mesmo idioma das bibliotecas e dos padrões que ele usa (HTTP, OpenTelemetry, Prometheus);

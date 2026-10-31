@@ -664,7 +664,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-024 · Uma chamada ao ERP por pedido a cada atraso mínimo, pela permissão de chamada no banco
 
-**Status:** proposta (PR 2 do M3). Detalha a AD-021 no ponto que ela deixou aberto: como o *Idempotent Consumer* impede duas chamadas simultâneas do mesmo pedido.
+**Status:** aceita (31/10/2026, PR #15). Detalha a AD-021 no ponto que ela deixou aberto: como o *Idempotent Consumer* impede duas chamadas simultâneas do mesmo pedido.
 
 **Contexto.** Com a fila na tabela da outbox, o lease e o token gravados na linha garantiam uma tentativa por pedido de cada vez. Com o SQS, essa garantia some: o relay publica pelo menos uma vez (AD-021), então duas mensagens do mesmo pedido podem ser recebidas juntas por workers diferentes, e o *visibility timeout* vale por mensagem, não por pedido. Sem a H1b, duas tentativas simultâneas do mesmo pedido (uma consultando enquanto a outra cria) fazem duas faturas.
 
@@ -686,6 +686,36 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Rever quando:** o ERP passar a garantir a H1b, que torna a exclusão por pedido desnecessária para a fatura, ou a vazão por pedido importar (nunca mais que uma chamada a cada 45 s por pedido).
 
 **Referências:** AD-003; AD-021; [microservices.io, Idempotent Consumer](https://microservices.io/patterns/communication-style/idempotent-consumer.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html) e [FIFO, deduplicação](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-messagededuplicationid-property.html).
+
+### AD-025 · Pastas por capacidade do negócio e por tecnologia de fronteira
+
+**Status:** proposta (PR de reorganização depois do M3)
+
+**Contexto.** Até o M3, o checkout, os pedidos e a saúde tinham pasta própria, mas o faturamento ficou espalhado: `worker.ts`, `reconciliation.ts` e `runbook.ts` soltos na raiz de `src/`, o relay e a conclusão em `outbox/`. Os módulos usados por todo o código (relógio, configuração, logs, telemetria) também estavam soltos na raiz. Quem abre o repositório não acha o faturamento num lugar só, e o M4 traz mais duas capacidades (vitrine e sincronização) sem regra de onde elas entram. Nos testes, `test/integration/erp/` não corresponde a nenhuma área do `spec.md`, e as migrações de exemplo dos testes tinham nomes em português, contra a convenção de idioma.
+
+**Decisão.** A regra está em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Pastas do código":
+
+- **Uma pasta por capacidade do negócio** (`checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`). Ela guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O faturamento junta o relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão em `src/billing/`.
+- **Uma pasta por tecnologia de fronteira** (`erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`), com a porta e o adaptador.
+- **`src/shared/`** para o que todo o código usa: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
+- **`src/main/`** com uma entrada por processo, e `src/app.ts` como fábrica do app HTTP.
+- As dependências vão de `main/` para o negócio, e do negócio para a fronteira e o `shared/`; o caminho inverso não existe.
+- Nos testes, a pasta de integração é a área do `spec.md`. Os testes do ERP simulado vão para a área do critério que provam, e as migrações de exemplo ganham nomes em inglês.
+- O `worker.ts` continua um arquivo só: o laço de recebimento e a tentativa dependem do mesmo prazo de visibilidade, e a conclusão e a permissão de chamada já são módulos à parte.
+
+**Alternativas consideradas:**
+
+- **Pastas por camada** (`controllers/`, `services/`, `repositories/`): uma mudança numa capacidade passa por várias pastas, e nada mostra o que pertence ao faturamento.
+- **Uma pasta `workers/` para tudo que roda fora da requisição:** separa o relay e a reconciliação do pedido que eles tratam.
+- **Manter os módulos transversais na raiz de `src/`:** a raiz misturaria fábrica, regra de negócio e utilitário, sem regra para o próximo arquivo.
+- **Espelhar `src/` em `test/integration/`:** espalharia os testes de um critério que atravessa pastas (o `FND-05` liga a telemetria ao repositório da saúde) e trocaria a regra que já está em vigor desde o M1.
+- **Conferir o sentido das dependências por ferramenta** (dependency-cruiser): mais uma dependência para uma regra que hoje vale sem exceção; fica para quando uma violação aparecer.
+
+**Trade-off.** Uma mudança só de lugar, sem comportamento novo, que mexe em muitos imports e nos caminhos citados na spec e na documentação. Duas pastas novas, `billing/` e `shared/`; o resto continua onde estava.
+
+**Rever quando:** uma capacidade nova não couber numa pasta só, uma pasta de negócio precisar do interior de outra, ou o `worker.ts` passar de umas 500 linhas.
+
+**Referências:** [Node.js Best Practices, 1.1 "Structure your solution by business components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md) e [1.2 "Layer your components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/createlayers.md); [Practica.js](https://github.com/practicajs/practica) (`libraries/` para o transversal); [NestJS, feature modules](https://docs.nestjs.com/modules); [Mark Seemann, Composition Root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/); [Fastify, testing](https://fastify.dev/docs/latest/Guides/Testing/) (fábrica do app separada do `listen`); [microservices.io, Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html); [testjavascript, integration tests best practices](https://github.com/testjavascript/nodejs-integration-tests-best-practices). Estrutura de projetos grandes: [twenty](https://github.com/twentyhq/twenty/tree/main/packages/twenty-server/src) (`modules/` por domínio, jobs dentro da capacidade, `engine/core-modules/` para o transversal), [n8n](https://github.com/n8n-io/n8n/tree/master/packages/cli/src) (a fila em `scaling/`, uma entrada por processo em `commands/`), [Ghost](https://github.com/TryGhost/Ghost/tree/main/ghost/core) (`server/services/<capacidade>/` e `shared/`), [novu](https://github.com/novuhq/novu/tree/next/apps/api/src) (`app/<capacidade>/` e `app/shared/`).
 
 ## Escolhas de ferramenta
 

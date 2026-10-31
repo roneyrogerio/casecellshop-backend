@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M3 — Processamento assíncrono (parte 1 no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, no PR #15, pronta para a aprovação); a seguir, o M4
+**Marco atual:** M4 — Vitrine e frescor, depois da reorganização das pastas (AD-025, PR próprio); o M3 terminou nos PRs #13 e #15
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -82,7 +82,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Pronto quando:** `CHK-*`, `FND-09`, `FND-10`, `FND-11` e `AI-19` passam, junto com as cláusulas novas do M2 nos critérios que já existiam: os arquivos `.ts` no `AI-01`, o `.kysely-codegenrc*` no `AI-04`, as duas conferências no `AI-05` e no `AI-17`, e os schemas de sucesso e de erro do `POST /checkout` e do `GET /orders/{orderId}/status` no `FND-07`.
 
-## M3 — Processamento assíncrono
+## M3 — Processamento assíncrono · CONCLUÍDO
 
 **Meta:** todo pedido aceito é processado pelo menos uma vez e termina faturado, falho ou na DLQ, de onde a reconciliação e o reprocessamento em lote o tiram; ele é faturado no máximo uma vez, com o limite do R6.
 

@@ -10,7 +10,7 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | [`project/STATE-ARCHIVE.md`](project/STATE-ARCHIVE.md) | A AD-007, substituída no M1 e guardada com o texto como foi aceito; não recebe mais nada |
 | [`features/casecellshop/spec.md`](features/casecellshop/spec.md) | A lista única de critérios de aceite com ID (`FND`, `CHK`, `ORD`, `CAT`, `OBS`, `DOC`, `AI`) |
 | [`features/casecellshop/design.md`](features/casecellshop/design.md) | Como construir: componentes, dados, consultas, contrato, observabilidade e parâmetros |
-| [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: commits, pull requests, branches, testes, idioma e instruções da IA |
+| [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: pastas do código, commits, pull requests, branches, testes, idioma e instruções da IA |
 | `src/contract/` e `openapi.yaml` (criados no M1) | O contrato HTTP em zod e o OpenAPI 3.1 gerado dele. A validação e os testes usam os mesmos schemas |
 | `ARCHITECTURE.md` (raiz, criado no M1) | O diagnóstico, a arquitetura alvo e o porquê de cada bloco, por tema |
 

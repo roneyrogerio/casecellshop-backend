@@ -71,8 +71,8 @@ O que B entrega:
 
 O que A entrega:
 
-- a loja controla a **promessa** de estoque: `on_hand` espelha o ERP, `reserved` é da loja e `sold_total` só cresce **[implementado: `migrations/store/20260102000000_create_store.ts`, `src/checkout/repository.ts`, `CHK-01`; a baixa no faturamento: `src/outbox/conclude.ts`, `ORD-17`]** (AD-002);
-- uma ordem de lock única entre linhas existentes (mensagem da outbox, pedido, estoque por SKU) evita deadlock **[implementado no checkout: `src/checkout/repository.ts`, `CHK-07`; na conclusão e no cancelamento do pedido: `src/outbox/conclude.ts`, `src/runbook.ts`]**;
+- a loja controla a **promessa** de estoque: `on_hand` espelha o ERP, `reserved` é da loja e `sold_total` só cresce **[implementado: `migrations/store/20260102000000_create_store.ts`, `src/checkout/repository.ts`, `CHK-01`; a baixa no faturamento: `src/billing/conclude.ts`, `ORD-17`]** (AD-002);
+- uma ordem de lock única entre linhas existentes (mensagem da outbox, pedido, estoque por SKU) evita deadlock **[implementado no checkout: `src/checkout/repository.ts`, `CHK-07`; na conclusão e no cancelamento do pedido: `src/billing/conclude.ts`, `src/billing/runbook.ts`]**;
 - o teste dispara 50 checkouts simultâneos com estoque 5 e conta que exatamente 5 passam, contra um PostgreSQL real **[implementado: `test/integration/checkout/checkout-concurrency.test.ts`, `CHK-01`]**.
 
 ### Problema 3: checkout frágil
@@ -117,7 +117,7 @@ O que B entrega:
 - **Workers:** um worker para o envio ao ERP e para a sincronização **[implementado: o envio; a sincronização, M4]**.
 - **Sincronização:** preço e estoque a cada 60 s, sem devolver unidade já vendida **[M4]**.
 - **Cache:** em processo, na vitrine **[M4]**.
-- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` **[implementado: `src/contract/`, `src/http/problem.ts`, `FND-03`, `FND-07`]**; os traces da requisição ao banco, vistos no Jaeger local **[implementado: `src/telemetry.ts`, `FND-05`]**; os demais logs, métricas e traces **[M2 a M5]**.
+- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` **[implementado: `src/contract/`, `src/http/problem.ts`, `FND-03`, `FND-07`]**; os traces da requisição ao banco, vistos no Jaeger local **[implementado: `src/shared/telemetry.ts`, `FND-05`]**; os demais logs, métricas e traces **[M2 a M5]**.
 
 **Dias 30 a 60: operar com segurança.**
 
@@ -192,7 +192,7 @@ flowchart LR
 
 - **`UPDATE` condicional atômico (escolhido):** `UPDATE inventory SET reserved = reserved + :q WHERE sku = :sku AND on_hand - reserved >= :q`. A checagem e a gravação são uma instrução só. O PostgreSQL trava a linha, e uma segunda transação concorrente espera e reavalia o `WHERE` com o valor novo. Zero linhas afetadas quer dizer sem estoque, e a transação inteira é desfeita **[implementado: `src/checkout/repository.ts`, `CHK-01`]**.
 - **Lock pessimista (`SELECT … FOR UPDATE` e depois `UPDATE`):** é correto, mas faz duas idas ao banco por SKU e põe a regra na aplicação, entre a leitura e a gravação, onde um erro de código volta a abrir a janela.
-- **Reserva de estoque:** não é alternativa ao lock, e sim o modelo que o checkout usa. A loja guarda a promessa (`reserved`) separada do estoque físico (`on_hand`), e a reserva só baixa no faturamento ou na falha. Assim a sincronização com o ERP nunca apaga uma reserva ainda não faturada **[implementado: a reserva, `CHK-01`; a baixa no faturamento ou na falha, `src/outbox/conclude.ts`, `ORD-08`, `ORD-17`; a sincronização, no M4]** (AD-002, L-001). A reserva com prazo, que expira se o cliente não paga, fica fora do escopo: aqui não há pagamento **[alvo]**.
+- **Reserva de estoque:** não é alternativa ao lock, e sim o modelo que o checkout usa. A loja guarda a promessa (`reserved`) separada do estoque físico (`on_hand`), e a reserva só baixa no faturamento ou na falha. Assim a sincronização com o ERP nunca apaga uma reserva ainda não faturada **[implementado: a reserva, `CHK-01`; a baixa no faturamento ou na falha, `src/billing/conclude.ts`, `ORD-08`, `ORD-17`; a sincronização, no M4]** (AD-002, L-001). A reserva com prazo, que expira se o cliente não paga, fica fora do escopo: aqui não há pagamento **[alvo]**.
 - **Lock distribuído (Redis ou similar):** resolve a disputa fora do banco, mas o lock precisa de prazo e de *fencing token*, e fica fora da transação do pedido. Um failover com replicação assíncrona pode perder um lock já concedido, e então o banco precisa da condição do mesmo jeito.
 
 Dois pedidos com os mesmos SKUs em ordens diferentes (`{A, B}` e `{B, A}`) podem travar um ao outro. Por isso toda transação reserva os SKUs na mesma ordem, a ordem de SKU **[implementado: `src/checkout/repository.ts`, `CHK-07`]**. O `UPDATE` condicional é a única barreira contra a promessa acima do estoque: o banco aceita `reserved > on_hand`, e o próprio controle negativo do teste mostra isso (`CHK-02`). Os CHECKs `reserved >= 0` e `on_hand >= 0` impedem só valores negativos, como defesa em profundidade **[implementado: `migrations/store/20260102000000_create_store.ts`, `test/integration/checkout/store-schema.test.ts`]**. Uma promessa acima do estoque, que só pode surgir quando a sincronização baixa o `on_hand`, aparece no gauge de SKUs com `reserved > on_hand` **[M5, `OBS-06`]**.
@@ -222,7 +222,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 **Decisão:** o pedido e a mensagem de saída nascem na mesma transação, numa tabela de outbox no PostgreSQL da loja (*Transactional Outbox*). Um *Message Relay* publica as mensagens no SQS, e o worker consome do SQS: chama o ERP fora de qualquer transação, consulta o ERP pela referência antes de criar de novo, repete com espera crescente pelo *visibility timeout*, e a mensagem vai para a DLQ do SQS depois do limite de recebimentos. A reconciliação e o runbook tiram os pedidos da DLQ (AD-003, AD-004, AD-021). Localmente, o SQS é o ElasticMQ, um emulador da API do SQS que roda no compose sem conta nem token.
 
-**Implementado no M3, em duas partes:** a primeira (PR #13) fez o worker com a fila na própria tabela da outbox (AD-003); a segunda (PR #15) trocou essa fila pelo SQS (AD-021, AD-024) e trouxe a reconciliação e o runbook. O código está em `src/outbox/relay.ts`, `src/queue/sqs.ts`, `src/worker.ts`, `src/outbox/call-permit.ts`, `src/reconciliation.ts` e `src/runbook.ts`, e os testes, em `test/integration/worker/`.
+**Implementado no M3, em duas partes:** a primeira (PR #13) fez o worker com a fila na própria tabela da outbox (AD-003); a segunda (PR #15) trocou essa fila pelo SQS (AD-021, AD-024) e trouxe a reconciliação e o runbook. O código está em `src/billing/relay.ts`, `src/queue/sqs.ts`, `src/billing/worker.ts`, `src/billing/call-permit.ts`, `src/billing/reconciliation.ts` e `src/billing/runbook.ts`, e os testes, em `test/integration/billing/`.
 
 ### Publicar antes ou depois de gravar o pedido
 
