@@ -1,7 +1,7 @@
 # Estado do projeto
 
-**Atualizado em:** 30/10/2026
-**Trabalho atual:** M2 — Checkout (M1 concluído)
+**Atualizado em:** 31/10/2026
+**Trabalho atual:** M3 — Processamento assíncrono (M2 concluído)
 
 Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita não é editada: se mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
 
@@ -145,7 +145,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-006 · Idempotência por `Idempotency-Key`, gravada primeiro na transação
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026). A ordem do pedido e da chave na transação é alterada pela AD-020.
 
 **Contexto.** Duplo clique, retry do cliente e reprocessamento não podem gerar dois pedidos. Checar a chave com um `SELECT` antes de gravar repete o *check-then-act*, e a chave precisa vir antes da reserva: senão, a repetição de um pedido que levou a última unidade receberia `409` em vez do pedido original.
 
@@ -565,7 +565,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-020 · A linha do pedido nasce antes da chave de idempotência
 
-**Status:** proposta (PR #12). Precisa, na AD-006, "a chave e o hash do payload normalizado são o primeiro passo da transação".
+**Status:** aceita (31/10/2026, PR #12). Altera, na AD-006, "a chave e o hash do payload normalizado são o primeiro passo da transação".
 
 **Contexto.** A AD-006 põe a chave como primeiro passo do checkout, para uma requisição repetida esperar no índice único antes de qualquer reserva. O esquema da loja (PR #11) liga a chave ao pedido por uma FK obrigatória (`idempotency_keys.order_id NOT NULL`), com o `id` do pedido gerado pelo banco. Com isso, a chave não pode existir antes da linha do pedido.
 

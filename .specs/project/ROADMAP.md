@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M2 — Checkout (parte 1, a camada de dados, concluída no PR #11; parte 2, o checkout, no PR #12)
+**Marco atual:** M3 — Processamento assíncrono
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -69,9 +69,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - o ruleset protege a `main`;
 - o PR registra o tempo gasto.
 
-## M2 — Checkout
+## M2 — Checkout · CONCLUÍDO
 
-**Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP.
+**Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP. Entrou pelos PRs #11 (camada de dados) e #12 (checkout e status do pedido).
 
 - Design de concorrência e idempotência (`DOC-CON`).
 - Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados e conferidos no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` na regra nova e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
