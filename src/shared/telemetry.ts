@@ -1,15 +1,19 @@
 import {
   context,
+  defaultTextMapGetter,
+  ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
   type Attributes,
   type Counter,
   type Histogram,
+  type Meter,
   type Span,
   type Tracer,
   type UpDownCounter,
 } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -22,6 +26,8 @@ import {
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { optionalEnv } from './config.ts';
+import { logContext } from './logging.ts';
 import { resolveServiceIdentity } from './service-identity.ts';
 
 export interface TelemetryOptions {
@@ -73,47 +79,65 @@ function ensureContextManager(): void {
 }
 
 function defaultExporter(): SpanExporter | undefined {
-  const choice = process.env['OTEL_TRACES_EXPORTER'];
+  const choice = optionalEnv('OTEL_TRACES_EXPORTER');
   if (choice === 'console') return new ConsoleSpanExporter();
   if (choice === 'otlp') return new OTLPTraceExporter();
   return undefined;
 }
 
-export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
-  ensureContextManager();
+// Um propagador só para o processo: injeta o traceparent da requisição na outbox e o retoma no worker.
+export const propagator = new W3CTraceContextPropagator();
 
-  const identity = resolveServiceIdentity(options.serviceName ?? 'casecellshop');
-  const resource = resourceFromAttributes({
-    'service.name': identity.service,
-    'deployment.environment.name': identity.env,
-    'service.version': identity.version,
-  });
+export interface ConsumerSpanOptions {
+  name: string;
+  // Sem traceparent, o span é raiz.
+  traceparent: string | null;
+  correlationId: string;
+  attributes: Attributes;
+}
 
-  const exporter = options.spanExporter ?? defaultExporter();
-  const spanProcessors: SpanProcessor[] = exporter ? [new BatchSpanProcessor({ exporter })] : [];
-  const tracerProvider = new TracerProvider({ resource, spanProcessors });
-  const tracer = tracerProvider.getTracer('casecellshop');
+// Roda `fn` num span CONSUMER que continua o trace do checkout (pelo traceparent da mensagem) e
+// leva o correlationId dele nos logs; o span fecha ao fim, com sucesso ou erro.
+export function runConsumerSpan<T>(telemetry: Telemetry, options: ConsumerSpanOptions, fn: (span: Span) => Promise<T>): Promise<T> {
+  const carrier = options.traceparent ? { traceparent: options.traceparent } : {};
+  const parent = propagator.extract(ROOT_CONTEXT, carrier, defaultTextMapGetter);
+  return logContext.run({ correlationId: options.correlationId }, () =>
+    telemetry.tracer.startActiveSpan(options.name, { kind: SpanKind.CONSUMER, attributes: options.attributes }, parent, async (span) => {
+      try {
+        return await fn(span);
+      } finally {
+        span.end();
+      }
+    }),
+  );
+}
 
-  // Sem servidor próprio: o /metrics sai pela API (e pelo worker) com este handler.
-  const prometheus = new PrometheusExporter({ preventServerStart: true });
-  const meterProvider = new MeterProvider({ resource, readers: [prometheus] });
-  const meter = meterProvider.getMeter('casecellshop');
+type Instruments = Pick<
+  Telemetry,
+  | 'httpRequestDuration'
+  | 'checkoutOutcome'
+  | 'outboxAttemptOutcome'
+  | 'outboxConclusionNoRow'
+  | 'outboxPublished'
+  | 'orderAcceptToInvoice'
+  | 'erpRequestDuration'
+  | 'erpRequestTotal'
+  | 'erpRequestsInFlight'
+  | 'erpConfigError'
+  | 'erpOutOfStockRejection'
+>;
 
-  // O exportador Prometheus não acrescenta o sufixo da unidade: o nome já a carrega.
-  const httpRequestDuration = meter.createHistogram('http_server_request_duration_seconds', {
-    unit: 's',
-    description: 'Duração das requisições HTTP, base dos SLOs de latência.',
-    advice: { explicitBucketBoundaries: DURATION_BUCKETS_SECONDS },
-  });
-
-  const checkoutOutcome = meter.createCounter('checkout_outcome_total', {
-    description: 'Checkouts por desfecho: accepted, replay, out_of_stock, price_changed, invalid ou unavailable.',
-  });
-
+function createInstruments(meter: Meter): Instruments {
   return {
-    tracer,
-    httpRequestDuration,
-    checkoutOutcome,
+    // O exportador Prometheus não acrescenta o sufixo da unidade: o nome já a carrega.
+    httpRequestDuration: meter.createHistogram('http_server_request_duration_seconds', {
+      unit: 's',
+      description: 'Duração das requisições HTTP, base dos SLOs de latência.',
+      advice: { explicitBucketBoundaries: DURATION_BUCKETS_SECONDS },
+    }),
+    checkoutOutcome: meter.createCounter('checkout_outcome_total', {
+      description: 'Checkouts por desfecho: accepted, replay, out_of_stock, price_changed, invalid ou unavailable.',
+    }),
     outboxAttemptOutcome: meter.createCounter('outbox_attempt_outcome_total', {
       description: 'Tentativas da outbox por desfecho: invoiced, failed, retry, dead, closed ou lease_short.',
     }),
@@ -141,19 +165,47 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
     erpOutOfStockRejection: meter.createCounter('erp_out_of_stock_rejection_total', {
       description: 'Pedidos que o ERP recusou por falta de estoque.',
     }),
-    async withSpan(name, spanOptions, fn) {
-      return tracer.startActiveSpan(name, spanOptions, async (span) => {
-        try {
-          return await fn(span);
-        } catch (error) {
-          span.setStatus({ code: SpanStatusCode.ERROR });
-          if (error instanceof Error) span.recordException(error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      });
-    },
+  };
+}
+
+function createWithSpan(tracer: Tracer): Telemetry['withSpan'] {
+  return (name, spanOptions, fn) =>
+    tracer.startActiveSpan(name, spanOptions, async (span) => {
+      try {
+        return await fn(span);
+      } catch (error) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        if (error instanceof Error) span.recordException(error);
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
+}
+
+export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
+  ensureContextManager();
+
+  const identity = resolveServiceIdentity(options.serviceName ?? 'casecellshop');
+  const resource = resourceFromAttributes({
+    'service.name': identity.service,
+    'deployment.environment.name': identity.env,
+    'service.version': identity.version,
+  });
+
+  const exporter = options.spanExporter ?? defaultExporter();
+  const spanProcessors: SpanProcessor[] = exporter ? [new BatchSpanProcessor({ exporter })] : [];
+  const tracerProvider = new TracerProvider({ resource, spanProcessors });
+  const tracer = tracerProvider.getTracer('casecellshop');
+
+  // Sem servidor próprio: o /metrics sai pela API (e pelo worker) com este handler.
+  const prometheus = new PrometheusExporter({ preventServerStart: true });
+  const meterProvider = new MeterProvider({ resource, readers: [prometheus] });
+
+  return {
+    tracer,
+    ...createInstruments(meterProvider.getMeter('casecellshop')),
+    withSpan: createWithSpan(tracer),
     metricsHandler: (request, response) => {
       prometheus.getMetricsRequestHandler(request, response);
     },

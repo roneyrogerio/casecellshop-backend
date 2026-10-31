@@ -9,31 +9,24 @@ function isZod(schema: unknown): schema is z.ZodType {
   return schema instanceof z.ZodType;
 }
 
-// Mensagens em português, sem repetir o texto interno do zod.
+// Mensagens em português, sem repetir o texto interno do zod. Os códigos sem mensagem própria
+// ficam listados, todos com a genérica, para o tsc acusar um código novo do zod (exaustividade).
+const MESSAGES: Record<z.core.$ZodIssue['code'], string> = {
+  invalid_type: 'Tipo inválido',
+  too_small: 'Valor abaixo do mínimo',
+  too_big: 'Valor acima do máximo',
+  invalid_format: 'Formato inválido',
+  invalid_value: 'Valor não permitido',
+  unrecognized_keys: 'Parâmetro desconhecido',
+  not_multiple_of: 'Valor inválido',
+  invalid_union: 'Valor inválido',
+  invalid_key: 'Valor inválido',
+  invalid_element: 'Valor inválido',
+  custom: 'Valor inválido',
+};
+
 function messageFor(issue: z.core.$ZodIssue): string {
-  switch (issue.code) {
-    case 'invalid_type':
-      return 'Tipo inválido';
-    case 'too_small':
-      return 'Valor abaixo do mínimo';
-    case 'too_big':
-      return 'Valor acima do máximo';
-    case 'invalid_format':
-      return 'Formato inválido';
-    case 'invalid_value':
-      return 'Valor não permitido';
-    case 'unrecognized_keys':
-      return 'Parâmetro desconhecido';
-    // Códigos sem mensagem própria: listados para a verificação de
-    // exaustividade, todos caem na mensagem genérica de sempre.
-    case 'not_multiple_of':
-    case 'invalid_union':
-    case 'invalid_key':
-    case 'invalid_element':
-    case 'custom':
-    default:
-      return 'Valor inválido';
-  }
+  return MESSAGES[issue.code];
 }
 
 function collect(origin: string, error: z.ZodError, into: ProblemErrors): void {

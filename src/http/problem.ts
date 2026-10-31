@@ -29,6 +29,19 @@ export class ProblemError extends Error {
   }
 }
 
+// Segundos até o cliente tentar de novo depois de o banco não responder.
+const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
+
+// O 503 de toda rota que depende do banco: o mesmo título e o mesmo Retry-After.
+export function databaseUnavailableProblem(): ProblemError {
+  return new ProblemError({
+    status: 503,
+    cause: 'service-unavailable',
+    title: 'Banco indisponível',
+    headers: { 'Retry-After': UNAVAILABLE_RETRY_AFTER_SECONDS },
+  });
+}
+
 export const notFoundHandler: RequestHandler = (_req, _res, next) => {
   next(new ProblemError({ status: 404, cause: 'not-found', title: 'Recurso não encontrado' }));
 };

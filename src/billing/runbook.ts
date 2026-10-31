@@ -1,15 +1,13 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
-import { expressionBuilder, sql } from 'kysely';
+import { sql } from 'kysely';
 import type { Pool } from 'pg';
-import { createDb, runInTransaction, type StoreDb } from '../db/database.ts';
+import { createDb, runInTransaction } from '../db/database.ts';
 import { createQueue, startRedrive } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { outbox } from './call-permit.ts';
 import { applyConclusion } from './conclude.ts';
 
 // Runbook da DLQ (design.md, "Worker: reconciliação e runbook").
-
-// Fora do callback do set: a regra do Kysely exige o objeto, e o coalesce precisa citar a coluna.
-const outbox = expressionBuilder<StoreDb, 'outbox'>();
 
 const DEFAULT_REDRIVE_TIMEOUT_MS = 60_000;
 const REDRIVE_POLL_MS = 1_000;

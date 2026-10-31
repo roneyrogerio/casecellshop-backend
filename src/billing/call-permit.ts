@@ -3,10 +3,14 @@ import { expressionBuilder, type Kysely, sql } from 'kysely';
 import type { StoreDb } from '../db/database.ts';
 
 // Fora do callback do set: a regra do Kysely exige o objeto, e o coalesce precisa citar a coluna.
-const outbox = expressionBuilder<StoreDb, 'outbox'>();
+export const outbox = expressionBuilder<StoreDb, 'outbox'>();
 
 // Permissão de chamada por pedido (AD-024; design.md, "Worker: envio"): uma
 // chamada ao ERP por pedido a cada atraso mínimo, pelo relógio do banco.
+
+// Atraso mínimo entre duas chamadas ao ERP do mesmo pedido, contado do início da última (H4 mais a
+// ida da requisição). O worker e a reconciliação tomam a mesma permissão, então partilham o valor.
+export const MIN_CALL_DELAY_MS = 45_000;
 
 export type CallPermit =
   | { granted: true; token: string; sentBefore: boolean }

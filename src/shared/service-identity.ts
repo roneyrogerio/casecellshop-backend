@@ -1,3 +1,5 @@
+import { optionalEnv } from './config.ts';
+
 export interface ServiceIdentity {
   service: string;
   env: string;
@@ -9,8 +11,8 @@ export interface ServiceIdentity {
 export function resolveServiceIdentity(defaultName: string): ServiceIdentity {
   return {
     // OTEL_SERVICE_NAME vence, como no padrão do OpenTelemetry; o nome do processo vale fora do compose.
-    service: process.env['OTEL_SERVICE_NAME'] ?? defaultName,
-    env: process.env['DEPLOY_ENV'] ?? 'development',
-    version: process.env['SERVICE_VERSION'] ?? '0.0.0',
+    service: optionalEnv('OTEL_SERVICE_NAME') ?? defaultName,
+    env: optionalEnv('DEPLOY_ENV') ?? 'development',
+    version: optionalEnv('SERVICE_VERSION') ?? '0.0.0',
   };
 }

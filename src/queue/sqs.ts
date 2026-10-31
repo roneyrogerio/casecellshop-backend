@@ -8,6 +8,7 @@ import {
   StartMessageMoveTaskCommand,
 } from '@aws-sdk/client-sqs';
 import { TRACEPARENT_ATTRIBUTE } from '../contract/billing-message.ts';
+import { optionalEnv, requireEnv } from '../shared/config.ts';
 
 // Porta da fila do faturamento sobre o SQS (AD-021; design.md, "Fila no SQS").
 // Sem retry interno: quem chama decide o que fazer com cada falha.
@@ -50,8 +51,16 @@ export interface Queue {
   approximateCount(): Promise<number>;
 }
 
+// Máximo de mensagens por ReceiveMessage: limite do próprio SQS.
+export const MAX_RECEIVE_BATCH = 10;
 const REQUEST_TIMEOUT_MS = 5_000;
 const RECEIVE_MARGIN_SECONDS = 5;
+
+// O endpoint vem vazio na AWS real; no compose, é o do ElasticMQ.
+export function createSqsClientFromEnv(): SQSClient {
+  const endpoint = optionalEnv('SQS_ENDPOINT');
+  return createSqsClient({ region: requireEnv('AWS_REGION'), ...(endpoint ? { endpoint } : {}) });
+}
 
 export function createSqsClient(settings: SqsSettings): SQSClient {
   return new SQSClient({

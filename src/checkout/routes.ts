@@ -52,44 +52,40 @@ export interface CheckoutRoutes {
   handlers: (RequestHandler | ErrorRequestHandler)[];
 }
 
-export function createCheckoutRoutes(checkout: CheckoutRepository, telemetry: Telemetry, logger: Logger): CheckoutRoutes {
-  const count = (outcome: Outcome) => telemetry.checkoutOutcome.add(1, { outcome });
+// Antes de tudo, para o 413, o 415 e o 400 sem chave também saírem com a rota certa.
+const markRoute: RequestHandler = (_req, res, next) => {
+  res.locals['route'] = checkoutRoute.path;
+  next();
+};
 
-  // Antes de tudo, para o 413, o 415 e o 400 sem chave também saírem com a rota certa.
-  const markRoute: RequestHandler = (_req, res, next) => {
-    res.locals['route'] = checkoutRoute.path;
-    next();
-  };
+const requireJson: RequestHandler = (req, _res, next) => {
+  if (!req.is('application/json')) {
+    next(new ProblemError({ status: 415, cause: 'unsupported-media-type', title: 'Use Content-Type: application/json' }));
+    return;
+  }
+  next();
+};
 
-  const requireJson: RequestHandler = (req, _res, next) => {
-    if (!req.is('application/json')) {
-      next(new ProblemError({ status: 415, cause: 'unsupported-media-type', title: 'Use Content-Type: application/json' }));
-      return;
-    }
-    next();
-  };
+// A falta da chave tem causa própria e vem antes da validação do contrato.
+const requireKey: RequestHandler = (req, _res, next) => {
+  if (req.headers['idempotency-key'] === undefined) {
+    next(new ProblemError({ status: 400, cause: 'idempotency-key-required', title: 'Idempotency-Key é obrigatória' }));
+    return;
+  }
+  next();
+};
 
-  const jsonBody = express.json({ limit: MAX_BODY_BYTES });
+const rejectDuplicateSku: RequestHandler = (req, _res, next) => {
+  const skus = (req.body as CheckoutRequest).items.map((item) => item.sku);
+  if (new Set(skus).size !== skus.length) {
+    next(new ProblemError({ status: 400, cause: 'duplicate-sku', title: 'SKU repetido no pedido' }));
+    return;
+  }
+  next();
+};
 
-  // A falta da chave tem causa própria e vem antes da validação do contrato.
-  const requireKey: RequestHandler = (req, _res, next) => {
-    if (req.headers['idempotency-key'] === undefined) {
-      next(new ProblemError({ status: 400, cause: 'idempotency-key-required', title: 'Idempotency-Key é obrigatória' }));
-      return;
-    }
-    next();
-  };
-
-  const rejectDuplicateSku: RequestHandler = (req, _res, next) => {
-    const skus = (req.body as CheckoutRequest).items.map((item) => item.sku);
-    if (new Set(skus).size !== skus.length) {
-      next(new ProblemError({ status: 400, cause: 'duplicate-sku', title: 'SKU repetido no pedido' }));
-      return;
-    }
-    next();
-  };
-
-  const accept: RequestHandler = async (req, res) => {
+function createAccept(checkout: CheckoutRepository, telemetry: Telemetry, logger: Logger): RequestHandler {
+  return async (req, res) => {
     const result = await checkout.create({
       idempotencyKey: req.headers['idempotency-key'] as string,
       correlationId: res.locals['correlationId'] as string,
@@ -99,16 +95,18 @@ export function createCheckoutRoutes(checkout: CheckoutRepository, telemetry: Te
     if (result.kind === 'accepted') {
       logger.info({ event: 'checkout.accepted', orderId: result.orderId, correlationId: res.locals['correlationId'] }, 'checkout aceito');
     }
-    count(result.kind);
+    telemetry.checkoutOutcome.add(1, { outcome: result.kind });
     const body: CheckoutAccepted = { orderId: result.orderId, status: result.status, total: result.total };
     res.status(202).setHeader('Location', `/orders/${result.orderId}/status`).setHeader('Retry-After', ACCEPTED_RETRY_AFTER_SECONDS).json(body);
   };
+}
 
-  // Erro de qualquer passo da rota: converte o do parser, conta o desfecho e registra a causa.
-  // O erro segue para o middleware único, que monta o problem+json.
+// Erro de qualquer passo da rota: converte o do parser, conta o desfecho e registra a causa.
+// O erro segue para o middleware único, que monta o problem+json.
+function createOnError(telemetry: Telemetry, logger: Logger): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const onError: ErrorRequestHandler = (error: unknown, _req, res, next) => {
+  return (error: unknown, _req, res, next) => {
     const problem = error instanceof ProblemError ? error : parserProblem(error);
     if (!problem) {
       next(error);
@@ -116,13 +114,18 @@ export function createCheckoutRoutes(checkout: CheckoutRepository, telemetry: Te
     }
     const { cause, currentPrices } = problem.init;
     const correlationId = res.locals['correlationId'] as string;
-    count(outcomeOf(cause));
+    telemetry.checkoutOutcome.add(1, { outcome: outcomeOf(cause) });
     logger.warn({ event: 'checkout.rejected', reason: cause, correlationId }, 'checkout recusado');
     if (currentPrices) {
       logger.warn({ event: 'checkout.price_changed', reason: cause, correlationId, items: currentPrices.length }, 'preço alterado desde que o cliente o viu');
     }
     next(problem);
   };
+}
 
+export function createCheckoutRoutes(checkout: CheckoutRepository, telemetry: Telemetry, logger: Logger): CheckoutRoutes {
+  const jsonBody = express.json({ limit: MAX_BODY_BYTES });
+  const accept = createAccept(checkout, telemetry, logger);
+  const onError = createOnError(telemetry, logger);
   return { handlers: [markRoute, requireJson, jsonBody, requireKey, validateRequest(checkoutRoute), rejectDuplicateSku, accept, onError] };
 }

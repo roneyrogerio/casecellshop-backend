@@ -4,9 +4,9 @@
 import { cancelOrder, redriveDlq } from '../billing/runbook.ts';
 import { OrderId } from '../contract/orders.ts';
 import { createPool } from '../db/pool.ts';
-import { createSqsClient } from '../queue/sqs.ts';
+import { createSqsClientFromEnv } from '../queue/sqs.ts';
 import { systemClock } from '../shared/clock.ts';
-import { optionalEnv, requireEnv } from '../shared/config.ts';
+import { requireEnv } from '../shared/config.ts';
 import { createLogger } from '../shared/logging.ts';
 
 const USAGE = 'uso: node src/main/runbook.ts redrive | cancel <orderId>';
@@ -30,8 +30,7 @@ let exitCode = 0;
 const logger = createLogger({ serviceName: 'casecellshop-runbook' });
 try {
   if (command === 'redrive') {
-    const sqsEndpoint = optionalEnv('SQS_ENDPOINT');
-    const client = createSqsClient({ region: requireEnv('AWS_REGION'), ...(sqsEndpoint ? { endpoint: sqsEndpoint } : {}) });
+    const client = createSqsClientFromEnv();
     try {
       const { before, remaining } = await redriveDlq({ client, dlqUrl: requireEnv('BILLING_DLQ_URL'), clock: systemClock });
       process.stdout.write(`${before - remaining} mensagens movidas da DLQ para a fila (restam ${remaining})\n`);

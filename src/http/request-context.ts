@@ -1,13 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { context, defaultTextMapGetter, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
-import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import type { RequestHandler } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
 import { logContext } from '../shared/logging.ts';
-import type { Telemetry } from '../shared/telemetry.ts';
-
-const propagator = new W3CTraceContextPropagator();
+import { propagator, type Telemetry } from '../shared/telemetry.ts';
 
 // Aceita o X-Request-Id válido; qualquer outro vira um UUID novo.
 function correlationIdFrom(header: string | string[] | undefined): string {
