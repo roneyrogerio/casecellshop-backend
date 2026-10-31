@@ -27,6 +27,7 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export interface ErpSimInvoices {
   created_at: Generated<Timestamp>;
+  dedup_key: string | null;
   id: Generated<Int8>;
   items: Json;
   reference: string;
