@@ -56,7 +56,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
 **Transação, nesta ordem:**
 
 1. **Chave de idempotência,** com os itens já ordenados por SKU. `INSERT … ON CONFLICT (key) DO NOTHING`, seguido de um `SELECT` quando a chave já existe: um `INSERT` simples que viola o índice único abortaria a transação no PostgreSQL. Uma requisição concorrente com a mesma chave espera no índice até a primeira terminar.
-   - O hash é do payload validado e normalizado, serializado com as chaves em ordem: o mesmo pedido escrito de outro jeito não vira `422`.
+   - O hash é o SHA-256 (`node:crypto`) do payload validado e normalizado, com os itens em ordem de SKU e serializado com as chaves em ordem: o mesmo pedido escrito de outro jeito não vira `422`.
    - Mesma chave e mesmo corpo: `202` com o mesmo `orderId`, a mesma `Location` e o status atual. Outro corpo: `422`. Sem a chave: `400`. Espera além do `lock_timeout` no passo da chave: `409`.
    - Um SKU repetido no mesmo pedido recebe `400`.
 2. **Pedido,** com o preço lido do banco e gravado em cada item. SKU inexistente: `422`. Preço diferente do `expectedUnitPrice`: `409` (`price-changed`), com o preço atual e sem reservar.
@@ -88,9 +88,11 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 - **Validação:** o contrato em `src/contract/` (zod) valida toda requisição (parâmetros, query, cabeçalhos e corpo) num middleware que responde `400` em problem+json; o `415` e o `413` vêm do parser de JSON. Nos testes, um helper valida o corpo e os cabeçalhos de toda resposta pelo schema da rota. `Location`, `Retry-After`, `X-Request-Id` e `Cache-Control` têm asserção própria.
 - **Geração:** `npm run openapi` gera o `openapi.yaml` (OpenAPI 3.1) a partir do registro de rotas; o CI gera de novo, compara com o commitado e passa o lint (`FND-07`).
-- **Limites de entrada:** quantidade de 1 a um máximo, número de itens, tamanho da chave e do corpo, objetos estritos (`.strict()`, que vira `additionalProperties: false` no OpenAPI).
+- **Limites de entrada:** quantidade de 1 a 10 por item, de 1 a 20 itens por pedido, `Idempotency-Key` com 1 a 128 caracteres ASCII visíveis (o formato do `X-Request-Id`), SKU com 1 a 64 caracteres de `A-Z`, `a-z`, `0-9`, `.`, `_` e `-`, corpo de até 16 KiB, e objetos estritos (`.strict()`, que vira `additionalProperties: false` no OpenAPI).
 - **`X-Request-Id`:** aceito se for válido, gerado se não. É o `correlationId` dos logs e volta em toda resposta, inclusive no `202`, e no problem+json. Um `traceparent` de entrada continua o trace.
-- **Fluxo assíncrono:** o `202` traz `Location` e `Retry-After`; o `503` também traz `Retry-After`.
+- **Fluxo assíncrono:** o `202` traz `{ orderId, status, total }`, com o `total` em centavos, e os cabeçalhos `Location: /orders/{orderId}/status` e `Retry-After: 4`, inclusive na repetição com a mesma chave; o `503` traz `Retry-After: 5`, como o do `/health`.
+- **`orderId`:** UUID v4 gerado pelo banco (`gen_random_uuid()`), sem ordem previsível; um identificador fora do formato UUID recebe `400`.
+- **Status:** `GET /orders/{orderId}/status` responde `200` com `{ orderId, status }`, e com `reason` só no `failed`.
 - **Pedido:** `pending`, `invoiced` ou `failed` com o motivo (rejeição do ERP, falta de estoque no ERP ou cancelamento: `erp_rejected`, `erp_out_of_stock` ou `cancelled`). O banco garante que só um pedido `failed` tem motivo, que todo `failed` tem um, e que o motivo é um dos três. Um pedido na DLQ continua `pending`.
 - **Preço:** em centavos, como inteiros. O checkout usa o preço do banco, nunca o da requisição, envia-o ao ERP (H3) e devolve o total no `202`. O `expectedUnitPrice`, o preço que o cliente viu, é obrigatório em cada item (AD-018): igual ao do banco, o pedido segue; diferente, `409` com o preço atual, e o cliente confirma de novo.
 - **Erros por rota:**
@@ -100,6 +102,9 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - todas: `default` em problem+json (`500`).
 - **Falhas do banco, pelo passo da transação,** com o SQLSTATE lido de `err.code`: `lock_timeout` (`55P03`) no `INSERT` da chave → `409`; qualquer outra (`lock_timeout` em outro passo, `statement_timeout` `57014`, deadlock `40P01`, pool esgotado, falha de conexão) → `503` com `Retry-After`. A transação abortada (`25P02` na guarda do `COMMIT`, `FND-10`) é defeito do código: `500`, com o evento de log `error` `db.transaction_aborted`.
 - **Erros:** `application/problem+json` (RFC 9457), com `correlationId` e um `type` por causa, que separa os três `409` e os dois `422`. Um middleware único produz todos, sem stack trace.
+  - **Causas (`/problems/<causa>`):** `400` `invalid-request` (validação do contrato, inclusive a falta do `expectedUnitPrice`), `idempotency-key-required` e `duplicate-sku`; `409` `out-of-stock`, `price-changed` e `idempotency-key-in-progress`; `413` `payload-too-large`; `415` `unsupported-media-type`; `422` `idempotency-key-reused` e `unknown-sku`; `404` `not-found`; `503` `service-unavailable`.
+  - **`price-changed`:** traz o membro de extensão `currentPrices: [{ sku, unitPrice }]`, com o preço atual de cada item que mudou.
+  - A falta da `Idempotency-Key` e o SKU repetido têm causa própria; por isso o handler os confere, além do schema, que declara a chave obrigatória.
 - **Listas:** `{ "items": [...], "hasNext": true }`, com `?page=` a partir de 1 e tamanho fixo. Uma página além do fim volta vazia, com `hasNext: false`.
 
 ## Vitrine e cache (AD-005)
@@ -189,12 +194,13 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `info`: checkout aceito, pedido faturado, rodada de sincronização;
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização, transação abortada antes do `COMMIT` (`db.transaction_aborted`, `FND-10`).
+  - **Checkout (M2):** `info` `checkout.accepted` e `warn` `checkout.rejected` (com a causa) e `checkout.price_changed`, todos com o `orderId` quando ele existe; o log `http_request` do checkout e do status também leva o `orderId`.
 - **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`). No SDK 3, o provider é o `TracerProvider` do `sdk-trace`, e os processadores recebem `{ exporter }`; nos testes, `forceFlush()` vem antes de ler o `InMemorySpanExporter`.
 - **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. O exportador vem de `OTEL_TRACES_EXPORTER`: nenhum por padrão, para o healthcheck do compose não encher o log a cada 2 s; `console` para ver os traces em desenvolvimento; `otlp` (OTLP/HTTP) para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version` nos traces e nos logs, com os mesmos valores, porque o Datadog só liga log e trace com a marcação unificada de serviço. O log leva no topo do JSON o `trace_id` (32 caracteres hexadecimais), o `span_id` (16) e o `trace_flags`, os nomes que o OpenTelemetry recomenda.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
   - **HTTP:** duração por rota (histogram), base dos SLOs de latência;
   - **cache:** `hit`, `miss`, `stale` e consultas à origem (counters); cargas em andamento (gauge); latência da vitrine por resultado, idade da entrada servida e idade do dado desde a leitura do ERP (histograms);
-  - **checkout:** desfecho por resultado (aceito, sem estoque, preço alterado, repetição, inválido, indisponível) (counter);
+  - **checkout:** desfecho por resultado (counter, desde o M2), com o label `outcome` em `accepted`, `out_of_stock`, `price_changed`, `replay`, `invalid` ou `unavailable`;
   - **fila:** pedidos sem desfecho em 60 s (counter) e aceite ao faturamento (histogram); idade da mensagem mais antiga, pendentes e DLQ (gauges); conclusões sem linha afetada (counter);
   - **estoque:** unidades reservadas e SKUs com `reserved > on_hand` (gauges);
   - **ERP:** duração e desfecho (histogram e counter), chamadas em andamento (gauge), rejeições por falta de estoque e erros de configuração (counters);
@@ -295,6 +301,8 @@ Ficam em configuração. Os que dependem de carga saem das premissas do [`PROJEC
 | Chamadas simultâneas ao ERP | 30 | Pico de ~7 pedidos/s × ~3 s ≈ 21 em voo; vazão de ~10/s, com folga para retries, consultas e sincronização |
 | Polling da outbox vazia | 500 ms | Início rápido sem carga relevante |
 | `Retry-After` do `202` | 4 s | Polling (0,5 s) mais a mediana do ERP (~3 s) |
+| `Retry-After` do `503` | 5 s | O mesmo do `/health`: tempo para um lock ou o banco se recuperar |
+| Limites do checkout | 1 a 10 por item; 1 a 20 itens; chave até 128 caracteres; corpo até 16 KiB | Um pedido de varejo de capinhas; o limite barra o corpo enorme antes da transação |
 | Tentativas e espera | 12; atraso mínimo + *full jitter* sobre exponencial de base 5 s e teto de 5 min | ~23 min em média e até ~39 min antes da DLQ |
 | Reconciliação | 5 min, até 100 mensagens por rodada | Um pedido na DLQ não exige reação em segundos; o alerta de DLQ já avisa; o grosso sai pelo reprocessamento em lote |
 | Chave de idempotência | pelo menos 24 h | Retries do cliente e reenvio no dia seguinte |
