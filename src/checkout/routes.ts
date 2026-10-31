@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import { CheckoutRequest, checkoutRoute, MAX_BODY_BYTES, type CheckoutAccepted } from '../contract/index.ts';
 import { ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
-import type { Telemetry } from '../telemetry.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 import type { CheckoutRepository } from './repository.ts';
 
 // Segundos até o cliente consultar o status do pedido (também na repetição).

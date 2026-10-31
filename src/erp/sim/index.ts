@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Clock } from '../../clock.ts';
+import type { Clock } from '../../shared/clock.ts';
 import { createErpDb, runInTransaction } from '../../db/database.ts';
 import type { ErpCatalogItem, ErpOrderRequest } from '../erp-client.ts';
 import { ErpNetworkError, type ErpRequest, type ErpResponse, type ErpTransport } from '../transport.ts';

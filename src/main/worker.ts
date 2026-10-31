@@ -1,17 +1,17 @@
 import { createServer } from 'node:http';
-import { systemClock } from '../clock.ts';
-import { envPort, optionalEnv, requireEnv } from '../config.ts';
-import { createRelay } from '../outbox/relay.ts';
-import { createSemaphore } from '../outbox/semaphore.ts';
+import { createReconciler } from '../billing/reconciliation.ts';
+import { createRelay } from '../billing/relay.ts';
+import { createWorker, DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
 import { createQueue, createSqsClient } from '../queue/sqs.ts';
 import { createPool } from '../db/pool.ts';
-import { installGracefulShutdown } from '../lifecycle.ts';
-import { createLogger } from '../logging.ts';
-import { createTelemetry } from '../telemetry.ts';
 import { createErpClient } from '../erp/acl.ts';
 import { createSimulatedErp } from '../erp/sim/index.ts';
-import { createReconciler } from '../reconciliation.ts';
-import { createWorker, DEFAULT_WORKER_CONFIG } from '../worker.ts';
+import { systemClock } from '../shared/clock.ts';
+import { envChoice, envPort, optionalEnv, requireEnv } from '../shared/config.ts';
+import { installGracefulShutdown } from '../shared/lifecycle.ts';
+import { createLogger } from '../shared/logging.ts';
+import { createSemaphore } from '../shared/semaphore.ts';
+import { createTelemetry } from '../shared/telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-worker' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-worker' });
@@ -26,10 +26,9 @@ const SIM_MODES = {
   slow: { mode: 'slow', delayMs: 3_000 },
   unavailable: { mode: 'unavailable' },
 } as const;
-const simMode = process.env['ERP_SIM_MODE'] ?? 'normal';
-if (!Object.hasOwn(SIM_MODES, simMode)) throw new Error(`ERP_SIM_MODE inválido: ${simMode}`);
+const simMode = envChoice('ERP_SIM_MODE', ['normal', 'slow', 'unavailable'], 'normal');
 const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
-sim.script.setDefault(SIM_MODES[simMode as keyof typeof SIM_MODES]);
+sim.script.setDefault(SIM_MODES[simMode]);
 const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
 
 const sqsEndpoint = optionalEnv('SQS_ENDPOINT');

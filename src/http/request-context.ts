@@ -4,8 +4,8 @@ import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import type { RequestHandler } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
-import { logContext } from '../logging.ts';
-import type { Telemetry } from '../telemetry.ts';
+import { logContext } from '../shared/logging.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 const propagator = new W3CTraceContextPropagator();
 

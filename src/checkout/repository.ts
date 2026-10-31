@@ -7,7 +7,7 @@ import type { CheckoutAccepted, CheckoutRequest } from '../contract/index.ts';
 import { createDb, runInTransaction } from '../db/database.ts';
 import { isUnavailable } from '../db/unavailable.ts';
 import { ProblemError } from '../http/problem.ts';
-import type { Telemetry } from '../telemetry.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 export interface CheckoutResult extends CheckoutAccepted {
   // 'replay' quando a chave já tinha um pedido; o status é o atual dele.

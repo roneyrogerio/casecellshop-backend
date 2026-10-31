@@ -2,7 +2,7 @@ import { SpanKind } from '@opentelemetry/api';
 import type { Pool } from 'pg';
 import { createDb } from '../db/database.ts';
 import type { OrderStatus } from '../contract/index.ts';
-import type { Telemetry } from '../telemetry.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 export interface OrdersRepository {
   findStatus(orderId: string): Promise<OrderStatus | null>;

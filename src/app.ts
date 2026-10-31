@@ -11,7 +11,7 @@ import { createOrdersRepository } from './orders/repository.ts';
 import { createErrorHandler, notFoundHandler, ProblemError } from './http/problem.ts';
 import { requestContext } from './http/request-context.ts';
 import { validateRequest } from './http/validate.ts';
-import type { Telemetry } from './telemetry.ts';
+import type { Telemetry } from './shared/telemetry.ts';
 
 export interface AppDependencies {
   pool: Pool;

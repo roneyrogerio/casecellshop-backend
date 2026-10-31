@@ -1,5 +1,5 @@
-import type { Clock } from '../clock.ts';
-import type { Telemetry } from '../telemetry.ts';
+import type { Clock } from '../shared/clock.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 import type {
   CreateOrderResult,
   ErpCatalogItem,
