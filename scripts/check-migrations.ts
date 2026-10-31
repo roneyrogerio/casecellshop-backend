@@ -1,15 +1,20 @@
 // Confere que o PR não altera nem apaga migração que já está na base (AI-01).
-// O node-pg-migrate não confere o conteúdo do que já rodou, então mudar um .sql
-// aplicado divergiria os bancos em silêncio. Só os .sql contam: o .gitkeep de uma
-// pasta que ganhou a primeira migração pode sair sem ser violação.
+// O Migrator do Kysely não confere o conteúdo do que já rodou, então mudar uma
+// migração aplicada divergiria os bancos em silêncio. Vale para todo arquivo de
+// migrations/, de qualquer extensão: um arquivo de outra extensão também pode
+// virar migração. Ficam de fora o .gitkeep de uma pasta que ganhou a primeira
+// migração e a remoção de um .sql, que deixou de ser migração com a AD-017.
 import { execFileSync } from 'node:child_process';
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export function findMigrationViolations(nameStatus: string): string[] {
   const violations: string[] = [];
   for (const line of nameStatus.split('\n')) {
     const [status, file] = line.split('\t');
-    if (!status || !file?.endsWith('.sql') || status === 'A') continue;
+    if (!status || !file || status === 'A') continue;
+    if (basename(file) === '.gitkeep') continue;
+    if (status === 'D' && file.endsWith('.sql')) continue;
     violations.push(`${file} já está na base e foi ${status === 'D' ? 'apagado' : 'alterado'} (${status})`);
   }
   return violations;

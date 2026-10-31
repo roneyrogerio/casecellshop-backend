@@ -64,7 +64,8 @@ jobs:
 
       # As duas conferências abaixo rodam com node, e não por npm run: o package.json
       # é do próprio PR, que poderia redefinir o script que o confere (AI-05).
-      # AI-01: migração .sql já na base não pode ser alterada nem apagada. A base
+      # AI-01: arquivo de migrations/ já na base não pode ser alterado nem apagado
+      # (fora o .gitkeep e a remoção de um .sql, que deixou de ser migração). A base
       # entra pelo ambiente, e não interpolada no script, para o nome da branch
       # nunca virar código no shell.
       - name: Migrações da base ficam intactas
