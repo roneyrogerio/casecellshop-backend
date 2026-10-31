@@ -493,7 +493,7 @@ export interface DB {
   it('AI-19 em src/db/types/ há as colunas reais (on_hand, reserved, reference) e nenhum nome de tabela ou de tipo', () => {
     const columns = readGeneratedColumns(path.join(root, 'src', 'db', 'types'));
 
-    for (const column of ['on_hand', 'reserved', 'reference', 'sku', 'price_cents', 'claim_token', 'total_cents']) {
+    for (const column of ['on_hand', 'reserved', 'reference', 'sku', 'price_cents', 'call_token', 'total_cents']) {
       expect(columns.has(column), column).toBe(true);
     }
     for (const notColumn of ['DB', 'erp_sim.invoices', 'inventory', 'outbox', 'x']) {

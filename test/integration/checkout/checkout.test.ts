@@ -385,8 +385,8 @@ describe('FND-07 o contrato do POST /checkout cobre cada resposta', () => {
 
 describe('CHK-12 o trace chega à linha da outbox', () => {
   async function outboxRow(orderId: string) {
-    const result = await database.pool.query<{ traceparent: string | null; correlation_id: string; status: string }>(
-      'select traceparent, correlation_id, status from outbox where order_id = $1',
+    const result = await database.pool.query<{ traceparent: string | null; correlation_id: string; published_at: Date | null }>(
+      'select traceparent, correlation_id, published_at from outbox where order_id = $1',
       [orderId],
     );
     return result.rows[0];
@@ -407,7 +407,8 @@ describe('CHK-12 o trace chega à linha da outbox', () => {
 
     expect(res.status).toBe(202);
     const row = await outboxRow(CheckoutAccepted.parse(res.body).orderId);
-    expect(row?.status).toBe('pending');
+    // A linha nasce não publicada: o relay a publica no SQS depois do commit do checkout.
+    expect(row?.published_at).toBeNull();
     expect(row?.correlation_id).toBe(requestId);
     expect(row?.correlation_id).toBe(header(res, 'x-request-id'));
     expect(row?.traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);

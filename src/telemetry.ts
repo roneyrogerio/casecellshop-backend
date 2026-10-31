@@ -40,6 +40,8 @@ export interface Telemetry {
   // Labels de lista fechada; nunca orderId nem sku.
   outboxAttemptOutcome: Counter;
   outboxConclusionNoRow: Counter;
+  // Linhas da outbox que o relay publicou no SQS; sem label.
+  outboxPublished: Counter;
   orderAcceptToInvoice: Histogram;
   erpRequestDuration: Histogram;
   erpRequestTotal: Counter;
@@ -117,6 +119,9 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
     }),
     outboxConclusionNoRow: meter.createCounter('outbox_conclusion_no_row_total', {
       description: 'Conclusões que não afetaram linha porque o token já não valia.',
+    }),
+    outboxPublished: meter.createCounter('outbox_published_total', {
+      description: 'Linhas da outbox publicadas no SQS pelo relay.',
     }),
     orderAcceptToInvoice: meter.createHistogram('order_accept_to_invoice_seconds', {
       unit: 's',

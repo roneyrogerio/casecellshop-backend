@@ -14,6 +14,7 @@ export {
   MAX_ITEMS,
   MAX_QUANTITY,
 } from './checkout.ts';
+export { BillingMessage, TRACEPARENT_ATTRIBUTE } from './billing-message.ts';
 export { HealthQuery, HealthStatus, healthRoute } from './health.ts';
 export { FailureReason, OrderId, OrderStatus, OrderStatusValue, orderStatusRoute } from './orders.ts';
 export { RequestHeaders, ResponseHeaders, RetryAfterHeaders } from './headers.ts';

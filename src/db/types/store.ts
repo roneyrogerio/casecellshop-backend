@@ -43,17 +43,14 @@ export interface Orders {
 }
 
 export interface Outbox {
-  attempts: Generated<number>;
-  claim_token: string | null;
+  call_token: string | null;
   correlation_id: string;
   created_at: Generated<Timestamp>;
+  dead_at: Timestamp | null;
   first_sent_at: Timestamp | null;
   last_call_at: Timestamp | null;
-  lease_until: Timestamp | null;
-  next_attempt_at: Generated<Timestamp>;
   order_id: string;
-  reconciled_at: Timestamp | null;
-  status: Generated<string>;
+  published_at: Timestamp | null;
   traceparent: string | null;
 }
 

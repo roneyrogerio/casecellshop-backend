@@ -2,7 +2,7 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado. Ele serve o catálogo do próprio banco, por um cache em memória; reserva o estoque de forma atômica no checkout; e envia os pedidos ao ERP de forma assíncrona, por uma outbox. O ERP é simulado dentro do processo, atrás da porta `ErpClient`.
 
-**Estado:** M1 (Fundação), F1 (Fábrica v2) e M2 (Checkout) concluídos; o M3 (Processamento assíncrono) está em andamento: o worker já envia os pedidos ao ERP simulado, com retry e DLQ, e a reconciliação e o runbook vêm na segunda parte do marco. O catálogo da loja é preenchido pela sincronização com o ERP, que é do M4; até lá, um `docker compose up` sobe tudo, mas o checkout recusa os SKUs por não haver catálogo, e os testes de ponta a ponta preenchem o catálogo eles mesmos. Os marcos seguintes estão no [`ROADMAP.md`](.specs/project/ROADMAP.md).
+**Estado:** M1 (Fundação), F1 (Fábrica v2) e M2 (Checkout) concluídos; o M3 (Processamento assíncrono) fecha com o PR #15: a outbox é publicada no SQS (o ElasticMQ, no compose), o worker envia os pedidos ao ERP simulado com retry e DLQ do SQS, e a reconciliação e o runbook (`node src/main/runbook.ts redrive` e `cancel <orderId>`) tiram os pedidos da DLQ. O catálogo da loja é preenchido pela sincronização com o ERP, que é do M4; até lá, um `docker compose up` sobe tudo, mas o checkout recusa os SKUs por não haver catálogo, e os testes de ponta a ponta preenchem o catálogo eles mesmos. Os marcos seguintes estão no [`ROADMAP.md`](.specs/project/ROADMAP.md).
 
 ## Pré-requisitos
 

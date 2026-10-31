@@ -1,12 +1,16 @@
 import { createServer } from 'node:http';
 import { systemClock } from '../clock.ts';
-import { envPort, requireEnv } from '../config.ts';
+import { envPort, optionalEnv, requireEnv } from '../config.ts';
+import { createRelay } from '../outbox/relay.ts';
+import { createSemaphore } from '../outbox/semaphore.ts';
+import { createQueue, createSqsClient } from '../queue/sqs.ts';
 import { createPool } from '../db/pool.ts';
 import { installGracefulShutdown } from '../lifecycle.ts';
 import { createLogger } from '../logging.ts';
 import { createTelemetry } from '../telemetry.ts';
 import { createErpClient } from '../erp/acl.ts';
 import { createSimulatedErp } from '../erp/sim/index.ts';
+import { createReconciler } from '../reconciliation.ts';
 import { createWorker, DEFAULT_WORKER_CONFIG } from '../worker.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-worker' });
@@ -27,7 +31,24 @@ if (!Object.hasOwn(SIM_MODES, simMode)) throw new Error(`ERP_SIM_MODE inválido:
 const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
 sim.script.setDefault(SIM_MODES[simMode as keyof typeof SIM_MODES]);
 const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
-const worker = createWorker({ pool, erp, logger, telemetry, clock: systemClock });
+
+const sqsEndpoint = optionalEnv('SQS_ENDPOINT');
+const sqsClient = createSqsClient({ region: requireEnv('AWS_REGION'), ...(sqsEndpoint ? { endpoint: sqsEndpoint } : {}) });
+const billingQueue = createQueue(sqsClient, requireEnv('BILLING_QUEUE_URL'));
+// Um limite só para todas as chamadas ao ERP do processo (design.md, "Worker: envio").
+const semaphore = createSemaphore(DEFAULT_WORKER_CONFIG.erpConcurrency);
+const worker = createWorker({ pool, queue: billingQueue, erp, semaphore, logger, telemetry, clock: systemClock });
+const relay = createRelay({ pool, queue: billingQueue, logger, telemetry, clock: systemClock });
+// A reconciliação divide o semáforo do worker: o limite de chamadas ao ERP vale para o processo todo.
+const reconciler = createReconciler({
+  pool,
+  dlq: createQueue(sqsClient, requireEnv('BILLING_DLQ_URL')),
+  erp,
+  semaphore,
+  logger,
+  telemetry,
+  clock: systemClock,
+});
 
 // O worker não tem API; expõe só o /metrics.
 const metricsServer = createServer((req, res) => {
@@ -41,6 +62,8 @@ const metricsServer = createServer((req, res) => {
 const metricsPort = envPort('WORKER_METRICS_PORT', 9464);
 
 await worker.start();
+await relay.start();
+await reconciler.start();
 metricsServer.listen(metricsPort, () => {
   logger.info({ event: 'worker_metrics_started', port: metricsPort }, 'métricas do worker ouvindo');
 });
@@ -48,7 +71,9 @@ metricsServer.listen(metricsPort, () => {
 installGracefulShutdown({
   logger,
   stop: async () => {
-    await worker.stop();
+    // Em conjunto: parar em sequência somaria as esperas e estouraria o prazo de encerramento.
+    await Promise.all([relay.stop(), reconciler.stop(), worker.stop()]);
+    sqsClient.destroy();
     await new Promise<void>((resolve, reject) => {
       metricsServer.close((error) => {
         if (error) reject(error);

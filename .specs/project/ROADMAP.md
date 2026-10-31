@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M3 — Processamento assíncrono (parte 1, o worker com a fila na tabela da outbox, no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, a seguir)
+**Marco atual:** M3 — Processamento assíncrono (parte 1 no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, no PR #15, pronta para a aprovação); a seguir, o M4
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -98,8 +98,9 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 - Design de cache e performance da vitrine (`DOC-CAC`).
 - Catálogo com cache e sincronização, conforme o design.
+- Uso pelo Insomnia sem passo manual (pedido do mantenedor, 31/10/2026): o `servers` do contrato aponta para `http://localhost:3000` (hoje é `/`, que não resolve num arquivo importado), e, se couber, a API serve o `/openapi.json`.
 
-**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro).
+**Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro), e, com um `docker compose up --build`, o `openapi.yaml` importado no Insomnia faz `GET /products`, `POST /checkout` e `GET /orders/{orderId}/status` contra `http://localhost:3000`, sem passo manual.
 
 ## M5 — Observabilidade e operação
 
@@ -130,6 +131,24 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 ---
 
+## Pendências
+
+Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um diz onde entra. As pendências de um PR para o seguinte ficam na descrição dele: as do PR 2 do M3 estão no #13, em "Para o próximo plano".
+
+- **Testes unitários do `src/` anterior ao M3** (pedido do mantenedor, PR próprio). Lacunas por prioridade:
+  - **alta:** o `503` do `/health` (status, `Retry-After`, problem+json, log `health_failed`, span ERROR), por integração com o contêiner parado; o `traceparent` de entrada continuar o trace (`request-context.ts`); os campos obrigatórios do log fora de requisição;
+  - **média:** `validate.ts` (caminho, mensagem, um erro por chave, origens, `messageFor`); `request-context.ts` (labels, log `http_request`, span ERROR no `5xx`, `close` sem `finish`); `lifecycle.ts` (um sinal só, `exit` 0 e 1, prazo de 25 s); `pool.ts` (`statement_timeout`, `lock_timeout` e o ouvinte `db_pool_error`); a mesma identidade de serviço no log e no trace;
+  - **baixa:** o exportador escolhido por `OTEL_TRACES_EXPORTER`; o `404` e o `x-powered-by`; `envPort` e `requireEnv`.
+  - **Decisões do mantenedor antes do PR:** o ID dos testes sem critério no `spec.md`; dois `SPEC_DEVIATION` (fora de requisição o log não traz `correlationId`, `trace_id` nem `span_id`; o `lifecycle.ts` usa `setTimeout` direto, contra a regra do relógio injetável); o provedor de cobertura, que seria dependência nova; e o `OTEL_TRACES_EXPORTER`, que ignora em silêncio um valor desconhecido.
+  - **Achados `baixa` do #12 que não tocam o SQS** (levados do PR 2 do M3): A5, o `scripts/check-kysely-usage.ts` aceita `sql` renomeado por desestruturação, `K["sql"]` e `sql` passado como argumento, e erra a regex depois de `)` e `}`; A6, o `reachesTs` de `test/repo/strict-checks.test.ts` não vê `*.[jt]s` nem `*.?s`; A7, o controle negativo do `CHK-02` roda fora da rota; A11, `spawnSync` sem `timeout` nos testes de `test/repo/`; e os pontos sem asserção: o `415` sem `Content-Type` e o `unavailable` no counter do checkout.
+- **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
+- **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
+- **Skill `/marco` no limite de bytes (próxima mudança de processo):** o `SKILL.md` tem 11.998 dos 12.000 bytes do `FND-06`; antes de acrescentar texto, passar trechos de referência para arquivos de apoio da pasta da skill.
+- **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
+- **CI sem os testes de compose na perna do Node 24.12** (PR de processo): o `Dockerfile` fixa o Node 26, então os testes que sobem o compose testam a mesma imagem nas duas pernas da matriz, e cada perna constrói o compose duas vezes.
+- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
+- **Ações nas contas do mantenedor (a conferir):** status checks estritos no ruleset; apagar as branches `chore/agentic-factory-v2` e `chore/ai-factory-v2`; validade do token do bot; CodeQL, Dependabot e push protection.
+
 ## Ordem de corte
 
 Se for preciso reduzir, os cortes vêm nesta ordem, sem tirar nenhum requisito da tabela acima. O que for cortado sai também das metas e vira limitação documentada no README.
@@ -143,11 +162,12 @@ Se for preciso reduzir, os cortes vêm nesta ordem, sem tirar nenhum requisito d
 
 Fora do escopo principal. Entram só depois que M1 a M6 estiverem completos, nesta ordem:
 
-1. Seção curta "segurança e limites" no README: sem autenticação, abuso possível, limites do contrato, preço lido do banco e o que muda em produção.
-2. Estimativa de capacidade no design de diagnóstico, a partir das premissas de carga.
-3. Plano de rollout por fase, com critério de saída e rollback.
-4. `/livez` e `/readyz` separados.
-5. Diagrama de sequência (Mermaid) do checkout ao faturamento.
+1. **Teste de mutação com o Stryker** (decidido pelo mantenedor em 31/10/2026, PR próprio): mede se os testes, escritos por IA, pegam erro, e a nota entra em "Como a IA foi usada" no README. No CI, os módulos sem banco (camada anticorrupção do ERP, semáforo, cálculo do retry, validação e erros); fora do CI, uma rodada incremental no worker, no relay e no checkout, que sobem contêiner. Dependência nova, com a linha no `STATE.md` e o critério com ID no `spec.md` no plano desse PR.
+2. Seção curta "segurança e limites" no README: sem autenticação, abuso possível, limites do contrato, preço lido do banco e o que muda em produção.
+3. Estimativa de capacidade no design de diagnóstico, a partir das premissas de carga.
+4. Plano de rollout por fase, com critério de saída e rollback.
+5. `/livez` e `/readyz` separados.
+6. Diagrama de sequência (Mermaid) do checkout ao faturamento.
 
 ## Arquitetura alvo
 
