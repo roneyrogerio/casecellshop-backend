@@ -55,7 +55,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
 
 **Transação, nesta ordem:**
 
-1. **Chave de idempotência,** com os itens já ordenados por SKU. `INSERT … ON CONFLICT (key) DO NOTHING`, seguido de um `SELECT` quando a chave já existe: um `INSERT` simples que viola o índice único abortaria a transação no PostgreSQL. Uma requisição concorrente com a mesma chave espera no índice até a primeira terminar.
+1. **Chave de idempotência,** com os itens já ordenados por SKU. `INSERT … ON CONFLICT (key) DO NOTHING`, seguido de um `SELECT` quando a chave já existe: um `INSERT` simples que viola o índice único abortaria a transação no PostgreSQL. Uma requisição concorrente com a mesma chave espera no índice até a primeira terminar. Antes da chave vai só a linha do pedido, com o `id` gerado pelo banco, porque a chave aponta para ele (`idempotency_keys.order_id`, FK `NOT NULL`); numa repetição, essa linha some no `ROLLBACK`. Nada é reservado antes da chave.
    - O hash é o SHA-256 (`node:crypto`) do payload validado e normalizado, com os itens em ordem de SKU e serializado com as chaves em ordem: o mesmo pedido escrito de outro jeito não vira `422`.
    - Mesma chave e mesmo corpo: `202` com o mesmo `orderId`, a mesma `Location` e o status atual. Outro corpo: `422`. Sem a chave: `400`. Espera além do `lock_timeout` no passo da chave: `409`.
    - Um SKU repetido no mesmo pedido recebe `400`.
