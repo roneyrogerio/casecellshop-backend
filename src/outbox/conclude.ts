@@ -13,11 +13,22 @@ export type Conclusion =
   | { kind: 'retry'; delayMs: number }
   | { kind: 'dead' };
 
+export interface ConclusionResult {
+  // false quando o token já não vale (nada muda).
+  applied: boolean;
+  // O pedido mudou de estado nesta transação (só invoiced e failed); se não, o desfecho já era outro.
+  orderChanged: boolean;
+  // outcome_at - accepted_at, ambos do banco e da mesma transação; só quando o pedido mudou.
+  acceptToOutcomeSeconds?: number;
+}
+
+const NOT_APPLIED: ConclusionResult = { applied: false, orderChanged: false };
+
 // Toda transição da outbox exige o token da reivindicação: um worker atrasado não sobrescreve
-// o desfecho de outro. Devolve false quando o token já não vale (nada muda).
+// o desfecho de outro.
 // Ordem de lock: outbox, pedido, estoque por SKU, um UPDATE por linha.
-export async function concludeMessage(db: Kysely<StoreDb>, orderId: string, token: string, conclusion: Conclusion): Promise<boolean> {
-  return runInTransaction(db, async (trx) => {
+export async function concludeMessage(db: Kysely<StoreDb>, orderId: string, token: string, conclusion: Conclusion): Promise<ConclusionResult> {
+  return runInTransaction(db, async (trx): Promise<ConclusionResult> => {
     const message = trx.updateTable('outbox').where('order_id', '=', orderId).where('claim_token', '=', token).where('status', '=', 'pending');
 
     if (conclusion.kind === 'retry') {
@@ -28,16 +39,16 @@ export async function concludeMessage(db: Kysely<StoreDb>, orderId: string, toke
           claim_token: null,
         })
         .executeTakeFirst();
-      return retried.numUpdatedRows > 0n;
+      return { applied: retried.numUpdatedRows > 0n, orderChanged: false };
     }
     if (conclusion.kind === 'dead') {
       // O pedido segue pending e a reserva fica, para o runbook decidir.
       const buried = await message.set({ status: 'dead', lease_until: null, claim_token: null }).executeTakeFirst();
-      return buried.numUpdatedRows > 0n;
+      return { applied: buried.numUpdatedRows > 0n, orderChanged: false };
     }
 
     const closed = await message.set({ status: 'done', lease_until: null, claim_token: null }).executeTakeFirst();
-    if (closed.numUpdatedRows === 0n) return false;
+    if (closed.numUpdatedRows === 0n) return NOT_APPLIED;
 
     // Compare-and-set: o estoque só muda se esta transação mudou o pedido.
     const order = await trx
@@ -49,8 +60,9 @@ export async function concludeMessage(db: Kysely<StoreDb>, orderId: string, toke
       )
       .where('id', '=', orderId)
       .where('status', '=', 'pending')
+      .returning(['accepted_at', 'outcome_at'])
       .executeTakeFirst();
-    if (order.numUpdatedRows === 0n) return true;
+    if (!order) return { applied: true, orderChanged: false };
 
     const items = await trx.selectFrom('order_items').select(['sku', 'quantity']).where('order_id', '=', orderId).orderBy('sku').execute();
     for (const { sku, quantity } of items) {
@@ -69,7 +81,8 @@ export async function concludeMessage(db: Kysely<StoreDb>, orderId: string, toke
         .where('sku', '=', sku)
         .execute();
     }
-    return true;
+    const acceptToOutcomeSeconds = order.outcome_at ? (order.outcome_at.getTime() - order.accepted_at.getTime()) / 1000 : undefined;
+    return acceptToOutcomeSeconds === undefined ? { applied: true, orderChanged: true } : { applied: true, orderChanged: true, acceptToOutcomeSeconds };
   });
 }
 

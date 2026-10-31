@@ -19,6 +19,8 @@ export interface ClaimedMessage {
 export interface ClaimSettled {
   orderId: string;
   attempts: number;
+  correlationId: string;
+  traceparent: string | null;
 }
 
 export interface ClaimResult {
@@ -74,7 +76,7 @@ export async function claimMessages(db: Kysely<StoreDb>, { limit, leaseMs, minDe
         continue;
       }
       await trx.updateTable('outbox').set({ status: settle, lease_until: null, claim_token: null }).where('order_id', '=', row.order_id).execute();
-      (settle === 'done' ? result.closed : result.dead).push({ orderId: row.order_id, attempts: row.attempts });
+      (settle === 'done' ? result.closed : result.dead).push({ orderId: row.order_id, attempts: row.attempts, correlationId: row.correlation_id, traceparent: row.traceparent });
     }
 
     const [first] = candidates;

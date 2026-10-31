@@ -7,7 +7,7 @@ import type { Clock } from './clock.ts';
 import { createDb, TransactionAbortedError } from './db/database.ts';
 import { logContext } from './logging.ts';
 import type { ErpClient } from './erp/erp-client.ts';
-import { type ClaimedMessage, claimMessages, intervalOf } from './outbox/claim.ts';
+import { type ClaimedMessage, type ClaimSettled, claimMessages, intervalOf } from './outbox/claim.ts';
 import { type Conclusion, concludeMessage, holdsLease } from './outbox/conclude.ts';
 import { createSemaphore } from './outbox/semaphore.ts';
 import type { Telemetry } from './telemetry.ts';
@@ -70,7 +70,7 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
   const db = createDb(pool);
   const semaphore = createSemaphore(settings.erpConcurrency);
   let running = false;
-  // Só o stop() liga: um pollOnce direto continua reivindicando.
+  // Ligado só enquanto o stop() espera; um pollOnce direto continua reivindicando fora disso.
   let stopping = false;
   const inFlight = new Set<Promise<void>>();
   let loop: Promise<void> | undefined;
@@ -131,35 +131,22 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
     return retry(created.kind);
   }
 
-  // Do aceite ao faturamento, os dois pontos pelo relógio do banco. Falhar aqui não pode refazer a
-  // conclusão, que já foi gravada.
-  async function recordAcceptToInvoice(orderId: string, log: Logger): Promise<void> {
-    try {
-      const row = await db
-        .selectFrom('orders')
-        .select(['accepted_at', sql<Date>`now()`.as('db_now')])
-        .where('id', '=', orderId)
-        .executeTakeFirst();
-      if (row) telemetry.orderAcceptToInvoice.record((row.db_now.getTime() - row.accepted_at.getTime()) / 1000);
-    } catch (error) {
-      log.warn({ event: 'outbox.metric_failed', err: error }, 'não foi possível medir o tempo do aceite ao faturamento');
-    }
-  }
-
   async function finish(message: ClaimedMessage, conclusion: Conclusion, log: Logger): Promise<void> {
     // O teto impede que um erro rápido e persistente vire um laço contra o banco.
     for (let tries = 1; tries <= MAX_CONCLUSION_TRIES; tries += 1) {
       try {
-        const applied = await concludeMessage(db, message.orderId, message.token, conclusion);
-        if (!applied) {
+        const result = await concludeMessage(db, message.orderId, message.token, conclusion);
+        if (!result.applied) {
           telemetry.outboxConclusionNoRow.add(1);
           log.warn({ event: 'outbox.conclusion_no_row' }, 'o token já não vale: a conclusão não mudou nada');
           return;
         }
+        // Faturado ou falho só conta se esta transação mudou o pedido; senão ele já tinha outro desfecho.
+        if ((conclusion.kind === 'invoiced' || conclusion.kind === 'failed') && !result.orderChanged) return;
         telemetry.outboxAttemptOutcome.add(1, { outcome: conclusion.kind });
         if (conclusion.kind === 'invoiced') {
           log.info({ event: 'order.invoiced' }, 'pedido faturado');
-          await recordAcceptToInvoice(message.orderId, log);
+          if (result.acceptToOutcomeSeconds !== undefined) telemetry.orderAcceptToInvoice.record(result.acceptToOutcomeSeconds);
         } else if (conclusion.kind === 'failed') {
           log.warn({ event: 'order.failed', reason: conclusion.reason }, 'pedido falhou no ERP');
         } else if (conclusion.kind === 'dead') {
@@ -203,7 +190,8 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
 
   // A tentativa continua o trace do checkout (traceparent da outbox) e o correlationId dele; sem
   // traceparent, o span é raiz. O mixin do logger lê os dois do contexto ativo.
-  function attempt(message: ClaimedMessage): Promise<void> {
+  // Também serve aos eventos que a reivindicação decide (closed, dead), para levarem o mesmo contexto.
+  function inAttemptSpan(message: ClaimSettled, fn: () => Promise<void> | void): Promise<void> {
     const parent = propagator.extract(ROOT_CONTEXT, message.traceparent ? { traceparent: message.traceparent } : {}, defaultTextMapGetter);
     return logContext.run({ correlationId: message.correlationId }, () =>
       telemetry.tracer.startActiveSpan(
@@ -212,13 +200,17 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
         parent,
         async (span) => {
           try {
-            await runAttempt(message);
+            await fn();
           } finally {
             span.end();
           }
         },
       ),
     );
+  }
+
+  function attempt(message: ClaimedMessage): Promise<void> {
+    return inAttemptSpan(message, () => runAttempt(message));
   }
 
   // Reivindica até as permissões livres e dispara as tentativas sem esperá-las: `done` resolve
@@ -237,13 +229,18 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
       throw error;
     }
     semaphore.release(permits - result.claimed.length);
-    for (const { orderId, attempts } of result.closed) {
-      telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
-      logger.info({ event: 'outbox.closed', orderId, attempt: attempts }, 'pedido já tinha desfecho: mensagem encerrada');
+    // Decididos na reivindicação, sem chamar o ERP, mas com o contexto da outbox como os da tentativa.
+    for (const settled of result.closed) {
+      await inAttemptSpan(settled, () => {
+        telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
+        logger.info({ event: 'outbox.closed', orderId: settled.orderId, attempt: settled.attempts }, 'pedido já tinha desfecho: mensagem encerrada');
+      });
     }
-    for (const { orderId, attempts } of result.dead) {
-      telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
-      logger.error({ event: 'outbox.dead', orderId, attempt: attempts }, 'limite de tentativas gasto: mensagem na DLQ');
+    for (const settled of result.dead) {
+      await inAttemptSpan(settled, () => {
+        telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
+        logger.error({ event: 'outbox.dead', orderId: settled.orderId, attempt: settled.attempts }, 'limite de tentativas gasto: mensagem na DLQ');
+      });
     }
     const done = Promise.all(result.claimed.map((message) => attempt(message).finally(() => semaphore.release(1)))).then(() => undefined);
     return { count: result.claimed.length, done };
@@ -286,9 +283,14 @@ export function createWorker({ pool, erp, logger, telemetry, clock, random = Mat
       if (running) {
         running = false;
         stopping = true;
-        // Para de reivindicar e espera as tentativas em andamento; o prazo é do lifecycle.
-        await loop;
-        await Promise.all(inFlight);
+        try {
+          // Para de reivindicar e espera as tentativas em andamento; o prazo é do lifecycle.
+          await loop;
+          await Promise.all(inFlight);
+        } finally {
+          // Só vale durante o encerramento: depois dele, start() e pollOnce() voltam a reivindicar.
+          stopping = false;
+        }
         logger.info({ event: 'worker_stopped' }, 'worker encerrado');
       }
     },
