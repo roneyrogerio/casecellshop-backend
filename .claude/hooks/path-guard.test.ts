@@ -197,7 +197,7 @@ describe('FND-08 guarda de caminho do implementer', () => {
   it.each([
     ['em src/', 'src/app.ts'],
     ['em src/ por caminho absoluto', join(root, 'src/db/migrate.ts')],
-    ['em migrations/', 'migrations/store/20260101000000_init.sql'],
+    ['em migrations/', 'migrations/store/20260101000000_init.ts'],
     ['no compose', 'compose.yaml'],
     ['em pasta com o prefixo src/contract', 'src/contractual/foo.ts'],
     ['em pasta com o prefixo test', 'testing/foo.ts'],
@@ -235,7 +235,7 @@ describe('AI-04 guarda de caminho nega ao implementer o que configura a verifica
     for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
   });
 
-  it.each(['src/checkout/reserve.ts', 'migrations/store/001_x.sql', 'package.json'])(
+  it.each(['src/checkout/reserve.ts', 'migrations/store/001_x.ts', 'package.json'])(
     'AI-04 o implementer continua podendo editar %s',
     (path) => {
       for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
@@ -302,7 +302,7 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
   // Controle negativo: nomes que só lembram os protegidos, e o código de produção, continuam liberados.
   it.each([
     'src/checkout/reserve.ts',
-    'migrations/store/001_x.sql',
+    'migrations/store/001_x.ts',
     'package.json',
     'src/oxlintrc.ts',
     'src/tsconfigs/loader.ts',

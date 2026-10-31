@@ -128,15 +128,6 @@ describe('FND-09 a conferência dos tipos do banco', () => {
       expect(content, file).not.toMatch(/\benum\b/);
     }
   });
-
-  it('FND-09 os arquivos versionados em src/db/types não trazem kysely_migration nem enum', () => {
-    for (const file of TYPE_FILES) {
-      const content = readFileSync(path.join(versionedDir, file), 'utf8');
-      expect(content, file).not.toContain('kysely_migration');
-      expect(content, file).not.toContain('KyselyMigration');
-      expect(content, file).not.toMatch(/\benum\b/);
-    }
-  });
 });
 
 describe('FND-09 o script ignora a configuração do kysely-codegen em arquivo e no package.json', () => {

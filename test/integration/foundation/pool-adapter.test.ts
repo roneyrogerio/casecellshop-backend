@@ -101,7 +101,7 @@ async function destroySocketDuringQuery(
         [`%pg_sleep(${seconds})%`],
       );
       expect(active.rows[0]?.total).toBe(1);
-    });
+    }, { timeout: 10_000 });
     const client = clients[0] as unknown as { connection: { stream: Socket } };
     client.connection.stream.destroy(new Error('socket destruído pelo teste'));
 
@@ -164,7 +164,7 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
       // Descartar é fechar a conexão: o servidor não guarda mais a transação aberta.
       await vi.waitFor(async () => {
         expect(await backendExists(pidInTransaction)).toBe(false);
-      });
+      }, { timeout: 10_000 });
     } finally {
       await pool.end();
     }

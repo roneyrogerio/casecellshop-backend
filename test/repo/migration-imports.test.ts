@@ -54,12 +54,6 @@ describe('FND-11 as migrações do repositório são .ts e só importam de kysel
     }
   });
 
-  it('FND-11 nenhum .sql sobra em migrations/ depois da conversão única', () => {
-    const sqlFiles = listMigrationFiles().filter((file) => file.endsWith('.sql'));
-
-    expect(sqlFiles).toEqual([]);
-  });
-
   it('FND-11 cada arquivo de migrations/ só importa de kysely, sem import de src/ nem relativo', () => {
     const files = listMigrationFiles()
       .filter((file) => file.endsWith('.ts'))

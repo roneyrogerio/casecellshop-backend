@@ -10,8 +10,8 @@ import {
   tableExists,
 } from '../../helpers/migration-database.ts';
 
-// O esquema esperado é o que a migração 20260101000000_create_erp_sim.sql criava no M1; o .sql
-// foi apagado na conversão única (AD-017), então a conferência está escrita aqui, pelo catálogo.
+// O esquema do erp_sim fica fixado aqui, pelo catálogo: as colunas, as restrições e o comportamento
+// que o M1 entregou e que o ERP simulado usa. Mudar a migração sem mudar este arquivo reprova.
 
 let container: MigrationContainer;
 let pool: pg.Pool;
@@ -37,16 +37,20 @@ async function migrationNamesInFolder(schema: string): Promise<string[]> {
     .sort();
 }
 
-async function sqlState(promise: Promise<unknown>): Promise<string | undefined> {
+// O código e o nome da restrição vêm do erro do driver; a mensagem não é contrato.
+async function violation(
+  promise: Promise<unknown>,
+): Promise<{ code: string | undefined; constraint: string | undefined } | undefined> {
   try {
     await promise;
     return undefined;
   } catch (error) {
-    return (error as { code?: string }).code;
+    const { code, constraint } = error as { code?: string; constraint?: string };
+    return { code, constraint };
   }
 }
 
-describe('FND-11 a migração erp_sim em TypeScript cria o mesmo esquema da .sql', () => {
+describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', () => {
   it('FND-11 colunas, tipos, nulidade, identidade do id e padrão do created_at', async () => {
     const result = await pool.query(
       `SELECT table_name, column_name, data_type, is_nullable, column_default, is_identity, identity_generation
@@ -161,34 +165,34 @@ describe('FND-11 a migração erp_sim em TypeScript cria o mesmo esquema da .sql
     ]);
   });
 
-  it('FND-11 o esquema se comporta como o da .sql: CHECKs, unicidade, id sempre gerado e created_at preenchido', async () => {
+  it('FND-11 o esquema do erp_sim recusa o que deve: CHECKs, unicidade e id informado à mão, e preenche o created_at', async () => {
     const sku = 'FND11-SKU-1';
     await pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)', [
       sku,
       'Capa',
     ]);
 
-    const negativePrice = await sqlState(
+    const negativePrice = await violation(
       pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, -1, 1)', [
         'FND11-SKU-2',
         'Capa',
       ]),
     );
-    const negativeStock = await sqlState(
+    const negativeStock = await violation(
       pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 1, -1)', [
         'FND11-SKU-3',
         'Capa',
       ]),
     );
-    const duplicateSku = await sqlState(
+    const duplicateSku = await violation(
       pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)', [
         sku,
         'Capa',
       ]),
     );
-    expect(negativePrice).toBe('23514');
-    expect(negativeStock).toBe('23514');
-    expect(duplicateSku).toBe('23505');
+    expect(negativePrice).toEqual({ code: '23514', constraint: 'products_price_cents_check' });
+    expect(negativeStock).toEqual({ code: '23514', constraint: 'products_on_hand_check' });
+    expect(duplicateSku).toEqual({ code: '23505', constraint: 'products_pkey' });
 
     const created = await pool.query<{ id: string; created_at: Date; recent: boolean }>(
       `INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)
@@ -197,19 +201,19 @@ describe('FND-11 a migração erp_sim em TypeScript cria o mesmo esquema da .sql
     expect(created.rows[0]?.id).toMatch(/^\d+$/);
     expect(created.rows[0]?.recent).toBe(true);
 
-    const duplicateReference = await sqlState(
+    const duplicateReference = await violation(
       pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)`),
     );
-    const negativeTotal = await sqlState(
+    const negativeTotal = await violation(
       pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-2', '[]'::jsonb, -1)`),
     );
-    // GENERATED ALWAYS: informar o id à mão é recusado (428C9).
-    const explicitId = await sqlState(
+    // GENERATED ALWAYS: informar o id à mão é recusado (428C9), sem restrição nomeada.
+    const explicitId = await violation(
       pool.query(`INSERT INTO erp_sim.invoices (id, reference, items, total_cents) VALUES (999, 'fnd11-ref-3', '[]'::jsonb, 0)`),
     );
-    expect(duplicateReference).toBe('23505');
-    expect(negativeTotal).toBe('23514');
-    expect(explicitId).toBe('428C9');
+    expect(duplicateReference).toEqual({ code: '23505', constraint: 'invoices_reference_key' });
+    expect(negativeTotal).toEqual({ code: '23514', constraint: 'invoices_total_cents_check' });
+    expect(explicitId?.code).toBe('428C9');
   });
 
   it('FND-11 o histórico fica na kysely_migration do erp_sim, e a pgmigrations do node-pg-migrate não existe', async () => {

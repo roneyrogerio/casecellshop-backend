@@ -320,7 +320,7 @@ describe('AI-03 o implementer é devolvido quando o git status mostra arquivo fo
     const { deps, writes } = makeDeps(
       {},
       { [KEY]: 2 },
-      { changed: ['src/checkout/reserve.ts', 'migrations/store/001_x.sql', 'package.json'] },
+      { changed: ['src/checkout/reserve.ts', 'migrations/store/001_x.ts', 'package.json'] },
     );
 
     const decision = await decide(stop('implementer'), deps);
