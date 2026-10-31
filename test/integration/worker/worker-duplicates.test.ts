@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { settle } from '../../helpers/async.ts';
-import { ERP_TIMEOUT_MS, countInvoices } from '../../helpers/erp.ts';
+import { ERP_TIMEOUT_MS, MIN_RETRY_DELAY_MS, countInvoices } from '../../helpers/erp.ts';
 import {
   acceptOrder,
   buildWorker,
@@ -9,6 +9,7 @@ import {
   expectInvoiced,
   expireLeaseOnly,
   makeClaimable,
+  markSentBefore,
   readOrder,
   readOutbox,
   startPoll,
@@ -142,6 +143,63 @@ describe('ORD-04 ERP que fatura depois do timeout, dentro da H4', () => {
     expect((await readOrder(suite.pool, order.orderId)).status).toBe('pending');
 
     // Os 30 s da chamada se completam no ERP; o atraso mínimo de 45 s passa antes da nova tentativa.
+    world.clock.advance(20_000);
+    await settle();
+    await world.sim.script.drain();
+    expect(await invoices(order.orderId)).toBe(1);
+    await makeClaimable(suite.pool, order.orderId);
+    expect(await worker.pollOnce()).toBe(1);
+
+    expect(await invoices(order.orderId)).toBe(1);
+    await expectInvoiced(suite.pool, order);
+  });
+});
+
+describe('ORD-04 a criação que vem depois de uma consulta (a partir da 2ª tentativa)', () => {
+  // Distâncias em ms, pelo relógio do banco, de agora ao último início de chamada e ao próximo retry.
+  async function timing(orderId: string): Promise<{ sinceCallMs: number; untilNextMs: number }> {
+    const result = await suite.pool.query<{ since_call: number; until_next: number }>(
+      `select (extract(epoch from (now() - last_call_at)) * 1000)::float8 as since_call,
+              (extract(epoch from (next_attempt_at - now())) * 1000)::float8 as until_next
+         from outbox where order_id = $1`,
+      [orderId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error(`outbox inexistente para ${orderId}`);
+    return { sinceCallMs: row.since_call, untilNextMs: row.until_next };
+  }
+
+  it('ORD-04 sem a H1b, a criação depois de uma consulta lenta regrava o last_call_at antes de sair e o retry conta a partir dele: uma fatura no fim', async () => {
+    const order = await acceptOrder(suite);
+    const world = createErpWorld(suite.database.erpPool, { withoutH1b: true });
+    await markSentBefore(suite.pool, order.orderId);
+    // A consulta demora 8 s (o p99,9 da premissa) e dá not_found; a criação fatura em 30 s, dentro da H4.
+    world.sim.script.enqueue({ mode: 'slow', delayMs: 8_000 }, { op: 'findOrder', reference: order.orderId });
+    world.sim.script.enqueue({ mode: 'invoice_after', delayMs: 30_000 }, { op: 'createOrder', reference: order.orderId });
+    // Quando a consulta responde, ela já começou há 30 s pelo relógio do banco (a espera real do ERP lento);
+    // o last_call_at gravado antes dela fica velho, e só uma nova gravação antes da criação o corrige.
+    world.transport.afterErp({ op: 'findOrder', reference: order.orderId }, async () => {
+      await suite.pool.query("update outbox set last_call_at = now() - interval '30 seconds' where order_id = $1", [order.orderId]);
+    });
+    const worker = newWorker(world);
+
+    const first = startPoll(worker);
+    await first.until(world.transport.waitForSends(1, 'findOrder'));
+    world.clock.advance(8_000);
+    await first.until(world.transport.waitForSends(1, 'createOrder'));
+    // A criação já saiu: o início dela foi gravado agora, e não o da consulta.
+    expect((await timing(order.orderId)).sinceCallMs).toBeLessThan(10_000);
+    world.clock.advance(ERP_TIMEOUT_MS);
+    expect(await first.result).toBe(1);
+
+    const scheduled = await timing(order.orderId);
+    expect(scheduled.sinceCallMs).toBeLessThan(10_000);
+    // O atraso mínimo de 45 s conta do início da criação, a última chamada.
+    expect(scheduled.untilNextMs).toBeGreaterThanOrEqual(MIN_RETRY_DELAY_MS - 2_000);
+    expect((await readOutbox(suite.pool, order.orderId)).scheduledInFuture).toBe(true);
+    expect(await worker.pollOnce()).toBe(0);
+
+    // Os 30 s da criação se completam no ERP; o atraso mínimo passa e a tentativa seguinte acha a fatura.
     world.clock.advance(20_000);
     await settle();
     await world.sim.script.drain();

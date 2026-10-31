@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { settle, track } from '../../helpers/async.ts';
 import { createAppPool, readInventory } from '../../helpers/checkout.ts';
-import { countInvoices, MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
+import { countInvoices, ERP_TIMEOUT_MS, MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 import {
   acceptOrder,
   buildWorker,
@@ -352,6 +353,50 @@ describe('ORD-20 chamadas simultâneas ao ERP', () => {
       expect(await invoices(order.orderId)).toBe(1);
       await expectInvoiced(suite.pool, order);
     }
+  });
+
+  it('ORD-20 com start(), uma chamada presa em voo não impede o worker de reivindicar e faturar as outras assim que há permissão livre', async () => {
+    // A presa é a mais antiga: entra na primeira reivindicação, junto de duas normais, e fica sem resposta.
+    const stuck = await acceptOrder(suite);
+    const others: AcceptedOrder[] = [];
+    for (let index = 0; index < 4; index += 1) others.push(await acceptOrder(suite));
+    const world = createErpWorld(suite.database.erpPool);
+    world.sim.script.enqueue({ mode: 'hang' }, { op: 'createOrder', reference: stuck.orderId });
+    const worker = newWorker(world, { erpConcurrency: 3 });
+    const started = worker.start();
+    started.catch(() => undefined);
+
+    // As 4 normais passam por 2 permissões: as duas últimas só saem se a reivindicação não esperar a presa.
+    // O relógio não anda: nada aqui depende dele.
+    await vi.waitFor(
+      async () => {
+        for (const order of others) expect((await readOrder(suite.pool, order.orderId)).status).toBe('invoiced');
+      },
+      { timeout: 8_000, interval: 25 },
+    );
+
+    // Enquanto isso a presa seguiu em voo, com o lease ativo e sem fatura.
+    expect(createsFor(world, stuck.orderId)).toBe(1);
+    expect((await readOrder(suite.pool, stuck.orderId)).status).toBe('pending');
+    expect((await readOutbox(suite.pool, stuck.orderId)).leased).toBe(true);
+    expect(await invoices(stuck.orderId)).toBe(0);
+    expect(world.transport.maxInFlight).toBeLessThanOrEqual(3);
+    for (const order of others) {
+      expect(await invoices(order.orderId)).toBe(1);
+      await expectInvoiced(suite.pool, order);
+    }
+
+    // O timeout no relógio manual solta a presa (ambígua); o stop() espera as tentativas e para.
+    world.clock.advance(ERP_TIMEOUT_MS);
+    const stopping = track(worker.stop());
+    for (let step = 0; step < 40 && !stopping.settled; step += 1) {
+      world.clock.advance(500);
+      await settle();
+    }
+    await stopping.result;
+    // A presa terminou como ambígua: nenhuma fatura, e o pedido segue pendente para outra tentativa.
+    expect(await invoices(stuck.orderId)).toBe(0);
+    expect((await readOrder(suite.pool, stuck.orderId)).status).toBe('pending');
   });
 
   it('ORD-20 controle do medidor: sem o limite apertado, as mesmas chamadas lentas ficam em voo juntas e o transporte medido as vê', async () => {
