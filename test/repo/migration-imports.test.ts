@@ -10,11 +10,12 @@ interface SourceFile {
   content: string;
 }
 
-// Todo módulo que o arquivo importa: `from '…'`, `import '…'`, `import('…')` e `require('…')`.
+// Todo módulo que o arquivo importa: `from '…'`, `import '…'`, `import('…')` e `require('…')`, com
+// aspas simples, duplas ou crase (o template literal sem interpolação também é um import válido).
 // Uma migração só pode importar de `kysely` (e de subcaminhos dele): nada de `src/`, de caminho
 // relativo ou de `node:`, para uma constante da aplicação que mude depois não mudar o esquema que
 // uma migração antiga cria.
-const IMPORT_PATTERN = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g;
+const IMPORT_PATTERN = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"`]([^'"`]+)['"`]/g;
 
 function isAllowedSpecifier(specifier: string): boolean {
   return specifier === 'kysely' || specifier.startsWith('kysely/');
@@ -83,6 +84,8 @@ describe('FND-11 controle negativo do conferidor de imports das migrações', ()
     ["import { type Kysely, sql } from 'kysely';"],
     ["import {\n  type Kysely,\n  sql,\n} from 'kysely';"],
     ["import { jsonArrayFrom } from 'kysely/helpers/postgres';"],
+    ['const { sql } = await import(`kysely`);'],
+    ['const helpers = await import(`kysely/helpers/postgres`);'],
   ])('FND-11 aceita o import de kysely: %s', (importLine) => {
     expect(findMigrationImportViolations(sample(importLine))).toEqual([]);
   });
@@ -95,6 +98,9 @@ describe('FND-11 controle negativo do conferidor de imports das migrações', ()
     ["import '../../src/setup.ts';", '../../src/setup.ts'],
     ["export { TABLE } from '../../src/db/constants.ts';", '../../src/db/constants.ts'],
     ["const { TABLE } = await import('../../src/db/constants.ts');", '../../src/db/constants.ts'],
+    ['const { TABLE } = await import(`../../src/db/constants.ts`);', '../../src/db/constants.ts'],
+    ['const { TABLE } = require(`../../src/db/constants.ts`);', '../../src/db/constants.ts'],
+    ['const { readFileSync } = await import(`node:fs`);', 'node:fs'],
     ["import { readFileSync } from 'node:fs';", 'node:fs'],
     ["import pg from 'pg';", 'pg'],
   ])('FND-11 reprova o import fora de kysely: %s', (importLine, specifier) => {
