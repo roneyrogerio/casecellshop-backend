@@ -1,5 +1,9 @@
+import { promises as fs } from 'node:fs';
+import type { Socket } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Kysely, PostgresDialect } from 'kysely';
+import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import pg from 'pg';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -415,4 +419,102 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
       expect(await appliedMigrations(database.pool, 'public')).toEqual(expectedNames);
     }
   }, 120_000);
+});
+
+// A conexão do migrate fica retirada do pool durante a migração toda. Sem o createPoolAdapter, ela não tem
+// ouvinte de `error`, e um socket que cai no meio de uma migração lenta derrubaria o processo do deploy.
+describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
+  const SLEEP_MARKER = '%pg_sleep(37)%';
+
+  // Destrói o socket da conexão que roda o pg_sleep da fixture e devolve o que `run` fez e as
+  // uncaughtException do processo. O vitest ouve uncaughtException e reprovaria a execução inteira por
+  // causa do controle negativo: os ouvintes dele saem durante o cenário e voltam depois.
+  async function destroySocketDuringSlowMigration(
+    database: ScratchDatabase,
+    run: (pool: pg.Pool) => Promise<unknown>,
+  ): Promise<{ outcome: unknown; uncaught: Error[] }> {
+    const uncaught: Error[] = [];
+    const onUncaught = (error: Error): void => {
+      uncaught.push(error);
+    };
+    const previous = process.listeners('uncaughtException');
+    process.removeAllListeners('uncaughtException');
+    process.on('uncaughtException', onUncaught);
+    const clients: pg.PoolClient[] = [];
+    const pool = new pg.Pool({ connectionString: database.uri, max: 4 });
+    // Um erro de conexão ociosa não pode derrubar o processo do teste.
+    pool.on('error', noop);
+    pool.on('connect', (client) => clients.push(client));
+    try {
+      const pending = run(pool).then(
+        () => 'resolveu',
+        (error: unknown) => error,
+      );
+      // Espera a migração estar dormindo no servidor, e acha a conexão dela pelo pid do backend.
+      let sleepingPid = -1;
+      await vi.waitFor(
+        async () => {
+          const active = await database.pool.query<{ pid: number }>(
+            `SELECT pid FROM pg_stat_activity
+              WHERE state = 'active' AND pid <> pg_backend_pid() AND query LIKE $1`,
+            [SLEEP_MARKER],
+          );
+          expect(active.rows).toHaveLength(1);
+          sleepingPid = active.rows[0]?.pid ?? -1;
+        },
+        { timeout: 20_000 },
+      );
+      const victim = clients.find((client) => (client as unknown as { processID: number }).processID === sleepingPid);
+      expect(victim).toBeDefined();
+      (victim as unknown as { connection: { stream: Socket } }).connection.stream.destroy(
+        new Error('socket destruído pelo teste'),
+      );
+
+      const outcome = await pending;
+      // O 'error' do cliente é emitido no mesmo evento do socket; um turno do laço basta para um crash aparecer.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return { outcome, uncaught };
+    } finally {
+      process.removeAllListeners('uncaughtException');
+      for (const listener of previous) process.on('uncaughtException', listener);
+      // O servidor continua no pg_sleep depois de o cliente cair; encerra o backend para não segurar o lock.
+      await database.pool.query(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE $1`,
+        [SLEEP_MARKER],
+      );
+      await pool.end();
+    }
+  }
+
+  it('FND-10 destruir o socket da conexão do migrate no meio de uma migração lenta não derruba o processo, e o migrate rejeita', async () => {
+    const database = await container.createDatabase();
+
+    const result = await destroySocketDuringSlowMigration(database, (pool) =>
+      migrate(pool, [fixtureFolder('socket-destruido')]),
+    );
+
+    expect(result.outcome).toBeInstanceOf(Error);
+    expect(result.uncaught).toEqual([]);
+    // A migração não terminou: nada dela ficou gravado.
+    expect(await tableExists(database.pool, 'public.fnd10_socket_destruido')).toBe(false);
+  }, 60_000);
+
+  it('FND-10 controle negativo: o Migrator do Kysely sobre o pool cru, no mesmo cenário, gera uma uncaughtException', async () => {
+    const database = await container.createDatabase();
+    const folder = fixtureFolder('socket-destruido');
+
+    const result = await destroySocketDuringSlowMigration(database, (pool) => {
+      // O que o migrate fazia sem o createPoolAdapter: o dialeto sobre o pool cru.
+      const db = new Kysely<object>({ dialect: new PostgresDialect({ pool }) });
+      const migrator = new Migrator({
+        db,
+        provider: new FileMigrationProvider({ fs, path, migrationFolder: folder.dir }),
+        migrationTableSchema: folder.schema,
+      });
+      return migrator.migrateToLatest();
+    });
+
+    expect(result.uncaught.length).toBeGreaterThan(0);
+    expect(result.uncaught[0]?.message).toContain('socket destruído pelo teste');
+  }, 60_000);
 });

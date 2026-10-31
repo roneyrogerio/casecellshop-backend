@@ -61,7 +61,7 @@ function commandOf(test: unknown): string {
 }
 
 describe('FND-01 healthcheck do PostgreSQL no compose', () => {
-  it('FND-01 o healthcheck do postgres no compose.yaml testa por TCP, com pg_isready -h localhost', () => {
+  it('FND-01 o healthcheck do postgres no compose.yaml testa por TCP, com o pg_isready --host apontando para 127.0.0.1 ou localhost', () => {
     const compose = parse(readFileSync(join(root, 'compose.yaml'), 'utf8')) as ComposeFile;
     const test = compose.services?.['postgres']?.healthcheck?.test;
 
@@ -69,7 +69,7 @@ describe('FND-01 healthcheck do PostgreSQL no compose', () => {
   });
 
   it.each([
-    ['o healthcheck de hoje, sem -h', 'pg_isready -U casecellshop -d casecellshop'],
+    ['o healthcheck antigo, sem -h', 'pg_isready -U casecellshop -d casecellshop'],
     ['-h apontando para o socket Unix', 'pg_isready -h /var/run/postgresql -U casecellshop -d casecellshop'],
     ['--host apontando para o socket Unix', 'pg_isready --host=/var/run/postgresql -U casecellshop'],
   ])('FND-01 controle negativo: %s reprova a conferência', (_label, command) => {

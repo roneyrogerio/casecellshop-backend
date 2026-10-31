@@ -71,7 +71,7 @@ const STYLE_RULES = [
 const GENERATED_TYPE_FILES = ['src/db/types/store.ts', 'src/db/types/erp-sim.ts'];
 const GENERATED_ONLY_RULES = ['typescript/consistent-type-definitions'];
 
-// Caminhos de amostra: o glob "alcança .ts" quando casa algum deles.
+// Caminhos de amostra: servem só para saber a que arquivos um glob que alcança .ts se limita (os gerados).
 const TS_SAMPLES = [
   'a.ts',
   'src/app.ts',
@@ -110,9 +110,23 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${source}$`);
 }
 
-function tsFilesReached(files: readonly string[]): string[] {
-  const patterns = files.map(globToRegExp);
-  return TS_SAMPLES.filter((sample) => patterns.some((pattern) => pattern.test(sample)));
+// O glob alcança .ts quando termina em `.ts`, em `*` ou em `**`, ou num grupo `{…ts…}`. Os caminhos de amostra
+// não servem para decidir: uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência.
+function reachesTs(glob: string): boolean {
+  return /(?:\.ts|\*)$/.test(glob) || /\{[^}]*\bts\b[^}]*\}$/.test(glob);
+}
+
+function overrideReachesTs(files: readonly string[]): boolean {
+  return files.some(reachesTs);
+}
+
+// Todo glob do override que alcança .ts casa ao menos um caminho de amostra e só arquivos gerados; um glob que
+// nenhuma amostra casa (src/http/**/*.ts) não prova que se limita aos gerados.
+function onlyReachesGeneratedFiles(files: readonly string[]): boolean {
+  return files.filter(reachesTs).every((glob) => {
+    const matched = TS_SAMPLES.filter((sample) => globToRegExp(glob).test(sample));
+    return matched.length > 0 && matched.every((sample) => GENERATED_TYPE_FILES.includes(sample));
+  });
 }
 
 function isOn(setting: unknown): boolean {
@@ -129,11 +143,10 @@ interface Override {
 function styleOverrideViolations(overrides: readonly Override[]): string[] {
   const violations: string[] = [];
   for (const override of overrides) {
-    const reached = tsFilesReached(override.files);
-    if (reached.length === 0) continue;
+    if (!overrideReachesTs(override.files)) continue;
     const disabled = STYLE_RULES.filter((rule) => override.rules !== undefined && rule in override.rules && !isOn(override.rules[rule]));
     if (disabled.length === 0) continue;
-    const onlyGenerated = reached.every((file) => GENERATED_TYPE_FILES.includes(file));
+    const onlyGenerated = onlyReachesGeneratedFiles(override.files);
     const onlyAllowedRules = disabled.every((rule) => GENERATED_ONLY_RULES.includes(rule));
     if (onlyGenerated && onlyAllowedRules) continue;
     violations.push(`${override.files.join(', ')} desliga ${disabled.join(', ')}`);
@@ -149,7 +162,7 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
   });
 
   it('AI-20 os dois overrides conhecidos para .ts existem e só desligam o que o critério aceita', () => {
-    const tsOverrides = overrides.filter((override) => tsFilesReached(override.files).length > 0);
+    const tsOverrides = overrides.filter((override) => overrideReachesTs(override.files));
     const disabledBy = (files: string): string[] =>
       Object.entries(tsOverrides.find((override) => override.files.includes(files))?.rules ?? {})
         .filter(([, setting]) => !isOn(setting))
@@ -177,6 +190,39 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['uma pasta de scripts', ['scripts/*.ts']],
   ])('AI-20 controle: um override para %s que desliga return-await reprova', (_label, files) => {
     expect(styleOverrideViolations([{ files, rules: { 'typescript/return-await': 'off' } }])).toHaveLength(1);
+  });
+
+  // Pastas que nenhum caminho de amostra cita: o glob alcança .ts pelo fim dele, e não por casar uma amostra.
+  it.each(STYLE_RULES)('AI-20 controle: um override de src/http/**/*.ts que desliga %s reprova', (rule) => {
+    expect(styleOverrideViolations([{ files: ['src/http/**/*.ts'], rules: { [rule]: 'off' } }])).toHaveLength(1);
+  });
+
+  it.each([
+    ['uma pasta fora das amostras, com **', ['src/http/**/*.ts']],
+    ['uma pasta fora das amostras, com *', ['src/http/*.ts']],
+    ['um arquivo fora das amostras', ['src/http/routes.ts']],
+    ['uma pasta e tudo dentro dela', ['src/http/**']],
+    ['uma pasta e os arquivos dela, com *', ['src/http/*']],
+    ['o grupo {js,ts}', ['src/http/**/*.{js,ts}']],
+    ['o grupo {ts,tsx}', ['src/http/**/*.{ts,tsx}']],
+  ])('AI-20 controle: um override para %s que desliga return-await reprova', (_label, files) => {
+    expect(styleOverrideViolations([{ files, rules: { 'typescript/return-await': 'off' } }])).toHaveLength(1);
+  });
+
+  it('AI-20 controle: consistent-type-definitions desligada numa pasta fora das amostras reprova, porque ela não se limita aos tipos gerados', () => {
+    const off = { 'typescript/consistent-type-definitions': 'off' };
+
+    expect(styleOverrideViolations([{ files: ['src/http/**/*.ts'], rules: off }])).toHaveLength(1);
+    expect(styleOverrideViolations([{ files: ['src/db/types/*.ts', 'src/http/**/*.ts'], rules: off }])).toHaveLength(1);
+  });
+
+  it.each([
+    ['só os .js', ['src/http/**/*.js']],
+    ['os .js, .mjs e .cjs', ['src/http/**/*.{js,mjs,cjs}']],
+    ['só os .md', ['docs/**/*.md']],
+    ['os .json', ['src/http/*.json']],
+  ])('AI-20 controle: um override para %s, que não alcança .ts, pode desligar return-await', (_label, files) => {
+    expect(styleOverrideViolations([{ files, rules: { 'typescript/return-await': 'off' } }])).toEqual([]);
   });
 
   it('AI-20 controle: consistent-type-definitions desligada fora dos arquivos gerados reprova', () => {
