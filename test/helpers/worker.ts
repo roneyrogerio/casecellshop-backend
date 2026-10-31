@@ -1,6 +1,6 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
-import { pino } from 'pino';
+import { pino, type Logger } from 'pino';
 import { expect, vi } from 'vitest';
 import { CheckoutAccepted } from '../../src/contract/index.ts';
 import { createErpClient } from '../../src/erp/acl.ts';
@@ -214,11 +214,12 @@ export interface ErpWorld {
   erp: ErpClient;
 }
 
-export function createErpWorld(erpPool: pg.Pool, options: { withoutH1b?: boolean } = {}): ErpWorld {
+export function createErpWorld(erpPool: pg.Pool, options: { withoutH1b?: boolean; telemetry?: Telemetry } = {}): ErpWorld {
   const clock = createManualClock();
   const sim = createSimulatedErp(options.withoutH1b === undefined ? { pool: erpPool, clock } : { pool: erpPool, clock, withoutH1b: options.withoutH1b });
   const transport = instrumentTransport(sim.transport);
-  const erp = createErpClient({ transport, clock, timeoutMs: ERP_TIMEOUT_MS });
+  // Com a telemetria, a camada anticorrupção produz as métricas e os spans do ERP (OBS-02, M3).
+  const erp = createErpClient({ transport, clock, timeoutMs: ERP_TIMEOUT_MS, ...(options.telemetry ? { telemetry: options.telemetry } : {}) });
   return { clock, sim, transport, erp };
 }
 
@@ -262,6 +263,8 @@ export interface BuildWorkerOptions {
   telemetry: Telemetry;
   config?: Partial<WorkerConfig>;
   random?: () => number;
+  // Padrão: silencioso. Os testes de log passam o logger que captura as linhas.
+  logger?: Logger;
 }
 
 // Um worker novo, como um processo novo: semáforo próprio, mesmo ERP e mesmo relógio.
@@ -269,7 +272,7 @@ export function buildWorker(world: ErpWorld, options: BuildWorkerOptions): Worke
   return createWorker({
     pool: options.pool,
     erp: world.erp,
-    logger: pino({ level: 'silent' }),
+    logger: options.logger ?? pino({ level: 'silent' }),
     telemetry: options.telemetry,
     clock: world.clock,
     random: options.random ?? (() => 0.5),
@@ -325,6 +328,8 @@ export function untilState(poll: PollHandle, check: () => Promise<void>): Promis
 
 export interface AcceptedOrder {
   orderId: string;
+  // O X-Request-Id da resposta do checkout: o correlationId gravado na outbox.
+  requestId: string;
   sku: string;
   quantity: number;
   priceCents: number;
@@ -335,17 +340,17 @@ export interface AcceptedOrder {
 // produção. O mesmo SKU entra no erp_sim com estoque (por padrão, de sobra).
 export async function acceptOrder(
   suite: WorkerSuite,
-  options: { quantity?: number; onHand?: number; erpOnHand?: number; priceCents?: number } = {},
+  options: { quantity?: number; onHand?: number; erpOnHand?: number; priceCents?: number; requestId?: string } = {},
 ): Promise<AcceptedOrder> {
   const quantity = options.quantity ?? 1;
   const onHand = options.onHand ?? 10;
   const priceCents = options.priceCents ?? 4990;
   const product = await seedProduct(suite.database.pool, { priceCents, onHand });
   await seedErpProduct(suite.database.pool, { sku: product.sku, priceCents, onHand: options.erpOnHand ?? onHand + 100 });
-  const res = await postCheckout(suite.checkout.server, checkoutBody(line(product, quantity)));
+  const res = await postCheckout(suite.checkout.server, checkoutBody(line(product, quantity)), options.requestId === undefined ? {} : { requestId: options.requestId });
   expect(res.status).toBe(202);
   const { orderId } = CheckoutAccepted.parse(res.body);
-  return { orderId, sku: product.sku, quantity, priceCents, onHand };
+  return { orderId, requestId: String(res.headers['x-request-id']), sku: product.sku, quantity, priceCents, onHand };
 }
 
 export interface OutboxRow {
