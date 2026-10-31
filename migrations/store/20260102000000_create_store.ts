@@ -31,19 +31,20 @@ export async function up(db: Kysely<any>): Promise<void> {
         .defaultTo('pending')
         .check(sql`status in ('pending', 'invoiced', 'failed')`),
     )
-    // O banco garante: só pedido `failed` tem motivo, todo `failed` tem um, e é um dos três.
-    // Um CHECK só, com as duas condições: o Kysely guarda um CHECK por coluna, e um segundo
-    // `.check()` substitui o primeiro em silêncio. Motivo nulo passa no `in` (resultado nulo),
-    // e a primeira condição já exige o nulo fora do `failed`.
-    .addColumn('failure_reason', 'text', (col) =>
-      col.check(
-        sql`(status = 'failed') = (failure_reason is not null) and failure_reason in ('erp_rejected', 'erp_out_of_stock', 'cancelled')`,
-      ),
-    )
+    .addColumn('failure_reason', 'text')
     .addColumn('accepted_at', 'timestamptz', (col) => col.notNull().defaultTo(sql`now()`))
     .addColumn('outcome_at', 'timestamptz')
     // Marca do SLI de 60 s: preenchida quando o pedido passa do prazo sem desfecho.
     .addColumn('sli_breached_at', 'timestamptz')
+    // O banco garante: só pedido `failed` tem motivo, todo `failed` tem um, e é um dos três.
+    // É CHECK de tabela, não de coluna: lê `status` além de `failure_reason`, e a documentação
+    // do PostgreSQL pede que o CHECK de coluna cite só a própria coluna. Também ganha nome
+    // estável (o de coluna sairia como `orders_check`). Motivo nulo passa no `in` (resultado
+    // nulo), e a primeira condição já exige o nulo fora do `failed`.
+    .addCheckConstraint(
+      'orders_failure_reason_matches_status',
+      sql`(status = 'failed') = (failure_reason is not null) and failure_reason in ('erp_rejected', 'erp_out_of_stock', 'cancelled')`,
+    )
     .execute();
 
   await db.schema
