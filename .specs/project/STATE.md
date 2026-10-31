@@ -296,7 +296,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - **Limites de palavras:** herdados da skill `tlc-spec-driven`, forçaram commits de compressão.
 - **Oráculo exposto:** o `implementer` podia editar o CI e as configurações que decidem se o trabalho dele está certo.
 
-A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, METR) converge em verificação determinística e independente, com o humano na intenção e no merge.
+Os seis problemas têm a mesma origem: a verificação dependia de quem implementava e de aprovações humanas em cada passo. Um agente que pode editar o próprio critério de aceite pode passar sem acertar, e uma verificação determinística, fora do alcance de quem implementa, dá o mesmo resultado em toda execução; a pessoa fica onde a decisão é dela, na intenção e no merge.
 
 **Decisão.**
 
@@ -689,33 +689,71 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-025 · Pastas por capacidade do negócio e por tecnologia de fronteira
 
-**Status:** proposta (PR de reorganização depois do M3)
+**Status:** proposta (31/10/2026)
 
-**Contexto.** Até o M3, o checkout, os pedidos e a saúde tinham pasta própria, mas o faturamento ficou espalhado: `worker.ts`, `reconciliation.ts` e `runbook.ts` soltos na raiz de `src/`, o relay e a conclusão em `outbox/`. Os módulos usados por todo o código (relógio, configuração, logs, telemetria) também estavam soltos na raiz. Quem abre o repositório não acha o faturamento num lugar só, e o M4 traz mais duas capacidades (vitrine e sincronização) sem regra de onde elas entram. Nos testes, `test/integration/erp/` não corresponde a nenhuma área do `spec.md`, e as migrações de exemplo dos testes tinham nomes em português, contra a convenção de idioma.
+**Contexto.** Até o M3, o checkout, os pedidos e a saúde tinham pasta própria, mas o faturamento ficou espalhado: `worker.ts`, `reconciliation.ts` e `runbook.ts` na raiz de `src/`, e o relay e a conclusão em `outbox/`. Os módulos usados por todo o código (relógio, configuração, logs, telemetria) também ficavam na raiz, ao lado da fábrica do app. Uma mudança no faturamento atravessava três lugares, e não havia regra de onde entram as capacidades do M4 (vitrine e sincronização). Nos testes, `test/integration/erp/` não correspondia a nenhuma área do `spec.md`, e as migrações de exemplo tinham nomes em português, contra a convenção de idioma.
 
-**Decisão.** A regra está em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Pastas do código":
+**Decisão.** A tabela está em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Pastas do código".
 
-- **Uma pasta por capacidade do negócio** (`checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`). Ela guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O faturamento junta o relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão em `src/billing/`.
-- **Uma pasta por tecnologia de fronteira** (`erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`), com a porta e o adaptador.
-- **`src/shared/`** para o que todo o código usa: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
-- **`src/main/`** com uma entrada por processo, e `src/app.ts` como fábrica do app HTTP.
-- As dependências vão de `main/` para o negócio, e do negócio para a fronteira e o `shared/`; o caminho inverso não existe.
-- Nos testes, a pasta de integração é a área do `spec.md`. Os testes do ERP simulado vão para a área do critério que provam, e as migrações de exemplo ganham nomes em inglês.
-- O `worker.ts` continua um arquivo só: o laço de recebimento e a tentativa dependem do mesmo prazo de visibilidade, e a conclusão e a permissão de chamada já são módulos à parte.
+- **Uma pasta por capacidade do negócio:** `checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`. Cada uma guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão mudam juntos quando o faturamento muda (AD-021, AD-024), então ficam juntos em `src/billing/`.
+- **Uma pasta por tecnologia de fronteira:** `erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`. Cada uma tem a porta e o adaptador, para trocar o ElasticMQ pelo SQS ou o ERP simulado pelo real sem tocar a regra de negócio (AD-004).
+- **`src/shared/`** guarda o que todo o código usa e que não conhece o negócio: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
+- **`src/main/`** tem uma entrada por processo e é o único lugar que monta as dependências. **`src/app.ts`** é a fábrica do app HTTP, sem abrir porta, para os testes subirem o app pelo supertest.
+- As dependências seguem um sentido só: de `main/` para o negócio, e do negócio para a fronteira, o contrato e o `shared/`. A fronteira e o `shared/` não importam pastas de negócio, e uma pasta de negócio não importa outra. O lint confere esse sentido (AD-026).
+- Nos testes, a pasta de integração é a área do `spec.md`, como desde o M1. Os testes do ERP simulado vão para a área do critério que provam, e as migrações de exemplo ganham nomes em inglês.
 
 **Alternativas consideradas:**
 
-- **Pastas por camada** (`controllers/`, `services/`, `repositories/`): uma mudança numa capacidade passa por várias pastas, e nada mostra o que pertence ao faturamento.
-- **Uma pasta `workers/` para tudo que roda fora da requisição:** separa o relay e a reconciliação do pedido que eles tratam.
-- **Manter os módulos transversais na raiz de `src/`:** a raiz misturaria fábrica, regra de negócio e utilitário, sem regra para o próximo arquivo.
-- **Espelhar `src/` em `test/integration/`:** espalharia os testes de um critério que atravessa pastas (o `FND-05` liga a telemetria ao repositório da saúde) e trocaria a regra que já está em vigor desde o M1.
-- **Conferir o sentido das dependências por ferramenta** (dependency-cruiser): mais uma dependência para uma regra que hoje vale sem exceção; fica para quando uma violação aparecer.
+- **Pastas por camada** (`controllers/`, `services/`, `repositories/`): uma mudança numa capacidade passa por várias pastas, e nada indica o que pertence ao faturamento.
+- **Uma pasta `workers/` para tudo que roda fora da requisição:** separa o relay e a reconciliação do pedido e das regras que eles tratam, e obriga `workers/` a importar o interior de `billing/`.
+- **Manter os módulos transversais na raiz de `src/`:** a raiz misturaria fábrica, regra de negócio e utilitário, sem critério para o próximo arquivo.
+- **Espelhar `src/` em `test/integration/`:** um critério que atravessa pastas (o `FND-05` liga a telemetria ao repositório da saúde) teria os testes espalhados, e a regra por área, em vigor desde o M1, mudaria sem ganho.
 
-**Trade-off.** Uma mudança só de lugar, sem comportamento novo, que mexe em muitos imports e nos caminhos citados na spec e na documentação. Duas pastas novas, `billing/` e `shared/`; o resto continua onde estava.
+**Trade-off.** Uma mudança só de lugar, sem comportamento novo, que mexe em muitos imports e nos caminhos citados na spec e na documentação.
 
-**Rever quando:** uma capacidade nova não couber numa pasta só, uma pasta de negócio precisar do interior de outra, ou o `worker.ts` passar de umas 500 linhas.
+**Rever quando:** uma capacidade nova não couber numa pasta só, ou uma pasta de negócio precisar do interior de outra.
 
-**Referências:** [Node.js Best Practices, 1.1 "Structure your solution by business components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md) e [1.2 "Layer your components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/createlayers.md); [Practica.js](https://github.com/practicajs/practica) (`libraries/` para o transversal); [NestJS, feature modules](https://docs.nestjs.com/modules); [Mark Seemann, Composition Root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/); [Fastify, testing](https://fastify.dev/docs/latest/Guides/Testing/) (fábrica do app separada do `listen`); [microservices.io, Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html); [testjavascript, integration tests best practices](https://github.com/testjavascript/nodejs-integration-tests-best-practices). Estrutura de projetos grandes: [twenty](https://github.com/twentyhq/twenty/tree/main/packages/twenty-server/src) (`modules/` por domínio, jobs dentro da capacidade, `engine/core-modules/` para o transversal), [n8n](https://github.com/n8n-io/n8n/tree/master/packages/cli/src) (a fila em `scaling/`, uma entrada por processo em `commands/`), [Ghost](https://github.com/TryGhost/Ghost/tree/main/ghost/core) (`server/services/<capacidade>/` e `shared/`), [novu](https://github.com/novuhq/novu/tree/next/apps/api/src) (`app/<capacidade>/` e `app/shared/`).
+**Referências:**
+
+- Robert C. Martin, *Clean Architecture*, 1.ª ed., cap. 13 ("Component Cohesion", princípio do fechamento comum) e cap. 14 ("Component Coupling", princípio das dependências acíclicas): agrupar o que muda junto e manter as dependências sem ciclo.
+- [Alistair Cockburn, *Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/): porta e adaptador por tecnologia externa.
+- [Mark Seemann, *Composition Root*](https://blog.ploeh.dk/2011/07/28/CompositionRoot/): a montagem das dependências fica junto da entrada de cada processo.
+- [Yoni Goldberg et al., *Node.js Best Practices*, seção 1.1](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
+
+### AD-026 · Limites de tamanho, complexidade e dependências conferidos pelo lint
+
+**Status:** proposta (31/10/2026)
+
+**Contexto.** O `.oxlintrc.json` ligava só a categoria `correctness`. Uma auditoria do código em 31/10/2026 achou, em `src/`, uma função de 257 linhas (`createWorker`), cinco funções com complexidade ciclomática entre 11 e 15, o mesmo laço de início e parada escrito três vezes, com diferenças entre as cópias, e variáveis de ambiente lidas fora do módulo de configuração. O código é escrito por agentes, e uma regra só escrita em texto não é cumprida de forma consistente: o que precisa valer sempre tem de ser conferido pela máquina (AD-012). O sentido das dependências da AD-025 também precisava de uma conferência.
+
+**Decisão.** Os limites e as regras estão em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Tamanho e forma do código", e são conferidos pelo `npm run lint` em `src/`, no hook de parada dos agentes, no pre-push e no CI.
+
+- **Tamanho:** 300 linhas por arquivo e 50 por função, contando só linhas com código. Os comentários explicam o porquê (`AGENTS.md`) e não podem empurrar uma função para fora do limite.
+- **Complexidade:** 10 de complexidade ciclomática por função, 4 níveis de aninhamento, 4 parâmetros (acima disso, um objeto de opções, como as fábricas `createX` já usam) e 4 callbacks aninhados.
+- **Dependências:** `no-restricted-imports` por pasta confere o sentido da AD-025, e `import/no-cycle` impede ciclos.
+- **Configuração:** `node/no-process-env` deixa só o `src/shared/config.ts` ler o ambiente, para a configuração ter um ponto de entrada e falhar na partida.
+- **Testes:** em `*.test.ts`, os limites de linhas por arquivo e por função e de callbacks aninhados não valem, porque `describe` e `it` são funções e uma tabela de casos é longa por natureza.
+- **Exceção:** um limite não sobe e uma regra não é desligada num arquivo sem uma AD. O `.oxlintrc.json` fica fora do alcance do `implementer` (AI-04).
+
+**Alternativas consideradas:**
+
+- **Os padrões das regras** (300 linhas, 50 por função, complexidade 20, 3 parâmetros): complexidade 20 deixa passar as cinco funções achadas; 3 parâmetros acusaria o middleware de erro do Express, que exige 4.
+- **Complexidade cognitiva** (limite 15) em vez da ciclomática: mede melhor a dificuldade de leitura, mas o oxlint não tem a regra nativa, e as opções (o plugin `sonarjs` pelos plugins em JavaScript, ainda em alfa, ou um pacote de terceiros) trazem uma dependência para uma medida que a ciclomática com aninhamento limitado já aproxima.
+- **dependency-cruiser** para o sentido das dependências: cobre camadas e arquivos órfãos, mas é uma dependência a mais para uma regra que o `no-restricted-imports` nativo expressa em poucas linhas.
+- **Só a revisão:** o revisor acha o problema depois do código escrito; o lint devolve o agente no próprio hook de parada.
+
+**Trade-off.** As fábricas `createX`, que devolvem um objeto de funções internas, contam as funções internas no tamanho da de fora; elas passam a ter as funções internas no nível do módulo, com as dependências passadas por parâmetro. Uma regra nova acusa o código existente, e o PR que a liga também ajusta o código.
+
+**Rever quando:** um limite exigir dividir uma função em partes que não fazem sentido sozinhas em mais de um caso, ou o oxlint ganhar a regra de complexidade cognitiva nativa.
+
+**Referências:**
+
+- [ESLint, regras `max-lines`, `max-lines-per-function`, `complexity`, `max-depth` e `max-params`](https://eslint.org/docs/latest/rules/): os padrões de cada regra e a observação de que não há um máximo objetivo, só uma faixa usual.
+- Thomas J. McCabe, *A Complexity Measure*, IEEE Transactions on Software Engineering, SE-2(4), 1976: o limite de 10 de complexidade ciclomática por módulo.
+- Arthur H. Watson e Thomas J. McCabe, *Structured Testing: A Testing Methodology Using the Cyclomatic Complexity Metric*, NIST SP 500-235, 1996: recomenda 10 como limite e registra limites de até 15 usados com justificativa.
+- [Google, *TypeScript Style Guide*](https://google.github.io/styleguide/tsguide.html): uma função acima de uns 40 linhas pede que se pense em dividi-la.
+- [oxc, regras do oxlint](https://oxc.rs/docs/guide/usage/linter/rules.html), consultado em 31/10/2026: as regras nativas e as que exigem plugin.
+- [Anthropic, *Claude Code: Best practices*](https://code.claude.com/docs/en/best-practices), consultado em 31/10/2026: o que precisa acontecer toda vez vai para um hook ou para o CI, não para as instruções.
 
 ## Escolhas de ferramenta
 

@@ -4,7 +4,9 @@
     "typescript",
     "oxc",
     "unicorn",
-    "vitest"
+    "vitest",
+    "import",
+    "node"
   ],
   "categories": {
     "correctness": "error"
@@ -147,6 +149,221 @@
       "rules": {
         "typescript/consistent-type-definitions": "off",
         "typescript/no-empty-object-type": "off"
+      }
+    },
+    {
+      "files": [
+        "src/**/*.ts"
+      ],
+      "rules": {
+        "max-lines": [
+          "error",
+          {
+            "max": 300,
+            "skipBlankLines": true,
+            "skipComments": true
+          }
+        ],
+        "max-lines-per-function": [
+          "error",
+          {
+            "max": 50,
+            "skipBlankLines": true,
+            "skipComments": true
+          }
+        ],
+        "complexity": [
+          "error",
+          {
+            "max": 10
+          }
+        ],
+        "max-depth": [
+          "error",
+          {
+            "max": 4
+          }
+        ],
+        "max-params": [
+          "error",
+          {
+            "max": 4
+          }
+        ],
+        "max-nested-callbacks": [
+          "error",
+          {
+            "max": 4
+          }
+        ],
+        "import/no-cycle": "error",
+        "node/no-process-env": "error"
+      }
+    },
+    {
+      "files": [
+        "src/shared/config.ts"
+      ],
+      "rules": {
+        "node/no-process-env": "off"
+      }
+    },
+    {
+      "files": [
+        "src/shared/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\./",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/contract/**/*.ts",
+        "src/db/**/*.ts",
+        "src/erp/**/*.ts",
+        "src/http/**/*.ts",
+        "src/queue/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(checkout|orders|health|billing|catalog|main)/|(^|/)app\\.ts$",
+                "message": "A fronteira e o contrato não importam pastas de negócio, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/checkout/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(orders|health|billing|catalog|main)/|(^|/)app\\.ts$",
+                "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/orders/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(checkout|health|billing|catalog|main)/|(^|/)app\\.ts$",
+                "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/health/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(checkout|orders|billing|catalog|main)/|(^|/)app\\.ts$",
+                "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/billing/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(checkout|orders|health|catalog|main)/|(^|/)app\\.ts$",
+                "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/catalog/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)(checkout|orders|health|billing|main)/|(^|/)app\\.ts$",
+                "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/app.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "(^|/)main/",
+                "message": "src/app.ts não importa src/main/ (AD-025)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/**/*.test.ts"
+      ],
+      "rules": {
+        "max-lines": "off",
+        "max-lines-per-function": "off",
+        "max-nested-callbacks": "off"
       }
     }
   ]
