@@ -579,6 +579,8 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 **Rever quando:** o checkout ganhar passos antes da reserva que custem caro, ou a chave passar a ter vida própria antes do pedido.
 
+**Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
+
 ### AD-021 · A outbox continua sendo a fila; o SQS entra por um relay
 
 **Status:** proposta (31/10/2026, PR #13). Corrige, na AD-003, o motivo dado para não rodar SQS local.
@@ -589,7 +591,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 - A outbox no PostgreSQL continua sendo a fila do worker, como na AD-003.
 - O motivo é a escrita dupla, não a ferramenta: gravar o pedido e publicar numa fila externa são duas escritas sem transação comum, então a outbox seria necessária mesmo com o SQS. E o que o worker decide por mensagem (o atraso mínimo contado do início da última chamada, o `first_sent_at`, a consulta ao ERP antes de criar, a espera com *full jitter*) continua no banco; pôr o SQS no caminho duplicaria o retry e a DLQ.
-- Em produção na AWS, um relay lê a outbox e publica no SQS Standard; o consumidor já é idempotente, então a FIFO só entraria se a ordem por pedido importasse. Um segundo consumidor dos eventos de pedido entra por um barramento do EventBridge ou um tópico do SNS, com uma fila SQS e uma DLQ por consumidor. A correspondência está no `ARCHITECTURE.md`, seção "Mensageria e resiliência".
+- Em produção na AWS, o worker do faturamento continua lendo a outbox no RDS. Quando surgir um segundo consumidor dos eventos de pedido, um relay lê a outbox e publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS Standard e a sua DLQ; os consumidores são idempotentes, então a FIFO só entraria se a ordem por pedido importasse. A tabela entre a outbox e o SQS no `ARCHITECTURE.md` ("Mensageria e resiliência") é uma correspondência de conceitos, não um plano de troca.
 - Como adicional, depois do M6: um relay que publica o evento "pedido faturado" num ElasticMQ, num perfil opcional do compose, fora do caminho crítico (`ROADMAP.md`, "Adicionais"). Ele pede uma dependência nova e uma AD própria quando entrar.
 
 **Alternativas consideradas:**
@@ -602,8 +604,6 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Rever quando:** surgir um segundo consumidor dos eventos de pedido, ou a vazão passar do que o polling sustenta, como a AD-003 já diz.
 
 **Referências:** [AWS Prescriptive Guidance, Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html); [microservices.io, Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html); [LocalStack 2026.03.0](https://blog.localstack.cloud/localstack-for-aws-release-2026-03-0/); [ElasticMQ](https://github.com/softwaremill/elasticmq); [Amazon SQS, filas de mensagens mortas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html).
-
-**Referências:** [IETF, The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header); [Brandur Leach, Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys); [PostgreSQL 18, Explicit Locking](https://www.postgresql.org/docs/18/explicit-locking.html).
 
 ## Escolhas de ferramenta
 

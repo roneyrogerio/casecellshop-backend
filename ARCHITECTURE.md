@@ -262,9 +262,11 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
 
 A outbox continua sendo a fila mesmo com o SQS, porque o problema que ela resolve é a escrita dupla, e o SQS não participa da transação do banco. É o padrão que o guia de padrões de nuvem da AWS recomenda: gravar a mensagem numa tabela de outbox na mesma transação e publicar depois, por um relay (AD-021).
 
-- **Hoje:** a tabela `outbox` no PostgreSQL é a fila, consumida pelo worker com `FOR UPDATE SKIP LOCKED` **[implementado: `src/outbox/claim.ts`, `ORD-02`, `ORD-20`]**.
-- **Na AWS:** o banco vai para o RDS; um relay lê a outbox (pelo mesmo `SKIP LOCKED`, ou por captura de mudanças) e publica no SQS Standard, que entrega pelo menos uma vez e sem ordem garantida. O consumidor já é idempotente pela consulta ao ERP antes de criar, então a fila FIFO só entraria se a ordem por pedido importasse; a deduplicação dela cobre só 5 minutos **[alvo]**.
-- **Um segundo consumidor** (notificação ao cliente, analytics) não lê a fila do faturamento: o relay publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS e a sua DLQ **[alvo]**.
+- **Hoje:** a tabela `outbox` no PostgreSQL é a fila, consumida pelo worker com `FOR UPDATE SKIP LOCKED` **[M3: `src/outbox/claim.ts`; a reivindicação exclusiva é exercida pelo `ORD-17` e pelo `ORD-20`, e nenhum critério testa o `SKIP LOCKED` isolado]**.
+- **Na AWS:** o banco vai para o RDS, e o worker do faturamento continua lendo a outbox, porque o que ele decide por mensagem (abaixo) não tem par no SQS **[alvo]**.
+- **Um segundo consumidor** (notificação ao cliente, analytics): um relay lê a outbox (pelo mesmo `SKIP LOCKED`, ou por captura de mudanças) e publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS Standard e a sua DLQ. O SQS Standard entrega pelo menos uma vez e sem ordem garantida, então cada consumidor é idempotente; a fila FIFO só entraria se a ordem por pedido importasse, e a deduplicação dela cobre só 5 minutos **[alvo]**.
+
+A tabela abaixo é uma correspondência de conceitos, para ler o desenho em termos de SQS; não é um plano de trocar a outbox pelo SQS.
 
 | Outbox no PostgreSQL | SQS |
 | --- | --- |
