@@ -57,6 +57,10 @@ export interface StallOptions {
 export interface Stall {
   // Resolve quando a chamada ao ERP simulado terminou (com resposta ou erro), mesmo presa para o worker.
   erpSettled: Promise<void>;
+  // Solta as chamadas presas no portão do transporte, rejeitando-as com `error` (a conexão cortada sem resposta):
+  // a camada anticorrupção as classifica como ambíguas, sem o timeout e sem o relógio manual. Só atinge as
+  // chamadas que já chegaram ao transporte; o teste espera `waitForSends` antes.
+  fail(error?: Error): void;
 }
 
 export interface InstrumentedTransport extends ErpTransport {
@@ -102,7 +106,7 @@ function take<T>(rules: Rule<T>[], request: ErpRequest): T | undefined {
 export function instrumentTransport(inner: ErpTransport): InstrumentedTransport {
   const sends: ErpRequest[] = [];
   const waiters: { count: number; op: ErpRequest['op'] | undefined; resolve: () => void }[] = [];
-  const stalls: Rule<{ callErp: boolean; settle: () => void }>[] = [];
+  const stalls: Rule<{ callErp: boolean; settle: () => void; rejecters: ((error: Error) => void)[] }>[] = [];
   const hooks: Rule<(request: ErpRequest) => Promise<void>>[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -157,12 +161,18 @@ export function instrumentTransport(inner: ErpTransport): InstrumentedTransport 
       const erpSettled = new Promise<void>((resolve) => {
         settle = resolve;
       });
+      const rejecters: ((error: Error) => void)[] = [];
       stalls.push({
         match,
         remaining: options.times ?? 1,
-        payload: { callErp: options.callErp ?? true, settle },
+        payload: { callErp: options.callErp ?? true, settle, rejecters },
       });
-      return { erpSettled };
+      return {
+        erpSettled,
+        fail(error = new Error('conexão com o ERP cortada sem resposta')) {
+          for (const reject of rejecters.splice(0)) reject(error);
+        },
+      };
     },
     afterErp(match, hook, times = 1) {
       hooks.push({ match, remaining: times, payload: hook });
@@ -181,7 +191,9 @@ export function instrumentTransport(inner: ErpTransport): InstrumentedTransport 
           () => undefined,
           () => undefined,
         ) ?? Promise.resolve()).then(stall.settle);
-        return new Promise<ErpResponse>(() => undefined);
+        return new Promise<ErpResponse>((_resolve, reject) => {
+          stall.rejecters.push(reject);
+        });
       }
       if (!call) throw new Error('chamada sem ERP simulado fora de um stall');
       return finish(call, request, hook);

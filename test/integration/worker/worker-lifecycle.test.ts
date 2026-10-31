@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { settle } from '../../helpers/async.ts';
-import { ERP_TIMEOUT_MS } from '../../helpers/erp.ts';
 import {
   buildWorker,
   createGate,
@@ -63,8 +62,8 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     const world = await createWorld(suite);
     const worker = buildWorker(world, { config: LOOP_CONFIG });
     const stuck = await submitOrder(suite, world);
-    // A chamada desta mensagem nunca recebe resposta: só o timeout do ERP, no relógio manual, a encerra.
-    world.transport.stall({ op: 'createOrder', reference: stuck.orderId }, { callErp: false });
+    // A chamada desta mensagem fica presa no portão do transporte, sem resposta, até o teste cortá-la.
+    const held = world.transport.stall({ op: 'createOrder', reference: stuck.orderId }, { callErp: false });
     await worker.start();
     await within(world.transport.waitForSends(1, 'createOrder'), 'a tentativa chamar o ERP');
 
@@ -75,11 +74,11 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     await settle();
     expect(sequence, 'o start() não resolve enquanto o stop() espera a tentativa em voo').toEqual([]);
 
-    // O timeout da chamada presa, no relógio manual, solta o stop(); então o start() volta a receber. Um avanço
-    // só basta: o timer do timeout é armado antes de a chamada chegar ao transporte, e a chamada já chegou. O
-    // relógio não avança mais: o ERP simulado fatura sem esperar o relógio, e um avanço repetido enquanto o laço
-    // volta a receber estouraria o timeout (10 s) da chamada da mensagem nova sob carga, deixando-a ambígua.
-    world.clock.advance(ERP_TIMEOUT_MS);
+    // Cortar a chamada presa no portão do transporte solta o stop(); então o start() volta a receber. O relógio
+    // manual não avança em nenhum ponto até aqui: a mensagem nova pode ser recebida e chamar o ERP a qualquer
+    // momento (um recebimento em voo do laço antigo, ou o laço novo), e um avanço nessa hora estouraria o timeout
+    // (10 s) da chamada dela, deixando-a ambígua. O ERP simulado fatura sem esperar o relógio.
+    held.fail();
     await vi.waitFor(
       async () => {
         expect((await readOrder(world.pool, fresh.orderId)).status).toBe('invoiced');
@@ -91,7 +90,9 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     await stopAdvancing(worker, world);
 
     await expectInvoiced(world, fresh, { queueEmpty: false });
-    // A mensagem da tentativa presa voltou ao SQS pelo retry (ambígua) e segue escondida; a da nova foi apagada.
+    // A tentativa presa terminou sem resposta (ambígua): o ERP não faturou o pedido dela, e a mensagem voltou ao
+    // SQS pelo retry e segue escondida; a da nova foi apagada.
+    expect((await readOrder(world.pool, stuck.orderId)).status).toBe('pending');
     await expectOneInFlight(world);
   });
 
