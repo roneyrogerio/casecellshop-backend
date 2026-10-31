@@ -500,12 +500,17 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 - **ZenStack 3:** o SQL de concorrência cai no próprio Kysely embutido, com uma camada a mais; no teste, o `updateMany` com `limit` vendeu além do estoque, um campo com `@map` quebrou em execução dentro do `ON CONFLICT`, e a migração depende do Prisma 6.
 - **Drizzle (linha estável):** no teste, o migrador pulou em silêncio a migração de um ramo paralelo, e gerar uma migração com renomeação exige terminal interativo; a correção só existe na versão candidata.
 - **MikroORM, TypeORM, Objection, Slonik e Effect SQL:** a unidade de trabalho esconde o SQL, os decorators não rodam no Node sem build, os tipos são fracos, ou os tipos são escritos à mão e conferidos só em execução.
+- **Migrador do próprio Kysely (`kysely/migration`, com o `kysely-ctl`) no lugar do node-pg-migrate:**
+  - só lê migrações em TypeScript ou JavaScript, e não em `.sql`; trocar exigiria reescrever as migrações que já estão na `main`, o que o AI-01 proíbe;
+  - não traz ganho de tipos: a própria documentação dele pede que a migração use `Kysely<any>`, sem os tipos atuais da aplicação, para continuar valendo quando o esquema mudar;
+  - roda todas as migrações pendentes numa única transação, e desligar a transação desliga para todas, enquanto o node-pg-migrate abre uma por arquivo;
+  - o lock e a conferência de ordem ele também tem, mas o node-pg-migrate já os dá.
 
 **Trade-off.** O Kysely ainda é 0.x, com quebra possível entre versões menores, e por isso fica fixado e é atualizado de propósito. A geração dos tipos precisa de um banco migrado no CI. As relações viram `join` escritos no código, sem a camada de alto nível de um ORM. Os erros de tipo do builder podem ser longos.
 
 **Rever quando:** o kysely-codegen parar de ser mantido (aí troca-se só o gerador); o Drizzle 1.0 ou o Prisma 8 saírem estáveis com bloqueio de linha e SQL tipado; ou uma consulta precisar de algo que o builder não expresse sem coluna em fragmento cru.
 
-**Referências:** [Kysely](https://kysely.dev/docs/intro); [kysely-codegen](https://github.com/RobinBlomberg/kysely-codegen); [node-pg-migrate](https://salsita.github.io/node-pg-migrate/); [PostgreSQL 18, isolamento de transações](https://www.postgresql.org/docs/18/transaction-iso.html); [Prisma, TypedSQL](https://www.prisma.io/docs/orm/prisma-client/using-raw-sql/typedsql); [Prisma, issue de `FOR UPDATE`](https://github.com/prisma/prisma/issues/5983); [Prisma, issue do commit silencioso](https://github.com/prisma/orm/issues/20496); [Drizzle, issue do migrador](https://github.com/drizzle-team/drizzle-orm/issues/5769); [ZenStack, migrações](https://zenstack.dev/docs/orm/migration).
+**Referências:** [Kysely](https://kysely.dev/docs/intro); [Kysely, migrações](https://kysely.dev/docs/migrations); [kysely-codegen](https://github.com/RobinBlomberg/kysely-codegen); [node-pg-migrate](https://salsita.github.io/node-pg-migrate/); [PostgreSQL 18, isolamento de transações](https://www.postgresql.org/docs/18/transaction-iso.html); [Prisma, TypedSQL](https://www.prisma.io/docs/orm/prisma-client/using-raw-sql/typedsql); [Prisma, issue de `FOR UPDATE`](https://github.com/prisma/prisma/issues/5983); [Prisma, issue do commit silencioso](https://github.com/prisma/orm/issues/20496); [Drizzle, issue do migrador](https://github.com/drizzle-team/drizzle-orm/issues/5769); [ZenStack, migrações](https://zenstack.dev/docs/orm/migration).
 
 ### AD-018 · O preço que o cliente viu é obrigatório no checkout
 
