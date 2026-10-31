@@ -33,7 +33,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
 
 ## Acesso ao banco (AD-017)
 
-- **Fonte única e tipos gerados (`FND-09`):** as migrações `.sql` definem as tabelas. Depois de aplicá-las, o kysely-codegen gera um arquivo de tipos por schema (o da loja e o `erp_sim`), versionado e nunca editado à mão, sem as tabelas de controle do node-pg-migrate e sem enum de runtime. O CI gera de novo com `--verify` e falha se algum arquivo divergir do banco.
+- **Fonte única e tipos gerados (`FND-09`):** as migrações definem as tabelas (`FND-11`). Depois de aplicá-las, o kysely-codegen gera um arquivo de tipos por schema (o da loja e o `erp_sim`), versionado e nunca editado à mão, sem as tabelas de controle do migrador (`kysely_migration` e `kysely_migration_lock`) e sem enum de runtime. O CI gera de novo com `--verify` e falha se algum arquivo divergir do banco.
 - **Consultas pelo Kysely,** sobre o mesmo pool do `pg`. Os trechos de SQL deste design são o SQL emitido; o código os escreve pelo builder, com `onConflict(…).doNothing()`, `forUpdate().skipLocked()` e `returning(…)`. Todo valor vai como parâmetro, nunca no texto. Zero linhas afetadas é `numUpdatedRows === 0n` no resultado. A reserva, por exemplo:
 
   ```ts
@@ -216,7 +216,46 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - `scripts/check-instructions.ts`: `checkInstructions(rootDir)` devolve as violações dos limites do que carrega em toda sessão (`FND-06`), uma frase por arquivo; o script falha se houver alguma, e importar o módulo não roda a conferência.
   - `scripts/generate-openapi.ts`: com `--check`, falha se o arquivo divergir do contrato; `--file <caminho>` troca o `openapi.yaml` da raiz por outro.
 - **Spans do M1:** o da requisição é `SERVER`, com o nome `<método> <rota>` (como `GET /health`) e o atributo `http.route`; o de repositório é `CLIENT`, com o nome `<repositório>.<operação>` (como `health.ping`) e o atributo `db.system.name` igual a `postgresql`.
-- **Migrações:** node-pg-migrate, com arquivos `.sql` em `migrations/store/` e `migrations/erp_sim/`, nome com data e hora, uma transação por arquivo, *advisory lock* e conferência de ordem; cada schema tem a sua tabela de controle. Como a ferramenta não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main`. Depois das migrações, o kysely-codegen gera os tipos do banco, e o CI confere com `--verify` que eles estão em dia (`FND-09`, a partir do M2).
+- **Migrações:** até a primeira fatia do M2, node-pg-migrate com arquivos `.sql`; a partir dela, o `Migrator` do Kysely (AD-017, `FND-11`):
+  - arquivos `.ts` em `migrations/store/` e `migrations/erp_sim/`, com nome `AAAAMMDDHHMMSS_nome.ts`, que exportam `up` e `down` sobre `Kysely<any>`; a estrutura sai do construtor de esquema, e o `` sql`…` `` fica para a condição de um CHECK e o `now()` de um valor padrão;
+  - o `migrate(pool)` roda um `Migrator` por pasta, na ordem loja e depois `erp_sim`, com o `FileMigrationProvider` (pasta em caminho absoluto) e a tabela de controle no schema da pasta (`migrationTableSchema`: `public` e `erp_sim`); um `onFileIgnored` que lança faz um arquivo ignorado reprovar, fora o `.gitkeep`; e um `error` no resultado do `migrateToLatest()` é lançado;
+  - o `Migrator` espera pelo *advisory lock*, reprova migração fora de ordem e aplica as pendentes numa transação só;
+  - como o migrador não confere o conteúdo do que já rodou, o CI falha se um PR alterar ou apagar uma migração que já está na `main` (`AI-01`);
+  - depois das migrações, o kysely-codegen gera os tipos do banco, e o CI confere com `--verify` que eles estão em dia (`FND-09`).
+
+  A migração do `erp_sim`, reescrita em TypeScript com o mesmo esquema da `.sql`, fica assim:
+
+  ```ts
+  import { type Kysely, sql } from 'kysely';
+
+  export async function up(db: Kysely<any>): Promise<void> {
+    await db.schema.createSchema('erp_sim').ifNotExists().execute();
+    const schema = db.schema.withSchema('erp_sim');
+    await schema
+      .createTable('products')
+      .addColumn('sku', 'text', (col) => col.primaryKey())
+      .addColumn('name', 'text', (col) => col.notNull())
+      .addColumn('price_cents', 'integer', (col) => col.notNull().check(sql`price_cents >= 0`))
+      .addColumn('on_hand', 'integer', (col) => col.notNull().check(sql`on_hand >= 0`))
+      .execute();
+    // A referência única é a H1b: criar duas vezes devolve a mesma fatura.
+    await schema
+      .createTable('invoices')
+      .addColumn('id', 'bigint', (col) => col.generatedAlwaysAsIdentity().primaryKey())
+      .addColumn('reference', 'text', (col) => col.notNull().unique())
+      .addColumn('items', 'jsonb', (col) => col.notNull())
+      .addColumn('total_cents', 'bigint', (col) => col.notNull().check(sql`total_cents >= 0`))
+      .addColumn('created_at', 'timestamptz', (col) => col.notNull().defaultTo(sql`now()`))
+      .execute();
+  }
+
+  export async function down(db: Kysely<any>): Promise<void> {
+    const schema = db.schema.withSchema('erp_sim');
+    await schema.dropTable('invoices').execute();
+    await schema.dropTable('products').execute();
+  }
+  ```
+
 - **Dados iniciais:** `seed(pool)` grava o catálogo de exemplo do `erp_sim` com `ON CONFLICT DO NOTHING`, e só o serviço `migrate` do compose o roda, depois das migrações. Os testes não o rodam: cada um cria os dados que usa.
 - **`/health`:** `200` se o banco responde a um `SELECT 1` feito pelo repositório; senão, `503` em problem+json. Fica no contrato; o `/metrics` fica fora dele.
 - **`X-Request-Id`:** aceito com 1 a 128 caracteres ASCII visíveis; fora disso, um UUID novo.

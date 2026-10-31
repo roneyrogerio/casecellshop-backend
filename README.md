@@ -35,7 +35,7 @@ npm run test:unit   # só os unitários, sem Docker
 
 Os testes que tocam o banco rodam contra um PostgreSQL real, pelo Testcontainers: o que se prova é o comportamento do banco, como lock, transação e índice único, e um mock não o reproduz.
 
-A partir do M2, as consultas são escritas pelo Kysely, com os tipos gerados do banco migrado: uma coluna apagada ou renomeada numa migração quebra o `npm run typecheck`, e o CI confere que os tipos estão em dia (`FND-09`).
+A partir do M2, as consultas e as migrações são escritas pelo Kysely, com os tipos gerados do banco migrado: uma coluna apagada ou renomeada numa migração quebra o `npm run typecheck`, e o CI confere que os tipos estão em dia (`FND-09`).
 
 Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda todos, no Node do `.nvmrc` e na 24.12. `npm run verify` roda o mesmo sem os testes de integração, em cerca de um minuto, e é o que o `pre-push` do repositório executa; `npm run verify:full` inclui a integração, com o Docker.
 

@@ -74,11 +74,11 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 **Meta:** comprar sem overselling, sem pedido duplicado, pelo preço informado e sem esperar o ERP.
 
 - Design de concorrência e idempotência (`DOC-CON`).
-- Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados com `--verify` no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as instruções dos agentes passam às regras do Kysely no mesmo PR.
+- Primeira fatia, antes do checkout: a camada de dados da AD-017 (Kysely, tipos gerados com `--verify` no CI, conferência das formas proibidas e guarda da transação), migrando o `/health`, o ERP simulado e o seed; as migrações passam ao `Migrator` do Kysely, com a do `erp_sim` reescrita em TypeScript, a conferência do `AI-01` olhando os `.ts` e o node-pg-migrate removido; as instruções dos agentes passam às regras do Kysely no mesmo PR.
 - Transação do checkout, respostas, status do pedido e contrato das duas rotas, conforme o design.
 - `/security-review` no PR, porque é o marco que recebe dados do cliente.
 
-**Pronto quando:** `CHK-*`, `FND-09`, `FND-10` e `AI-19` passam, junto com as cláusulas novas do M2 nos critérios que já existiam: o `.kysely-codegenrc*` no `AI-04`, as duas conferências no `AI-05` e no `AI-17`, e os schemas de sucesso e de erro do `POST /checkout` e do `GET /orders/{orderId}/status` no `FND-07`.
+**Pronto quando:** `CHK-*`, `FND-09`, `FND-10`, `FND-11` e `AI-19` passam, junto com as cláusulas novas do M2 nos critérios que já existiam: os arquivos `.ts` no `AI-01`, o `.kysely-codegenrc*` no `AI-04`, as duas conferências no `AI-05` e no `AI-17`, e os schemas de sucesso e de erro do `POST /checkout` e do `GET /orders/{orderId}/status` no `FND-07`.
 
 ## M3 — Processamento assíncrono
 

@@ -29,7 +29,7 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 
 - **Runtime:** Node.js 26.13.0 LTS (a partir da 24.12), ESM, TypeScript por *type stripping*; TypeScript 7.0.2 só para checar tipos, e o oxlint para o lint
 - **HTTP:** Express 5.3.0, com o contrato em zod 4.6.7 e o OpenAPI 3.1 gerado pelo `@asteasolutions/zod-to-openapi` 9.1.0
-- **Banco e fila:** PostgreSQL 18.6 com `pg` 8.23.1 e as consultas pelo Kysely 0.29.7, com os tipos gerados do banco migrado pelo kysely-codegen 0.20.0; migrações em `.sql` pelo node-pg-migrate 9.0.0; a outbox é a fila
+- **Banco e fila:** PostgreSQL 18.6 com `pg` 8.23.1 e as consultas pelo Kysely 0.29.7, com os tipos gerados do banco migrado pelo kysely-codegen 0.20.0; as migrações pelo `Migrator` do próprio Kysely; a outbox é a fila
 - **Observabilidade:** `pino` 10.4.0 e OpenTelemetry JS na linha 3 (API 1.10.0, SDK 3.0.0)
 - **Testes:** Vitest 5.0.5, supertest 7.3.1 e Testcontainers 12.2.1
 
