@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import request from 'supertest';
-import type { Telemetry } from '../../src/telemetry.ts';
+import type { Telemetry } from '../../src/shared/telemetry.ts';
 
 export type MetricType = 'counter' | 'gauge' | 'histogram' | 'summary' | 'untyped';
 

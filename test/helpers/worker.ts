@@ -7,9 +7,9 @@ import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
 import { createSimulatedErp, type SimulatedErp } from '../../src/erp/sim/index.ts';
 import type { ErpRequest, ErpResponse, ErpTransport } from '../../src/erp/transport.ts';
-import type { Semaphore } from '../../src/outbox/semaphore.ts';
-import { createTelemetry, type Telemetry } from '../../src/telemetry.ts';
-import { createWorker, type Worker, type WorkerConfig } from '../../src/worker.ts';
+import { createWorker, type Worker, type WorkerConfig } from '../../src/billing/worker.ts';
+import type { Semaphore } from '../../src/shared/semaphore.ts';
+import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import {
   APP_POOL_SIZE,
   checkoutBody,

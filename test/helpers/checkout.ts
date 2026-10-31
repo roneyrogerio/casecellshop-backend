@@ -10,8 +10,8 @@ import request from 'supertest';
 import { createApp } from '../../src/app.ts';
 import { checkoutRoute } from '../../src/contract/index.ts';
 import { LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from '../../src/db/pool.ts';
-import { logContext } from '../../src/logging.ts';
-import { createTelemetry, type Telemetry } from '../../src/telemetry.ts';
+import { logContext } from '../../src/shared/logging.ts';
+import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import { expectMatchesContract } from './contract.ts';
 import type { TestDatabase } from './database.ts';
 
