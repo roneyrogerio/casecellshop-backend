@@ -33,7 +33,7 @@ Todo prazo gravado usa o relógio do banco; o relógio injetável controla só o
 
 ## Acesso ao banco (AD-017)
 
-- **Fonte única e tipos gerados (`FND-09`):** as migrações definem as tabelas (`FND-11`). Depois de aplicá-las, o kysely-codegen gera um arquivo de tipos por schema (o da loja e o `erp_sim`), versionado e nunca editado à mão, sem as tabelas de controle do migrador (`kysely_migration` e `kysely_migration_lock`) e sem enum de runtime. O CI gera de novo com `--verify` e falha se algum arquivo divergir do banco.
+- **Fonte única e tipos gerados (`FND-09`):** as migrações definem as tabelas (`FND-11`). Depois de aplicá-las, o kysely-codegen gera um arquivo de tipos por schema (o da loja e o `erp_sim`), versionado e nunca editado à mão, sem as tabelas de controle do migrador (`kysely_migration` e `kysely_migration_lock`) e sem enum de runtime. O CI gera de novo com `--verify` e falha se algum arquivo divergir do banco. Como ninguém edita esses arquivos, o lint desliga neles só as duas regras que o código gerado viola (`consistent-type-definitions` e `no-empty-object-type`).
 - **Consultas pelo Kysely,** sobre o mesmo pool do `pg`. Os trechos de SQL deste design são o SQL emitido; o código os escreve pelo builder, com `onConflict(…).doNothing()`, `forUpdate().skipLocked()` e `returning(…)`. Todo valor vai como parâmetro, nunca no texto. Zero linhas afetadas é `numUpdatedRows === 0n` no resultado. A reserva, por exemplo:
 
   ```ts
