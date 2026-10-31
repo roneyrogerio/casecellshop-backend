@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import {
   DockerComposeEnvironment,
   getContainerRuntimeClient,
@@ -50,17 +52,48 @@ async function inspectOneShot(service: string) {
   return client.container.getById(found[0]!.Id).inspect();
 }
 
+const execFileAsync = promisify(execFile);
+
+// Mesmo projeto, arquivo e variáveis do up, para o CLI achar os contêineres do teste.
+async function composeCli(args: string[]): Promise<string> {
+  const { stdout, stderr } = await execFileAsync('docker', ['compose', '-p', projectName, '-f', 'compose.yaml', ...args], {
+    cwd: root,
+    env: { ...process.env, API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) },
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return `${stdout}${stderr}`;
+}
+
+// Quando o up falha (por exemplo "service migrate didn't complete successfully"), o erro do
+// Testcontainers não traz a saída do serviço que caiu. Sem ela não há como achar a causa em CI.
+async function collectServiceLogs(): Promise<string> {
+  try {
+    return await composeCli(['logs', '--no-color', '--timestamps', '--tail', '200', 'migrate', 'postgres', 'api', 'worker']);
+  } catch (error) {
+    return `não foi possível ler os logs dos serviços: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 beforeAll(async () => {
   apiPort = await freePort();
   jaegerUiPort = await freePort();
   projectName = `ccs-fnd01-${randomBytes(4).toString('hex')}`;
-  // Nome de projeto próprio e portas livres (API e interface do Jaeger): não conflita com o compose de desenvolvimento.
-  environment = await new DockerComposeEnvironment(root, 'compose.yaml')
-    .withProjectName(projectName)
-    .withEnvironment({ API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) })
-    .withBuild()
-    .withStartupTimeout(240_000)
-    .up();
+  try {
+    // Nome de projeto próprio e portas livres (API e interface do Jaeger): não conflita com o compose de desenvolvimento.
+    environment = await new DockerComposeEnvironment(root, 'compose.yaml')
+      .withProjectName(projectName)
+      .withEnvironment({ API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) })
+      .withBuild()
+      .withStartupTimeout(240_000)
+      .up();
+  } catch (error) {
+    // O afterAll não derruba nada se o up lançou (environment fica indefinido): os logs são lidos
+    // e o projeto é derrubado aqui, para não deixar contêineres e volume para trás.
+    const logs = await collectServiceLogs();
+    await composeCli(['down', '--volumes', '--timeout', '5']).catch(() => undefined);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${reason}\n\n--- logs dos serviços (migrate, postgres, api, worker; últimas 200 linhas) ---\n${logs}`, { cause: error });
+  }
 }, 480_000);
 
 afterAll(async () => {

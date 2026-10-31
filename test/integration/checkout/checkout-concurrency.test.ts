@@ -12,6 +12,8 @@ import {
   header,
   line,
   newKey,
+  PATIENT_LIMITS,
+  PATIENT_LOCK_TIMEOUT_MS,
   postCheckout,
   readInventory,
   seedProduct,
@@ -22,14 +24,20 @@ import {
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
 
 let database: TestDatabase;
+// Harness dos testes de atomicidade, unicidade e ordem de lock (CHK-01, CHK-03, CHK-07): lock_timeout
+// e statement_timeout folgados, para não medirem a latência da máquina (ver PATIENT_LIMITS).
 let harness: CheckoutHarness;
+// Harness com os limites de produção (2 s e 5 s), só para o CHK-08, que prova o corte pelo lock_timeout.
+let productionHarness: CheckoutHarness;
 
 beforeAll(async () => {
   database = await startMigratedDatabase();
-  harness = await startCheckoutHarness(database, APP_POOL_SIZE);
+  harness = await startCheckoutHarness(database, APP_POOL_SIZE, PATIENT_LIMITS);
+  productionHarness = await startCheckoutHarness(database, APP_POOL_SIZE);
 }, 120_000);
 
 afterAll(async () => {
+  await productionHarness?.close();
   await harness?.close();
   await database?.stop();
 });
@@ -123,8 +131,9 @@ describe('CHK-02 controle negativo da reserva', () => {
 describe('CHK-03 e CHK-04 idempotência sob concorrência', () => {
   it('CHK-03 a mesma Idempotency-Key em 10 requisições paralelas, com estoque 1, gera um único pedido e todas respondem 202 com o mesmo orderId', async () => {
     // Exijo 202 para todas, e não aceito o 409 idempotency-key-in-progress: a primeira transação
-    // dura milissegundos, muito abaixo do lock_timeout de 2 s, e o design manda a concorrente
-    // esperar a primeira e receber o pedido original. O 409 só vale depois do lock_timeout.
+    // dura milissegundos, muito abaixo do lock_timeout, e o design manda a concorrente esperar a
+    // primeira e receber o pedido original. O 409 só vale depois do lock_timeout (que aqui é o
+    // folgado dos testes de concorrência, para a máquina sobrecarregada não virar 409).
     for (let round = 1; round <= ROUNDS; round += 1) {
       const product = await seedProduct(database.pool, { priceCents: 2500, onHand: 1 });
       const key = newKey();
@@ -157,6 +166,10 @@ describe('CHK-07 ordem de lock', () => {
     await second.connect();
     const reserve = 'update inventory set reserved = reserved + 1 where sku = $1';
     try {
+      // O deadlock só continua visível com o lock_timeout folgado se o PostgreSQL o detectar antes dele.
+      const detection = await database.pool.query<{ ms: number }>("select setting::int as ms from pg_settings where name = 'deadlock_timeout'");
+      expect(detection.rows[0]?.ms ?? Number.POSITIVE_INFINITY).toBeLessThan(PATIENT_LOCK_TIMEOUT_MS);
+
       await first.query('begin');
       await second.query('begin');
       await first.query(reserve, [a.sku]);
@@ -235,7 +248,7 @@ describe('CHK-08 lock_timeout', () => {
       const holderPid = await backendPid(holder);
 
       const startedAt = Date.now();
-      const pending = postCheckout(harness.server, checkoutBody(line(product)), { key });
+      const pending = postCheckout(productionHarness.server, checkoutBody(line(product)), { key });
       // Se o teste falhar antes do await, a promessa solta não pode virar rejeição sem dono.
       void pending.catch(() => undefined);
       // Espera por condição: o checkout está de fato parado num lock do banco.
@@ -259,7 +272,7 @@ describe('CHK-08 lock_timeout', () => {
     expect(await countKeyRows(database.pool, key)).toBe(0);
     expect((await readInventory(database.pool, product.sku)).reserved).toBe(0);
     // Solto o lock, o cliente repete com a mesma chave e é aceito.
-    const retry = await postCheckout(harness.server, checkoutBody(line(product)), { key });
+    const retry = await postCheckout(productionHarness.server, checkoutBody(line(product)), { key });
     expect(retry.status).toBe(202);
   });
 
@@ -278,7 +291,7 @@ describe('CHK-08 lock_timeout', () => {
       before = await footprint(database.pool);
 
       const startedAt = Date.now();
-      const pending = postCheckout(harness.server, checkoutBody(line(product)), { key });
+      const pending = postCheckout(productionHarness.server, checkoutBody(line(product)), { key });
       void pending.catch(() => undefined);
       await vi.waitFor(async () => expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1), { timeout: 5_000, interval: 50 });
 
@@ -297,7 +310,7 @@ describe('CHK-08 lock_timeout', () => {
     expect(await footprint(database.pool)).toEqual(before);
     expect(await countKeyRows(database.pool, key)).toBe(0);
     expect((await readInventory(database.pool, product.sku)).reserved).toBe(0);
-    const retry = await postCheckout(harness.server, checkoutBody(line(product)), { key });
+    const retry = await postCheckout(productionHarness.server, checkoutBody(line(product)), { key });
     expect(retry.status).toBe(202);
   });
 });

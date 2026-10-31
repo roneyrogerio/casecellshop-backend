@@ -18,16 +18,35 @@ import type { TestDatabase } from './database.ts';
 // Tamanho fixo do pool da API nos testes de concorrência, o mesmo de produção (design.md, "Parâmetros").
 export const APP_POOL_SIZE = 10;
 
+export interface PoolLimits {
+  lockTimeoutMs?: number;
+  statementTimeoutMs?: number;
+}
+
+// Limites dos testes de concorrência (CHK-01, CHK-03, CHK-07). Eles medem atomicidade, unicidade e
+// ausência de deadlock, não a latência da máquina: com a CPU sobrecarregada (testes unitários em
+// paralelo, fsync lento no Docker), quem segura o lock demora a mandar o próximo comando e as
+// 9 transações da fila estouravam o lock_timeout de 2 s, virando 503. O deadlock continua visível,
+// porque o PostgreSQL o detecta pelo deadlock_timeout (1 s por padrão), muito antes destes limites.
+// O statement_timeout também conta a espera por lock, então precisa ser maior que o lock_timeout.
+// O CHK-08 não usa estes limites: ele prova justamente o corte de produção.
+export const PATIENT_LOCK_TIMEOUT_MS = 30_000;
+export const PATIENT_STATEMENT_TIMEOUT_MS = 60_000;
+export const PATIENT_LIMITS: PoolLimits = {
+  lockTimeoutMs: PATIENT_LOCK_TIMEOUT_MS,
+  statementTimeoutMs: PATIENT_STATEMENT_TIMEOUT_MS,
+};
+
 // Pool da API como em produção (5 s de statement_timeout, 2 s de lock_timeout), exceto a espera
 // por conexão: com 50 requisições sobre 10 conexões, a espera de 1 s de produção mediria a
 // máquina de CI e não a atomicidade do checkout.
-export function createAppPool(uri: string, max: number = APP_POOL_SIZE): pg.Pool {
+export function createAppPool(uri: string, max: number = APP_POOL_SIZE, limits: PoolLimits = {}): pg.Pool {
   const pool = new pg.Pool({
     connectionString: uri,
     max,
     connectionTimeoutMillis: 15_000,
-    statement_timeout: STATEMENT_TIMEOUT_MS,
-    lock_timeout: LOCK_TIMEOUT_MS,
+    statement_timeout: limits.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS,
+    lock_timeout: limits.lockTimeoutMs ?? LOCK_TIMEOUT_MS,
   });
   pool.on('error', () => undefined);
   return pool;
@@ -46,7 +65,11 @@ export interface CheckoutHarness {
 
 // Monta o app como o main/api.ts, com o logger do mesmo formato (nível em texto e correlationId
 // pelo AsyncLocalStorage) escrevendo em memória e os spans no exportador em memória.
-export async function startCheckoutHarness(database: TestDatabase, poolSize: number = APP_POOL_SIZE): Promise<CheckoutHarness> {
+export async function startCheckoutHarness(
+  database: TestDatabase,
+  poolSize: number = APP_POOL_SIZE,
+  limits: PoolLimits = {},
+): Promise<CheckoutHarness> {
   const logLines: Record<string, unknown>[] = [];
   const sink = new Writable({
     write(chunk: Buffer, _encoding, callback) {
@@ -69,7 +92,7 @@ export async function startCheckoutHarness(database: TestDatabase, poolSize: num
   );
   const exporter = new InMemorySpanExporter();
   const telemetry = createTelemetry({ spanExporter: exporter });
-  const pool = createAppPool(database.uri, poolSize);
+  const pool = createAppPool(database.uri, poolSize, limits);
   const app = createApp({ pool, logger, telemetry });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
