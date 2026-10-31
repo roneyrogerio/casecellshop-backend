@@ -1,3 +1,4 @@
+import { readdir } from 'node:fs/promises';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate, MIGRATION_FOLDERS } from '../../../src/db/migrate.ts';
@@ -24,6 +25,17 @@ beforeAll(async () => {
 afterAll(async () => {
   await container?.stop();
 });
+
+// Nomes das migrações de uma pasta, sem a extensão, em ordem; é o que a kysely_migration deve listar.
+async function migrationNamesInFolder(schema: string): Promise<string[]> {
+  const folder = MIGRATION_FOLDERS.find((candidate) => candidate.schema === schema);
+  if (!folder) throw new Error(`a pasta do schema ${schema} não está em MIGRATION_FOLDERS`);
+  const files = await readdir(folder.dir);
+  return files
+    .filter((file) => file.endsWith('.ts'))
+    .map((file) => file.slice(0, -'.ts'.length))
+    .sort();
+}
 
 async function sqlState(promise: Promise<unknown>): Promise<string | undefined> {
   try {
@@ -201,9 +213,14 @@ describe('FND-11 a migração erp_sim em TypeScript cria o mesmo esquema da .sql
   });
 
   it('FND-11 o histórico fica na kysely_migration do erp_sim, e a pgmigrations do node-pg-migrate não existe', async () => {
-    expect(await appliedMigrations(pool, 'erp_sim')).toEqual(['20260101000000_create_erp_sim']);
-    // A pasta da loja ainda não tem migração, mas já tem a sua tabela de controle no schema público.
-    expect(await appliedMigrations(pool, 'public')).toEqual([]);
+    // Cada schema guarda só as migrações da sua própria pasta, lidas do disco: o histórico do
+    // `public` não traz as do erp_sim, e o do erp_sim não traz as da loja.
+    const storeNames = await migrationNamesInFolder('public');
+    const erpSimNames = await migrationNamesInFolder('erp_sim');
+    expect(erpSimNames).toContain('20260101000000_create_erp_sim');
+    expect(await appliedMigrations(pool, 'erp_sim')).toEqual(erpSimNames);
+    expect(await appliedMigrations(pool, 'public')).toEqual(storeNames);
+    for (const name of erpSimNames) expect(storeNames).not.toContain(name);
     expect(await tableExists(pool, 'erp_sim.pgmigrations')).toBe(false);
     expect(await tableExists(pool, 'public.pgmigrations')).toBe(false);
   });
