@@ -61,6 +61,7 @@ async function collectServiceLogs(): Promise<string> {
 }
 
 // O catálogo da loja vem da sincronização (M4): o teste grava o SKU direto no PostgreSQL do contêiner.
+// Essa semeadura por psql existe só até a sincronização do M4; então o teste passa a esperar a primeira rodada dela.
 async function psql(sql: string): Promise<string> {
   const result = await environment
     .getContainer('postgres-1')

@@ -218,7 +218,7 @@ export function createErpWorld(erpPool: pg.Pool, options: { withoutH1b?: boolean
   const clock = createManualClock();
   const sim = createSimulatedErp(options.withoutH1b === undefined ? { pool: erpPool, clock } : { pool: erpPool, clock, withoutH1b: options.withoutH1b });
   const transport = instrumentTransport(sim.transport);
-  // Com a telemetria, a camada anticorrupção produz as métricas e os spans do ERP (OBS-02, M3).
+  // Com a telemetria, a camada anticorrupção produz as métricas do ERP (OBS-02, M3); os spans da tentativa são do worker, não dela.
   const erp = createErpClient({ transport, clock, timeoutMs: ERP_TIMEOUT_MS, ...(options.telemetry ? { telemetry: options.telemetry } : {}) });
   return { clock, sim, transport, erp };
 }

@@ -254,6 +254,22 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     expect(rig.world.transport.sends).toHaveLength(0);
   });
 
+  it('OBS-02 o pedido que mudou de estado fora do fluxo entre a chamada e a conclusão não soma invoiced nem registra amostra no aceite ao faturamento', async () => {
+    const rig = createRig();
+    const order = await acceptOrder(suite);
+    rig.world.transport.afterErp({ op: 'createOrder', reference: order.orderId }, async () => {
+      await suite.pool.query("update orders set status = 'failed', failure_reason = 'cancelled', outcome_at = now() where id = $1", [order.orderId]);
+    });
+
+    await rig.run();
+
+    const families = await rig.scrape();
+    expect(attemptOutcome(families, 'invoiced') ?? 0).toBe(0);
+    expect(valueOf(families, 'order_accept_to_invoice_seconds', {}, 'order_accept_to_invoice_seconds_count') ?? 0).toBe(0);
+    // O ERP chegou a faturar, mas a loja não conta o pedido que já tinha outro desfecho.
+    expect(erpRequests(families, 'create_order', 'ok')).toBe(1);
+  });
+
   it('OBS-02 uma conclusão sem linha afetada (token trocado durante a chamada) soma 1 em outbox_conclusion_no_row_total', async () => {
     const rig = createRig();
     const order: AcceptedOrder = await acceptOrder(suite);

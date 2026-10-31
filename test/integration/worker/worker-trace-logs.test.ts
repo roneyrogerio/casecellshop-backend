@@ -10,6 +10,7 @@ import {
   buildWorker,
   cancelLeftoverMessages,
   createErpWorld,
+  expectInvoiced,
   makeClaimable,
   readOutbox,
   startWorkerSuite,
@@ -130,6 +131,8 @@ interface Scenario {
   level: 'info' | 'warn' | 'error';
   extra: Record<string, unknown>;
   config?: Partial<WorkerConfig>;
+  // Evento que não pode sair no cenário (a mensagem que vai para `dead` não volta à fila).
+  absent?: string;
   script: (world: ErpWorld, orderId: string) => void;
 }
 
@@ -162,6 +165,7 @@ const SCENARIOS: Scenario[] = [
     level: 'error',
     extra: {},
     config: { maxAttempts: 1 },
+    absent: 'outbox.retry',
     script: (world, orderId) => world.sim.script.enqueue({ mode: 'unavailable' }, { op: 'createOrder', reference: orderId }),
   },
 ];
@@ -169,7 +173,7 @@ const SCENARIOS: Scenario[] = [
 describe('OBS-01 logs do worker', () => {
   it.each(SCENARIOS)(
     'OBS-01 $name: o log $event ($level) traz os campos obrigatórios, orderId, attempt e o correlationId da outbox, e nenhum log leva o corpo',
-    async ({ event, level, extra, config, script }) => {
+    async ({ event, level, extra, config, absent, script }) => {
       const logs = captureLogs();
       const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
       const recorded = await recordedContext(order.orderId);
@@ -185,9 +189,47 @@ describe('OBS-01 logs do worker', () => {
       expect(wanted, `evento ${event} entre ${JSON.stringify(lines.map((line) => line['event']))}`).toHaveLength(1);
       expect(wanted[0]?.['level']).toBe(level);
       expect(wanted[0]).toMatchObject(extra);
+      expect(lines.filter((line) => line['event'] === (absent ?? 'nenhum.evento'))).toEqual([]);
       for (const line of lines) expectAttemptLine(line, order, recorded, 1);
     },
   );
+
+  // Os dois eventos que a reivindicação decide, sem chamar o ERP, também levam o contexto da outbox.
+  it('OBS-01 outbox.closed (pedido que já não estava pending) traz os campos obrigatórios, orderId, attempt e o correlationId do checkout', async () => {
+    const logs = captureLogs();
+    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const recorded = await recordedContext(order.orderId);
+    await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    const world = createErpWorld(suite.database.erpPool);
+
+    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger }).pollOnce();
+
+    const lines = logs.eventsOf('outbox.closed', order.orderId);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.['level']).toBe('info');
+    expectAttemptLine(lines[0] ?? {}, order, recorded, (await readOutbox(suite.pool, order.orderId)).attempts);
+    expect(world.transport.sends).toHaveLength(0);
+  });
+
+  it('OBS-01 outbox.dead do limite já gasto traz os campos obrigatórios, orderId, attempt e o correlationId do checkout', async () => {
+    const maxAttempts = 3;
+    const logs = captureLogs();
+    const order = await acceptOrder(suite, { requestId: `obs01-${randomUUID()}` });
+    const recorded = await recordedContext(order.orderId);
+    await suite.pool.query('update outbox set attempts = $2 where order_id = $1', [order.orderId, maxAttempts]);
+    await makeClaimable(suite.pool, order.orderId);
+    const world = createErpWorld(suite.database.erpPool);
+
+    await buildWorker(world, { pool: suite.pool, telemetry: suite.checkout.telemetry, logger: logs.logger, config: { maxAttempts } }).pollOnce();
+
+    const row = await readOutbox(suite.pool, order.orderId);
+    expect(row.status).toBe('dead');
+    const lines = logs.eventsOf('outbox.dead', order.orderId);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.['level']).toBe('error');
+    expectAttemptLine(lines[0] ?? {}, order, recorded, row.attempts);
+    expect(world.transport.sends).toHaveLength(0);
+  });
 
   it('OBS-01 o retry por erro de configuração traz o outcome config_error, e o attempt acompanha a segunda tentativa', async () => {
     const logs = captureLogs();
@@ -251,7 +293,8 @@ function poolAbortingGuard(pool: pg.Pool, control: AbortSwitch): pg.Pool {
           raw.query = (...args: unknown[]) => {
             const first = args[0];
             const text = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
-            if (control.armed && /^\s*select\s+1\b/i.test(text)) {
+            // O alias "guard" é o da consulta do invólucro; outro `select 1` não é a guarda.
+            if (control.armed && /^\s*select\s+1\s+as\s+"guard"\s*$/i.test(text)) {
               control.armed = false;
               control.fired += 1;
               return Promise.reject(Object.assign(new Error('current transaction is aborted, commands ignored until end of transaction block'), { code: '25P02' }));
@@ -283,10 +326,10 @@ describe('OBS-01 db.transaction_aborted também sai do worker', () => {
 
     expect(control.fired, 'a guarda da conclusão foi falhada uma vez').toBe(1);
     const aborted = logs.eventsOf('db.transaction_aborted', order.orderId);
-    expect(aborted.length).toBeGreaterThanOrEqual(1);
+    expect(aborted).toHaveLength(1);
     expect(aborted[0]).toMatchObject({ level: 'error', orderId: order.orderId, attempt: 1, correlationId: recorded.correlationId });
-    // A conclusão abortada não grava nada, e o ERP já tem a fatura: nada se perde nem se duplica.
+    // A conclusão abortada não grava nada; a repetida fecha a mensagem, fatura o pedido e baixa o estoque uma vez só.
     expect(await countInvoices(suite.database.pool, order.orderId)).toBe(1);
-    expect((await readOutbox(suite.pool, order.orderId)).status).not.toBe('dead');
+    await expectInvoiced(suite.pool, order);
   });
 });
