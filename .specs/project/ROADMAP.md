@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M3 — Processamento assíncrono (parte 1, o worker com a fila na tabela da outbox, no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, a seguir)
+**Marco atual:** M3 — Processamento assíncrono (parte 1 no PR #13; parte 2, o SQS como fila, a reconciliação e o runbook, no PR #15, pronta para a aprovação); a seguir, o M4
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
