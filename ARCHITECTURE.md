@@ -241,7 +241,7 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
   - se o ERP também recusa a segunda criação com a mesma referência (H1b), a duplicação fica impossível mesmo além da H4 **[M3, `ORD-06`]**.
 - **Worker atrasado:** toda conclusão exige o token da reivindicação (`WHERE claim_token = :t`), e o pedido muda de estado por compare-and-set. Um worker que perdeu o lease não sobrescreve o desfecho de outro, e o estoque baixa uma vez só **[M3, `ORD-16`, `ORD-17`]**.
 
-**Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b, e o README o declara.
+**Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b **[M3]**, e o README o declara entre as limitações **[M6]**.
 
 ### Retry, DLQ, OpenAPI e testes
 
