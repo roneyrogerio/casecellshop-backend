@@ -16,7 +16,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
 
 ## Fundação
 
-- **FND-01** `docker compose up` sobe tudo, com as migrações aplicadas antes da API e do worker.
+- **FND-01** `docker compose up` sobe tudo, com as migrações aplicadas antes da API e do worker. Do M3 em diante, sobe também o ElasticMQ com a fila do faturamento e a DLQ já criadas, com a *redrive policy* do design, antes do worker, e uma mensagem na fila continua lá depois de o emulador reiniciar.
 - **FND-02** `npm test` passa local e no CI. O CI verde nas duas versões do Node prova o critério em todo PR; a execução local é registrada uma vez, no PR do M1. Não tem teste próprio.
 - **FND-03** Uma requisição fora do contrato recebe `400` em `application/problem+json`, com o `correlationId` no corpo e no `X-Request-Id`.
 - **FND-04** Uma fatura criada no ERP simulado continua lá depois de o worker reiniciar.
@@ -117,7 +117,7 @@ Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de 
 Com falhas injetadas pelo ERP simulado, contando **faturas no ERP**:
 
 - **ORD-01** Mensagem entregue duas vezes, sem a H1b: uma fatura.
-- **ORD-02** Worker que morre (lease abandonado) no meio da chamada, sem a H1b: uma fatura, e a nova reivindicação só acontece depois do atraso mínimo.
+- **ORD-02** Worker que morre no meio da chamada (mensagem abandonada, que volta a ficar visível no SQS), sem a H1b: uma fatura, e a nova chamada ao ERP só acontece depois do atraso mínimo, contado do início da chamada abandonada.
 - **ORD-03** ERP que fatura e não responde, com e sem a H1b: uma fatura nos dois casos.
 - **ORD-04** ERP que fatura depois do timeout, dentro do limite da H4, sem a H1b: uma fatura.
 - **ORD-05** ERP que devolve `502` na hora e fatura em seguida, sem a H1b: uma fatura.
@@ -126,17 +126,18 @@ Com falhas injetadas pelo ERP simulado, contando **faturas no ERP**:
 - **ORD-08** Rejeição permanente, e rejeição por falta de estoque no ERP (H2), liberam a reserva.
 - **ORD-09** Na consulta, um `404` de pedido inexistente leva à criação; um `404` sem o corpo esperado é erro de configuração e não cria.
 - **ORD-10** Um `400` ou um `401` do ERP não falha o pedido: é transitório e conta no alerta de configuração.
-- **ORD-11** Um worker com o lease prestes a vencer não chama o ERP.
-- **ORD-12** Uma mensagem que derruba o processo chega à DLQ sozinha, e as outras do mesmo lote são faturadas.
-- **ORD-13** Uma mensagem vai para a DLQ depois do limite de tentativas, com a reserva mantida e o pedido `pending`.
-- **ORD-14** ERP fora por mais que a janela de retry: os pedidos ficam na DLQ com a reserva; quando o ERP volta, a reconciliação fatura os que ele já tem.
-- **ORD-15** O cancelamento pelo runbook encerra a mensagem, e um reprocessamento depois não cria fatura.
-- **ORD-16** Uma falha do banco ao gravar o desfecho não manda a mensagem para a DLQ.
+- **ORD-11** Um worker cuja visibilidade da mensagem está prestes a vencer não chama o ERP; duas mensagens do mesmo pedido recebidas juntas (o relay publica pelo menos uma vez) não chamam o ERP ao mesmo tempo.
+- **ORD-12** Uma mensagem que derruba o processo chega à DLQ do SQS sozinha, e as outras do mesmo lote são faturadas; uma mensagem com corpo fora do schema não chama o ERP e também chega à DLQ.
+- **ORD-13** Uma mensagem vai para a DLQ do SQS depois do limite de recebimentos, com a reserva mantida e o pedido `pending`.
+- **ORD-14** ERP fora por mais que a janela de retry: os pedidos ficam na DLQ com a reserva; quando o ERP volta, a reconciliação fatura os que ele já tem e tira a mensagem da DLQ, e deixa na DLQ os que ele não tem.
+- **ORD-15** O cancelamento pelo runbook marca o pedido como `failed` (`cancelled`) e libera a reserva só se ele ainda está `pending`; a mensagem que estava na DLQ, devolvida à fila por um *redrive* depois, é apagada sem chamar o ERP e não cria fatura.
+- **ORD-16** Uma falha do banco ao gravar o desfecho não manda a mensagem para a DLQ nem a apaga: o worker repete a gravação no máximo 5 vezes por tentativa, enquanto a visibilidade vale, e depois a deixa voltar à fila.
 - **ORD-17** Duas conclusões simultâneas do mesmo pedido baixam o estoque uma vez só.
 - **ORD-18** O span da tentativa é filho do span do checkout.
-- **ORD-19** Depois de o worker faturar o pedido, `GET /orders/{orderId}/status` devolve `invoiced`; depois de uma rejeição permanente, `failed` com o motivo; com a mensagem na DLQ, `pending`; sempre validado pelo schema do contrato. No sistema subido pelo `docker compose`, um checkout chega a `invoiced` pelo worker, com uma fatura no ERP simulado, o estoque baixado e a mensagem encerrada.
-- **ORD-20** O worker nunca tem mais chamadas simultâneas ao ERP que o limite configurado, e uma mensagem só é reivindicada depois de a tentativa ter a permissão do semáforo, para o lease não correr enquanto ela espera a vez; uma chamada lenta não impede o worker de reivindicar outra mensagem quando há permissão livre.
+- **ORD-19** Depois de o worker faturar o pedido, `GET /orders/{orderId}/status` devolve `invoiced`; depois de uma rejeição permanente, `failed` com o motivo; com a mensagem na DLQ, `pending`; sempre validado pelo schema do contrato. No sistema subido pelo `docker compose`, um checkout chega a `invoiced` pelo relay, pelo SQS e pelo worker, com uma fatura no ERP simulado, o estoque baixado e a fila e a DLQ vazias.
+- **ORD-20** O worker nunca tem mais chamadas simultâneas ao ERP que o limite configurado, e uma mensagem só é recebida do SQS depois de a tentativa ter a permissão do semáforo, para a visibilidade não correr enquanto ela espera a vez; uma chamada lenta não impede o worker de receber outra mensagem quando há permissão livre.
 - **ORD-21** A camada anticorrupção e o ERP simulado cumprem o contrato do design: cada resposta é classificada pela tabela, por operação; o timeout corre no relógio injetável e aborta a chamada; nenhuma chamada é repetida dentro da camada; o simulado implementa H1a, H1b, H2 e H3, o modo sem a H1b e cada comportamento do roteiro, uma chamada por comportamento; um atraso do simulado não ocupa conexão do banco.
+- **ORD-22** O *Message Relay* publica no SQS cada linha da outbox ainda não publicada, só depois do commit do checkout, e a marca como publicada; uma falha entre publicar e marcar publica a mesma linha de novo, e a mensagem repetida não gera segunda fatura; dois relays ao mesmo tempo não publicam a mesma linha na mesma rodada; a mensagem leva o `traceparent` do checkout.
 
 ## Vitrine e sincronização
 
@@ -158,8 +159,8 @@ Com relógio controlado:
 
 ## Observabilidade
 
-- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs. No M2, os logs do checkout e do status do pedido levam o `orderId`. No M3, os logs do worker, inclusive os que a reivindicação decide (`outbox.closed` e o `outbox.dead` do limite já gasto), levam o `orderId`, a tentativa (`attempt`), o desfecho (pelo nome do evento e, no `outbox.retry`, pelo campo `outcome`) e o `correlationId` gravado na outbox, com os eventos do design, e o `db.transaction_aborted` também sai do worker.
-- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado. No M2, o counter de desfecho do checkout, com o label `outcome` da lista fechada do design e sem `orderId` nem `sku`. No M3, o `/metrics` do worker expõe as métricas de fila e de ERP que o worker produz, com os nomes e labels do design: desfecho da tentativa, conclusões sem linha afetada, aceite ao faturamento, duração, desfecho e chamadas em andamento ao ERP, erros de configuração e rejeições por falta de estoque.
+- **OBS-01** Todo log traz os campos obrigatórios do design e, quando existem, o `orderId` e o `sku`, para seguir um pedido, um produto ou uma requisição pelos logs. No M2, os logs do checkout e do status do pedido levam o `orderId`. No M3, os logs do worker, inclusive o `outbox.closed` de uma mensagem cujo pedido já tinha desfecho, levam o `orderId`, a tentativa (`attempt`, o número de recebimentos da mensagem no SQS), o desfecho (pelo nome do evento e, no `outbox.retry`, pelo campo `outcome`) e o `correlationId` levado na mensagem, com os eventos do design, e o `db.transaction_aborted` também sai do worker; o `outbox.dead` sai da reconciliação, uma vez por chegada da mensagem à DLQ, com o `orderId` e o `correlationId`.
+- **OBS-02** `/metrics` expõe as métricas de cada área do design, com o tipo indicado. No M2, o counter de desfecho do checkout, com o label `outcome` da lista fechada do design e sem `orderId` nem `sku`. No M3, o `/metrics` do worker expõe as métricas de fila e de ERP que o worker produz, com os nomes e labels do design: desfecho da tentativa (o `dead` contado pela reconciliação), conclusões sem efeito, mensagens publicadas pelo relay, aceite ao faturamento, duração, desfecho e chamadas em andamento ao ERP, erros de configuração e rejeições por falta de estoque.
 - **OBS-03** Um teste confere, na saída de `/metrics`, cada métrica usada nos alertas e no dashboard do README.
 - **OBS-04** Um pedido sem desfecho em 60 s é contado uma vez, mesmo com várias réplicas da API.
 - **OBS-05** Um `orderId` leva aos logs e a um trace da requisição ao ERP.

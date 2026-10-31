@@ -238,7 +238,8 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
 `DOC-MSG-02`.
 
 - **Pedido fantasma e mensagem fantasma:** não existem, pela transação única acima. Um pedido aceito sempre tem a mensagem, e a mensagem sempre tem o pedido (a chave estrangeira `outbox.order_id`) **[implementado: `migrations/store/20260102000000_create_store.ts`]**.
-- **Mensagem perdida no worker:** a mensagem recebida do SQS fica invisível pelo *visibility timeout* e só é apagada depois de gravado o desfecho. Se o worker morre no meio, ela volta a ficar visível e outro worker a retoma, depois do atraso mínimo; na primeira parte, o mesmo papel é do lease e do token gravados na outbox **[M3, `ORD-02`]**.
+- **Mensagem perdida no worker:** a mensagem recebida do SQS fica invisível por 60 s e só é apagada depois de gravado o desfecho no banco. Se o worker morre no meio, ela volta a ficar visível e outro worker a retoma, depois do atraso mínimo **[M3, `ORD-02`]**. Localmente, o ElasticMQ guarda as mensagens num volume, para um reinício do emulador não perder o que a outbox já marcou como publicado **[M3, `FND-01`]**.
+- **Mensagem repetida:** o relay publica pelo menos uma vez, então o mesmo pedido pode ter duas mensagens. Antes de chamar o ERP, cada tentativa toma no banco a permissão de chamada do pedido: um `UPDATE` que só acontece se a última chamada começou há mais de 45 s. Só uma das duas ganha; a outra volta à fila pelo tempo que falta (AD-024) **[M3, `ORD-01`, `ORD-11`, `ORD-22`]**.
 - **Fatura duplicada,** o risco que sobra numa entrega "pelo menos uma vez":
   - o pedido vai ao ERP com o `orderId` da loja como referência;
   - `first_sent_at` é gravado no banco antes da primeira chamada e nunca apagado. Daí em diante, toda tentativa consulta o ERP pela referência antes de criar (H1a), inclusive depois de um reprocessamento, que zera as tentativas (L-005) **[M3, `ORD-01`, `ORD-07`]**;
@@ -272,16 +273,16 @@ A outbox e a fila têm papéis diferentes, e o desenho é o que o guia de padrõ
 | *Transactional Outbox* | garante que a mensagem nasce junto com o pedido, na mesma transação | tabela `outbox` no PostgreSQL **[implementado: `src/checkout/repository.ts`, `CHK-12`]** |
 | *Message Relay* (*Polling Publisher*) | lê a outbox depois do commit e publica na fila; pode publicar duas vezes, nunca perde | processo que lê com `SKIP LOCKED` e publica em lote **[M3]** |
 | Fila (SQS) | distribui o trabalho, esconde a mensagem em processamento, repete e manda para a DLQ | SQS, com o ElasticMQ no compose e nos testes **[M3]** |
-| *Idempotent Consumer* | tolera a mensagem repetida | o worker consulta o ERP pela referência antes de criar, e o pedido muda por compare-and-set **[M3, `ORD-01` a `ORD-06`]** |
+| *Idempotent Consumer* | tolera a mensagem repetida | a permissão de chamada por pedido no banco (AD-024), a consulta ao ERP pela referência antes de criar e o pedido mudando por compare-and-set **[M3, `ORD-01` a `ORD-06`]** |
 
-O SQS não guarda o que o worker decide por pedido, então isso fica no banco, na linha do pedido: o `first_sent_at`, o início da última chamada (para o atraso mínimo da H4) e o resultado da consulta ao ERP. A primeira parte do M3 guardou tudo na própria outbox, que também fazia o papel de fila; a correspondência entre as duas versões:
+O SQS não guarda o que o worker decide por pedido, então isso fica no banco, na linha da outbox do pedido: o `first_sent_at`, o início da última chamada (para o atraso mínimo da H4 e a permissão de chamada) e o resultado da consulta ao ERP. A primeira parte do M3 guardou tudo na própria outbox, que também fazia o papel de fila; a correspondência entre as duas versões:
 
-| Primeira parte (tabela como fila, AD-003) | Segunda parte (SQS, AD-021) |
+| Primeira parte (tabela como fila, AD-003) | Segunda parte (SQS, AD-021, AD-024) |
 | --- | --- |
-| lease (`lease_until`) | *visibility timeout* |
-| token da reivindicação (`claim_token`) | *receipt handle* |
+| lease (`lease_until`) | *visibility timeout* de 60 s |
+| token da reivindicação (`claim_token`) | *receipt handle*, e a permissão de chamada por pedido no banco |
 | 12 tentativas contadas na reivindicação | `maxReceiveCount = 12` na *redrive policy* |
-| status `dead` | DLQ, com retenção maior que a da fila de origem |
+| status `dead` | DLQ, com retenção de 14 dias |
 | reprocessamento em lote por SQL | *redrive* (`StartMessageMoveTask`) |
 
 **Na AWS:** o banco vai para o RDS, o relay roda como serviço ou tarefa, e o endereço do SQS passa a ser o real, sem mudar código. Um segundo consumidor dos eventos de pedido (aviso ao cliente, analytics) não lê a fila do faturamento: o relay publica o evento num barramento do EventBridge ou num tópico do SNS, e cada consumidor tem a sua fila SQS e a sua DLQ. O SQS Standard entrega pelo menos uma vez e sem ordem garantida, então cada consumidor é idempotente; a fila FIFO só entraria se a ordem por pedido importasse, e a deduplicação dela cobre só 5 minutos **[alvo]**.
@@ -304,7 +305,7 @@ O SQS não guarda o que o worker decide por pedido, então isso fica no banco, n
   - Never call the ERP inside a database transaction.
   - Lock order between existing rows: outbox message, order, stock by SKU, one `UPDATE` per row.
   - Order transitions by compare-and-set; stock changes only if the transition affected a row.
-  - Every outbox transition is conditioned on the claim token.
+  - The billing queue is SQS (ElasticMQ locally): every queue transition uses the message's receipt handle, and every send or reconciliation attempt takes the per-order call permit before its first ERP call and renews it before the next (compare-and-set on `outbox.last_call_at`, AD-024).
   - Deadlines stored in the database use the database clock; process timers use the injectable clock.
   ```
 

@@ -65,10 +65,28 @@ services:
       OTEL_TRACES_EXPORTER: otlp
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       OTEL_SERVICE_NAME: casecellshop-worker
+      # Credenciais fixas e sem segredo: o SDK exige alguma, o ElasticMQ as ignora.
+      SQS_ENDPOINT: http://elasticmq:9324
+      AWS_REGION: elasticmq
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      BILLING_QUEUE_URL: http://elasticmq:9324/000000000000/billing
+      BILLING_DLQ_URL: http://elasticmq:9324/000000000000/billing-dlq
     depends_on:
       migrate:
         condition: service_completed_successfully
+      elasticmq:
+        condition: service_started
     stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Emulador do SQS (AD-021). As filas vêm do elasticmq.conf; mensagens e filas ficam no volume,
+  # para sobreviver ao reinício. A porta 9324 fica só na rede do compose.
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+      - elasticmq-data:/data
     restart: unless-stopped
 
   # All-in-one em memória, sem arquivo de configuração: os traces somem ao derrubar o serviço.
@@ -82,3 +100,4 @@ services:
 
 volumes:
   pgdata:
+  elasticmq-data:

@@ -5,6 +5,12 @@ export function requireEnv(name: string): string {
   return value;
 }
 
+// Variável opcional: vazia conta como ausente (o SQS_ENDPOINT fica vazio na AWS real).
+export function optionalEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return value ? value : undefined;
+}
+
 export function envPort(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;

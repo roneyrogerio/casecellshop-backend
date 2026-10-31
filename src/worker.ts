@@ -9,7 +9,8 @@ import { logContext } from './logging.ts';
 import type { ErpClient } from './erp/erp-client.ts';
 import { type ClaimedMessage, type ClaimSettled, claimMessages, intervalOf } from './outbox/claim.ts';
 import { type Conclusion, concludeMessage, holdsLease } from './outbox/conclude.ts';
-import { createSemaphore } from './outbox/semaphore.ts';
+import { createSemaphore, type Semaphore } from './outbox/semaphore.ts';
+import type { Queue } from './queue/sqs.ts';
 import type { Telemetry } from './telemetry.ts';
 
 // Parâmetros da tabela do design.md; os testes sobrepõem só o que precisam.
@@ -25,6 +26,10 @@ export interface WorkerConfig {
   backoffCapMs: number;
   pollIntervalMs: number;
   erpConcurrency: number;
+  // Fila no SQS (AD-021, AD-024); a Fatia 2 do PR 2 do M3 tira os campos da fila
+  // na tabela (lease, tentativas e polling).
+  visibilitySeconds: number;
+  receiveWaitSeconds: number;
 }
 
 export const DEFAULT_WORKER_CONFIG: WorkerConfig = {
@@ -37,10 +42,15 @@ export const DEFAULT_WORKER_CONFIG: WorkerConfig = {
   backoffCapMs: 300_000,
   pollIntervalMs: 500,
   erpConcurrency: 30,
+  visibilitySeconds: 60,
+  receiveWaitSeconds: 1,
 };
 
 export interface WorkerDependencies {
   pool: Pool;
+  // Opcionais só até a Fatia 2, que troca a fila na tabela pelo SQS.
+  queue?: Queue;
+  semaphore?: Semaphore;
   // Porta do ERP (camada anticorrupção).
   erp: ErpClient;
   logger: Logger;

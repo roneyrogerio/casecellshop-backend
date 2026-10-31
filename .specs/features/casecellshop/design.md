@@ -12,12 +12,15 @@ graph LR
   API --> Cache[Cache em processo]
   Cache --> DB[(PostgreSQL da loja)]
   API --> DB
-  W[Worker] --> DB
+  R[Relay] --> DB
+  R --> SQS[(SQS: fila e DLQ)]
+  W[Worker] --> SQS
+  W --> DB
   W --> ACL[ErpClient]
   ACL --> ERP[ERP simulado / schema erp_sim]
 ```
 
-O compose roda o PostgreSQL, um serviço de migração, a API e um worker. O worker faz o envio ao ERP, a reconciliação e a sincronização, e o ERP simulado roda no processo dele.
+O compose roda o PostgreSQL, um serviço de migração, o ElasticMQ (o SQS local), a API e um worker. O processo do worker roda o relay, o envio ao ERP, a reconciliação e a sincronização, e o ERP simulado roda no processo dele.
 
 ## Dados
 
@@ -25,7 +28,7 @@ O compose roda o PostgreSQL, um serviço de migração, a API e um worker. O wor
 - `inventory`: `on_hand`, `reserved`, `sold_total` e `synced_at`, com `reserved >= 0`, `on_hand >= 0` e quantidade positiva garantidos pelo banco.
 - `orders` e `order_items`: status (`pending`, `invoiced` ou `failed`), motivo, preço de cada item, `accepted_at`, `outcome_at` e a marca do SLI de 60 s.
 - `idempotency_keys`: a chave (índice único), o hash do payload, o pedido e a data.
-- `outbox`: status (`pending`, `dead`, `done` ou `cancelled`), tentativas, `lease_until`, `claim_token`, `first_sent_at`, `last_call_at`, `next_attempt_at`, `reconciled_at`, `traceparent` e `correlationId`.
+- `outbox` (caixa de saída e estado por pedido que o SQS não guarda, AD-021, AD-024): `published_at` (índice parcial das não publicadas), `first_sent_at`, `last_call_at`, `call_token`, `dead_at`, `traceparent` e `correlationId`.
 - `sync_state`: `last_completed_at`.
 - Schema `erp_sim`: produtos, preço, estoque e faturas do ERP simulado, acessado só pelo módulo do fake. Tem tipos gerados próprios, que só o módulo do fake e os testes importam.
 
@@ -118,53 +121,72 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Antes da primeira sincronização completa,** `503`.
 - **`Cache-Control: no-store`** em toda resposta: sem o cabeçalho, um cache intermediário pode aplicar frescor heurístico (RFC 9111 §4.2.2).
 
-## Worker: envio (AD-003)
+## Fila no SQS (AD-021, AD-024)
 
-Esta seção descreve a primeira parte do M3, com a fila na própria tabela da outbox. A AD-021 troca a fila pelo SQS na segunda parte: o Passo 0 dela reescreve a reivindicação, o lease, o retry, a DLQ e o reprocessamento em termos de SQS, e mantém a tentativa, a conclusão e os parâmetros.
+- **Filas:** `billing` (Standard), com *visibility timeout* de 60 s e *redrive policy* para `billing-dlq` com `maxReceiveCount` 12; `billing-dlq` com retenção de 14 dias (o máximo do SQS). Na AWS, a retenção de uma mensagem na DLQ conta da entrada dela na fila de origem, então a DLQ precisa da retenção máxima.
+- **Mensagem:** corpo JSON `{ orderId, correlationId }`, com o schema em `src/contract/billing-message.ts`, e o `traceparent` do checkout no atributo de mensagem `traceparent` (texto). Só caracteres ASCII: o ElasticMQ com persistência perde acentos ao recarregar do disco, e o schema já barra (o `correlationId` do contrato é ASCII imprimível).
+- **Porta (`src/queue/sqs.ts`):** `createSqsClient({ endpoint?, region })` e `createQueue(client, queueUrl)`, que devolve `send` (lote de até 10, devolve os ids que falharam), `receive({ max, waitSeconds, visibilitySeconds? })` (com `ApproximateReceiveCount` e o atributo `traceparent`), `delete` e `changeVisibility` (ambos devolvem `ok` ou `stale`, este quando o SQS recusa o *receipt handle* por `ReceiptHandleIsInvalid`: a mensagem foi recebida de novo por outro) e `approximateCount()`; e `startRedrive(client, dlqUrl)` (`StartMessageMoveTask` da DLQ para a fila de origem). Nenhum retry dentro da porta: o SDK roda com `maxAttempts` 1 e timeout de requisição de 5 s, e quem chama decide.
+- **Configuração:** `SQS_ENDPOINT` (vazio na AWS real), `AWS_REGION`, `BILLING_QUEUE_URL` e `BILLING_DLQ_URL`. As credenciais vêm da cadeia padrão do SDK; no compose, valores fixos sem segredo, que o ElasticMQ ignora.
+- **ElasticMQ:** `softwaremill/elasticmq-native` 1.7.1, com o `elasticmq.conf` do repositório criando as duas filas e com as mensagens persistidas num volume (`messages-storage`), porque o padrão em memória perderia, num reinício do emulador, mensagens que a outbox já marcou como publicadas. O `ListMessageMoveTasks` derruba a imagem nativa 1.7.1 (erro de reflexão), então nada no projeto o chama: o runbook acompanha o *redrive* pelo número de mensagens da DLQ. O ElasticMQ não implementa retenção: aceita o `MessageRetentionPeriod` e o ignora, e as mensagens não expiram; a retenção de 14 dias da DLQ é configuração da fila na AWS. Com a persistência ligada, as filas gravadas no volume prevalecem sobre o `elasticmq.conf`: uma mudança no arquivo só vale num volume novo (`docker compose down -v`).
 
-- **Limite:** um semáforo no processo, em ordem de chegada, para todas as chamadas ao ERP (envio, sincronização e reconciliação). A permissão devolvida vai direto ao primeiro da fila, para quem chega depois não passar à frente.
-- **Reivindicação:**
-  - o worker adquire primeiro as permissões e só reivindica tantas mensagens quantas permissões tem; cada tentativa segura a sua até a conclusão, para a consulta e a criação não esperarem na fila no meio da tentativa e o lease não correr enquanto a mensagem espera a vez;
-  - numa transação curta, com `FOR UPDATE SKIP LOCKED`, grava e faz commit, antes de qualquer chamada: lease, token novo, mais uma tentativa (contada aqui, para uma mensagem que derruba o processo também chegar à DLQ) e `first_sent_at`, se vazio (nunca apagado);
-  - uma mensagem só é reivindicada depois do atraso mínimo, contado de `last_call_at`. Vale para retry, lease vencido, reprocessamento e reconciliação;
-  - uma mensagem de lease vencido é reivindicada sozinha, e o erro de uma mensagem não interrompe as outras;
-  - uma mensagem cujo pedido já não está `pending` é encerrada sem chamar o ERP;
-  - uma mensagem que já gastou o limite de tentativas vai para `dead` na reivindicação, sem chamar o ERP: é o caminho da mensagem que derruba o processo, que nunca chega a gravar desfecho.
+## Message Relay (AD-021)
+
+- No processo do worker, um laço: numa transação curta, lê até 10 linhas da outbox com `published_at IS NULL`, em ordem de `created_at`, com `FOR UPDATE SKIP LOCKED`; publica o lote no SQS; marca `published_at = now()` nas que o SQS aceitou e faz commit. As recusadas ficam para a próxima rodada.
+- A chamada ao SQS fica dentro da transação, para outro relay não publicar as mesmas linhas. O `statement_timeout` não conta o tempo em que a transação espera o SQS, então quem limita esse tempo é o timeout de 5 s da porta, que aborta a requisição e faz a rodada rejeitar. Uma queda entre publicar e o commit publica de novo: a entrega é pelo menos uma vez, e o consumidor tolera (`ORD-01`, `ORD-22`).
+- Uma linha cujo corpo não passa no schema (só uma linha gravada fora da API) é logada (`outbox.invalid_row`, `error`, com o `orderId`) e fica fora do lote; as outras seguem.
+- Uma rodada que publicou um lote cheio roda de novo na hora; senão (outbox vazia, lote parcial, nada aceito pelo SQS ou erro), espera 500 ms pelo relógio injetável. Um erro é logado (`outbox.relay_error`) e não para o laço.
+- Métrica: `outbox_published_total` (counter, sem label).
+- **Interface (`src/outbox/relay.ts`):** `createRelay({ pool, queue, logger, telemetry, clock, config? })` devolve `start`, `stop` e `publishOnce()` (uma rodada; resolve com o número de linhas publicadas).
+
+## Worker: envio (AD-003, AD-021, AD-024)
+
+- **Limite:** um semáforo no processo, em ordem de chegada, para todas as chamadas ao ERP (envio, sincronização e reconciliação), criado no `src/main/worker.ts` e passado a quem chama o ERP. A permissão devolvida vai direto ao primeiro da fila, para quem chega depois não passar à frente.
+- **Recebimento:**
+  - o worker adquire primeiro as permissões livres e só recebe do SQS até `min(permissões, 10)` mensagens, com *long polling* de 1 s; devolve ao semáforo as que sobraram. Cada tentativa segura a sua permissão até a conclusão, para a consulta e a criação não esperarem na fila e a visibilidade não correr enquanto a mensagem espera a vez;
+  - o `ReceiveMessage` pede a visibilidade da configuração (60 s) em vez de herdar a da fila, e o prazo da mensagem é `recebida em + visibilidade`, no relógio injetável, medido antes da chamada;
+  - a tentativa é o `ApproximateReceiveCount`, que o SQS conta a cada recebimento: uma mensagem que derruba o processo também chega à DLQ, sozinha, sem segurar as outras do lote; o *redrive* zera a contagem (conferido no ElasticMQ);
+  - um corpo fora do schema é logado (`outbox.invalid_message`, `error`) e a mensagem fica sem resposta: volta e chega à DLQ pelo limite de recebimentos, sem chamar o ERP;
+  - uma mensagem cujo pedido já não está `pending` é apagada sem chamar o ERP (`outbox.closed`).
+- **Permissão de chamada (AD-024, `src/outbox/call-permit.ts`, usada também pela reconciliação):** antes da primeira chamada ao ERP da tentativa, num `UPDATE` só, pelo relógio do banco: `SET last_call_at = now(), call_token = :novo, first_sent_at = coalesce(first_sent_at, now()), dead_at = NULL` (o `dead_at` só na do worker) `WHERE order_id = :id AND (last_call_at IS NULL OR last_call_at + atraso mínimo <= now()) RETURNING` o `first_sent_at` anterior. Sem linha afetada, outra tentativa chamou o ERP há menos que o atraso mínimo: a mensagem volta com `ChangeMessageVisibility` pelo tempo que falta, mais 1 s (`outbox.call_deferred`, `info`). Como o atraso mínimo é maior que uma chamada, isso é a regra da H4 e também a exclusão mútua por pedido entre mensagens repetidas.
 - **Chamada:**
-  - fora da transação, com o preço aceito no checkout (H3);
-  - antes de cada chamada, grava `last_call_at` e confere o lease num `UPDATE` só, pelo relógio do banco (`WHERE claim_token = :t AND lease_until > now() + timeout + folga`): sem linha afetada, desiste, e a mensagem volta quando o lease vencer;
-  - com `first_sent_at` já preenchido, consulta pela referência antes de criar;
-  - o token protege o banco da loja, não o ERP; do lado do ERP, a proteção contra duas criações simultâneas é a H1b.
-- **Conclusão:** concluir, adiar, marcar como falho ou mandar para a DLQ só tem efeito com `WHERE claim_token = :t`, para um worker atrasado não sobrescrever o resultado de outro; a transição do pedido segue o compare-and-set; uma conclusão sem linha afetada é contada numa métrica; se gravar o desfecho falhar, o worker repete enquanto o lease vale, até 5 vezes por tentativa, para um erro rápido e persistente não virar um laço contra o banco; esgotadas as repetições, desiste, e a mensagem volta pela reivindicação quando o lease vencer.
-- **Desfechos:**
-  - transitório ou ambíguo: nova tentativa depois do atraso mínimo mais *full jitter* sobre um exponencial com teto; o jitter espalha os retries depois de uma falha que atingiu muitos pedidos de uma vez;
-  - permanente: pedido falho e reserva liberada;
-  - limite de tentativas: `dead` (a DLQ), com o pedido `pending`.
-- **Encerramento:** no `SIGTERM`, o worker para de reivindicar e espera a chamada em andamento; se o prazo estourar, o lease vence e o token protege o estado. O contêiner roda `node` direto, sem `npm`, para o sinal chegar ao processo.
-- **Interface (`src/worker.ts`):** `createWorker({ pool, erp, logger, telemetry, clock, random?, config? })` devolve `start`, `stop` e `pollOnce`.
-  - `pollOnce()` faz uma rodada: adquire as permissões livres do semáforo, reivindica até esse número de mensagens, roda as tentativas em paralelo e resolve, depois de todas terminarem, com o número de mensagens reivindicadas. Uma tentativa que lança um erro inesperado conta como ambígua e não interrompe as outras;
-  - `start()` não espera a rodada inteira: mantém as tentativas em andamento e reivindica de novo assim que uma permissão volta, para uma chamada lenta não segurar a vazão das outras; quando a reivindicação volta vazia, espera o intervalo de polling pelo relógio injetável. O `stop()` para de reivindicar e espera as tentativas em andamento; um `start()` depois do `stop()` volta a reivindicar, e um `start()` chamado enquanto o `stop()` espera aguarda o `stop()` terminar e então volta a reivindicar (um estado só: parado, rodando ou parando);
-  - `random` (padrão `Math.random`) sorteia o jitter, para o teste fixá-lo; `config` sobrepõe os parâmetros da tabela (lease, atraso mínimo, timeout, folga, tentativas, base e teto da espera, polling, limite de chamadas);
+  - fora de transação, com o preço aceito no checkout (H3);
+  - antes de cada chamada, inclusive a primeira, desiste sem responder ao SQS (`outbox.lease_short`), e a mensagem volta quando a visibilidade vencer, se o prazo da mensagem tem menos que timeout + 2 s pela frente, ou se a permissão de chamada (ou a última renovação dela) foi tomada há mais que atraso mínimo − timeout − 2 s (33 s), pelo relógio injetável: depois disso, outra tentativa do mesmo pedido já pode tomar a permissão, e um processo que parou entre tomar a permissão e chamar o ERP chamaria junto com ela;
+  - com `first_sent_at` anterior preenchido, consulta pela referência antes de criar; a criação que vem depois da consulta regrava `last_call_at = now()` com `WHERE call_token = :t` (o token, e não o horário, porque o `Date` do JS perde os microssegundos do `now()`); sem linha afetada, desiste como acima.
+- **Conclusão:** primeiro o banco, depois o SQS.
+  - faturado ou falho: numa transação, o pedido muda por compare-and-set (`WHERE status = 'pending'`), o estoque só se o pedido mudou, na ordem de lock; depois, `DeleteMessage`;
+  - retry: `ChangeMessageVisibility` com o atraso mínimo mais *full jitter* sobre um exponencial com teto, em segundos inteiros, arredondado para cima; o jitter espalha os retries depois de uma falha que atingiu muitos pedidos de uma vez;
+  - o SQS respondeu `stale` (outro recebimento já tem a mensagem): a tentativa não muda mais nada e conta em `outbox_conclusion_no_row_total` (`outbox.conclusion_no_row`); o banco já está protegido pelo compare-and-set;
+  - se gravar o desfecho no banco falhar, o worker repete enquanto o prazo da mensagem vale, até 5 vezes por tentativa, para um erro rápido e persistente não virar um laço contra o banco; esgotadas as repetições, desiste sem responder ao SQS, e a mensagem volta quando a visibilidade vencer. Uma falha do SQS ao apagar ou ao mudar a visibilidade também só é logada: a mensagem volta, e o pedido já com desfecho a encerra.
+- **Desfechos:** transitório ou ambíguo, nova tentativa; permanente, pedido falho e reserva liberada; limite de recebimentos, a DLQ do SQS, com o pedido `pending` e a reserva.
+- **Encerramento:** no `SIGTERM`, o worker para de receber e espera as tentativas em andamento; se o prazo estourar, a visibilidade vence e a mensagem volta. O contêiner roda `node` direto, sem `npm`, para o sinal chegar ao processo.
+- **Interface (`src/worker.ts`):** `createWorker({ pool, queue, erp, semaphore?, logger, telemetry, clock, random?, config? })` devolve `start`, `stop` e `pollOnce`.
+  - `pollOnce()` faz uma rodada: adquire as permissões livres, recebe até esse número de mensagens, roda as tentativas em paralelo e resolve, depois de todas terminarem, com o número de mensagens recebidas. Uma tentativa que lança um erro inesperado conta como ambígua e não interrompe as outras;
+  - `start()` não espera a rodada inteira: mantém as tentativas em andamento e recebe de novo assim que uma permissão volta, para uma chamada lenta não segurar a vazão das outras; o *long polling* faz a espera com a fila vazia. O `stop()` para de receber e espera as tentativas em andamento; um `start()` depois do `stop()` volta a receber, e um `start()` chamado enquanto o `stop()` espera aguarda o `stop()` terminar e então volta a receber; em qualquer sequência de `start()` e `stop()`, o `stop()` que resolve por último deixa o worker parado (um estado só: parado, rodando ou parando);
+  - `semaphore` (padrão: um novo, com o limite da configuração); `random` (padrão `Math.random`) sorteia o jitter, para o teste fixá-lo; `config` sobrepõe os parâmetros da tabela (visibilidade, atraso mínimo, timeout, folga, base e teto da espera, *long polling*, limite de chamadas);
   - `erp` é a porta `ErpClient`; o `src/main/worker.ts` monta o ERP simulado sobre o pool próprio dele e a camada anticorrupção por cima.
-- **Nos testes:** os prazos gravados correm no relógio do banco, então o teste semeia `lease_until`, `last_call_at` e `next_attempt_at` em vez de esperar; o timeout do ERP e os atrasos do simulado correm no relógio manual. A morte do worker é uma rodada abandonada no meio de uma chamada com o comportamento `hang`, seguida do lease vencido semeado.
+- **Nos testes:** a fila é o ElasticMQ, num contêiner por arquivo de teste e filas com nome único por teste, criadas pelo helper com a mesma *redrive policy* do `elasticmq.conf` (o limite de recebimentos pode ser menor no teste). O teste não espera a visibilidade: devolve a mensagem com `ChangeMessageVisibility` e `VisibilityTimeout = 0` e semeia `last_call_at` no banco; o prazo da mensagem e o timeout do ERP correm no relógio manual. A morte do worker é uma rodada abandonada no meio de uma chamada com o comportamento `hang`, seguida da mensagem devolvida à fila.
 
-## Worker: reconciliação e runbook (AD-003)
+## Worker: reconciliação e runbook (AD-003, AD-021)
 
-Como "Worker: envio", esta seção descreve o desenho com a fila na tabela da outbox; a segunda parte do M3 a reescreve sobre a DLQ do SQS e o *redrive* (AD-021).
+- **Reconciliação, periódica (`src/reconciliation.ts`):** a cada 5 min, recebe da DLQ até 100 mensagens (lotes de 10), cada uma com visibilidade de 5 min, para a rodada seguinte ler outras e uma mensagem não ser vista duas vezes na mesma rodada. Para cada uma:
+  - marca a chegada à DLQ uma vez: `UPDATE outbox SET dead_at = now() WHERE order_id = :id AND dead_at IS NULL RETURNING`; com linha, loga `outbox.dead` (`error`, com `orderId` e `correlationId`) e conta `dead` em `outbox_attempt_outcome_total`. A permissão de chamada tomada pelo worker zera o `dead_at` (a tomada pela reconciliação não), então uma mensagem que volta à DLQ depois de um *redrive* e de nova tentativa é contada de novo;
+  - corpo fora do schema: fica para o runbook;
+  - pedido que já não está `pending`: apaga da DLQ (`outbox.closed`);
+  - com a permissão de chamada do worker (o atraso mínimo vale também aqui) e uma permissão do semáforo, consulta o ERP pela referência: achou, conclui como faturado pelo mesmo caminho do worker e apaga da DLQ (`order.invoiced`); não achou, ou a consulta falhou, ou não teve a permissão de chamada, a mensagem fica na DLQ para o runbook.
+  - **Interface:** `createReconciler({ pool, dlq, erp, semaphore, logger, telemetry, clock, config? })` devolve `start`, `stop` e `reconcileOnce()` (resolve com `{ seen, invoiced, closed }`).
+- **Runbook (`src/runbook.ts` e `node src/main/runbook.ts <comando>`):**
+  - `redrive`: `StartMessageMoveTask` da DLQ para a fila de origem; espera, pelo `ApproximateNumberOfMessages` da DLQ, até ela esvaziar ou passar 60 s, e imprime quantas mensagens saíram. É seguro, porque cada mensagem passa pela permissão de chamada (atraso mínimo) e consulta o ERP antes de criar, já que `first_sent_at` nunca é apagado (`ORD-07`);
+  - `cancel <orderId>`: depois de o operador confirmar no ERP que o pedido não existe, numa transação, na ordem de lock, marca o pedido como `failed` com o motivo `cancelled` por compare-and-set e libera a reserva só se o pedido mudou; imprime se mudou. Não toca o SQS: a mensagem que ficou na DLQ é apagada pela reconciliação ou, depois de um *redrive*, pelo worker, que encontra o pedido já com desfecho (`ORD-15`).
 
-- **Reconciliação, periódica:** consulta pela referência as mensagens em `dead` cujo atraso mínimo passou, em lotes ordenados por `reconciled_at`. Se o ERP tem o pedido, conclui como faturado e encerra a mensagem com `WHERE status = 'dead'`. Se não tem, ou se a consulta falhar, a mensagem fica para o runbook.
-- **Reprocessar em lote:** um SQL devolve à fila as mensagens em `dead` (por exemplo, as do período de uma queda), zera as tentativas e preserva `first_sent_at`. É seguro, porque cada uma é consultada no ERP antes de qualquer criação, e só depois do atraso mínimo.
-- **Cancelar:** depois de o operador confirmar no ERP que o pedido não existe, um SQL, na ordem de lock, encerra a mensagem (`WHERE status = 'dead'`; zero linhas, nada muda), marca o pedido como `failed` e libera a reserva.
-
-| Aqui | No SQS |
+| Primeira parte (tabela como fila) | Segunda parte (SQS) |
 | --- | --- |
-| lease | visibility timeout |
-| token da reivindicação | receipt handle |
-| tentativas | `maxReceiveCount` |
-| `dead` | DLQ |
-| SQL de reprocessar em lote | redrive |
+| lease e `lease_until` | *visibility timeout*, com o prazo no relógio injetável |
+| token da reivindicação | *receipt handle* no SQS; `call_token` na permissão de chamada |
+| tentativas na outbox | `ApproximateReceiveCount` e `maxReceiveCount` |
+| status `dead` | DLQ do SQS; `dead_at` só para logar a chegada uma vez |
+| SQL de reprocessar em lote | *redrive* (`StartMessageMoveTask`) |
 
-Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o atraso mínimo da H4), o `first_sent_at` e o resultado da consulta ao ERP antes de criar. A espera de cada retry (atraso mínimo mais *full jitter*) é calculada no worker e aplicada pela visibilidade da mensagem (`ChangeMessageVisibility`).
+Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o atraso mínimo da H4), o `first_sent_at` e o resultado da consulta ao ERP antes de criar.
 
 ## Sincronização (AD-009)
 
@@ -235,7 +257,8 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
   - `warn`: checkout recusado, retry, origem do cache em erro, preço alterado, erro de configuração no ERP;
   - `error`: mensagem na DLQ, falha da sincronização, transação abortada antes do `COMMIT` (`db.transaction_aborted`, `FND-10`).
   - **Checkout (M2):** `info` `checkout.accepted` e `warn` `checkout.rejected` (com a causa) e `checkout.price_changed`, todos com o `orderId` quando ele existe; o log `http_request` do checkout e do status também leva o `orderId`.
-  - **Worker (M3):** cada tentativa roda no `logContext` com o `correlationId` gravado na outbox e dentro do span dela, e todo log da tentativa leva `orderId` e `attempt`. Eventos: `info` `order.invoiced` e `outbox.closed` (pedido que já não estava `pending`); `warn` `order.failed` (com o motivo), `outbox.retry` (com o `outcome` que o causou, só quando a mensagem de fato volta à fila), `outbox.lease_short`, `outbox.conclusion_no_row`, `outbox.conclusion_failed` (falha ao gravar o desfecho, antes de repetir) e `erp.config_error` (com o status); `error` `outbox.dead`, `outbox.attempt_error` (erro inesperado na tentativa), `worker.poll_error` (falha da reivindicação no laço do `start()`) e `db.transaction_aborted` (no lugar do `outbox.conclusion_failed`, quando a falha é a transação abortada). O span da tentativa se chama `outbox.attempt`, com os atributos `orderId` e `attempt`. Os eventos que a reivindicação decide sem chamar o ERP (`outbox.closed` e o `outbox.dead` do limite já gasto) rodam num span próprio, `outbox.settle`, filho do mesmo `traceparent`, com `orderId`, `attempt` e `outcome`, para quem conta tentativas no backend de traces não contar encerramentos. Quando a conclusão fecha a mensagem mas o pedido já tinha outro desfecho (mudado fora do fluxo), sai o `outbox.closed` e conta `closed`, para toda mensagem encerrada aparecer no log e no counter.
+  - **Worker (M3):** cada tentativa roda no `logContext` com o `correlationId` da mensagem e dentro do span dela, e todo log da tentativa leva `orderId` e `attempt` (o `ApproximateReceiveCount`). Eventos: `info` `order.invoiced`, `outbox.closed` (pedido que já não estava `pending`) e `outbox.call_deferred` (sem a permissão de chamada); `warn` `order.failed` (com o motivo), `outbox.retry` (com o `outcome` que o causou, só quando a visibilidade de fato mudou), `outbox.lease_short`, `outbox.conclusion_no_row` (o SQS recusou o *receipt handle*), `outbox.conclusion_failed` (falha ao gravar o desfecho, antes de repetir), `outbox.queue_error` (falha do SQS ao apagar ou mudar a visibilidade) e `erp.config_error` (com o status); `error` `outbox.invalid_message` (sem `orderId` quando o corpo não o tem), `outbox.attempt_error` (erro inesperado na tentativa), `worker.poll_error` (falha do recebimento no laço do `start()`) e `db.transaction_aborted` (no lugar do `outbox.conclusion_failed`, quando a falha é a transação abortada). O span da tentativa se chama `outbox.attempt`, com os atributos `orderId` e `attempt`, filho do `traceparent` da mensagem; uma tentativa que encerra a mensagem sem chamar o ERP (`outbox.closed`) roda no span `outbox.settle`, com `orderId`, `attempt` e `outcome`, para quem conta tentativas no backend de traces não contar encerramentos. Quando a conclusão grava o desfecho mas o pedido já tinha outro (mudado fora do fluxo), sai o `outbox.closed` e conta `closed`, para toda mensagem encerrada aparecer no log e no counter.
+  - **Relay e reconciliação (M3):** `error` `outbox.relay_error` (rodada do relay que falhou), `outbox.invalid_row` (linha da outbox fora do schema da mensagem, com o `orderId`) e `outbox.dead` (da reconciliação, uma vez por chegada à DLQ, com `orderId` e `correlationId`, no span `outbox.settle`); `info` `outbox.reconciled` (resumo da rodada, com `seen`, `invoiced` e `closed`); `warn` `outbox.reconcile_error` (rodada que falhou). O `order.invoiced` e o `outbox.closed` da reconciliação são os mesmos do worker.
 - **Pacotes** (AD-011): `@opentelemetry/api` 1.10.0, que o SDK 3 exige; SDK 3.0.0 com `sdk-trace` (que substitui o `sdk-trace-base` e o `sdk-trace-node`), `context-async-hooks` e o propagador W3C do `core`, registrados na inicialização, mais `sdk-metrics` e `resources`; exporters 0.300.0 (`exporter-prometheus`, `exporter-trace-otlp-http`). No SDK 3, o provider é o `TracerProvider` do `sdk-trace`, e os processadores recebem `{ exporter }`; nos testes, `forceFlush()` vem antes de ler o `InMemorySpanExporter`.
 - **Traces:** spans manuais no middleware HTTP, no cache, nos repositórios, na outbox, no worker, na sincronização e no `ErpClient`. Cada tentativa é um span filho do checkout, retomado pelo `traceparent` da outbox, com `orderId` e número da tentativa. O exportador vem de `OTEL_TRACES_EXPORTER`: nenhum por padrão, para o healthcheck do compose não encher o log a cada 2 s; `console` para ver os traces em desenvolvimento; `otlp` (OTLP/HTTP) para um backend de traces em produção (no Datadog, pelo Agent). Os atributos de recurso `service.name`, `deployment.environment.name` e `service.version` viram `service`, `env` e `version` nos traces e nos logs, com os mesmos valores, porque o Datadog só liga log e trace com a marcação unificada de serviço. O log leva no topo do JSON o `trace_id` (32 caracteres hexadecimais), o `span_id` (16) e o `trace_flags`, os nomes que o OpenTelemetry recomenda.
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, gauge para estado, histogram para durações e idades, com buckets em segundos que incluem os limiares dos SLOs. Labels de uma lista fechada (rota como template, método, classe de status, resultado), nunca `orderId` nem `sku`:
@@ -247,8 +270,9 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
   - **ERP:** duração e desfecho (histogram e counter), chamadas em andamento (gauge), rejeições por falta de estoque e erros de configuração (counters);
   - **sincronização:** idade da última rodada completa (gauge), correções por campo e SKUs ausentes zerados (counters).
 - **Nomes das métricas do worker (M3),** no `/metrics` dele:
-  - `outbox_attempt_outcome_total` (counter, label `outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed` ou `lease_short`), contado quando o desfecho é gravado: `closed` e o `dead` do limite já gasto na reivindicação, `lease_short` quando a tentativa desiste; a conclusão sem linha afetada não conta aqui, só no counter dela;
-  - `outbox_conclusion_no_row_total` (counter, sem label);
+  - `outbox_attempt_outcome_total` (counter, label `outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed`, `lease_short` ou `deferred`), contado quando o desfecho é gravado: `closed` quando a mensagem é apagada porque o pedido já tinha desfecho, `lease_short` quando a tentativa desiste pelo prazo, `deferred` quando falta a permissão de chamada, `dead` pela reconciliação na primeira vez que vê a mensagem na DLQ; a conclusão recusada pelo SQS não conta aqui, só no counter dela;
+  - `outbox_conclusion_no_row_total` (counter, sem label): conclusões sem efeito porque o *receipt handle* já não vale;
+  - `outbox_published_total` (counter, sem label): linhas da outbox publicadas pelo relay;
   - `order_accept_to_invoice_seconds` (histogram, sem label, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` e o `failed` do `outbox_attempt_outcome_total`, e os logs `order.invoiced` e `order.failed`, também só saem nesse caso;
   - `erp_request_duration_seconds` (histogram) e `erp_request_total` (counter), com os labels `operation` (`create_order`, `find_order` ou `list_catalog`) e `outcome` (`ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous` ou `config_error`), com fronteiras até 30 s, a última em 30;
   - `erp_requests_in_flight` (gauge, sem label);
@@ -344,15 +368,17 @@ Ficam em configuração. Os que dependem de carga saem das premissas do [`PROJEC
 | Intervalo da sincronização | 60 s | Defasagem de até 65,5 s mais a rodada; uma leitura do catálogo por minuto no ERP |
 | Timeout do ERP | 10 s | Acima do p99,9 da premissa (8 s) |
 | Atraso mínimo | 45 s desde o início da última chamada | H4 (40 s) mais 5 s para a ida da requisição |
-| Lease | 30 s | Consulta e criação (2 × 10 s), com a permissão do semáforo já em mãos, mais folga; desiste se restar menos que timeout + 2 s |
+| Visibilidade da mensagem (*visibility timeout*) | 60 s | Timeout (10 s) mais o atraso mínimo (45 s) mais folga: a mensagem de um worker morto quase sempre volta depois do atraso mínimo, e a permissão de chamada adia a que voltar antes (AD-024); desiste se restar menos que timeout + 2 s |
 | Encerramento | 25 s no processo; `stop_grace_period: 30s` | O Docker manda `SIGKILL` 10 s depois do `SIGTERM` por padrão, então o compose precisa de prazo maior que o do processo |
 | Chamadas simultâneas ao ERP | 30 | Pico de ~7 pedidos/s × ~3 s ≈ 21 em voo; vazão de ~10/s, com folga para retries, consultas e sincronização |
-| Polling da outbox vazia | 500 ms | Início rápido sem carga relevante |
-| `Retry-After` do `202` | 4 s | Polling (0,5 s) mais a mediana do ERP (~3 s) |
+| *Long polling* do worker | 1 s, até 10 mensagens por `ReceiveMessage` | Segura as permissões do semáforo no máximo 1 s com a fila vazia; 10 é o máximo do SQS |
+| Relay | lotes de 10; 500 ms de espera com a outbox vazia | 10 é o máximo do `SendMessageBatch`; início rápido sem carga relevante |
+| Retenção (só na AWS) | fila 4 dias (padrão); DLQ 14 dias (máximo) | Na AWS, a retenção na DLQ conta da entrada na fila de origem; o ElasticMQ não expira mensagens |
+| `Retry-After` do `202` | 4 s | Relay (até 0,5 s) e *long polling* (até 1 s), quase sempre menos com fila, mais a mediana do ERP (~3 s) |
 | `Retry-After` do `503` | 5 s | O mesmo do `/health`: tempo para um lock ou o banco se recuperar |
 | Limites do checkout | 1 a 10 por item; 1 a 20 itens; chave até 128 caracteres; corpo até 16 KiB | Um pedido de varejo de capinhas; o limite barra o corpo enorme antes da transação |
-| Tentativas e espera | 12; atraso mínimo + *full jitter* sobre exponencial de base 5 s e teto de 5 min | ~23 min em média e até ~39 min antes da DLQ |
-| Reconciliação | 5 min, até 100 mensagens por rodada | Um pedido na DLQ não exige reação em segundos; o alerta de DLQ já avisa; o grosso sai pelo reprocessamento em lote |
+| Tentativas e espera | 12 recebimentos (`maxReceiveCount`); atraso mínimo + *full jitter* sobre exponencial de base 5 s e teto de 5 min, aplicado pela visibilidade | ~23 min em média e até ~39 min antes da DLQ |
+| Reconciliação | 5 min, até 100 mensagens por rodada, cada uma com visibilidade de 5 min na DLQ | Um pedido na DLQ não exige reação em segundos; o alerta de DLQ já avisa; o grosso sai pelo *redrive* |
 | Chave de idempotência | pelo menos 24 h | Retries do cliente e reenvio no dia seguinte |
-| Pools, por processo | API 10; worker 10; ERP simulado 10; migração 2, sem `statement_timeout` nem `lock_timeout`, com espera por conexão de 1 s | A chamada ao ERP não segura conexão: a reivindicação e a conclusão são transações de milissegundos; total de 30, e 32 enquanto o `migrate` roda, abaixo do `max_connections` padrão de 100 |
+| Pools, por processo | API 10; worker 10; ERP simulado 10; migração 2, sem `statement_timeout` nem `lock_timeout`, com espera por conexão de 1 s | A chamada ao ERP não segura conexão: a permissão de chamada e a conclusão são comandos de milissegundos, e só a rodada do relay segura uma conexão durante a publicação no SQS; total de 30, e 32 enquanto o `migrate` roda, abaixo do `max_connections` padrão de 100 |
 | `statement_timeout` / `lock_timeout` / espera por conexão | 5 s / 2 s / 1 s | Nenhuma requisição espera indefinidamente |
