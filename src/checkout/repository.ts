@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import type { Logger } from 'pino';
 import type { CheckoutAccepted, CheckoutRequest } from '../contract/index.ts';
 import { createDb, runInTransaction } from '../db/database.ts';
+import { isUnavailable } from '../db/unavailable.ts';
 import { ProblemError } from '../http/problem.ts';
 import type { Telemetry } from '../telemetry.ts';
 
@@ -22,22 +23,6 @@ const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
 
 const propagator = new W3CTraceContextPropagator();
 const carrierSetter: TextMapSetter<Record<string, string>> = { set: (carrier, key, value) => void (carrier[key] = value) };
-
-// SQLSTATE de espera além do lock_timeout, cancelamento pelo statement_timeout e deadlock.
-const UNAVAILABLE_SQLSTATES = new Set(['55P03', '57014', '40P01']);
-
-function isUnavailable(error: unknown): boolean {
-  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
-  if (typeof code === 'string') {
-    if (UNAVAILABLE_SQLSTATES.has(code)) return true;
-    // Classe 08 (conexão) e 57P (desligamento do servidor).
-    if (/^(08|57P)/.test(code)) return true;
-    // Erros de rede do Node (ECONNREFUSED, ETIMEDOUT...) não são SQLSTATE de 5 caracteres.
-    if (/^E[A-Z]{4,}$/.test(code)) return true;
-  }
-  // O pg-pool não dá código à espera esgotada por uma conexão nem à conexão encerrada.
-  return typeof message === 'string' && /timeout exceeded when trying to connect|connection terminated|connection error/i.test(message);
-}
 
 // Sinal interno: desfaz a transação inteira (inclusive o pedido e a chave) e leva o
 // motivo para fora, sem tratar a recusa de negócio como falha do span.

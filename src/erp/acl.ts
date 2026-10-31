@@ -15,7 +15,7 @@ export interface ErpClientOptions {
   // O timeout aborta a chamada pelo clock.sleep, para o teste controlar o tempo.
   clock: Clock;
   timeoutMs: number;
-  // Métricas e spans entram na fatia de observabilidade do M3.
+  // Sem ele, a camada não mede nada (os testes de unidade da classificação não precisam).
   telemetry?: Telemetry;
 }
 
@@ -70,7 +70,7 @@ function isConfigStatus(status: number): boolean {
 
 // Camada anticorrupção: aplica o timeout e classifica cada resposta numa lista
 // fechada, sem retry interno (o retry fica no worker).
-export function createErpClient({ transport, clock, timeoutMs }: ErpClientOptions): ErpClient {
+export function createErpClient({ transport, clock, timeoutMs, telemetry }: ErpClientOptions): ErpClient {
   async function call(request: ErpRequest): Promise<Outcome> {
     const controller = new AbortController();
     let timedOut = false;
@@ -96,7 +96,29 @@ export function createErpClient({ transport, clock, timeoutMs }: ErpClientOption
     }
   }
 
-  return {
+  // Mede cada operação sem mudar o resultado: duração e contagem por desfecho, a gauge de
+  // chamadas em voo e o alerta de configuração. Sem `telemetry`, só repassa.
+  async function observe<T extends { kind: string }>(operation: 'create_order' | 'find_order' | 'list_catalog', run: () => Promise<T>): Promise<T> {
+    if (!telemetry) return run();
+    const startedAt = clock.now();
+    telemetry.erpRequestsInFlight.add(1);
+    let result: T | undefined;
+    try {
+      result = await run();
+      return result;
+    } finally {
+      telemetry.erpRequestsInFlight.add(-1);
+      // Uma exceção inesperada não tem desfecho da lista fechada: só a duração fica sem registro.
+      if (result) {
+        const labels = { operation, outcome: result.kind };
+        telemetry.erpRequestDuration.record((clock.now() - startedAt) / 1000, labels);
+        telemetry.erpRequestTotal.add(1, labels);
+        if (result.kind === 'config_error') telemetry.erpConfigError.add(1, { operation });
+      }
+    }
+  }
+
+  const raw: ErpClient = {
     async createOrder(request): Promise<CreateOrderResult> {
       const outcome = await call({ op: 'createOrder', body: request });
       if (outcome.kind === 'timeout' || outcome.kind === 'transport_error') {
@@ -162,5 +184,15 @@ export function createErpClient({ transport, clock, timeoutMs }: ErpClientOption
       if (status === 404 || isConfigStatus(status)) return { kind: 'config_error', status };
       return { kind: 'transient', cause: status === 200 ? 'http_200_invalid_body' : `http_${status}` };
     },
+  };
+
+  return {
+    async createOrder(request) {
+      const result = await observe('create_order', () => raw.createOrder(request));
+      if (result.kind === 'permanent' && result.reason === 'out_of_stock') telemetry?.erpOutOfStockRejection.add(1);
+      return result;
+    },
+    findOrderByReference: (reference) => observe('find_order', () => raw.findOrderByReference(reference)),
+    listCatalog: (page) => observe('list_catalog', () => raw.listCatalog(page)),
   };
 }

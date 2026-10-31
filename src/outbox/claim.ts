@@ -11,6 +11,9 @@ export interface ClaimedMessage {
   // A mensagem já foi enviada numa reivindicação anterior: consulta antes de criar.
   sentBefore: boolean;
   items: ErpOrderItem[];
+  // Gravados pelo checkout: a tentativa continua o trace e o log da requisição.
+  correlationId: string;
+  traceparent: string | null;
 }
 
 export interface ClaimSettled {
@@ -47,7 +50,7 @@ export async function claimMessages(db: Kysely<StoreDb>, { limit, leaseMs, minDe
     const rows = await trx
       .selectFrom('outbox')
       .innerJoin('orders', 'orders.id', 'outbox.order_id')
-      .select(['outbox.order_id', 'outbox.attempts', 'outbox.first_sent_at', 'outbox.lease_until', 'orders.status as order_status'])
+      .select(['outbox.order_id', 'outbox.attempts', 'outbox.first_sent_at', 'outbox.lease_until', 'outbox.correlation_id', 'outbox.traceparent', 'orders.status as order_status'])
       .where('outbox.status', '=', 'pending')
       .where('outbox.next_attempt_at', '<=', now)
       .where((eb) => eb.or([eb('outbox.lease_until', 'is', null), eb('outbox.lease_until', '<=', now)]))
@@ -91,7 +94,15 @@ export async function claimMessages(db: Kysely<StoreDb>, { limit, leaseMs, minDe
         .where('order_id', '=', row.order_id)
         .returning('attempts')
         .executeTakeFirstOrThrow();
-      result.claimed.push({ orderId: row.order_id, token, attempts: updated.attempts, sentBefore: row.first_sent_at !== null, items: [] });
+      result.claimed.push({
+        orderId: row.order_id,
+        token,
+        attempts: updated.attempts,
+        sentBefore: row.first_sent_at !== null,
+        items: [],
+        correlationId: row.correlation_id,
+        traceparent: row.traceparent,
+      });
     }
 
     // Itens com o preço aceito no checkout (H3), lidos junto para a tentativa não ocupar outra conexão.

@@ -14,7 +14,6 @@ export const logContext = new AsyncLocalStorage<LogContext>();
 // `serviceName` é o nome do processo, o mesmo que o createTelemetry recebe; o
 // OTEL_SERVICE_NAME o substitui, e `service`, `env` e `version` saem da mesma fonte do recurso dos traces.
 // `destination` deixa o teste capturar as linhas JSON; sem ele, o pino escreve no stdout.
-// Stub do M3: a Fatia 3 liga o destino ao pino.
 export function createLogger(options: { serviceName: string; level?: string; destination?: DestinationStream }): Logger {
   const { service, env, version } = resolveServiceIdentity(options.serviceName);
   return pino({
@@ -34,5 +33,5 @@ export function createLogger(options: { serviceName: string; level?: string; des
         trace_flags: spanContext && spanContext.traceFlags.toString(16).padStart(2, '0'),
       };
     },
-  });
+  }, options.destination);
 }

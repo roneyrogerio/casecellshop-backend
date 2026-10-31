@@ -26,7 +26,7 @@ const simMode = process.env['ERP_SIM_MODE'] ?? 'normal';
 if (!Object.hasOwn(SIM_MODES, simMode)) throw new Error(`ERP_SIM_MODE inválido: ${simMode}`);
 const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
 sim.script.setDefault(SIM_MODES[simMode as keyof typeof SIM_MODES]);
-const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs });
+const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
 const worker = createWorker({ pool, erp, logger, telemetry, clock: systemClock });
 
 // O worker não tem API; expõe só o /metrics.
