@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Kysely, PostgresDialect } from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import type { Pool } from 'pg';
-import { createErpDb } from './database.ts';
+import { createErpDb, createPoolAdapter } from './database.ts';
 
 export interface MigrationFolder {
   // Caminho absoluto da pasta de migrações.
@@ -48,7 +48,7 @@ function createProvider(dir: string): FileMigrationProvider {
 // as pendentes de cada schema numa transação só.
 export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = MIGRATION_FOLDERS): Promise<void> {
   // Não chamamos db.destroy(): o pool pertence a quem chamou.
-  const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) });
+  const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }) });
   for (const { dir, schema } of folders) {
     const migrator = new Migrator({
       db,

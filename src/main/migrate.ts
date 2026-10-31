@@ -1,12 +1,12 @@
 import { requireEnv } from '../config.ts';
-import { createPool } from '../db/pool.ts';
+import { createMigrationPool } from '../db/pool.ts';
 import { migrate, seed } from '../db/migrate.ts';
 import { createLogger } from '../logging.ts';
 
 // Serviço de execução única do compose: migra os dois schemas e grava o catálogo
 // de exemplo do ERP simulado. Só ele roda o seed.
 const logger = createLogger({ serviceName: 'casecellshop-migrate' });
-const pool = createPool(requireEnv('DATABASE_URL'), logger);
+const pool = createMigrationPool(requireEnv('DATABASE_URL'), logger);
 try {
   await migrate(pool);
   await seed(pool);
