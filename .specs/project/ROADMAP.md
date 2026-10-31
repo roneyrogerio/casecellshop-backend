@@ -145,7 +145,8 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
 - **Skill `/marco` no limite de bytes (próxima mudança de processo):** o `SKILL.md` tem 11.998 dos 12.000 bytes do `FND-06`; antes de acrescentar texto, passar trechos de referência para arquivos de apoio da pasta da skill.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
-- **Teste de mutação com Stryker** (decisão do mantenedor, PR próprio depois do M3): uma rodada por marco, só nos módulos sem banco; pede dependência nova e a linha no `STATE.md`.
+- **Teste de mutação com Stryker** (decisão do mantenedor, PR próprio depois do M3): uma rodada por marco, só nos módulos sem banco; pede dependência nova e a linha no `STATE.md`. A decidir no plano desse PR: o worker, o relay e o checkout, onde está o maior risco, ficam de fora por terem banco; uma rodada incremental fora do CI os cobriria.
+- **CI sem os testes de compose na perna do Node 24.12** (PR de processo): o `Dockerfile` fixa o Node 26, então os testes que sobem o compose testam a mesma imagem nas duas pernas da matriz, e cada perna constrói o compose duas vezes.
 - **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor (a conferir):** status checks estritos no ruleset; apagar as branches `chore/agentic-factory-v2` e `chore/ai-factory-v2`; validade do token do bot; CodeQL, Dependabot e push protection.
 
