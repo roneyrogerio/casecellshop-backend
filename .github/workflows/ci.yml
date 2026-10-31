@@ -55,6 +55,13 @@ jobs:
         if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
         run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
 
+      # FND-09: os tipos do banco versionados batem com o banco migrado. Sobe o
+      # próprio PostgreSQL pelo Testcontainers; uma vez só, porque o resultado não
+      # depende da versão do Node. Roda com node, e não por npm run (AI-05).
+      - name: Tipos do banco em dia
+        if: matrix.node == 'nvmrc'
+        run: node scripts/check-db-types.ts
+
       # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
       - run: npm run openapi -- --check
       - run: npm run lint:openapi
