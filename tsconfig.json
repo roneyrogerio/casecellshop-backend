@@ -24,6 +24,7 @@
   },
   "include": [
     "src",
+    "migrations",
     "test",
     "scripts",
     ".claude/hooks",

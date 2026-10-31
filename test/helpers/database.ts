@@ -25,7 +25,15 @@ export async function startMigratedDatabase(): Promise<TestDatabase> {
   const uri = container.getConnectionUri();
   const pool = createPool(uri);
   const erpPool = createPool(uri);
-  await migrate(pool);
+  try {
+    await migrate(pool);
+  } catch (error) {
+    // Sem isto, um migrate que falha deixaria o contêiner e os pools vivos até o fim da suíte.
+    await pool.end();
+    await erpPool.end();
+    await container.stop();
+    throw error;
+  }
   return {
     container,
     uri,

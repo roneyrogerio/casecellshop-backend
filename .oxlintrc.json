@@ -131,6 +131,23 @@
         "typescript/prefer-readonly": "off",
         "typescript/return-await": "off"
       }
+    },
+    {
+      "files": [
+        "**/migrations/**/*.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    },
+    {
+      "files": [
+        "src/db/types/*.ts"
+      ],
+      "rules": {
+        "typescript/consistent-type-definitions": "off",
+        "typescript/no-empty-object-type": "off"
+      }
     }
   ]
 }

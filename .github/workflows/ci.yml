@@ -55,6 +55,18 @@ jobs:
         if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
         run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
 
+      # FND-09: os tipos do banco versionados batem com o banco migrado. Sobe o
+      # próprio PostgreSQL pelo Testcontainers; uma vez só, porque o resultado não
+      # depende da versão do Node. Roda com node, e não por npm run (AI-05).
+      - name: Tipos do banco em dia
+        if: matrix.node == 'nvmrc'
+        run: node scripts/check-db-types.ts
+
+      # AI-19: as formas do Kysely que escapam do tsc ou montam SQL fora do builder
+      # reprovam em src/. Roda com node, e não por npm run (AI-05).
+      - name: Formas do Kysely
+        run: node scripts/check-kysely-usage.ts
+
       # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
       - run: npm run openapi -- --check
       - run: npm run lint:openapi
@@ -64,7 +76,8 @@ jobs:
 
       # As duas conferências abaixo rodam com node, e não por npm run: o package.json
       # é do próprio PR, que poderia redefinir o script que o confere (AI-05).
-      # AI-01: migração .sql já na base não pode ser alterada nem apagada. A base
+      # AI-01: arquivo de migrations/ já na base não pode ser alterado nem apagado
+      # (fora o .gitkeep e a remoção de um .sql, que deixou de ser migração). A base
       # entra pelo ambiente, e não interpolada no script, para o nome da branch
       # nunca virar código no shell.
       - name: Migrações da base ficam intactas

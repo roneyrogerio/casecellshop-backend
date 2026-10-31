@@ -31,16 +31,20 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
     const firstErpPool = createPool(database.uri);
 
     // Primeira vida do worker: ele sobe e o ERP simulado fatura o pedido.
-    const firstWorker = createWorker({ pool: database.pool, erpPool: firstErpPool, logger, telemetry, clock });
-    await firstWorker.start();
-    const firstClient = createSimulatedErpClient({ pool: firstErpPool, clock });
-    const created = await firstClient.createOrder({
-      reference,
-      items: [{ sku, quantity: 2, unitPriceCents: 4990 }],
-    });
-    expect(created.reference).toBe(reference);
-    await firstWorker.stop();
-    await firstErpPool.end();
+    let created: Awaited<ReturnType<ReturnType<typeof createSimulatedErpClient>['createOrder']>>;
+    try {
+      const firstWorker = createWorker({ pool: database.pool, erpPool: firstErpPool, logger, telemetry, clock });
+      await firstWorker.start();
+      const firstClient = createSimulatedErpClient({ pool: firstErpPool, clock });
+      created = await firstClient.createOrder({
+        reference,
+        items: [{ sku, quantity: 2, unitPriceCents: 4990 }],
+      });
+      expect(created.reference).toBe(reference);
+      await firstWorker.stop();
+    } finally {
+      await firstErpPool.end();
+    }
 
     // Segunda vida: instância nova do worker e do cliente, com um pool novo sobre o mesmo banco.
     const restartedErpPool = createPool(database.uri);

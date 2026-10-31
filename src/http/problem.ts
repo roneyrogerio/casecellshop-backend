@@ -2,6 +2,7 @@ import type { ErrorRequestHandler, RequestHandler } from 'express';
 import type { Logger } from 'pino';
 import type { z } from 'zod';
 import { PROBLEM_MEDIA_TYPE, type Problem } from '../contract/index.ts';
+import { TransactionAbortedError } from '../db/database.ts';
 
 type ProblemBody = z.input<typeof Problem>;
 
@@ -40,7 +41,10 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
         ? error.init
         : { status: 500, cause: 'internal-error', title: 'Erro interno' };
 
-    if (!(error instanceof ProblemError)) {
+    if (error instanceof TransactionAbortedError) {
+      // Defeito do código (erro capturado dentro da transação), não falha do cliente.
+      logger.error({ event: 'db.transaction_aborted', err: error, correlationId }, 'transação abortada antes do COMMIT');
+    } else if (!(error instanceof ProblemError)) {
       // O detalhe vai só para o log; a resposta nunca leva stack trace nem SQL.
       logger.error({ event: 'unhandled_error', err: error, correlationId }, 'erro inesperado na requisição');
     }

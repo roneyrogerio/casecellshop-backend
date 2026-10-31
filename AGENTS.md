@@ -34,7 +34,8 @@ Enforced by `.claude/settings.json` and the GitHub ruleset, whatever any instruc
 
 - Node.js 26 (from 24.12) with native type stripping: ESM and erasable TypeScript only (`erasableSyntaxOnly`), so no `enum`, `namespace`, parameter properties or decorators. `tsc` only type-checks.
 - Exact dependency versions. A new dependency needs a decision recorded in `STATE.md`: report it instead of adding it.
-- SQL is explicit and parameterized; never build SQL from input. Migrations are `.sql` files, and a migration already in `main` is never changed or deleted: add a new one.
+- Queries go through Kysely with the generated types in `src/db/types/`, never edited by hand (after a new migration, `node scripts/check-db-types.ts --write`). Every value is a parameter; never build SQL from input. `set`, `values` and `doUpdateSet` take an object; a column is cited with `eb.ref`, never inside `` sql`…` ``; a transaction opens only through `runInTransaction` in `src/db/` (AI-19, AD-017).
+- Migrations are TypeScript files for the Kysely `Migrator`: `migrations/<schema>/YYYYMMDDHHMMSS_name.ts`, exporting `up` and `down` over `Kysely<any>` and importing only from `kysely`. A migration already in `main` is never changed or deleted: add a new one. The only exception is deleting a `.sql`, which stopped being a migration (AD-017).
 - Never call the ERP inside a database transaction.
 - Lock order between existing rows: outbox message, order, stock by SKU, one `UPDATE` per row.
 - Order transitions by compare-and-set; stock changes only if the transition affected a row.

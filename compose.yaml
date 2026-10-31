@@ -12,7 +12,10 @@ services:
       # No PostgreSQL 18 a imagem espera o volume em /var/lib/postgresql.
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U casecellshop -d casecellshop"]
+      # Com --host o teste vai por TCP: na primeira subida a imagem roda um servidor temporário
+      # só no socket Unix, e sem host o banco ficaria saudável antes de a porta abrir.
+      # Usa 127.0.0.1 (IPv4 explícito), como recomenda a imagem oficial, pois localhost pode resolver para IPv6.
+      test: ["CMD-SHELL", "pg_isready --host 127.0.0.1 -U casecellshop -d casecellshop"]
       interval: 2s
       timeout: 3s
       retries: 30

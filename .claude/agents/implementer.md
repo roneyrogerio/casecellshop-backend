@@ -30,7 +30,7 @@ The task map in your prompt lists the criteria, the spec sections, the ADs and t
 
 ## Run
 
-`npm run verify:fast` (lint, typecheck and the tests related to your changes) while you work; a stop hook runs the same checks, also compares `git status` with your role and the `scripts` block of `package.json` with `HEAD`, and sends you back while any of them fails. Before reporting done, also run the slice tests named in the map, `npm run openapi -- --check` and `npm run lint:openapi`. Never change or delete a migration already in `origin/main`; add a new one.
+`npm run verify:fast` (lint, typecheck and the tests related to your changes) while you work; a stop hook runs the same checks, also compares `git status` with your role and the `scripts` block of `package.json` with `HEAD`, and sends you back while any of them fails. Before reporting done, also run the slice tests named in the map, `npm run openapi -- --check` and `npm run lint:openapi`. Never change or delete a migration already in `origin/main` (deleting a `.sql`, which stopped being a migration, is the one exception, AD-017); add a new one, then regenerate the database types with `node scripts/check-db-types.ts --write`.
 
 Keep working until every test named in the map passes and the checks above are green. Stop earlier only when something outside your role blocks you (a test, the spec, the contract or a check that looks wrong), and say what blocks you: you cannot ask questions mid-task, so stopping ends your turn with the report.
 
