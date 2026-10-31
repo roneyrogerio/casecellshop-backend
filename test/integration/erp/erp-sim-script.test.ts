@@ -39,10 +39,8 @@ describe('normal, lento e indisponível', () => {
   it('ORD-21 sem comportamento na fila a criação responde como no normal, na hora', async () => {
     const { client, order, reference } = await newScenario();
 
-    const call = await begin(client.createOrder(order));
-
-    expect(call.settled).toBe(true);
-    expect(await call.result).toMatchObject({ kind: 'ok' });
+    // O relógio manual nunca avança aqui: se o normal dependesse dele, a promessa não resolveria.
+    expect(await client.createOrder(order)).toMatchObject({ kind: 'ok' });
     expect(await countInvoices(database.pool, reference)).toBe(1);
   });
 
