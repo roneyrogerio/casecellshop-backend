@@ -3,4 +3,72 @@
  * Please do not edit it manually.
  */
 
-export interface DB {}
+import type { ColumnType } from "kysely";
+
+export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S, I | undefined, U>
+  : ColumnType<T, T | undefined, T>;
+
+export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export interface IdempotencyKeys {
+  created_at: Generated<Timestamp>;
+  key: string;
+  order_id: string;
+  payload_hash: string;
+}
+
+export interface Inventory {
+  on_hand: number;
+  reserved: Generated<number>;
+  sku: string;
+  sold_total: Generated<number>;
+  synced_at: Generated<Timestamp>;
+}
+
+export interface OrderItems {
+  order_id: string;
+  quantity: number;
+  sku: string;
+  unit_price_cents: number;
+}
+
+export interface Orders {
+  accepted_at: Generated<Timestamp>;
+  failure_reason: string | null;
+  id: Generated<string>;
+  outcome_at: Timestamp | null;
+  sli_breached_at: Timestamp | null;
+  status: Generated<string>;
+}
+
+export interface Outbox {
+  attempts: Generated<number>;
+  claim_token: string | null;
+  correlation_id: string;
+  created_at: Generated<Timestamp>;
+  first_sent_at: Timestamp | null;
+  last_call_at: Timestamp | null;
+  lease_until: Timestamp | null;
+  next_attempt_at: Generated<Timestamp>;
+  order_id: string;
+  reconciled_at: Timestamp | null;
+  status: Generated<string>;
+  traceparent: string | null;
+}
+
+export interface Products {
+  name: string;
+  price_cents: number;
+  sku: string;
+  synced_at: Generated<Timestamp>;
+}
+
+export interface DB {
+  idempotency_keys: IdempotencyKeys;
+  inventory: Inventory;
+  order_items: OrderItems;
+  orders: Orders;
+  outbox: Outbox;
+  products: Products;
+}

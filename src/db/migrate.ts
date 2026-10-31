@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Kysely, PostgresDialect } from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import type { Pool } from 'pg';
+import { createErpDb } from './database.ts';
 
 export interface MigrationFolder {
   // Caminho absoluto da pasta de migrações.
@@ -54,9 +55,14 @@ export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = 
       provider: createProvider(dir),
       migrationTableSchema: schema,
     });
-    const { error } = await migrator.migrateToLatest();
-    // O erro original segue sem embrulho, para a mensagem da migração aparecer.
-    if (error) throw error instanceof Error ? error : new Error('falha ao migrar', { cause: error });
+    const { error, results } = await migrator.migrateToLatest();
+    // `if (error)` deixaria passar um erro falso (uma migração que lança null); o
+    // resultado com status Error e a presença da chave também reprovam.
+    const failed = results?.some((result) => result.status === 'Error') ?? false;
+    if (error !== undefined || failed) {
+      // O erro original segue sem embrulho, para a mensagem da migração aparecer.
+      throw error instanceof Error ? error : new Error('falha ao migrar', { cause: error });
+    }
   }
 }
 
@@ -76,10 +82,12 @@ const SEED_PRODUCTS: [sku: string, name: string, priceCents: number, onHand: num
 // Catálogo de exemplo do ERP simulado. Idempotente: rodar de novo não repõe
 // estoque nem muda preço que já existe.
 export async function seed(pool: Pool): Promise<void> {
+  const db = createErpDb(pool);
   for (const [sku, name, priceCents, onHand] of SEED_PRODUCTS) {
-    await pool.query(
-      'INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, $3, $4) ON CONFLICT (sku) DO NOTHING',
-      [sku, name, priceCents, onHand],
-    );
+    await db
+      .insertInto('erp_sim.products')
+      .values({ sku, name, price_cents: priceCents, on_hand: onHand })
+      .onConflict((oc) => oc.column('sku').doNothing())
+      .execute();
   }
 }
