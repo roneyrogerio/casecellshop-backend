@@ -476,7 +476,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-017 · Consultas e migrações pelo Kysely, com tipos gerados do banco migrado
 
-**Status:** proposta (30/10/2026). Substitui, na AD-001, o SQL em texto com tipos escritos à mão, a recusa de query builder e as migrações em `.sql`; e, na tabela de ferramentas, o node-pg-migrate.
+**Status:** aceita (30/10/2026, PR #7). Substitui, na AD-001, o SQL em texto com tipos escritos à mão, a recusa de query builder e as migrações em `.sql`; e, na tabela de ferramentas, o node-pg-migrate.
 
 **Contexto.** Com SQL em texto e o tipo de cada linha escrito à mão (`pool.query<{ sku: string; available: number }>(…)`), a tabela fica definida duas vezes, e nada liga as duas: uma migração que apaga ou renomeia uma coluna passa no `tsc`, e a consulta só quebra quando roda. Os testes contra o PostgreSQL real pegam a quebra só nas consultas que algum teste executa. Com várias pessoas, um PR que apaga uma coluna e outro que passa a usá-la ficam verdes separados. O desafio é avaliado justamente no SQL de concorrência (atualização condicional, `FOR UPDATE SKIP LOCKED`, `ON CONFLICT`, o relógio do banco), que precisa continuar legível na revisão e não pode ficar fora da conferência de tipos.
 
@@ -524,7 +524,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-018 · O preço que o cliente viu é obrigatório no checkout
 
-**Status:** proposta (30/10/2026).
+**Status:** aceita (30/10/2026, PR #7).
 
 **Contexto.** A vitrine pode ficar até cerca de 65 s defasada (AD-005, AD-009). Com o preço que o cliente viu opcional no `POST /checkout`, um pedido feito nessa janela seria cobrado pelo preço atual do banco, que pode ser diferente do que o cliente viu, sem que ele saiba.
 
