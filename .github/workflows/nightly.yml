@@ -108,6 +108,10 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - name: Cria o diretório do relatório
+        # A imagem roda como uid 1000; montado sem existir, o diretório nasceria
+        # com dono root e modo 755, e o Schemathesis sairia sem gravar (A25).
+        run: install -d -m 0777 schemathesis-report
       - name: Fuzzing com o Schemathesis
         env:
           FUZZ_SEED: ${{ github.run_id }}

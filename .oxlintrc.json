@@ -586,7 +586,8 @@
     {
       "files": [
         "test/integration/global-setup.ts",
-        "test/integration/foundation/container-shutdown.test.ts"
+        "test/integration/foundation/container-shutdown.test.ts",
+        "test/integration/foundation/api-fuzz-negative-control.test.ts"
       ],
       "rules": {
         "no-restricted-imports": "off"
