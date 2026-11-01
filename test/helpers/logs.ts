@@ -1,5 +1,5 @@
 import type { Logger } from 'pino';
-import { createLogger } from '../../src/logging.ts';
+import { createLogger } from '../../src/shared/logging.ts';
 
 export type LogLine = Record<string, unknown>;
 

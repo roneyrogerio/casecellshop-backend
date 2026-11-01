@@ -1,9 +1,9 @@
 import { createApp } from '../app.ts';
-import { envPort, requireEnv } from '../config.ts';
 import { createPool } from '../db/pool.ts';
-import { installGracefulShutdown } from '../lifecycle.ts';
-import { createLogger } from '../logging.ts';
-import { createTelemetry } from '../telemetry.ts';
+import { envPort, requireEnv } from '../shared/config.ts';
+import { installGracefulShutdown } from '../shared/lifecycle.ts';
+import { createLogger } from '../shared/logging.ts';
+import { createTelemetry } from '../shared/telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-api' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-api' });

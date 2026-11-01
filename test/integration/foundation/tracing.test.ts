@@ -4,7 +4,7 @@ import { pino } from 'pino';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
-import { createTelemetry } from '../../../src/telemetry.ts';
+import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
 
 let database: TestDatabase;

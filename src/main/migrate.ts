@@ -1,7 +1,7 @@
-import { requireEnv } from '../config.ts';
 import { createMigrationPool } from '../db/pool.ts';
 import { migrate, seed } from '../db/migrate.ts';
-import { createLogger } from '../logging.ts';
+import { requireEnv } from '../shared/config.ts';
+import { createLogger } from '../shared/logging.ts';
 
 // Serviço de execução única do compose: migra os dois schemas e grava o catálogo
 // de exemplo do ERP simulado. Só ele roda o seed.

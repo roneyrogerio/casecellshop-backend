@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CreateOrderResult } from '../../../src/erp/erp-client.ts';
 import { createPool, startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
-import { createErpHarness } from '../../helpers/erp.ts';
+import { createErpHarness, orderFor, seedErpProduct, uniqueName } from '../../helpers/erp.ts';
 
 let database: TestDatabase;
 
@@ -64,6 +64,28 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
       expect(await client.findOrderByReference('pedido-fnd04-inexistente')).toEqual({ kind: 'not_found' });
     } finally {
       await pool.end();
+    }
+  });
+});
+
+function orderOf(result: CreateOrderResult) {
+  if (result.kind !== 'ok') throw new Error(`esperava ok, veio ${result.kind}`);
+  return result.order;
+}
+
+describe('o estado do ERP simulado vive no banco, não na instância', () => {
+  it('FND-04 uma instância nova do simulado sobre outro pool enxerga a fatura da primeira', async () => {
+    const sku = uniqueName('PERSIST-SKU');
+    const reference = uniqueName('pedido-persistente');
+    await seedErpProduct(database.pool, { sku });
+    const created = orderOf(await createErpHarness(database.erpPool).client.createOrder(orderFor(reference, sku)));
+
+    const otherPool = createPool(database.uri);
+    try {
+      const found = await createErpHarness(otherPool).client.findOrderByReference(reference);
+      expect(found).toEqual({ kind: 'found', order: created });
+    } finally {
+      await otherPool.end();
     }
   });
 });

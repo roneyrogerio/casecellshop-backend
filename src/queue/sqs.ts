@@ -50,6 +50,8 @@ export interface Queue {
   approximateCount(): Promise<number>;
 }
 
+// Máximo de mensagens por ReceiveMessage: limite do próprio SQS.
+export const MAX_RECEIVE_BATCH = 10;
 const REQUEST_TIMEOUT_MS = 5_000;
 const RECEIVE_MARGIN_SECONDS = 5;
 

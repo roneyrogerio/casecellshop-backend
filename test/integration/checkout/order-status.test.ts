@@ -7,8 +7,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { OrderStatus, PROBLEM_MEDIA_TYPE, Problem } from '../../../src/contract/index.ts';
-import { createLogger } from '../../../src/logging.ts';
-import { createTelemetry } from '../../../src/telemetry.ts';
+import { createLogger } from '../../../src/shared/logging.ts';
+import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
 

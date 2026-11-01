@@ -1,7 +1,7 @@
-import type { Clock } from '../../src/clock.ts';
+import type { Clock } from '../../src/shared/clock.ts';
 
 // Relógio manual para os testes, no lugar do sleep. O design.md só diz que
-// `Clock` é uma porta (src/clock.ts); este formato (now, sleep, advance) é a
+// `Clock` é uma porta (src/shared/clock.ts); este formato (now, sleep, advance) é a
 // suposição do test-writer e deve ser ajustado aqui se a porta for outra.
 export interface ManualClock extends Clock {
   advance(ms: number): void;

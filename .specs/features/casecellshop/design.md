@@ -22,6 +22,8 @@ graph LR
 
 O compose roda o PostgreSQL, um serviço de migração, o ElasticMQ (o SQS local), a API e um worker. O processo do worker roda o relay, o envio ao ERP, a reconciliação e a sincronização, e o ERP simulado roda no processo dele.
 
+O código fica numa pasta por capacidade do negócio (`checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`), uma por sistema externo (`erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`), o transversal em `shared/` e uma entrada por processo em `main/`, como em [`CONVENTIONS.md`](../../codebase/CONVENTIONS.md), "Pastas do código" (AD-025).
+
 ## Dados
 
 - `products`: SKU, nome, preço em centavos e `synced_at`.
@@ -136,7 +138,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - Uma linha cujo corpo não passa no schema (só uma linha gravada fora da API) é logada (`outbox.invalid_row`, `error`, com o `orderId`) e fica fora do lote; as outras seguem.
 - Uma rodada que publicou um lote cheio roda de novo na hora; senão (outbox vazia, lote parcial, nada aceito pelo SQS ou erro), espera 500 ms pelo relógio injetável. Um erro é logado (`outbox.relay_error`) e não para o laço.
 - Métrica: `outbox_published_total` (counter, sem label).
-- **Interface (`src/outbox/relay.ts`):** `createRelay({ pool, queue, logger, telemetry, clock, config? })` devolve `start`, `stop` e `publishOnce()` (uma rodada; resolve com o número de linhas publicadas).
+- **Interface (`src/billing/relay.ts`):** `createRelay({ pool, queue, logger, telemetry, clock, config? })` devolve `start`, `stop` e `publishOnce()` (uma rodada; resolve com o número de linhas publicadas).
 
 ## Worker: envio (AD-003, AD-021, AD-024)
 
@@ -147,7 +149,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - a tentativa é o `ApproximateReceiveCount`, que o SQS conta a cada recebimento: uma mensagem que derruba o processo também chega à DLQ, sozinha, sem segurar as outras do lote; o *redrive* zera a contagem (conferido no ElasticMQ);
   - um corpo fora do schema é logado (`outbox.invalid_message`, `error`) e a mensagem fica sem resposta: volta e chega à DLQ pelo limite de recebimentos, sem chamar o ERP;
   - uma mensagem cujo pedido já não está `pending` é apagada sem chamar o ERP (`outbox.closed`).
-- **Permissão de chamada (AD-024, `src/outbox/call-permit.ts`, usada também pela reconciliação):** antes da primeira chamada ao ERP da tentativa, num `UPDATE` só, pelo relógio do banco: `SET last_call_at = now(), call_token = :novo, first_sent_at = coalesce(first_sent_at, now()), dead_at = NULL` (o `dead_at` só na do worker) `WHERE order_id = :id AND (last_call_at IS NULL OR last_call_at + atraso mínimo <= now()) RETURNING` o `first_sent_at` anterior. Sem linha afetada, outra tentativa chamou o ERP há menos que o atraso mínimo: a mensagem volta com `ChangeMessageVisibility` pelo tempo que falta, mais 1 s (`outbox.call_deferred`, `info`). Como o atraso mínimo é maior que uma chamada, isso é a regra da H4 e também a exclusão mútua por pedido entre mensagens repetidas.
+- **Permissão de chamada (AD-024, `src/billing/call-permit.ts`, usada também pela reconciliação):** antes da primeira chamada ao ERP da tentativa, num `UPDATE` só, pelo relógio do banco: `SET last_call_at = now(), call_token = :novo, first_sent_at = coalesce(first_sent_at, now()), dead_at = NULL` (o `dead_at` só na do worker) `WHERE order_id = :id AND (last_call_at IS NULL OR last_call_at + atraso mínimo <= now()) RETURNING` o `first_sent_at` anterior. Sem linha afetada, outra tentativa chamou o ERP há menos que o atraso mínimo: a mensagem volta com `ChangeMessageVisibility` pelo tempo que falta, mais 1 s (`outbox.call_deferred`, `info`). Como o atraso mínimo é maior que uma chamada, isso é a regra da H4 e também a exclusão mútua por pedido entre mensagens repetidas.
 - **Chamada:**
   - fora de transação, com o preço aceito no checkout (H3);
   - os itens do pedido são lidos antes de tomar a permissão, para nenhuma consulta ao banco ficar entre a última conferência abaixo e a chamada;
@@ -160,7 +162,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
   - se gravar o desfecho no banco falhar, o worker repete enquanto o prazo da mensagem vale, até 5 vezes por tentativa, para um erro rápido e persistente não virar um laço contra o banco; esgotadas as repetições, desiste sem responder ao SQS, e a mensagem volta quando a visibilidade vencer. Uma falha do SQS ao apagar ou ao mudar a visibilidade também só é logada: a mensagem volta, e o pedido já com desfecho a encerra.
 - **Desfechos:** transitório ou ambíguo, nova tentativa; permanente, pedido falho e reserva liberada; limite de recebimentos, a DLQ do SQS, com o pedido `pending` e a reserva.
 - **Encerramento:** no `SIGTERM`, o relay, a reconciliação e o worker param juntos, e não um depois do outro, para o worker parar de receber logo; o worker espera as tentativas em andamento, e a reconciliação interrompe a rodada entre uma mensagem e outra, sem começar consulta nova ao ERP (as que sobram voltam à DLQ pela visibilidade); se o prazo estourar, a visibilidade vence e a mensagem volta. O contêiner roda `node` direto, sem `npm`, para o sinal chegar ao processo.
-- **Interface (`src/worker.ts`):** `createWorker({ pool, queue, erp, semaphore?, logger, telemetry, clock, random?, config? })` devolve `start`, `stop` e `pollOnce`.
+- **Interface (`src/billing/worker.ts`):** `createWorker({ pool, queue, erp, semaphore?, logger, telemetry, clock, random?, config? })` devolve `start`, `stop` e `pollOnce`.
   - `pollOnce()` faz uma rodada: adquire as permissões livres, recebe até esse número de mensagens, roda as tentativas em paralelo e resolve, depois de todas terminarem, com o número de mensagens recebidas. Uma tentativa que lança um erro inesperado conta como ambígua e não interrompe as outras;
   - `start()` não espera a rodada inteira: mantém as tentativas em andamento e recebe de novo assim que uma permissão volta, para uma chamada lenta não segurar a vazão das outras; o *long polling* faz a espera com a fila vazia. O `stop()` para de receber e espera as tentativas em andamento; um `start()` depois do `stop()` volta a receber, e um `start()` chamado enquanto o `stop()` espera aguarda o `stop()` terminar e então volta a receber; em qualquer sequência de `start()` e `stop()`, o `stop()` que resolve por último deixa o worker parado (um estado só: parado, rodando ou parando);
   - `semaphore` (padrão: um novo, com o limite da configuração); `random` (padrão `Math.random`) sorteia o jitter, para o teste fixá-lo; `config` sobrepõe os parâmetros da tabela (visibilidade, atraso mínimo, timeout, folga, base e teto da espera, *long polling*, limite de chamadas);
@@ -169,14 +171,14 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 ## Worker: reconciliação e runbook (AD-003, AD-021)
 
-- **Reconciliação, periódica (`src/reconciliation.ts`):** a cada 5 min, recebe da DLQ até 100 mensagens (lotes de 10), cada uma com visibilidade de 5 min, para a rodada seguinte ler outras e uma mensagem não ser vista duas vezes na mesma rodada. Para cada uma:
+- **Reconciliação, periódica (`src/billing/reconciliation.ts`):** a cada 5 min, recebe da DLQ até 100 mensagens (lotes de 10), cada uma com visibilidade de 5 min, para a rodada seguinte ler outras e uma mensagem não ser vista duas vezes na mesma rodada. Para cada uma:
   - marca a chegada à DLQ uma vez: `UPDATE outbox SET dead_at = now() WHERE order_id = :id AND dead_at IS NULL RETURNING`; com linha, loga `outbox.dead` (`error`, com `orderId` e `correlationId`) e conta `dead` em `outbox_attempt_outcome_total`. A permissão de chamada tomada pelo worker zera o `dead_at` (a tomada pela reconciliação não), então uma mensagem que volta à DLQ depois de um *redrive* e de nova tentativa é contada de novo;
   - corpo fora do schema: fica para o runbook;
   - pedido que já não está `pending`: apaga da DLQ (`outbox.closed`);
   - com a permissão de chamada do worker (o atraso mínimo vale também aqui) e uma permissão do semáforo, consulta o ERP pela referência: achou, conclui como faturado pelo mesmo caminho do worker e apaga da DLQ (`order.invoiced`); não achou, ou a consulta falhou, ou não teve a permissão de chamada, a mensagem fica na DLQ para o runbook.
   - a DLQ é lida sem *long polling* (`waitSeconds` 0), porque a rodada é periódica; o `stop()` acorda a espera do intervalo e interrompe a rodada entre mensagens; um erro numa mensagem é logado (`outbox.reconcile_error`, com `orderId` e `correlationId`) e a rodada segue, para uma mensagem com defeito não travar as outras.
   - **Interface:** `createReconciler({ pool, dlq, erp, semaphore, logger, telemetry, clock, config? })` devolve `start`, `stop` e `reconcileOnce()` (resolve com `{ seen, invoiced, closed }`).
-- **Runbook (`src/runbook.ts` e `node src/main/runbook.ts <comando>`):**
+- **Runbook (`src/billing/runbook.ts` e `node src/main/runbook.ts <comando>`):**
   - `redrive`: `StartMessageMoveTask` da DLQ para a fila de origem; espera, pelo `ApproximateNumberOfMessages` da DLQ, até ela esvaziar ou passar 60 s, e imprime quantas mensagens saíram. É seguro, porque cada mensagem passa pela permissão de chamada (atraso mínimo) e consulta o ERP antes de criar, já que `first_sent_at` nunca é apagado (`ORD-07`);
   - `cancel <orderId>`: depois de o operador confirmar no ERP que o pedido não existe, numa transação, na ordem de lock, marca a linha da outbox como publicada se ainda não estava (`published_at = coalesce(published_at, now())`, para o relay parar de tentar uma linha que não passa no schema da mensagem, `outbox.invalid_row`), marca o pedido como `failed` com o motivo `cancelled` por compare-and-set e libera a reserva só se o pedido mudou; imprime se mudou. Não toca o SQS: a mensagem que ficou na DLQ é apagada pela reconciliação ou, depois de um *redrive*, pelo worker, que encontra o pedido já com desfecho (`ORD-15`).
 
@@ -286,11 +288,11 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
 
 - **Pontos de injeção,** que os testes usam sem ler o resto de `src/`:
   - `src/app.ts`: `createApp({ pool, logger, telemetry })` devolve o app do Express, sem abrir porta;
-  - `src/telemetry.ts`: `createTelemetry({ spanExporter? })` devolve, além do que a API e o worker usam, `forceFlush()` e `shutdown()`; os testes passam o `InMemorySpanExporter` do `sdk-trace`;
-  - `src/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`; no M3, o `erpPool` dá lugar à porta `erp` (ver "Worker: envio");
+  - `src/shared/telemetry.ts`: `createTelemetry({ spanExporter? })` devolve, além do que a API e o worker usam, `forceFlush()` e `shutdown()`; os testes passam o `InMemorySpanExporter` do `sdk-trace`;
+  - `src/billing/worker.ts`: `createWorker({ pool, erpPool, logger, telemetry, clock })`, com `start()` e `stop()`; no M3, o `erpPool` dá lugar à porta `erp` (ver "Worker: envio");
   - `src/erp/erp-client.ts`: a porta `ErpClient`, com `listCatalog(page)`, que devolve `{ items: [{ sku, name, priceCents, onHand }], hasNext }`; `createOrder({ reference, items: [{ sku, quantity, unitPriceCents }] })`, que devolve `{ erpOrderId, reference }`; e `findOrderByReference(reference)`, que devolve o mesmo objeto ou `null`;
   - `src/erp/sim/index.ts`: `createSimulatedErpClient({ pool, clock })` monta a porta: a camada anticorrupção sobre o transporte simulado, como na AD-004. No M1, só há o modo normal; a separação entre as duas entra no M3, com os modos de falha. O estado fica no schema `erp_sim`, com as tabelas `erp_sim.products (sku, name, price_cents, on_hand)` e `erp_sim.invoices (id, reference único, items, total_cents, created_at)`; os testes criam produtos e contam faturas por SQL nelas;
-  - `src/clock.ts`: a porta `Clock`, com `now()` em milissegundos e `sleep(ms)`; os testes usam um relógio manual;
+  - `src/shared/clock.ts`: a porta `Clock`, com `now()` em milissegundos e `sleep(ms)`; os testes usam um relógio manual;
   - `src/db/migrate.ts`: `migrate(pool)` aplica as migrações dos dois schemas (a partir do M2, `migrate(pool, folders = MIGRATION_FOLDERS)`, com `folders` como lista de `{ dir, schema }`, para os testes do `FND-11` usarem pastas próprias), e `seed(pool)` grava os dados iniciais do `erp_sim`;
   - `src/db/database.ts` (M2, AD-017): `createDb(pool)` e `createErpDb(pool)` devolvem o `Kysely` tipado de cada schema, o da loja e o `erp_sim`, os dois sobre `createPoolAdapter(pool)`, o adaptador do pool passado ao `PostgresDialect` (ouvinte de `error` em toda conexão retirada; descarte da conexão cujo `ROLLBACK` falhou); `runInTransaction(db, fn)` é o único invólucro de transação, com a guarda antes do `COMMIT`, e rejeita com `TransactionAbortedError` quando a guarda recebe `25P02` (`FND-10`);
   - `src/db/types/store.ts` e `src/db/types/erp-sim.ts` (M2): os tipos gerados de cada schema, cada um com a interface `DB` que o kysely-codegen emite;

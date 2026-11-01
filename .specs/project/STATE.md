@@ -3,7 +3,7 @@
 **Atualizado em:** 31/10/2026
 **Trabalho atual:** M3 — Processamento assíncrono (M2 concluído)
 
-Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita não é editada: se mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
+Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita só recebe errata de redação que não muda a decisão, registrada abaixo do status (`.specs/README.md`, "Ciclo"); se a decisão mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
 
 ---
 
@@ -288,6 +288,8 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 **Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, o destino dos achados `baixa` de texto, pela AD-022, e a leitura de uns 10 minutos do mantenedor, pela AD-023.
 
+**Errata (31/10/2026, PR #17):** a última frase do contexto trocou a lista de autores e empresas pelo princípio que ela resumia, sem acrescentar afirmação; a decisão não mudou.
+
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
 - **Leitura por chamada:** cada agente relia de 65 KB a 147 KB, e o `AGENTS.md` entrava duas vezes, pelo `CLAUDE.md` e pela instrução de lê-lo.
@@ -296,7 +298,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - **Limites de palavras:** herdados da skill `tlc-spec-driven`, forçaram commits de compressão.
 - **Oráculo exposto:** o `implementer` podia editar o CI e as configurações que decidem se o trabalho dele está certo.
 
-A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, METR) converge em verificação determinística e independente, com o humano na intenção e no merge.
+O princípio adotado é a verificação determinística e independente de quem implementa, com o humano na intenção e no merge.
 
 **Decisão.**
 
@@ -664,7 +666,7 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 
 ### AD-024 · Uma chamada ao ERP por pedido a cada atraso mínimo, pela permissão de chamada no banco
 
-**Status:** proposta (PR 2 do M3). Detalha a AD-021 no ponto que ela deixou aberto: como o *Idempotent Consumer* impede duas chamadas simultâneas do mesmo pedido.
+**Status:** aceita (31/10/2026, PR #15). Detalha a AD-021 no ponto que ela deixou aberto: como o *Idempotent Consumer* impede duas chamadas simultâneas do mesmo pedido.
 
 **Contexto.** Com a fila na tabela da outbox, o lease e o token gravados na linha garantiam uma tentativa por pedido de cada vez. Com o SQS, essa garantia some: o relay publica pelo menos uma vez (AD-021), então duas mensagens do mesmo pedido podem ser recebidas juntas por workers diferentes, e o *visibility timeout* vale por mensagem, não por pedido. Sem a H1b, duas tentativas simultâneas do mesmo pedido (uma consultando enquanto a outra cria) fazem duas faturas.
 
@@ -686,6 +688,74 @@ A pesquisa da fábrica (palestra de Tariq Shaukat, Spotify, Stripe, Anthropic, M
 **Rever quando:** o ERP passar a garantir a H1b, que torna a exclusão por pedido desnecessária para a fatura, ou a vazão por pedido importar (nunca mais que uma chamada a cada 45 s por pedido).
 
 **Referências:** AD-003; AD-021; [microservices.io, Idempotent Consumer](https://microservices.io/patterns/communication-style/idempotent-consumer.html); [Amazon SQS, visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html) e [FIFO, deduplicação](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-messagededuplicationid-property.html).
+
+### AD-025 · Pastas por capacidade do negócio e por tecnologia de fronteira
+
+**Status:** proposta (31/10/2026)
+
+**Contexto.** Até o M3, o checkout, os pedidos e a saúde tinham pasta própria, mas o faturamento ficou espalhado: `worker.ts`, `reconciliation.ts` e `runbook.ts` na raiz de `src/`, e o relay e a conclusão em `outbox/`. Os módulos usados por todo o código (relógio, configuração, logs, telemetria) também ficavam na raiz, ao lado da fábrica do app. Uma mudança no faturamento atravessava três lugares, e não havia regra de onde entram as capacidades do M4 (vitrine e sincronização). Nos testes, `test/integration/erp/` não correspondia a nenhuma área do `spec.md`, e as migrações de exemplo tinham nomes em português, contra a convenção de idioma.
+
+**Decisão.** A tabela está em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Pastas do código".
+
+- **Uma pasta por capacidade do negócio:** `checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`. Cada uma guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão mudam juntos quando o faturamento muda (AD-021, AD-024), então ficam juntos em `src/billing/`.
+- **Uma pasta por sistema externo:** `erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`. Cada uma tem a porta, definida pela conversa de que o negócio precisa (`ErpClient`, `Queue`), e o adaptador da tecnologia que a atende. O ERP simulado é um adaptador da porta `ErpClient`, e o ERP real entra no lugar dele sem mudar a regra de negócio (AD-004).
+- **`src/shared/`** guarda o que todo o código usa e que não conhece o negócio: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
+- **`src/main/`** tem uma entrada por processo e monta as dependências de cada processo. **`src/app.ts`** monta o app HTTP (rotas e repositórios) sem abrir porta, para os testes subirem o app pelo supertest.
+- As dependências seguem um sentido só: de `main/` para o negócio, e do negócio para a fronteira, o contrato e o `shared/`. A fronteira não importa pastas de negócio, o `shared/` não importa nenhuma outra pasta de `src/`, e uma pasta de negócio não importa outra. O lint confere esse sentido (AD-026).
+- Nos testes, a pasta de integração é a área do `spec.md`, como desde o M1. Os testes do ERP simulado vão para a área do critério que provam, e as migrações de exemplo ganham nomes em inglês.
+
+**Alternativas consideradas:**
+
+- **Pastas por camada** (`controllers/`, `services/`, `repositories/`): uma mudança numa capacidade passa por várias pastas, e nada indica o que pertence ao faturamento.
+- **Uma pasta `workers/` para tudo que roda fora da requisição:** separa o relay e a reconciliação do pedido e das regras que eles tratam, e obriga `workers/` a importar o interior de `billing/`.
+- **Manter os módulos transversais na raiz de `src/`:** a raiz misturaria fábrica, regra de negócio e utilitário, sem critério para o próximo arquivo.
+- **Espelhar `src/` em `test/integration/`:** um critério que atravessa pastas (o `FND-05` liga a telemetria ao repositório da saúde) teria os testes espalhados, e a regra por área, em vigor desde o M1, mudaria sem ganho.
+
+**Trade-off.** Uma mudança só de lugar, sem comportamento novo, que mexe em muitos imports e nos caminhos citados na spec e na documentação.
+
+**Rever quando:** uma capacidade nova não couber numa pasta só, ou uma pasta de negócio precisar de outra.
+
+**Referências:**
+
+- Robert C. Martin, *Clean Architecture*, 1.ª ed., cap. 13 ("Component Cohesion", princípio do fechamento comum) e cap. 14 ("Component Coupling", princípio das dependências acíclicas): agrupar o que muda junto e manter as dependências sem ciclo.
+- [Alistair Cockburn, *Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/), consultado em 31/10/2026: a porta é definida pelo propósito da conversa, e o adaptador é a parte específica da tecnologia; uma porta pode ter vários adaptadores.
+- [Mark Seemann, *Composition Root*](https://blog.ploeh.dk/2011/07/28/CompositionRoot/), consultado em 31/10/2026: a montagem das dependências fica junto da entrada de cada processo.
+- [Yoni Goldberg et al., *Node.js Best Practices*, "Structure your solution by components"](https://github.com/goldbergyoni/nodebestpractices/blob/194a827cec4006d11df028a6a88397d57a851d59/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
+
+### AD-026 · Limites de tamanho, complexidade e dependências conferidos pelo lint
+
+**Status:** proposta (31/10/2026)
+
+**Contexto.** O `.oxlintrc.json` ligava só a categoria `correctness`. Uma auditoria do código em 31/10/2026 achou, em `src/`, uma função de 257 linhas (`createWorker`), cinco funções com complexidade ciclomática entre 11 e 15, o mesmo laço de início e parada escrito três vezes, com diferenças entre as cópias, e variáveis de ambiente lidas fora do módulo de configuração. O código é escrito por agentes, e uma regra só escrita em texto não é cumprida de forma consistente: o que precisa valer sempre tem de ser conferido pela máquina (AD-012). O sentido das dependências da AD-025 também precisava de uma conferência.
+
+**Decisão.** Os limites e as regras estão em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Tamanho e forma do código", e são conferidos pelo `npm run lint` em `src/`, no hook de parada dos agentes, no pre-push e no CI.
+
+- **Tamanho:** 300 linhas por arquivo e 50 por função, contando só linhas com código. Os comentários explicam o porquê (`AGENTS.md`) e não podem empurrar uma função para fora do limite.
+- **Complexidade:** 10 de complexidade ciclomática por função, na variante em que um `switch` conta como uma decisão só, porque um `switch` sobre os valores de uma lista fechada (os desfechos do ERP, os códigos do zod) é lido como uma tabela; 4 níveis de aninhamento; e 4 parâmetros (acima disso, um objeto de opções, como as fábricas `createX` já usam).
+- **Dependências:** `no-restricted-imports` por pasta confere o sentido da AD-025 e deixa só o `src/main/` importar o ERP simulado; `import/no-cycle` impede ciclos.
+- **Configuração:** `node/no-process-env` deixa só o `src/shared/config.ts` ler o ambiente, para os padrões, a validação e as mensagens de erro de cada variável ficarem num lugar só.
+- **Testes:** em `*.test.ts`, os limites de linhas por arquivo e por função não valem, porque `describe` e `it` são funções e uma tabela de casos é longa por natureza.
+- **Exceção:** um limite não sobe e uma regra não é desligada num arquivo sem uma AD. O `.oxlintrc.json` fica fora do alcance do `implementer` (AI-04).
+
+**Alternativas consideradas:**
+
+- **Os padrões das regras** (complexidade 20, 3 parâmetros): complexidade 20 deixa passar as cinco funções achadas; 3 parâmetros acusaria o middleware de erro do Express, que exige 4. Os outros números (300 linhas por arquivo, 50 por função, aninhamento 4) são os padrões das próprias regras.
+- **Complexidade cognitiva** (limite 15) em vez da ciclomática: mede melhor a dificuldade de leitura, mas o oxlint não tem a regra nativa, e as opções (o plugin `sonarjs` pelos plugins em JavaScript, ainda em alfa, ou um pacote de terceiros) trazem uma dependência para uma medida que a ciclomática com aninhamento limitado já aproxima.
+- **dependency-cruiser** para o sentido das dependências: cobre camadas e arquivos órfãos, mas é uma dependência a mais para uma regra que o `no-restricted-imports` nativo expressa em poucas linhas.
+- **Só a revisão:** o revisor acha o problema depois do código escrito; o lint devolve o agente no próprio hook de parada.
+
+**Trade-off.** As fábricas `createX`, que devolvem um objeto de funções internas, contam as funções internas no tamanho da de fora; elas passam a ter as funções internas no nível do módulo, com as dependências passadas por parâmetro. Uma regra nova acusa o código existente, e o PR que a liga também ajusta o código.
+
+**Rever quando:** um limite exigir dividir uma função em partes que não fazem sentido sozinhas em mais de um caso, ou o oxlint ganhar a regra de complexidade cognitiva nativa.
+
+**Referências:**
+
+- [ESLint, *max-lines*](https://eslint.org/docs/latest/rules/max-lines), consultado em 31/10/2026: "não há um número máximo objetivo" de linhas por arquivo, e as recomendações vão de 100 a 500; o padrão da regra é 300. Os limites desta AD são, portanto, escolha do projeto dentro da faixa usual, e não um número de consenso.
+- [ESLint, *complexity*](https://eslint.org/docs/latest/rules/complexity), consultado em 31/10/2026: as variantes `classic` e `modified`.
+- Thomas J. McCabe, *A Complexity Measure*, IEEE Transactions on Software Engineering, SE-2(4), 1976: o limite de 10 de complexidade ciclomática por módulo.
+- [Google, *TypeScript Style Guide*, "Function Length"](https://google.github.io/styleguide/tsguide.html), consultado em 31/10/2026: sem limite rígido, uma função acima de umas 40 linhas pede que se pense em dividi-la.
+- [oxc, regras do oxlint](https://oxc.rs/docs/guide/usage/linter/rules.html), consultado em 31/10/2026: as regras nativas e as que exigem plugin.
+- [Anthropic, *Claude Code: Best practices*](https://code.claude.com/docs/en/best-practices), consultado em 31/10/2026: o que precisa acontecer toda vez vai para um hook ou para o CI, não para as instruções.
 
 ## Escolhas de ferramenta
 

@@ -211,8 +211,9 @@ function ciViolations(workflow: Workflow, pkg: Pkg, composeTests: string[]): str
 // --- linhas de base em memória ----------------------------------------------------------------------------------
 
 const COMPOSE_A = 'test/integration/foundation/compose.test.ts';
-const COMPOSE_B = 'test/integration/worker/worker-compose.test.ts';
-const BASE_COMPOSE = [COMPOSE_A, COMPOSE_B];
+const COMPOSE_B = 'test/integration/billing/worker-compose.test.ts';
+// Em ordem alfabética, a mesma que o detector (composeTestsUnder) promete.
+const BASE_COMPOSE = [COMPOSE_A, COMPOSE_B].sort();
 
 const BASE_PKG: Pkg = {
   engines: { node: '>=24.12.0' },

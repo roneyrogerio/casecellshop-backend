@@ -10,7 +10,7 @@ O que construir e por quê fica escrito e versionado antes do código. Cada test
 | [`project/STATE-ARCHIVE.md`](project/STATE-ARCHIVE.md) | A AD-007, substituída no M1 e guardada com o texto como foi aceito; não recebe mais nada |
 | [`features/casecellshop/spec.md`](features/casecellshop/spec.md) | A lista única de critérios de aceite com ID (`FND`, `CHK`, `ORD`, `CAT`, `OBS`, `DOC`, `AI`) |
 | [`features/casecellshop/design.md`](features/casecellshop/design.md) | Como construir: componentes, dados, consultas, contrato, observabilidade e parâmetros |
-| [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: commits, pull requests, branches, testes, idioma e instruções da IA |
+| [`codebase/CONVENTIONS.md`](codebase/CONVENTIONS.md) | As convenções do repositório: pastas do código, commits, pull requests, branches, testes, idioma e instruções da IA |
 | `src/contract/` e `openapi.yaml` (criados no M1) | O contrato HTTP em zod e o OpenAPI 3.1 gerado dele. A validação e os testes usam os mesmos schemas |
 | `ARCHITECTURE.md` (raiz, criado no M1) | O diagnóstico, a arquitetura alvo e o porquê de cada bloco, por tema |
 
@@ -63,9 +63,26 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 
 **Ciclo:**
 - a AD nasce "proposta" no PR que a cria e fica aceita com o merge dele; a substituída é marcada no mesmo PR;
-- aceita, não é editada: uma nova AD a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN"); quando a nova muda só uma parte, "alterada pela AD-NNN" / "altera a AD-NNN";
+- aceita, não é editada, exceto por uma errata de redação que não muda a decisão, registrada logo abaixo do status com data e PR ("**Errata (DD/MM/AAAA, PR #N):** …"); uma mudança de decisão pede uma nova AD, que a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN"); quando a nova muda só uma parte, "alterada pela AD-NNN" / "altera a AD-NNN".
 
-**Fontes.** O motivo é escrito nos termos do projeto (requisitos, restrições e trade-offs) e se sustenta sozinho. Documentação, normas e exemplos de outros projetos entram só em "Referências", como evidência verificável, nunca como o motivo.
+**Fontes.**
+
+- O motivo é escrito nos termos do projeto: as hipóteses (H1a–H4), os critérios, as ADs anteriores, os atributos de qualidade e as restrições. Ele se sustenta com todos os links removidos.
+- Documentação, normas e livros entram em "Referências", como evidência verificável do que a decisão afirma.
+- Como outro projeto ou empresa resolve o mesmo problema entra só como evidência: em "Alternativas consideradas", dizendo por que serve ou não serve aqui, ou em "Referências". Popularidade ("é o padrão", "a maioria usa") e autoridade ("a empresa X faz assim") nunca são o motivo.
+- O texto descreve fatos, em voz ativa, sem narrar a pesquisa ("a pesquisa mostrou", "depois de pesquisar").
+
+**Formato das referências.** Link descritivo, nunca URL solta, seguido do que a fonte sustenta nesta decisão:
+
+| Fonte | Formato |
+| --- | --- |
+| Página ou seção | `[Autor ou organização, *Título*, seção](URL#âncora): o que sustenta` |
+| Norma ou RFC | `[IETF, *RFC 9457*, seção 3](URL): o que sustenta` |
+| Código de outro repositório | link permanente com o SHA do commit e as linhas (`/blob/<sha>/caminho#L10-L20`), nunca o de uma branch |
+| Livro | `Autor, *Título*, edição, capítulo` |
+| Página que muda (documentação de fornecedor, blog) | o formato da página, mais "consultado em DD/MM/AAAA" |
+
+Dentro do repositório, cite o ID (`AD-NNN`, `ORD-11`, `H4`) e não a âncora de um título, que quebra quando o título muda. Mensagem de commit, README e comentário de código citam o ID da AD, sem link externo.
 
 **Modelos.** AD, no `STATE.md`:
 
