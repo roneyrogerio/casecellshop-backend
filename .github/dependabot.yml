@@ -1,0 +1,30 @@
+# AI-45: os PRs de atualização passam pelo mesmo CI e pela aprovação do dono.
+# A espera de 7 dias deixa passar a janela em que uma versão maliciosa costuma ser
+# retirada do registro; as atualizações de segurança não esperam.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Mantém a versão exata do package.json (save-exact).
+    versioning-strategy: increase
+    commit-message:
+      prefix: build(deps)
+    groups:
+      npm:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns: ['*']

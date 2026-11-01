@@ -135,12 +135,42 @@ jobs:
         if: matrix.node == 'nvmrc'
         run: node scripts/check-db-types.ts
 
+  # AI-43: os workflows conferidos sem Node. O actionlint pega o YAML que não roda
+  # (expressão, contexto, shellcheck do run:); o zizmor, o que roda e é inseguro
+  # (action sem SHA, commit de fork, permissão demais, injeção no shell).
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Versão fixa, e o tarball só é extraído depois de bater com o checksums da
+      # mesma release; o script oficial de instalação vem da branch e não confere nada.
+      - name: actionlint
+        run: |
+          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          ./actionlint
+
+      # advanced-security: false faz o achado reprovar o job pelo código de saída,
+      # sem pedir escrita no code scanning; o token de leitura liga as auditorias que
+      # consultam a API (commit de fork no lugar do da action, action vulnerável).
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
+          advanced-security: false
+          token: ${{ github.token }}
+
   # AI-42: o único check que o ruleset exige. Um job pulado conta como verde, e um
   # job que depende de outro que falhou é pulado; por isso este roda sempre e olha
   # o resultado de cada um. Mudar os jobs acima não mexe no ruleset.
   ci-ok:
     name: ci-ok
-    needs: [checks, test]
+    needs: [checks, test, workflows]
     if: always()
     runs-on: ubuntu-latest
     steps:
