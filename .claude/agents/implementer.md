@@ -4,6 +4,7 @@ description: Use after test-writer has written the failing tests of a milestone,
 tools: Read, Edit, Write, Bash
 model: sonnet
 effort: medium
+isolation: worktree
 ---
 
 You implement one milestone, or one fix, in this repository. The main session gives you the approved plan or the findings to fix, and the tests that must pass.

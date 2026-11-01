@@ -6,6 +6,9 @@
   "enabledMcpjsonServers": [
     "github"
   ],
+  "worktree": {
+    "baseRef": "head"
+  },
   "permissions": {
     "allow": [
       "Bash(git commit *)",
@@ -65,7 +68,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/path-guard.mjs\""
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/path-guard.mjs\"",
+            "onFailure": "block"
           }
         ]
       },
@@ -74,7 +78,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/github-guard.mjs\""
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/github-guard.mjs\"",
+            "onFailure": "block"
           }
         ]
       },
@@ -83,7 +88,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/bash-guard.mjs\""
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/bash-guard.mjs\"",
+            "onFailure": "block"
           }
         ]
       }
@@ -105,7 +111,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-start.mjs\""
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-start.mjs\"",
+            "timeout": 180
           }
         ]
       }

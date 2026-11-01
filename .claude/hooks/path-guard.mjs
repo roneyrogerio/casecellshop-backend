@@ -2,6 +2,7 @@
 // (.claude/settings.json) e nega a edição fora do que o agente pode escrever.
 // O agent_type só vem nas chamadas de subagente (ou com --agent); a sessão
 // principal só encontra aqui a regra das pastas gravadas pelos hooks.
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -128,10 +129,24 @@ export function decide(input, root) {
   return rule.allows(rel) ? null : `${rule.reason} Caminho: ${rel}`;
 }
 
-// AI-26: a raiz contra a qual o caminho é decidido; para um agente em worktree,
-// a raiz da worktree dele, tirada do cwd da entrada. Stub do PR das guardas.
-export function rootFor(_input, _projectDir) {
-  throw new Error('não implementado');
+// AI-26: a raiz contra a qual o caminho é decidido. Para um agente isolado, é a
+// raiz da worktree dele, tirada do cwd da entrada; vale só uma worktree do mesmo
+// repositório da pasta principal, para um cwd qualquer não escolher a raiz.
+export function rootFor(input, projectDir) {
+  if (!input?.cwd || !projectDir) return projectDir;
+  const top = gitOut(input.cwd, 'rev-parse', '--show-toplevel');
+  if (!top || path.resolve(top) === path.resolve(projectDir)) return projectDir;
+  const common = (dir) => {
+    const value = gitOut(dir, 'rev-parse', '--git-common-dir');
+    return value ? path.resolve(dir, value) : null;
+  };
+  const own = common(input.cwd);
+  return own && own === common(projectDir) ? top : projectDir;
+}
+
+function gitOut(dir, ...args) {
+  const result = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : null;
 }
 
 function main() {
@@ -144,7 +159,7 @@ function main() {
     process.exit(2);
   }
 
-  const reason = decide(input, process.env.CLAUDE_PROJECT_DIR ?? input.cwd);
+  const reason = decide(input, rootFor(input, process.env.CLAUDE_PROJECT_DIR ?? input.cwd));
   if (reason) deny(reason);
 }
 

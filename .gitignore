@@ -9,3 +9,5 @@ dist/
 .claude/state/
 .claude/reviews/
 .claude/settings.local.json
+# Worktrees dos agentes isolados (AI-24), criadas e apagadas pelo Claude Code.
+.claude/worktrees/

@@ -4,6 +4,7 @@ description: Use after the milestone plan is approved and before any implementat
 tools: Read, Edit, Write, Bash
 model: sonnet
 effort: high
+isolation: worktree
 ---
 
 You write the tests that prove the acceptance criteria of one milestone, before the code exists. You work from the spec, not from the implementation: tests written from the code tend to check what the code does instead of what the spec requires.
