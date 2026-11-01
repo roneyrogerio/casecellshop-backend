@@ -4,6 +4,7 @@ import { TransactionAbortedError } from '../db/database.ts';
 import type { HandleResult, Queue } from '../queue/sqs.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { concludeOrder, type OrderConclusion } from './conclude.ts';
+import { billingMetrics } from './telemetry.ts';
 import {
   type Attempt,
   callErp,
@@ -34,7 +35,10 @@ async function respond(
   try {
     const result = await action();
     if (result === 'stale') {
-      telemetry.outboxConclusionNoRow.add(1);
+      billingMetrics(telemetry).add(
+        'casecellshop.outbox.orphan_conclusions',
+        1,
+      );
       log.warn(
         { event: 'outbox.conclusion_no_row' },
         'o SQS recusou o receipt handle: outro recebimento já tem a mensagem',
@@ -63,7 +67,9 @@ async function close(
     log,
   );
   if (result !== 'ok') return;
-  ctx.telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
+  billingMetrics(ctx.telemetry).add('casecellshop.outbox.attempts', 1, {
+    'casecellshop.outbox.attempt.outcome': 'closed',
+  });
   log.info(
     { event: 'outbox.closed' },
     'pedido já tinha desfecho: mensagem encerrada',
@@ -113,7 +119,9 @@ async function finishRetry(
   );
   // Só conta e loga quando a visibilidade de fato mudou.
   if (result !== 'ok') return;
-  ctx.telemetry.outboxAttemptOutcome.add(1, { outcome: outcome.kind });
+  billingMetrics(ctx.telemetry).add('casecellshop.outbox.attempts', 1, {
+    'casecellshop.outbox.attempt.outcome': outcome.kind,
+  });
   if (outcome.kind === 'retry')
     log.warn(
       { event: 'outbox.retry', outcome: outcome.cause },
@@ -139,11 +147,17 @@ async function finishConclusion(
     await close(ctx, message, log);
     return;
   }
-  ctx.telemetry.outboxAttemptOutcome.add(1, { outcome: outcome.kind });
+  const metrics = billingMetrics(ctx.telemetry);
+  metrics.add('casecellshop.outbox.attempts', 1, {
+    'casecellshop.outbox.attempt.outcome': outcome.kind,
+  });
   if (outcome.kind === 'invoiced') {
     log.info({ event: 'order.invoiced' }, 'pedido faturado');
     if (result.acceptToOutcomeSeconds !== undefined)
-      ctx.telemetry.orderAcceptToInvoice.record(result.acceptToOutcomeSeconds);
+      metrics.record(
+        'casecellshop.order.accept_to_invoice.duration',
+        result.acceptToOutcomeSeconds,
+      );
   } else {
     log.warn(
       { event: 'order.failed', reason: outcome.reason },
@@ -191,7 +205,9 @@ export async function runAttempt(
     }
     outcome = await callErp(ctx, message, log);
     if (!outcome) {
-      ctx.telemetry.outboxAttemptOutcome.add(1, { outcome: 'lease_short' });
+      billingMetrics(ctx.telemetry).add('casecellshop.outbox.attempts', 1, {
+        'casecellshop.outbox.attempt.outcome': 'lease_short',
+      });
       return;
     }
   } catch (error) {

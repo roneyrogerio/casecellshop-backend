@@ -16,6 +16,7 @@ import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
+import { billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
 // reconciliação e runbook").
@@ -103,7 +104,9 @@ async function markDead(
     { event: 'outbox.dead' },
     'a mensagem chegou à DLQ: o pedido segue pendente com a reserva',
   );
-  telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
+  billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
+    'casecellshop.outbox.attempt.outcome': 'dead',
+  });
 }
 
 // Confirma no ERP que o pedido existe e então o fatura; 'kept' deixa a mensagem para o runbook.
@@ -125,10 +128,16 @@ async function invoiceIfFound(
 
   const result = await concludeOrder(db, message.orderId, { kind: 'invoiced' });
   if (result.orderChanged) {
-    telemetry.outboxAttemptOutcome.add(1, { outcome: 'invoiced' });
+    const metrics = billingMetrics(telemetry);
+    metrics.add('casecellshop.outbox.attempts', 1, {
+      'casecellshop.outbox.attempt.outcome': 'invoiced',
+    });
     log.info({ event: 'order.invoiced' }, 'pedido faturado pela reconciliação');
     if (result.acceptToOutcomeSeconds !== undefined)
-      telemetry.orderAcceptToInvoice.record(result.acceptToOutcomeSeconds);
+      metrics.record(
+        'casecellshop.order.accept_to_invoice.duration',
+        result.acceptToOutcomeSeconds,
+      );
   }
   await dlq.delete(received.receiptHandle);
   return 'invoiced';
@@ -152,7 +161,9 @@ async function settleMessage(
   if (!order) return 'kept';
   if (order.status !== 'pending') {
     if ((await dlq.delete(received.receiptHandle)) !== 'ok') return 'kept';
-    telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
+    billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
+      'casecellshop.outbox.attempt.outcome': 'closed',
+    });
     log.info(
       { event: 'outbox.closed' },
       'pedido já tinha desfecho: mensagem apagada da DLQ',

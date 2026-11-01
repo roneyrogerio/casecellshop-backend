@@ -1,5 +1,7 @@
 // OBS-07 (AD-029): a telemetria do faturamento: o relay, o worker e a reconciliação.
 import type { LogEventSpec, MetricSpec } from '../shared/telemetry-catalog.ts';
+import { metricsOf } from '../shared/telemetry-instruments.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 const ATTEMPT_OUTCOMES = [
   'invoiced',
@@ -46,6 +48,11 @@ export const BILLING_METRICS = {
     attributes: {},
   },
 } as const satisfies Record<string, MetricSpec>;
+
+// Os instrumentos do faturamento, criados uma vez por `Telemetry` a partir da declaração acima.
+export function billingMetrics(telemetry: Telemetry) {
+  return metricsOf(telemetry, 'casecellshop.billing', BILLING_METRICS);
+}
 
 export const BILLING_LOG_EVENTS = {
   'casecellshop.worker.started': {

@@ -8,9 +8,17 @@ import {
   trace,
   type Span,
 } from '@opentelemetry/api';
+import {
+  ATTR_ERROR_TYPE,
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_HTTP_ROUTE,
+  ATTR_URL_SCHEME,
+} from '@opentelemetry/semantic-conventions';
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
+import { HTTP_METHODS } from '../shared/http-metrics.ts';
 import { logContext } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
 
@@ -23,8 +31,10 @@ function correlationIdFrom(header: string | string[] | undefined): string {
   return randomUUID();
 }
 
-function statusClass(status: number): string {
-  return `${Math.floor(status / 100)}xx`;
+// Cardinalidade limitada: um método fora da lista da convenção vira `_OTHER`.
+function methodAttribute(method: string): string {
+  const known: readonly string[] = HTTP_METHODS;
+  return known.includes(method) ? method : '_OTHER';
 }
 
 interface ConcludedRequest {
@@ -62,11 +72,13 @@ function concludeRequest({
   const spanContext = span.spanContext();
   span.end();
 
-  // Labels de lista fechada: rota como template, método e classe de status.
+  // Atributos da convenção do OpenTelemetry; o `error.type` só na resposta 5xx, como pede a convenção.
   telemetry.httpRequestDuration.record(seconds, {
-    route,
-    method: req.method,
-    status_class: statusClass(status),
+    [ATTR_HTTP_REQUEST_METHOD]: methodAttribute(req.method),
+    [ATTR_HTTP_ROUTE]: route,
+    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
+    [ATTR_URL_SCHEME]: req.secure ? 'https' : 'http',
+    ...(status >= 500 ? { [ATTR_ERROR_TYPE]: String(status) } : {}),
   });
   // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
   // O orderId entra só quando o handler o gravou (pedido existente).

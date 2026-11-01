@@ -1,5 +1,7 @@
 // OBS-07 (AD-029): a telemetria do checkout.
 import type { LogEventSpec, MetricSpec } from '../shared/telemetry-catalog.ts';
+import { metricsOf } from '../shared/telemetry-instruments.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 const CHECKOUT_OUTCOMES = [
   'accepted',
@@ -23,6 +25,11 @@ export const CHECKOUT_METRICS = {
     },
   },
 } as const satisfies Record<string, MetricSpec>;
+
+// Os instrumentos do checkout, criados uma vez por `Telemetry` a partir da declaração acima.
+export function checkoutMetrics(telemetry: Telemetry) {
+  return metricsOf(telemetry, 'casecellshop.checkout', CHECKOUT_METRICS);
+}
 
 export const CHECKOUT_LOG_EVENTS = {
   'casecellshop.checkout.accepted': {

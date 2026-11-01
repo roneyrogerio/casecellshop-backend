@@ -1,5 +1,10 @@
 // OBS-07 (AD-029): a telemetria da camada anticorrupção do ERP.
 import type { MetricSpec } from '../shared/telemetry-catalog.ts';
+import {
+  metricsOf,
+  type AttributesOf,
+} from '../shared/telemetry-instruments.ts';
+import type { Telemetry } from '../shared/telemetry.ts';
 
 const ERP_OPERATIONS = ['create_order', 'find_order', 'list_catalog'] as const;
 
@@ -45,3 +50,15 @@ export const ERP_METRICS = {
     attributes: {},
   },
 } as const satisfies Record<string, MetricSpec>;
+
+// Os valores das listas fechadas, para o código do ERP ser conferido pelo tipo contra a declaração.
+type DurationAttributes = AttributesOf<
+  (typeof ERP_METRICS)['casecellshop.erp.client.operation.duration']
+>;
+export type ErpOperation = DurationAttributes['casecellshop.erp.operation'];
+export type ErpOutcome = DurationAttributes['casecellshop.erp.outcome'];
+
+// Os instrumentos do ERP, criados uma vez por `Telemetry` a partir da declaração acima.
+export function erpMetrics(telemetry: Telemetry) {
+  return metricsOf(telemetry, 'casecellshop.erp', ERP_METRICS);
+}

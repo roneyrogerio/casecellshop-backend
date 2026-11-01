@@ -7,6 +7,7 @@ import type { OutgoingMessage, Queue } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
+import { billingMetrics } from './telemetry.ts';
 
 // Message Relay (Polling Publisher): publica no SQS as linhas da outbox ainda não
 // publicadas (AD-021; design.md, "Message Relay").
@@ -108,7 +109,10 @@ async function publishBatch(
     .where('order_id', 'in', accepted)
     .returning('order_id')
     .execute();
-  telemetry.outboxPublished.add(marked.length);
+  billingMetrics(telemetry).add(
+    'casecellshop.outbox.published.messages',
+    marked.length,
+  );
   return { read: rows.length, published: marked.length };
 }
 

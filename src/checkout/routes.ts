@@ -13,6 +13,7 @@ import { ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import type { CheckoutRepository } from './repository.ts';
+import { checkoutMetrics } from './telemetry.ts';
 
 // Segundos até o cliente consultar o status do pedido (também na repetição).
 const ACCEPTED_RETRY_AFTER_SECONDS = '4';
@@ -154,7 +155,9 @@ function createAccept(
         'checkout aceito',
       );
     }
-    telemetry.checkoutOutcome.add(1, { outcome: result.kind });
+    checkoutMetrics(telemetry).add('casecellshop.checkout.requests', 1, {
+      'casecellshop.checkout.outcome': result.kind,
+    });
     const body: CheckoutAccepted = {
       orderId: result.orderId,
       status: result.status,
@@ -184,7 +187,9 @@ function createOnError(
     }
     const { cause, currentPrices } = problem.init;
     const correlationId = res.locals['correlationId'] as string;
-    telemetry.checkoutOutcome.add(1, { outcome: outcomeOf(cause) });
+    checkoutMetrics(telemetry).add('casecellshop.checkout.requests', 1, {
+      'casecellshop.checkout.outcome': outcomeOf(cause),
+    });
     logger.warn(
       { event: 'checkout.rejected', reason: cause, correlationId },
       'checkout recusado',
