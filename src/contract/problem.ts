@@ -43,7 +43,8 @@ export const Problem = z
       )
       .optional()
       .meta({
-        description: 'Cada violação do contrato, só no invalid-request.',
+        description:
+          'Um erro por campo violado, o primeiro problema de cada um, só no invalid-request.',
       }),
     currentPrices: z
       .array(
