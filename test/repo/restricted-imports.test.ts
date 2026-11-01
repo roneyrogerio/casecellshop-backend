@@ -10,7 +10,7 @@ import { repoRoot } from '../helpers/repo-root.ts';
 //
 // - FND-14: os contêineres sobem num lugar só, por rodada. Um teste que sobe o próprio PostgreSQL ou ElasticMQ com
 //   `PostgreSqlContainer`, `GenericContainer` ou `DockerComposeEnvironment` volta ao contêiner por arquivo.
-// - FND-13 ("Processos"): todo processo filho dos testes de repositório passa pelo `runCommand` (test/helpers/run-node.ts),
+// - FND-13 ("Processos"): todo processo filho síncrono dos testes de repositório passa pelo `runCommand` (test/helpers/run-node.ts),
 //   que sempre leva `timeout`. Um `spawnSync`, `execSync` ou `execFileSync` direto volta ao processo sem prazo.
 //
 // A regra é uma só por arquivo (o override de baixo substitui o de cima): quem escreve a configuração junta as opções
