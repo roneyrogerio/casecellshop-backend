@@ -49,7 +49,8 @@ interface Exchange {
 }
 
 // Requisição e resposta reais do Node, com o que o Express acrescenta (`locals`); o cabeçalho entra como veio,
-// inclusive como lista, que o Node nunca entrega para esse nome mas o tipo permite.
+// inclusive como lista, que o Node nunca entrega para esse nome mas o tipo permite. A resposta ainda não foi
+// enviada: o middleware roda antes do handler e põe o X-Request-Id nela, o que um cabeçalho já enviado recusaria.
 function exchangeWith(requestId: unknown, status = 200): Exchange {
   const incoming = new IncomingMessage(new Socket());
   incoming.method = 'GET';
@@ -62,6 +63,15 @@ function exchangeWith(requestId: unknown, status = 200): Exchange {
     res: outgoing as unknown as Response,
     nextCalls: 0,
   };
+}
+
+// O handler responde: pela convenção, o status só é gravado quando a resposta foi enviada (`headersSent`). O
+// `writeHead` monta o cabeçalho sem precisar de conexão e aceita qualquer código de 100 a 599, inclusive os 1xx,
+// que o `flushHeaders` (com a conexão) trataria à parte; depois vem o `finish`, como no fim de uma resposta.
+function finishResponse(exchange: Exchange): void {
+  exchange.res.writeHead(exchange.res.statusCode);
+  expect(exchange.res.headersSent).toBe(true);
+  exchange.res.emit('finish');
 }
 
 function run(
@@ -140,7 +150,7 @@ function statusBecomesItsCode(make: Factory, executed: Map<string, number>) {
     recorded.length = 0;
     const exchange = exchangeWith('abc', status);
     run(make, exchange, target);
-    exchange.res.emit('finish');
+    finishResponse(exchange);
 
     executed.set(String(status), (executed.get(String(status)) ?? 0) + 1);
     expect(recorded).toHaveLength(1);
@@ -226,7 +236,7 @@ function matchedRouteBecomesTheTemplate(make: Factory) {
       const exchange = exchangeWith('abc', status);
       exchange.res.locals['route'] = route;
       run(make, exchange, target);
-      exchange.res.emit('finish');
+      finishResponse(exchange);
 
       expect(recorded).toHaveLength(1);
       expect(recorded[0]?.['http.route']).toBe(route);
