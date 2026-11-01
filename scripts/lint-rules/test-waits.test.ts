@@ -139,8 +139,39 @@ ruleTester.run('no-fixed-step', plugin.rules['no-fixed-step'], {
       'um waitAdvancing citado só em string',
       "const text = 'waitAdvancing(() => clock.advance(500), check)';",
     ),
+    ok(
+      'um vi.waitUntil que só confere, sem avançar o relógio',
+      'await vi.waitUntil(() => status === 1, { timeout: WAIT_GUARD_MS });',
+    ),
+    ok(
+      'um expect.poll que só confere, sem avançar o relógio',
+      'await expect.poll(() => status, { timeout: WAIT_GUARD_MS }).toBe(1);',
+    ),
+    ok(
+      'um avanço depois do vi.waitUntil, e não dentro dele',
+      [
+        'await vi.waitUntil(() => status === 1, { timeout: WAIT_GUARD_MS });',
+        'world.clock.advance(500);',
+      ].join('\n'),
+    ),
   ],
   invalid: [
+    bad(
+      'um .advance(…) dentro do vi.waitUntil',
+      'await vi.waitUntil(() => { clock.advance(500); return status === 1; }, { timeout: WAIT_GUARD_MS });',
+    ),
+    bad(
+      'um .advance(…) dentro do vi.waitUntil sem segundo argumento',
+      'await vi.waitUntil(() => { world.clock.advance(500); return true; });',
+    ),
+    bad(
+      'um .advance(…) dentro do expect.poll',
+      'await expect.poll(() => { clock.advance(500); return status; }, { timeout: WAIT_GUARD_MS }).toBe(1);',
+    ),
+    bad(
+      'um .advance(…) dentro do expect.poll sem segundo argumento',
+      'await expect.poll(async () => { world.clock.advance(500); return await read(); }).toBe(1);',
+    ),
     bad(
       'um .advance(500) dentro do vi.waitFor',
       [
@@ -328,8 +359,104 @@ ruleTester.run('wait-guard', plugin.rules['wait-guard'], {
       'uma chamada sem relação, com timeout literal',
       'await container.stop({ timeout: 10_000 });',
     ),
+    ok(
+      'timeout: WAIT_GUARD_MS * 3 (produto por um literal maior que 1)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS * 3 });',
+    ),
+    ok(
+      'um vi.waitUntil com timeout: WAIT_GUARD_MS',
+      'await vi.waitUntil(() => status === 1, { timeout: WAIT_GUARD_MS });',
+    ),
+    ok(
+      'um vi.waitUntil com timeout: 2 * WAIT_GUARD_MS e interval',
+      'await vi.waitUntil(check, { timeout: 2 * WAIT_GUARD_MS, interval: 50 });',
+    ),
+    ok(
+      'um expect.poll com timeout: WAIT_GUARD_MS no segundo argumento',
+      'await expect.poll(() => status, { timeout: WAIT_GUARD_MS }).toBe(1);',
+    ),
+    ok(
+      'um expect.poll com timeout: WAIT_GUARD_MS * 2 e interval',
+      'await expect.poll(read, { timeout: WAIT_GUARD_MS * 2, interval: 20 }).toBe(1);',
+    ),
+    ok(
+      'um expect.poll vindo de um parâmetro cujo padrão é WAIT_GUARD_MS',
+      'async function f(limit = WAIT_GUARD_MS) { await expect.poll(read, { timeout: limit }).toBe(1); }',
+    ),
   ],
   invalid: [
+    bad(
+      'um timeout de WAIT_GUARD_MS / 10 (a divisão encurta o prazo)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS / 10 });',
+    ),
+    bad(
+      'um timeout de Math.min(WAIT_GUARD_MS, 1000) (o mínimo encurta o prazo)',
+      'await vi.waitFor(check, { timeout: Math.min(WAIT_GUARD_MS, 1000) });',
+    ),
+    bad(
+      'um timeout de WAIT_GUARD_MS - 59_000 (a subtração encurta o prazo)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS - 59_000 });',
+    ),
+    bad(
+      'um timeout de WAIT_GUARD_MS * 0.5 (o literal é menor que 1)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS * 0.5 });',
+    ),
+    bad(
+      'um timeout de WAIT_GUARD_MS * graceMs (o fator não é literal)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS * graceMs });',
+    ),
+    bad(
+      'um timeout de WAIT_GUARD_MS + 1 (a soma não é produto)',
+      'await vi.waitFor(check, { timeout: WAIT_GUARD_MS + 1 });',
+    ),
+    bad(
+      'um timeout vindo de um parâmetro cujo padrão é WAIT_GUARD_MS / 10',
+      'async function f(limit = WAIT_GUARD_MS / 10) { await vi.waitFor(check, { timeout: limit }); }',
+    ),
+    bad(
+      'um observe com prazo de WAIT_GUARD_MS / 10',
+      'const outcome = await observe(round, WAIT_GUARD_MS / 10);',
+    ),
+    bad(
+      'um observe com prazo de Math.min(WAIT_GUARD_MS, 1000)',
+      'const outcome = await observe(round, Math.min(WAIT_GUARD_MS, 1000));',
+    ),
+    bad(
+      'um observe com prazo de WAIT_GUARD_MS - 59_000',
+      'const outcome = await observe(p, WAIT_GUARD_MS - 59_000);',
+    ),
+    bad(
+      'um vi.waitUntil sem segundo argumento (o padrão do Vitest é 1 s)',
+      'await vi.waitUntil(() => status === 1);',
+    ),
+    bad(
+      'um vi.waitUntil com opções sem timeout',
+      'await vi.waitUntil(check, { interval: 50 });',
+    ),
+    bad(
+      'um vi.waitUntil com timeout literal',
+      'await vi.waitUntil(check, { timeout: 5_000 });',
+    ),
+    bad(
+      'um vi.waitUntil com timeout de WAIT_GUARD_MS / 10',
+      'await vi.waitUntil(check, { timeout: WAIT_GUARD_MS / 10 });',
+    ),
+    bad(
+      'um expect.poll sem segundo argumento (o padrão do Vitest é 1 s)',
+      'await expect.poll(() => status).toBe(1);',
+    ),
+    bad(
+      'um expect.poll com opções sem timeout',
+      'await expect.poll(read, { interval: 50 }).toBe(1);',
+    ),
+    bad(
+      'um expect.poll com timeout literal',
+      'await expect.poll(read, { timeout: 5_000 }).toBe(1);',
+    ),
+    bad(
+      'um expect.poll com timeout de Math.min(WAIT_GUARD_MS, 1000)',
+      'await expect.poll(read, { timeout: Math.min(WAIT_GUARD_MS, 1000) }).toBe(1);',
+    ),
     bad(
       'um vi.waitFor sem segundo argumento',
       'await vi.waitFor(() => expect(1).toBe(1));',
@@ -487,6 +614,18 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
       ["import { createServer } from 'node:http';", UP].join('\n'),
     ),
     ok(
+      'um listen({ port: 3000 }) (forma de objeto, porta fixa), num arquivo com compose',
+      [UP, 'server.listen({ port: 3000 });'].join('\n'),
+    ),
+    ok(
+      'um server.listen() sem argumento num arquivo sem compose',
+      'server.listen();',
+    ),
+    ok(
+      'um listen({ port: 0 }) num arquivo sem compose',
+      'server.listen({ port: 0 });',
+    ),
+    ok(
       'o upComposeProject só importado, sem chamada, com listen(0) (não sobe o compose)',
       [
         "import { upComposeProject } from '../../helpers/compose.ts';",
@@ -530,6 +669,20 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
     bad(
       'um listen(0) encadeado ao createServer, num arquivo com compose',
       [UP, 'createServer().listen(0, resolve);'].join('\n'),
+    ),
+    bad(
+      'um server.listen() sem argumento (o sistema escolhe a porta), num arquivo com compose',
+      [UP, 'server.listen();'].join('\n'),
+    ),
+    bad(
+      'um server.listen({ port: 0 }) (forma de objeto), num arquivo com compose',
+      [UP, 'server.listen({ port: 0 });'].join('\n'),
+    ),
+    bad(
+      'um server.listen({ port: 0, host }, …) com host e função, num arquivo com compose',
+      [UP, "server.listen({ port: 0, host: '127.0.0.1' }, resolve);"].join(
+        '\n',
+      ),
     ),
     bad(
       'um listen(0) antes da chamada do upComposeProject',

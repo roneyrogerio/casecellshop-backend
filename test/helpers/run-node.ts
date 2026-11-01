@@ -1,4 +1,35 @@
-import { spawnSync } from 'node:child_process';
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from 'node:child_process';
+
+// Prazo do processo filho. Sem ele, um filho travado (git esperando credencial, oxlint em laço) prende o teste até o
+// testTimeout do Vitest, ou para sempre num teste sem prazo (FND-13, "Processos").
+const COMMAND_TIMEOUT_MS = 60_000;
+
+type CommandOptions = Omit<
+  SpawnSyncOptionsWithStringEncoding,
+  'encoding' | 'timeout'
+> & {
+  // Quem precisa de mais (ou de menos) tempo diz aqui; o padrão é o COMMAND_TIMEOUT_MS.
+  timeout?: number;
+};
+
+// Única porta de entrada dos testes de repositório e dos ajudantes para rodar um processo de forma síncrona: sempre
+// com `timeout` e a saída em texto. O `no-restricted-imports` do .oxlintrc.json proíbe o `spawnSync`, o `execSync` e
+// o `execFileSync` de `node:child_process` nessas pastas, salvo neste arquivo.
+export function runCommand(
+  bin: string,
+  args: readonly string[],
+  options: CommandOptions = {},
+): SpawnSyncReturns<string> {
+  return spawnSync(bin, args, {
+    ...options,
+    encoding: 'utf8',
+    timeout: options.timeout ?? COMMAND_TIMEOUT_MS,
+  });
+}
 
 export interface NodeRun {
   status: number | null;
@@ -14,17 +45,16 @@ export interface NodeRunOptions {
   timeout?: number;
 }
 
-// Roda `node <script> <args>` de forma síncrona, com a saída em texto. É o único `spawnSync` do node dos ajudantes que
-// executam um script do repositório (CLI de scripts/, hook de .claude/hooks/); cada um deles só escolhe o ambiente.
+// Roda `node <script> <args>` de forma síncrona, com a saída em texto. É o único ponto dos ajudantes que executam um
+// script do repositório (CLI de scripts/, hook de .claude/hooks/); cada um deles só escolhe o ambiente.
 export function runNode(
   script: string,
   args: string[],
   options: NodeRunOptions,
 ): NodeRun {
-  const result = spawnSync(process.execPath, [script, ...args], {
+  const result = runCommand(process.execPath, [script, ...args], {
     cwd: options.cwd,
     env: options.env,
-    encoding: 'utf8',
     ...(options.input === undefined ? {} : { input: options.input }),
     ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
   });

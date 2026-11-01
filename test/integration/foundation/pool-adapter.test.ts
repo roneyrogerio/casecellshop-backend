@@ -104,7 +104,7 @@ async function destroySocketDuringQuery(
       async () => {
         const active = await database.pool.query<{ total: number }>(
           `SELECT count(*)::int AS total FROM pg_stat_activity
-         WHERE state = 'active' AND pid <> pg_backend_pid() AND query LIKE $1`,
+         WHERE datname = current_database() AND state = 'active' AND pid <> pg_backend_pid() AND query LIKE $1`,
           [`%pg_sleep(${seconds})%`],
         );
         expect(active.rows[0]?.total).toBe(1);

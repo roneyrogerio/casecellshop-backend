@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
@@ -16,6 +15,7 @@ import {
   makeTempDir,
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-42: o CI tem quatro jobs, e o ruleset exige só o `ci-ok`. `checks` roda uma vez o que não depende do Node,
 // `test` é a matriz do FND-12, `workflows` confere os workflows (AI-43) e `ci-ok` agrega os outros três. Cada
@@ -298,10 +298,10 @@ function runStep(step: CiStep, env: Record<string, string>): number | null {
   const dir = makeTempDir('ci-ok-');
   writeFileIn(dir, 'step.sh', step.run ?? '');
   // O shell padrão do GitHub no Linux: bash -e {0}.
-  return spawnSync(
+  return runCommand(
     'bash',
     ['--noprofile', '--norc', '-e', join(dir, 'step.sh')],
-    { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' },
+    { env: { PATH: process.env.PATH ?? '', ...env } },
   ).status;
 }
 

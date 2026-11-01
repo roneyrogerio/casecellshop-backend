@@ -4,6 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import {
+  checkoutRoute,
   CorrelationId,
   HealthStatus,
   PROBLEM_MEDIA_TYPE,
@@ -130,6 +131,37 @@ describe('FND-03 requisição fora do contrato', () => {
     expect(HealthStatus.parse(res.body)).toEqual({ status: 'ok' });
     expect(res.headers['x-request-id']).toBe('saude-1');
     expectMatchesContract(healthRoute, res);
+  });
+
+  it('FND-03 POST /checkout com JSON malformado responde 400 invalid-request em problem+json, com o correlationId no corpo e no X-Request-Id, sem stack, SQL nem texto do parser', async () => {
+    const id = 'fnd03-json-quebrado';
+    const res = await request(app)
+      .post('/checkout')
+      .set('Content-Type', 'application/json')
+      .set('Idempotency-Key', 'key-fnd03-json-quebrado')
+      .set('X-Request-Id', id)
+      .send('{"items": [');
+
+    expect(res.status).toBe(400);
+    expect((res.headers['content-type'] as string).split(';')[0]).toBe(
+      PROBLEM_MEDIA_TYPE,
+    );
+    expectMatchesContract(checkoutRoute, res);
+    const problem = Problem.parse(res.body);
+    expect(problem.type).toBe('/problems/invalid-request');
+    expect(problem.status).toBe(400);
+    expect(problem.correlationId).toBe(id);
+    expect(res.headers['x-request-id']).toBe(id);
+
+    const text = JSON.stringify(res.body);
+    expect(res.body).not.toHaveProperty('stack');
+    expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
+    expect(text).not.toMatch(/node_modules/);
+    // O texto que o parser do JSON gera ("Unexpected end of JSON input", "Expected ... in JSON at position N").
+    expect(text).not.toMatch(/SyntaxError|Unexpected|at position|JSON input/i);
+    expect(text).not.toMatch(
+      /\b(select|insert|update)\b.*\b(from|into|set)\b/i,
+    );
   });
 
   it('FND-03 o tipo de conteúdo do 400 é exatamente application/problem+json', async () => {

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -17,6 +16,7 @@ import {
   makeTempDir,
 } from '../helpers/git-sandbox.ts';
 import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // O hook fica em .githooks/ (AI-08) e não tem arquivo de origem ao lado: o teste mora em test/repo/,
 // onde ficam os testes de configuração do repositório.
@@ -81,9 +81,8 @@ function runHook(
   const cwd =
     options.subdir === undefined ? project : join(project, options.subdir);
   mkdirSync(cwd, { recursive: true });
-  const result = spawnSync(hook, ['origin', url], {
+  const result = runCommand(hook, ['origin', url], {
     input: REFS,
-    encoding: 'utf8',
     cwd,
     env: isolatedEnv(npm),
   });
@@ -103,17 +102,17 @@ describe('AI-08 o .githooks/pre-push é versionado e executável', () => {
   });
 
   it('AI-08 o git ls-files -s registra o modo 100755', () => {
-    const result = spawnSync(
+    const result = runCommand(
       'git',
       ['ls-files', '-s', '--', '.githooks/pre-push'],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root },
     );
 
     expect(result.stdout.startsWith('100755 ')).toBe(true);
   }, 60_000);
 
   it('AI-08 é um script sh', () => {
-    const result = spawnSync('head', ['-n', '1', hook], { encoding: 'utf8' });
+    const result = runCommand('head', ['-n', '1', hook]);
 
     expect(result.stdout).toMatch(/^#!\/bin\/sh|^#!\/usr\/bin\/env sh/);
   }, 60_000);
@@ -159,9 +158,8 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
   );
 
   it('AI-08 sem argumentos recusa', () => {
-    const result = spawnSync(hook, [], {
+    const result = runCommand(hook, [], {
       input: '',
-      encoding: 'utf8',
       env: isolatedEnv(makeFakeNpm(0)),
     });
 
@@ -183,9 +181,8 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
     const args = ['-c', `url.${bare}.insteadOf=https://github.com/a/b.git`];
     if (hooksPath !== null) args.push('-c', `core.hooksPath=${hooksPath}`);
     args.push('push', 'origin', 'HEAD:refs/heads/feature');
-    return spawnSync('git', args, {
+    return runCommand('git', args, {
       cwd: project,
-      encoding: 'utf8',
       env: isolatedEnv(makeFakeNpm(0)),
     });
   }

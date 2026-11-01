@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from './git-sandbox.ts';
 import { isolatedEnv } from './identity-sandbox.ts';
+import { runCommand } from './run-node.ts';
 
 afterEach(() => {
   cleanupTempDirs();
@@ -13,7 +13,7 @@ describe.skipIf(process.platform === 'win32')(
   'AI-14 o ambiente isolado dos testes nunca alcança o chaveiro real',
   () => {
     const sh = (env: Record<string, string>, script: string) =>
-      spawnSync('sh', ['-c', script], { encoding: 'utf8', env });
+      runCommand('sh', ['-c', script], { env });
 
     it.each(['security', 'secret-tool'])(
       'AI-14 o %s do ambiente isolado é o falso, de uma pasta temporária no começo do PATH',

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -12,6 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   let tree: string;
@@ -39,13 +39,10 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
       ? 'describe, expect, it'
       : 'expect, it';
     writeFileSync(file, `import { ${imports} } from 'vitest';\n\n${body}\n`);
-    const result = spawnSync(
+    const result = runCommand(
       'npx',
       ['oxlint', '-c', path.join(root, '.oxlintrc.json'), file],
-      {
-        cwd: root,
-        encoding: 'utf8',
-      },
+      { cwd: root },
     );
     return result.status;
   }
@@ -84,13 +81,10 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
 // A lista vem do próprio Vitest, e não de uma reimplementação do casamento de padrões:
 // um include ou exclude errado só aparece comparando com o que ele de fato descobre.
 function vitestFiles(project: string): string[] {
-  const result = spawnSync(
+  const result = runCommand(
     'npx',
     ['vitest', 'list', '--project', project, '--filesOnly'],
-    {
-      cwd: root,
-      encoding: 'utf8',
-    },
+    { cwd: root },
   );
   expect(result.status).toBe(0);
   return result.stdout
@@ -102,13 +96,10 @@ function vitestFiles(project: string): string[] {
 
 // Arquivos novos ainda sem commit também contam (--others), e o que foi apagado do disco não.
 function testFilesInRepo(): string[] {
-  const result = spawnSync(
+  const result = runCommand(
     'git',
     ['ls-files', '--cached', '--others', '--exclude-standard', '*.test.ts'],
-    {
-      cwd: root,
-      encoding: 'utf8',
-    },
+    { cwd: root },
   );
   expect(result.status).toBe(0);
   return result.stdout
@@ -163,10 +154,10 @@ describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', 
         writeFileSync(path.join(tree, file), '');
       }
 
-      const result = spawnSync(
+      const result = runCommand(
         path.join(root, 'node_modules', '.bin', 'vitest'),
         ['list', '--project', 'unit', '--filesOnly'],
-        { cwd: tree, encoding: 'utf8' },
+        { cwd: tree },
       );
       const listed = result.stdout
         .split('\n')

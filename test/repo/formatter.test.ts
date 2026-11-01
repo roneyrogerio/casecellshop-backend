@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getFileInfo } from 'prettier';
@@ -6,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { cleanupTempDirs, makeTempDir } from '../helpers/git-sandbox.ts';
 import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-34: o formato do código é o do Prettier. A configuração, o `.prettierignore`, o `verify`, o CI e o hook
 // do settings.json são conferidos aqui; a decisão do hook fica em .claude/hooks/format-edited.test.ts.
@@ -63,7 +63,7 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
 
   // Sem o .prettierignore (--ignore-path vazio): um arquivo ignorado passaria em silêncio, e aqui o que se prova é o formato.
   it('AI-34 os arquivos de test/fixtures/migrations/ passam no prettier --check', () => {
-    const result = spawnSync(
+    const result = runCommand(
       prettierBin,
       [
         '--check',
@@ -72,7 +72,7 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
         '/dev/null',
         'test/fixtures/migrations',
       ],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root },
     );
 
     expect(`${result.stdout}${result.stderr}`).not.toContain(
@@ -130,13 +130,10 @@ describe('AI-34 controle negativo: um arquivo fora do formato reprova o prettier
   function check(content: string): { status: number | null; output: string } {
     const file = join(makeTempDir('ai34-check-'), 'amostra.ts');
     writeFileSync(file, content);
-    const result = spawnSync(
+    const result = runCommand(
       prettierBin,
       ['--config', join(root, '.prettierrc.json'), '--check', file],
-      {
-        cwd: root,
-        encoding: 'utf8',
-      },
+      { cwd: root },
     );
     return {
       status: result.status,

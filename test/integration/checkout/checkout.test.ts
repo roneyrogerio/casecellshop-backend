@@ -464,6 +464,25 @@ describe('CHK-10 entradas recusadas, cada causa com o seu type', () => {
     );
   });
 
+  it('CHK-10 sem Content-Type, com corpo JSON válido: 415 unsupported-media-type', async () => {
+    const item = await product();
+    const key = newKey();
+    // Um Buffer não ganha tipo do supertest (uma string ganharia application/x-www-form-urlencoded).
+    const payload = Buffer.from(JSON.stringify(checkoutBody(line(item))));
+    await expectRefused(
+      async () => {
+        const res = await postCheckout(harness.server, payload, { key });
+        // A premissa do teste: a requisição saiu mesmo sem o cabeçalho.
+        const sent = res as unknown as {
+          req: { getHeader(name: string): unknown };
+        };
+        expect(sent.req.getHeader('content-type')).toBeUndefined();
+        return res;
+      },
+      { status: 415, type: '/problems/unsupported-media-type', key },
+    );
+  });
+
   it('CHK-10 a mesma chave com outro corpo: 422 idempotency-key-reused, e o primeiro pedido segue intacto', async () => {
     const item = await product(1000, 10);
     const key = newKey();
@@ -826,6 +845,44 @@ describe('OBS-02 counter de desfecho do checkout', () => {
       expect(text).not.toContain(orderId);
       expect(text).not.toContain(item.sku);
       expect(text).not.toContain(empty.sku);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('OBS-02 o banco indisponível no checkout (503 service-unavailable) soma 1 em outcome="unavailable" e em nenhum outro desfecho', async () => {
+    // App próprio, com telemetria nova: os contadores começam em zero e o teste conta exato.
+    const own = await startCheckoutHarness(database);
+    try {
+      const item = await product(1000, 5);
+      // Só o erro entra, no limite do pool: a conexão recusada que o banco parado produziria.
+      let injected = 0;
+      (own.pool as unknown as { connect: () => Promise<never> }).connect =
+        () => {
+          injected += 1;
+          return Promise.reject(
+            Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+              code: 'ECONNREFUSED',
+            }),
+          );
+        };
+
+      const res = await postCheckout(own.server, checkoutBody(line(item)));
+
+      expect(injected).toBeGreaterThanOrEqual(1);
+      expect(res.status).toBe(503);
+      expect(problemOf(res).type).toBe('/problems/service-unavailable');
+      expect(header(res, 'retry-after')).toBe('5');
+
+      await vi.waitFor(
+        async () => {
+          const { outcomes } = await checkoutOutcomes(own.app);
+          expect(outcomes.get('unavailable')).toBe(1);
+          // Nenhum outro desfecho foi contado: só há a série unavailable.
+          expect([...outcomes.keys()]).toEqual(['unavailable']);
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
     } finally {
       await own.close();
     }

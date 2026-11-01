@@ -65,12 +65,19 @@ export interface CheckoutHarness {
   close(): Promise<void>;
 }
 
+export interface HarnessOptions {
+  // Troca o pool que o app recebe (o harness continua dono, e fecha, o pool original). É o ponto de
+  // injeção do controle negativo do CHK-02: a rota real, com a reserva ingênua no limite do pool.
+  decoratePool?: (pool: pg.Pool) => pg.Pool;
+}
+
 // Monta o app como o main/api.ts, com o logger do mesmo formato (nível em texto e correlationId
 // pelo AsyncLocalStorage) escrevendo em memória e os spans no exportador em memória.
 export async function startCheckoutHarness(
   database: TestDatabase,
   poolSize: number = APP_POOL_SIZE,
   limits: PoolLimits = {},
+  options: HarnessOptions = {},
 ): Promise<CheckoutHarness> {
   const logLines: Record<string, unknown>[] = [];
   const sink = new Writable({
@@ -100,7 +107,11 @@ export async function startCheckoutHarness(
   const exporter = new InMemorySpanExporter();
   const telemetry = createTelemetry({ spanExporter: exporter });
   const pool = createAppPool(database.uri, poolSize, limits);
-  const app = createApp({ pool, logger, telemetry });
+  const app = createApp({
+    pool: options.decoratePool?.(pool) ?? pool,
+    logger,
+    telemetry,
+  });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 

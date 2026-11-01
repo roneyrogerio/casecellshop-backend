@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -14,6 +13,7 @@ import {
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-36: código repetido novo reprova o `npm run verify` e o CI (jscpd), contra a linha de base das repetições que
 // já existiam. O controle negativo roda o binário em dois arquivos na pasta temporária do sistema.
@@ -92,10 +92,10 @@ describe('AI-36 controle negativo: um bloco copiado reprova', () => {
     writeFileIn(dir, 'src/first.ts', block());
     writeFileIn(dir, 'src/second.ts', block());
     const jscpd = (...args: string[]): number | null =>
-      spawnSync(
+      runCommand(
         jscpdBin,
         [join(dir, 'src'), '--silent', '--reporters', 'silent', ...args],
-        { cwd: dir, encoding: 'utf8' },
+        { cwd: dir },
       ).status;
     const recordBaseline = (): string => {
       const baseline = join(dir, 'baseline.json');

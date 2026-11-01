@@ -1,9 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { cpSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { git, makeTempDir } from './git-sandbox.ts';
 import { repoRoot } from './repo-root.ts';
-import { type NodeRun, runNode } from './run-node.ts';
+import { type NodeRun, runCommand, runNode } from './run-node.ts';
 
 // Ambiente de teste da identidade (AI-14): o git não pode enxergar a configuração global nem a do sistema da máquina,
 // senão a credencial real do dono entraria no teste.
@@ -53,9 +52,8 @@ export function makeRepo(prefix = 'identity-'): string {
 }
 
 export function localConfig(dir: string, key: string): string | undefined {
-  const result = spawnSync('git', ['config', '--local', '--get', key], {
+  const result = runCommand('git', ['config', '--local', '--get', key], {
     cwd: dir,
-    encoding: 'utf8',
     env: isolatedEnv(),
   });
   return result.status === 0 ? result.stdout.trim() : undefined;

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   expectBinaryReader,
@@ -12,6 +11,7 @@ import {
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
 import { repoBin } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-35: código sem uso reprova o `npm run verify` e o CI (knip). A configuração, o script do verify e o passo do CI
 // são conferidos aqui; o controle negativo roda o binário num projeto mínimo na pasta temporária do sistema.
@@ -69,10 +69,7 @@ describe('AI-35 controle negativo: o knip acusa um export que ninguém importa',
         ? "import { neverImportedHelper, usedHelper } from './lib.ts';\n\nconsole.log(usedHelper() + neverImportedHelper());\n"
         : "import { usedHelper } from './lib.ts';\n\nconsole.log(usedHelper());\n",
     );
-    const result = spawnSync(knipBin, ['--no-progress'], {
-      cwd: dir,
-      encoding: 'utf8',
-    });
+    const result = runCommand(knipBin, ['--no-progress'], { cwd: dir });
     return { status: result.status, out: `${result.stdout}${result.stderr}` };
   }
 
