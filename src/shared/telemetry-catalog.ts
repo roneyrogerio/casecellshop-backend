@@ -59,13 +59,35 @@ const SNAKE_CASE = new RegExp(`^${SEGMENT}$`);
 // A unidade vai no `unit`, nunca no nome, em qualquer palavra; `total` é do exportador, que o acrescenta aos
 // contadores, e só vale como última palavra.
 const UNIT_WORDS = new Set<string>([
-  ...'s ms us ns kb mb gb kib mib gib percent'.split(' '),
-  ...'second millisecond microsecond nanosecond minute hour day byte bit'.split(
-    ' ',
-  ),
-  ...'seconds milliseconds microseconds nanoseconds minutes hours days bytes bits'.split(
-    ' ',
-  ),
+  's',
+  'ms',
+  'us',
+  'ns',
+  'kb',
+  'mb',
+  'gb',
+  'kib',
+  'mib',
+  'gib',
+  'percent',
+  'second',
+  'millisecond',
+  'microsecond',
+  'nanosecond',
+  'minute',
+  'hour',
+  'day',
+  'byte',
+  'bit',
+  'seconds',
+  'milliseconds',
+  'microseconds',
+  'nanoseconds',
+  'minutes',
+  'hours',
+  'days',
+  'bytes',
+  'bits',
 ]);
 
 function redundantWord(name: string): string | undefined {
