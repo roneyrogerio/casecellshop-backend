@@ -46,11 +46,24 @@ function scriptsRunning(
     .map(([name]) => name);
 }
 
+// AI-35 e AI-36: o knip e o jscpd entram no verify por um script cujo corpo chama o binário; o nome do script
+// também não vem do critério.
+function scriptsCalling(
+  binary: string,
+  scripts: Record<string, string>,
+): string[] {
+  return Object.entries(scripts)
+    .filter(([, body]) => new RegExp(`^${binary}(\\s|$)`).test(body.trim()))
+    .map(([name]) => name);
+}
+
 const KYSELY_CHECK = scriptsRunning(
   'scripts/check-kysely-usage.ts',
   pkg.scripts,
 );
 const DB_TYPES_CHECK = scriptsRunning('scripts/check-db-types.ts', pkg.scripts);
+const UNUSED_CHECK = scriptsCalling('knip', pkg.scripts);
+const DUPLICATION_CHECK = scriptsCalling('jscpd', pkg.scripts);
 
 describe('AI-17 as conferências dos scripts enxergam o que procuram (controle negativo)', () => {
   it('AI-17 o leitor de passos reconhece npm run, npm test e a flag do openapi, e recusa o que não é npm', () => {
@@ -87,13 +100,39 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(scriptsRunning('scripts/check-db-types.ts', sample)).toEqual([]);
   });
 
-  it('AI-17 o verify roda lint, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations, check:scripts e a conferência das formas do Kysely', () => {
+  it('AI-17 existe um script do package.json para o knip (AI-35) e outro para o jscpd (AI-36)', () => {
+    expect(UNUSED_CHECK).toHaveLength(1);
+    expect(DUPLICATION_CHECK).toHaveLength(1);
+  });
+
+  it('AI-17 o leitor de scripts acha o knip e o jscpd pelo corpo e recusa um corpo que só os cita', () => {
+    const sample = {
+      a: 'knip',
+      b: 'knip --production',
+      c: 'echo knip',
+      d: 'jscpd src --baseline x.json',
+      e: 'node scripts/jscpd.ts',
+    };
+
+    expect(scriptsCalling('knip', sample)).toEqual(['a', 'b']);
+    expect(scriptsCalling('jscpd', sample)).toEqual(['d']);
+  });
+
+  it('AI-17 o verify roda lint, formato, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations, check:scripts, a conferência das formas do Kysely, o knip e o jscpd', () => {
     const steps = stepsOf(pkg.scripts.verify);
 
     expect(steps).not.toContain(null);
     expect(KYSELY_CHECK).toHaveLength(1);
+    expect(UNUSED_CHECK).toHaveLength(1);
+    expect(DUPLICATION_CHECK).toHaveLength(1);
     expect([...steps].map(String).sort()).toEqual(
-      [...COMMON, 'test:unit', ...KYSELY_CHECK].sort(),
+      [
+        ...COMMON,
+        'test:unit',
+        ...KYSELY_CHECK,
+        ...UNUSED_CHECK,
+        ...DUPLICATION_CHECK,
+      ].sort(),
     );
   });
 
@@ -103,8 +142,17 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(steps).not.toContain(null);
     expect(KYSELY_CHECK).toHaveLength(1);
     expect(DB_TYPES_CHECK).toHaveLength(1);
+    expect(UNUSED_CHECK).toHaveLength(1);
+    expect(DUPLICATION_CHECK).toHaveLength(1);
     expect([...steps].map(String).sort()).toEqual(
-      [...COMMON, 'test', ...KYSELY_CHECK, ...DB_TYPES_CHECK].sort(),
+      [
+        ...COMMON,
+        'test',
+        ...KYSELY_CHECK,
+        ...DB_TYPES_CHECK,
+        ...UNUSED_CHECK,
+        ...DUPLICATION_CHECK,
+      ].sort(),
     );
   });
 
