@@ -88,12 +88,13 @@ async function decideChecked(input, deps) {
       output: 'O bloco "scripts" mudou: ele define o que o CI e este hook rodam, e é da sessão principal.',
     });
   }
-  // Em paralelo: o lint, os tipos e os testes não dependem um do outro, e a
-  // parada leva o tempo do mais lento, não a soma.
-  const results = await Promise.all(checks.map((name) => deps.runCheck(name, input.cwd)));
-  checks.forEach((name, index) => {
-    if (!results[index].ok) failures.push({ name, output: results[index].output });
-  });
+  // Em sequência, e todas: a devolução cita cada checagem que falhou (AI-03). Rodar
+  // em paralelo não reduziu o tempo (medido no PR #19: 25 s em sequência, 28 s em
+  // paralelo, com os testes ligados à mudança em 21 s); o ganho vem do PR de testes.
+  for (const name of checks) {
+    const result = await deps.runCheck(name, input.cwd);
+    if (!result.ok) failures.push({ name, output: result.output });
+  }
 
   if (failures.length === 0) {
     deps.writeCount(key, 0);
