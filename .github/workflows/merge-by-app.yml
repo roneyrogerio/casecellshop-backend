@@ -1,0 +1,62 @@
+name: Merge pelo App
+
+# AI-10: liga o auto-merge em nome do GitHub App casecellshop-merge, e não do
+# GITHUB_TOKEN. Um evento do GITHUB_TOKEN não dispara workflow: o merge feito por
+# ele deixava a main sem CI e sem CodeQL, e a issue do "Closes #N" aberta.
+#
+# O workflow_run roda sempre a versão deste arquivo que está na main, e não faz
+# checkout: nada do PR roda aqui. A chave do App fica no ambiente merge, que só a
+# main acessa. O zizmor marca o workflow_run como gatilho perigoso porque ele
+# costuma rodar código do PR; o .github/zizmor.yml o dispensa só neste arquivo.
+on:
+  workflow_run:
+    workflows: ['Merge na aprovação']
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    name: Liga o auto-merge
+    # O "Merge na aprovação" só passa com a aprovação do dono num PR deste
+    # repositório; a conferência pela API, abaixo, não depende disso.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request_review' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: merge
+    permissions: {}
+    steps:
+      # Token de 1 hora, só com o que o merge pede; o App não tem outra permissão.
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # A aprovação é conferida de novo pela API, no commit atual do PR: um push
+      # depois da aprovação deixa o PR sem aprovação válida, e nada é ligado.
+      - name: Confere a aprovação do dono e liga o auto-merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr view "$HEAD_BRANCH" --json number,state --jq 'select(.state == "OPEN") | .number')
+          if [ -z "$pr" ]; then
+            echo "::warning::Nenhum PR aberto da branch $HEAD_BRANCH."
+            exit 0
+          fi
+          head=$(gh pr view "$pr" --json headRefOid --jq '.headRefOid')
+          approved=$(HEAD="$head" gh api "repos/$GH_REPO/pulls/$pr/reviews" --paginate \
+            --jq '.[] | select(.state == "APPROVED" and .author_association == "OWNER" and .commit_id == env.HEAD) | .id')
+          if [ -z "$approved" ]; then
+            echo "::warning::O PR #$pr não tem aprovação do dono no commit $head."
+            exit 0
+          fi
+          gh pr merge "$pr" --auto --merge

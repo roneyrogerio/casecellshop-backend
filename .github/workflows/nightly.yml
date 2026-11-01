@@ -1,9 +1,9 @@
 name: Agendado
 
-# AI-46: o que muda sem commit e o que o CI do PR não cobre. O merge pelo
-# auto-merge usa o GITHUB_TOKEN, que não dispara o CI da main; uma
-# vulnerabilidade nova chega sem commit; e um teste que depende da ordem só
-# aparece com a ordem embaralhada. Fora da hora cheia, quando o GitHub atrasa os
+# AI-46: o que muda sem commit e o que o CI do PR não cobre. Uma vulnerabilidade
+# nova, um alerta novo numa action fixada e o comportamento de uma dependência
+# chegam sem commit; e um teste que depende da ordem só aparece com a ordem
+# embaralhada. Fora da hora cheia, quando o GitHub atrasa os
 # agendamentos; workflow_dispatch para rodar à mão.
 on:
   schedule:
@@ -25,6 +25,8 @@ jobs:
   main-full:
     name: CI completo na main
     runs-on: ubuntu-latest
+    # AI-05: o tempo esgotado termina o job como cancelado, e o report avisa.
+    timeout-minutes: 30
     env:
       REDOCLY_TELEMETRY: 'off'
     steps:
@@ -59,6 +61,7 @@ jobs:
   flaky-hunt:
     name: Testes embaralhados (${{ matrix.seed }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -91,28 +94,55 @@ jobs:
           path: ${{ runner.temp }}/vitest-report.json
           retention-days: 7
 
-  # O aviso de falha de um agendamento vai para quem mexeu no cron por último, que
-  # é a conta de máquina; a issue chega ao dono. Sem checkout e sem instalar nada:
-  # a escrita fica num job que não roda código do repositório.
-  report:
-    name: Avisa a falha
-    needs: [main-full, flaky-hunt]
-    if: ${{ failure() }}
+  # Uma action fixada por SHA pode ganhar um alerta sem commit; o zizmor com o
+  # token de leitura consulta os alertas, como no job workflows do ci.yml.
+  workflows:
+    name: Workflows na main
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
+          advanced-security: false
+          token: ${{ github.token }}
+
+  # O aviso de falha de um agendamento vai para quem mexeu no cron por último, que
+  # é a conta de máquina; a issue chega ao dono. Roda em qualquer resultado: um job
+  # que falha ou termina cancelado (o tempo esgotado) abre ou comenta a issue, e uma
+  # execução verde fecha a que estiver aberta. Só a issue aberta pela conta do
+  # Actions conta. Sem checkout e sem instalar nada: a escrita fica num job que não
+  # roda código do repositório.
+  report:
+    name: Avisa o resultado
+    needs: [main-full, flaky-hunt, workflows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: Abre ou comenta a issue da execução agendada
+      - name: Abre, comenta ou fecha a issue da execução agendada
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ toJSON(needs) }}
         run: |
           title="Execução agendada falhou"
-          body="A execução agendada falhou: $RUN_URL"
-          number=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
+          number=$(gh issue list --state open --author app/github-actions --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            body="A execução agendada falhou: $RUN_URL"
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body "$body"
+            else
+              gh issue create --title "$title" --body "$body"
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "A execução agendada passou: $RUN_URL"
           fi
