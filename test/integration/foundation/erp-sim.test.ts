@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CreateOrderResult } from '../../../src/erp/erp-client.ts';
 import {
-  createPool,
   startMigratedDatabase,
   type TestDatabase,
 } from '../../helpers/database.ts';
+import { createTestPool } from '../../helpers/pool.ts';
 import {
   createErpHarness,
   orderFor,
@@ -32,7 +32,7 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
     );
 
     // Primeira vida do worker: o ERP simulado fatura o pedido por um pool próprio.
-    const firstErpPool = createPool(database.uri);
+    const firstErpPool = createTestPool(database.uri);
     let created: CreateOrderResult;
     try {
       const first = createErpHarness(firstErpPool);
@@ -46,7 +46,7 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
     }
 
     // Segunda vida: instância nova do simulado e da camada anticorrupção, com um pool novo sobre o mesmo banco.
-    const restartedErpPool = createPool(database.uri);
+    const restartedErpPool = createTestPool(database.uri);
     try {
       const second = createErpHarness(restartedErpPool);
 
@@ -71,7 +71,7 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
   });
 
   it('FND-04 uma referência que o ERP simulado nunca faturou não existe depois do reinício', async () => {
-    const pool = createPool(database.uri);
+    const pool = createTestPool(database.uri);
     try {
       const { client } = createErpHarness(pool);
       expect(
@@ -99,7 +99,7 @@ describe('o estado do ERP simulado vive no banco, não na instância', () => {
       ),
     );
 
-    const otherPool = createPool(database.uri);
+    const otherPool = createTestPool(database.uri);
     try {
       const found =
         await createErpHarness(otherPool).client.findOrderByReference(

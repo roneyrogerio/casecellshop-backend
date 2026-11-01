@@ -9,7 +9,7 @@ import {
   localConfig,
   makeRepo,
   makeScriptsSandbox,
-  runScript,
+  runIsolatedScript,
 } from '../test/helpers/identity-sandbox.ts';
 
 type Identity =
@@ -405,6 +405,12 @@ describe('AI-14 promptIdentity, o login e o item do chaveiro', () => {
   });
 });
 
+function runSelfSetup(dir: string): ReturnType<typeof runIsolatedScript> {
+  return runIsolatedScript(dir, 'setup-local.ts', ['--identity', 'self'], {
+    env: isolatedEnv(),
+  });
+}
+
 // O CLI de verdade, numa cópia dos scripts em um repositório temporário: nunca no clone real.
 describe('AI-14 o CLI do setup:local', () => {
   it('AI-14 sem argumentos mostra o uso e sai com código diferente de 0', () => {
@@ -412,7 +418,7 @@ describe('AI-14 o CLI do setup:local', () => {
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', []);
+    const result = runIsolatedScript(dir, 'setup-local.ts', []);
 
     expect(result.status).not.toBe(0);
     expect(result.status).not.toBeNull();
@@ -424,9 +430,7 @@ describe('AI-14 o CLI do setup:local', () => {
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
-      env: isolatedEnv(),
-    });
+    const result = runSelfSetup(dir);
 
     expect(result.status).toBe(0);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
@@ -438,7 +442,9 @@ describe('AI-14 o CLI do setup:local', () => {
     const dir = makeScriptsSandbox();
     git(dir, 'config', '--local', 'casecellshop.identity', 'self');
 
-    const result = runScript(dir, 'setup-local.ts', [], { env: isolatedEnv() });
+    const result = runIsolatedScript(dir, 'setup-local.ts', [], {
+      env: isolatedEnv(),
+    });
 
     expect(result.status).toBe(0);
     expect(`${result.stdout}${result.stderr}`).not.toContain(USAGE_BOT);
@@ -478,7 +484,7 @@ describe('AI-14 o CLI do setup:local na nuvem (CLAUDE_CODE_REMOTE=true)', () => 
       expect(runsOnlyWhenDirect()).toBe(true);
       const dir = makeScriptsSandbox();
 
-      const result = runScript(dir, 'setup-local.ts', args, {
+      const result = runIsolatedScript(dir, 'setup-local.ts', args, {
         env: cloudEnv(),
       });
 
@@ -498,9 +504,7 @@ describe('AI-14 o CLI do setup:local na nuvem (CLAUDE_CODE_REMOTE=true)', () => 
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
-      env: isolatedEnv(),
-    });
+    const result = runSelfSetup(dir);
 
     expect(result.status).toBe(0);
     expect(savedKeys(dir)).toContain('casecellshop.identity self');
@@ -585,7 +589,7 @@ describe('AI-14 parseSetupArgs, --token-store', () => {
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', [
+    const result = runIsolatedScript(dir, 'setup-local.ts', [
       '--identity',
       'self',
       '--token-store',
@@ -1167,9 +1171,14 @@ describe('AI-14 o CLI do setup:local no modo self com o helper do projeto instal
       );
     expect(helpers().stdout).toContain('git-credential-bot');
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
-      env: isolatedEnv(),
-    });
+    const result = runIsolatedScript(
+      dir,
+      'setup-local.ts',
+      ['--identity', 'self'],
+      {
+        env: isolatedEnv(),
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(helpers().stdout.trim()).toBe('');

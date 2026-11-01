@@ -1,20 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { inject } from 'vitest';
+import { createTestPool, type TestPoolConfig } from './pool.ts';
 
 export interface TestDatabase {
   uri: string;
   // Pool da loja e pool do ERP simulado, no mesmo banco, como no compose.
   pool: pg.Pool;
   erpPool: pg.Pool;
+  // Outro pool sobre o mesmo banco, com o ouvinte de `error` e os limites que o teste pedir. Quem o cria o encerra.
+  newPool(config?: TestPoolConfig): pg.Pool;
   stop(): Promise<void>;
-}
-
-export function createPool(uri: string): pg.Pool {
-  const pool = new pg.Pool({ connectionString: uri, max: 5 });
-  // Um erro de conexão ociosa não pode derrubar o processo do teste.
-  pool.on('error', () => undefined);
-  return pool;
 }
 
 // Mesmo servidor da rodada (FND-14), outro banco.
@@ -45,12 +41,13 @@ export async function startMigratedDatabase(): Promise<TestDatabase> {
     `CREATE DATABASE "${name}" TEMPLATE "${inject('pgTemplateDatabase')}"`,
   );
   const uri = uriOfDatabase(inject('pgAdminUri'), name);
-  const pool = createPool(uri);
-  const erpPool = createPool(uri);
+  const pool = createTestPool(uri);
+  const erpPool = createTestPool(uri);
   return {
     uri,
     pool,
     erpPool,
+    newPool: (config) => createTestPool(uri, config),
     async stop() {
       // Os pools fecham antes do DROP: o FORCE derruba o que sobrar, mas um cliente derrubado emite 57P01.
       await pool.end();

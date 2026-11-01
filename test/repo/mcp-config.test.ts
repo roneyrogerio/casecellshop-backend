@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface GithubServer {
   type?: unknown;
@@ -13,8 +14,6 @@ interface GithubServer {
 interface McpConfig {
   mcpServers?: { github?: GithubServer };
 }
-
-const root = join(import.meta.dirname, '..', '..');
 
 let tools: readonly string[];
 

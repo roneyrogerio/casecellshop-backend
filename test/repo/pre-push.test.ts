@@ -16,10 +16,10 @@ import {
   initRepo,
   makeTempDir,
 } from '../helpers/git-sandbox.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // O hook fica em .githooks/ (AI-08) e não tem arquivo de origem ao lado: o teste mora em test/repo/,
 // onde ficam os testes de configuração do repositório.
-const root = join(import.meta.dirname, '..', '..');
 const hook = join(root, '.githooks', 'pre-push');
 
 afterEach(cleanupTempDirs);

@@ -9,7 +9,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { checkDbTypes } from '../../../scripts/check-db-types.ts';
 import { migrate } from '../../../src/db/migrate.ts';
@@ -18,11 +17,8 @@ import {
   type MigrationContainer,
   startMigrationContainer,
 } from '../../helpers/migration-database.ts';
+import { repoRoot } from '../../helpers/repo-root.ts';
 
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 const versionedDir = path.join(repoRoot, 'src', 'db', 'types');
 const TYPE_FILES = ['store.ts', 'erp-sim.ts'];
 

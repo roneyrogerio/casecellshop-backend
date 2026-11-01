@@ -1,7 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { repoRoot } from '../../test/helpers/repo-root.ts';
+import { runHook } from '../../test/helpers/run-node.ts';
 
 interface GuardInput {
   agent_type?: string;
@@ -574,19 +575,7 @@ describe('AI-11 o bash-guard como processo', () => {
   const hook = join(import.meta.dirname, 'bash-guard.mjs');
 
   function run(raw: string) {
-    const result = spawnSync(process.execPath, [hook], {
-      input: raw,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..'),
-      },
-    });
-    return {
-      code: result.status,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    return runHook(hook, repoRoot, raw);
   }
 
   function payload(agentType: string | undefined, command: string): string {

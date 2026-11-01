@@ -12,13 +12,14 @@ import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { runCompose } from '../helpers/compose.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // FND-12: a versão do Node é imposta, não só declarada (AD-011). O `devEngines.runtime` com `onFail: error` faz o
 // npm parar abaixo do piso, e a perna do piso do CI deixa de fora só os testes que sobem o `docker compose`, porque a
 // imagem tem o Node do Dockerfile nas duas pernas.
 
 const execFileAsync = promisify(execFile);
-const root = join(import.meta.dirname, '..', '..');
 
 interface DevEnginesRuntime {
   name?: unknown;
@@ -467,6 +468,18 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // O detector só enxerga `upComposeProject(`. Um teste que subisse o projeto por `runCompose(p, ['up', …])` escaparia
+  // dele e rodaria na perna do piso, sem a imagem do Dockerfile. Por isso o helper recusa o `up`: subir o projeto
+  // só é possível por quem o detector acha. A recusa vem antes de qualquer chamada ao Docker.
+  it.each([[['up', '-d']], [['--profile', 'app', 'up', '--wait']], [['up']]])(
+    'FND-12 controle negativo: o runCompose recusa %j, então o up só passa por upComposeProject, que o detector acha',
+    async (args) => {
+      await expect(runCompose('node-floor-control', args)).rejects.toThrow(
+        /upComposeProject/,
+      );
+    },
+  );
 });
 
 describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker compose', () => {

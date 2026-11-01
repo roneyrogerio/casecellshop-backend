@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
   getContainerRuntimeClient,
@@ -28,8 +27,7 @@ import {
   runCompose,
   upComposeProject,
 } from '../../helpers/compose.ts';
-
-const root = fileURLToPath(new URL('../../..', import.meta.url));
+import { repoRoot as root } from '../../helpers/repo-root.ts';
 
 let environment: StartedDockerComposeEnvironment;
 let projectName: string;

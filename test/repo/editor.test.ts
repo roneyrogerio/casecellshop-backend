@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // AI-41: o editor recomenda as extensões do Prettier e do oxlint; formatar ao salvar é escolha de cada pessoa.
-const root = join(import.meta.dirname, '..', '..');
 
 function readExtensions(): { recommendations?: unknown } {
   try {

@@ -1,13 +1,12 @@
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
   DockerComposeEnvironment,
   type StartedDockerComposeEnvironment,
 } from 'testcontainers';
+import { repoRoot as root } from './repo-root.ts';
 
 const execFileAsync = promisify(execFile);
-const root = fileURLToPath(new URL('../..', import.meta.url));
 
 // FND-13: o compose recebe a porta 0 e o Docker escolhe a porta do host na hora do `up`. Escolher uma porta livre
 // antes (um `listen(0)` seguido de `close`) deixa uma janela em que outro processo a ocupa, e o `up` falha com
@@ -26,11 +25,17 @@ export function publishedPort(
   return environment.getContainer(container).getMappedPort(containerPort);
 }
 
-// O CLI do compose no mesmo projeto, arquivo e variáveis do `up`, para achar os contêineres do teste.
+// O CLI do compose no mesmo projeto, arquivo e variáveis do `up`, para achar os contêineres do teste. Não sobe o
+// projeto: o `up` só existe em `upComposeProject`, e é por ele que o detector de test/repo/node-floor.test.ts acha
+// os testes que precisam da imagem do Dockerfile (FND-12). Um `runCompose(p, ['up'])` passaria despercebido por ele.
 export async function runCompose(
   projectName: string,
   args: string[],
 ): Promise<string> {
+  if (args.includes('up'))
+    throw new Error(
+      'runCompose não sobe o projeto: use upComposeProject, que o detector do FND-12 enxerga',
+    );
   const { stdout, stderr } = await execFileAsync(
     'docker',
     ['compose', '-p', projectName, '-f', 'compose.yaml', ...args],

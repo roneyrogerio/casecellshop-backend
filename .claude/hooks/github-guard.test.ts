@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -10,6 +9,8 @@ import {
   makeTempDir,
   writeFileIn,
 } from '../../test/helpers/git-sandbox.ts';
+import { repoRoot } from '../../test/helpers/repo-root.ts';
+import { runHook } from '../../test/helpers/run-node.ts';
 
 afterEach(cleanupTempDirs);
 
@@ -541,15 +542,7 @@ describe('AI-08 github-guard como processo', () => {
   const hook = join(import.meta.dirname, 'github-guard.mjs');
 
   function run(raw: string) {
-    const result = spawnSync(process.execPath, [hook], {
-      input: raw,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..'),
-      },
-    });
-    return { code: result.status, stderr: result.stderr };
+    return runHook(hook, repoRoot, raw);
   }
 
   it.each([
@@ -592,13 +585,7 @@ describe('AI-16 github-guard como processo, com um repositório git de verdade',
   const hook = join(import.meta.dirname, 'github-guard.mjs');
 
   function runIn(project: string, input: unknown) {
-    const result = spawnSync(process.execPath, [hook], {
-      input: JSON.stringify(input),
-      encoding: 'utf8',
-      cwd: project,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: project },
-    });
-    return { code: result.status, stderr: result.stderr };
+    return runHook(hook, project, JSON.stringify(input));
   }
 
   // Repositório com um commit, remoto bare e a branch main publicada com -u (o upstream existe e é o HEAD).

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface Step {
   name?: string;
@@ -25,8 +26,6 @@ interface Workflow {
   concurrency?: Concurrency | string;
   jobs?: Record<string, Job>;
 }
-
-const root = join(import.meta.dirname, '..', '..');
 
 function stepsOf(workflow: Workflow): Step[] {
   return Object.values(workflow.jobs ?? {}).flatMap((job) => job.steps ?? []);

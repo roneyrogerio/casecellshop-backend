@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  createPool,
   startMigratedDatabase,
   type TestDatabase,
 } from '../../helpers/database.ts';
+import { createTestPool } from '../../helpers/pool.ts';
 import {
   advanceAndDrain,
   begin,
@@ -97,7 +97,7 @@ describe('normal, lento e indisponível', () => {
   });
 
   it('ORD-21 o atraso do slow corre fora de transação: nenhuma conexão do ERP fica ocupada enquanto ele espera', async () => {
-    const pool = createPool(database.uri);
+    const pool = createTestPool(database.uri);
     try {
       const harness = createErpHarness(pool);
       const sku = uniqueName('ROTEIRO-LENTO-SKU');

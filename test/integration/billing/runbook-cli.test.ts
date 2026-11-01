@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { countInvoices } from '../../helpers/erp.ts';
 import { dlqTotal, moveToDlq } from '../../helpers/dlq.ts';
+import { repoRoot as root } from '../../helpers/repo-root.ts';
 import { TEST_REGION } from '../../helpers/sqs.ts';
 import {
   acceptOrder,
@@ -17,7 +17,6 @@ import {
 // A linha de comando do runbook (`node src/main/runbook.ts <comando>`): só a fiação, como processo (saída,
 // código de saída, mensagem). A decisão de cada comando é provada em runbook.test.ts, em processo.
 
-const root = fileURLToPath(new URL('../../..', import.meta.url));
 const PROCESS_TIMEOUT_MS = 40_000;
 
 let suite: WorkerSuite;

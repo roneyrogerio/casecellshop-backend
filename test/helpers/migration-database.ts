@@ -18,6 +18,8 @@ import pg from 'pg';
 import { expect, vi } from 'vitest';
 import type { MigrationFolder } from '../../src/db/migrate.ts';
 import { WAIT_GUARD_MS } from './async.ts';
+import { composeImage } from './compose-image.ts';
+import { createTestPool } from './pool.ts';
 
 // Ajudantes dos testes do FND-11: um banco novo por teste, no mesmo contêiner, e um Migrator do
 // Kysely montado à mão, para os controles negativos provarem que o gancho do migrate é o que
@@ -69,13 +71,9 @@ async function openConnections(admin: pg.Pool): Promise<string[]> {
 
 export async function startMigrationContainer(): Promise<MigrationContainer> {
   const container: StartedPostgreSqlContainer = await new PostgreSqlContainer(
-    'postgres:18.6',
+    composeImage('postgres'),
   ).start();
-  const adminPool = new pg.Pool({
-    connectionString: container.getConnectionUri(),
-    max: 2,
-  });
-  adminPool.on('error', () => undefined);
+  const adminPool = createTestPool(container.getConnectionUri(), { max: 2 });
   const pools: pg.Pool[] = [];
   let counter = 0;
   return {
@@ -89,8 +87,7 @@ export async function startMigrationContainer(): Promise<MigrationContainer> {
       url.pathname = `/${name}`;
       const uri = url.toString();
       // Pool folgado: duas chamadas de migrate ao mesmo tempo seguram uma conexão cada.
-      const pool = new pg.Pool({ connectionString: uri, max: 10 });
-      pool.on('error', () => undefined);
+      const pool = createTestPool(uri, { max: 10 });
       pools.push(pool);
       return { uri, pool };
     },
@@ -146,8 +143,7 @@ export async function runPlainMigrator(
   folder: MigrationFolder,
   control: MigratorControl = {},
 ): Promise<MigrationResultSet> {
-  const pool = new pg.Pool({ connectionString: uri, max: 4 });
-  pool.on('error', () => undefined);
+  const pool = createTestPool(uri, { max: 4 });
   const dialect = control.withoutLock
     ? new NoLockDialect({ pool })
     : new PostgresDialect({ pool });

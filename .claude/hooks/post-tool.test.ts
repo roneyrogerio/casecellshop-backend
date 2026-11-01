@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +7,7 @@ import {
   initRepo,
   makeTempDir,
 } from '../../test/helpers/git-sandbox.ts';
+import { type HookRun, runHook } from '../../test/helpers/run-node.ts';
 
 // O hook é um script: o que o Claude Code vê é o código de saída, o stderr e os arquivos gravados.
 const hookFile = join(import.meta.dirname, 'post-tool.mjs');
@@ -15,24 +15,10 @@ const stopFile = join(import.meta.dirname, 'subagent-stop.mjs');
 
 afterEach(cleanupTempDirs);
 
-interface HookResult {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function runScript(script: string, project: string, raw: string): HookResult {
-  const result = spawnSync(process.execPath, [script], {
-    input: raw,
-    encoding: 'utf8',
-    cwd: project,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: project },
-  });
-  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
-}
+type HookResult = HookRun;
 
 function runPostTool(project: string, input: unknown): HookResult {
-  return runScript(hookFile, project, JSON.stringify(input));
+  return runHook(hookFile, project, JSON.stringify(input));
 }
 
 function handback(
@@ -198,7 +184,7 @@ describe('AI-15 o PostToolUse do SubagentHandback grava o relatório do reviewer
       const viaPostTool = makeTempDir('ai15-');
       const viaStop = makeTempDir('ai15-');
       handback(viaPostTool, 'reviewer', agentId, REPORT);
-      runScript(
+      runHook(
         stopFile,
         viaStop,
         JSON.stringify({
@@ -324,7 +310,7 @@ describe('AI-15 AI-16 o PostToolUse com entrada ilegível recusa, como os outros
       const project = makeTempDir('ai15-');
       initRepo(project);
 
-      const result = runScript(hookFile, project, raw);
+      const result = runHook(hookFile, project, raw);
 
       expect(result.code).toBe(2);
       expect(result.stderr).not.toBe('');

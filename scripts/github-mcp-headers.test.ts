@@ -5,7 +5,7 @@ import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
 import {
   isolatedEnv,
   makeScriptsSandbox,
-  runScript,
+  runIsolatedScript,
   setFakeCredential,
 } from '../test/helpers/identity-sandbox.ts';
 
@@ -109,7 +109,7 @@ describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone
   it('AI-08 sem identidade configurada falha sem imprimir cabeçalho', () => {
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'github-mcp-headers.ts', []);
+    const result = runIsolatedScript(dir, 'github-mcp-headers.ts', []);
 
     expect(result.status).not.toBe(0);
     // Mede o tamanho, sem imprimir a saída: se um token real vazasse, a mensagem de falha não o mostraria.
@@ -121,7 +121,7 @@ describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone
     setFakeCredential(dir, 'tok-self');
     git(dir, 'config', '--local', 'casecellshop.identity', 'self');
 
-    const result = runScript(dir, 'github-mcp-headers.ts', []);
+    const result = runIsolatedScript(dir, 'github-mcp-headers.ts', []);
 
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
@@ -136,7 +136,7 @@ describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone
     git(dir, 'config', '--local', 'credential.helper', '');
     git(dir, 'config', '--local', 'casecellshop.identity', 'self');
 
-    const result = runScript(dir, 'github-mcp-headers.ts', []);
+    const result = runIsolatedScript(dir, 'github-mcp-headers.ts', []);
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe('');
@@ -145,7 +145,7 @@ describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone
   it('AI-08 na nuvem devolve {} mesmo sem identidade', () => {
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'github-mcp-headers.ts', [], {
+    const result = runIsolatedScript(dir, 'github-mcp-headers.ts', [], {
       env: isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' }),
     });
 

@@ -8,13 +8,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 const APP_CHECK = '.claude/skills/app-check/SKILL.md';
 const MARCO = '.claude/skills/marco/SKILL.md';
 const SETTINGS = '.claude/settings.json';

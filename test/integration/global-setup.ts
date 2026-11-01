@@ -2,7 +2,9 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import pg from 'pg';
 import type { TestProject } from 'vitest/node';
 import { migrate } from '../../src/db/migrate.ts';
+import { composeImage } from '../helpers/compose-image.ts';
 import { startElasticMqContainer } from '../helpers/elasticmq-container.ts';
+import { createTestPool } from '../helpers/pool.ts';
 
 // O que o setup passa aos arquivos de teste (FND-14): lido com `inject` em test/helpers/.
 declare module 'vitest' {
@@ -42,7 +44,7 @@ export default async function setup(
 ): Promise<() => Promise<void>> {
   // Os dois contêineres sobem juntos; o modelo só depende do PostgreSQL.
   const [postgres, elasticMq] = await Promise.all([
-    new PostgreSqlContainer('postgres:18.6').start(),
+    new PostgreSqlContainer(composeImage('postgres')).start(),
     startElasticMqContainer(),
   ]);
   try {
@@ -55,11 +57,7 @@ export default async function setup(
       await admin.query(`CREATE DATABASE "${TEMPLATE_DATABASE}"`);
       const templateUri = new URL(adminUri);
       templateUri.pathname = `/${TEMPLATE_DATABASE}`;
-      const pool = new pg.Pool({
-        connectionString: templateUri.href,
-        max: 2,
-      });
-      pool.on('error', () => undefined);
+      const pool = createTestPool(templateUri.href, { max: 2 });
       try {
         await migrate(pool);
       } finally {

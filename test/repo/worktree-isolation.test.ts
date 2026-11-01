@@ -1,14 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // O frontmatter de um agente como mapa; um arquivo sem frontmatter válido dá um mapa vazio, e o teste falha na asserção.
 function frontmatterOf(raw: string): Record<string, unknown> {

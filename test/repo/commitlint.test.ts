@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { repoRoot } from '../helpers/ci-workflow.ts';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // AI-45: o commitlint do projeto ignora os commits assinados pelo `dependabot[bot]`, cujo corpo traz as notas de
 // versão em linhas longas; o commit de qualquer outro autor com corpo longo continua reprovando. Roda o binário do

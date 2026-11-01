@@ -7,11 +7,11 @@ import {
   makeTempDir,
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // AI-38: todo teste (`it` e `test`) começa pelo ID do critério (`vitest/valid-title` com `mustMatch` no
 // .oxlintrc.json); um nome sem ID reprova o `npm run lint`. Como no AI-02, a amostra fica na pasta temporária
 // do sistema e a configuração do projeto entra por caminho absoluto.
-const root = join(import.meta.dirname, '..', '..');
 const oxlintBin = join(root, 'node_modules', '.bin', 'oxlint');
 
 afterAll(cleanupTempDirs);

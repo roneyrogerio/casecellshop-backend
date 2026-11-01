@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTempDirs,
@@ -18,11 +18,8 @@ import {
   initRepo,
   makeTempDir,
 } from '../../test/helpers/git-sandbox.ts';
+import { repoRoot as root } from '../../test/helpers/repo-root.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
 
 interface HookInput {

@@ -14,6 +14,7 @@ import { logContext } from '../../src/shared/logging.ts';
 import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import { expectMatchesContract } from './contract.ts';
 import type { TestDatabase } from './database.ts';
+import { createTestPool } from './pool.ts';
 
 // Tamanho fixo do pool da API nos testes de concorrência, o mesmo de produção (design.md, "Parâmetros").
 export const APP_POOL_SIZE = 10;
@@ -45,15 +46,12 @@ export function createAppPool(
   max: number = APP_POOL_SIZE,
   limits: PoolLimits = {},
 ): pg.Pool {
-  const pool = new pg.Pool({
-    connectionString: uri,
+  return createTestPool(uri, {
     max,
     connectionTimeoutMillis: 15_000,
     statement_timeout: limits.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS,
     lock_timeout: limits.lockTimeoutMs ?? LOCK_TIMEOUT_MS,
   });
-  pool.on('error', () => undefined);
-  return pool;
 }
 
 export interface CheckoutHarness {

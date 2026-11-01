@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type { Socket } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Kysely, PostgresDialect } from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import pg from 'pg';
@@ -11,6 +10,8 @@ import { MIGRATION_FOLDERS, migrate } from '../../../src/db/migrate.ts';
 import { createMigrationPool, createPool } from '../../../src/db/pool.ts';
 import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { captureUncaught } from '../../helpers/uncaught.ts';
+import { createTestPool } from '../../helpers/pool.ts';
+import { repoRoot } from '../../helpers/repo-root.ts';
 import {
   appliedMigrations,
   fixtureFolder,
@@ -30,11 +31,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await container?.stop();
 });
-
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 
 describe('FND-11 migrate aplica as pastas pelo Migrator do Kysely', () => {
   it('FND-11 as duas pastas do repositório são o padrão, a da loja antes e o erp_sim depois', () => {
@@ -393,9 +389,7 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
       'sobre um pool sem statement_timeout nem lock_timeout',
       0,
       (uri: string): pg.Pool => {
-        const bare = new pg.Pool({ connectionString: uri, max: 10 });
-        bare.on('error', noop);
-        return bare;
+        return createTestPool(uri, { max: 10 });
       },
     ],
     [
@@ -535,9 +529,7 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
   ): Promise<{ outcome: unknown; uncaught: Error[] }> {
     const { errors: uncaught, restore } = captureUncaught();
     const clients: pg.PoolClient[] = [];
-    const pool = new pg.Pool({ connectionString: database.uri, max: 4 });
-    // Um erro de conexão ociosa não pode derrubar o processo do teste.
-    pool.on('error', noop);
+    const pool = createTestPool(database.uri, { max: 4 });
     pool.on('connect', (client) => clients.push(client));
     try {
       const pending = run(pool).then(

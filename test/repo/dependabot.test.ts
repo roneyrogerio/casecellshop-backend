@@ -1,12 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  mutated,
-  parseYaml,
-  readRepoYaml,
-  repoRoot,
-} from '../helpers/ci-workflow.ts';
+import { mutated, parseYaml, readRepoYaml } from '../helpers/ci-workflow.ts';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // AI-45 (a parte do dependabot.yml): o Dependabot abre os PRs do npm e das actions uma vez por semana, com espera de
 // 7 dias desde a publicação (cooldown), um grupo por ecossistema, a versão exata no package.json e o prefixo de commit

@@ -6,11 +6,16 @@ import pg from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkDbTypes } from '../../../scripts/check-db-types.ts';
 import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
+import { composeImage } from '../../helpers/compose-image.ts';
 import {
   fixtureFolder,
   runPlainMigrator,
   startMigrationContainer,
 } from '../../helpers/migration-database.ts';
+import {
+  createPoolWithoutErrorListener,
+  createTestPool,
+} from '../../helpers/pool.ts';
 import { captureUncaught } from '../../helpers/uncaught.ts';
 
 // FND-13, encerramento: parar o contêiner de um banco de teste não pode deixar escapar o 57P01 ("terminating
@@ -23,12 +28,15 @@ function codeOf(error: Error): unknown {
   return (error as { code?: unknown }).code;
 }
 
-// Pool com uma conexão ociosa aberta; o ouvinte, se dado, recebe os erros dela.
+// Pool com uma conexão ociosa aberta. Sem `onError` é o pool sem ouvinte do controle negativo; com ele, o pool de
+// teste de sempre, mais o ouvinte que recebe os erros dela.
 async function idlePool(
   uri: string,
   onError?: (error: Error) => void,
 ): Promise<pg.Pool> {
-  const pool = new pg.Pool({ connectionString: uri, max: 1 });
+  const pool = onError
+    ? createTestPool(uri, { max: 1 })
+    : createPoolWithoutErrorListener(uri, { max: 1 });
   if (onError) pool.on('error', onError);
   await pool.query('SELECT 1');
   return pool;
@@ -43,7 +51,9 @@ afterEach(() => {
 
 describe('FND-13 encerramento do contêiner de um banco de teste', () => {
   it('FND-13 controle negativo: um pool ocioso, aberto e sem ouvinte de erro quando o contêiner para, deixa escapar o 57P01 como uncaughtException', async () => {
-    const container = await new PostgreSqlContainer('postgres:18.6').start();
+    const container = await new PostgreSqlContainer(
+      composeImage('postgres'),
+    ).start();
     const leaked = await idlePool(container.getConnectionUri());
     const uncaught = captureUncaught();
     try {

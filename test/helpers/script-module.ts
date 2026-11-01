@@ -1,10 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect } from 'vitest';
 import { repoRoot } from './repo-root.ts';
 import { makeTempDir, writeFileIn } from './git-sandbox.ts';
+import { type NodeRun, runNode } from './run-node.ts';
 
 // Carrega um script de scripts/ por import dinâmico. Enquanto o script não existe (ou não exporta a função), o teste
 // reprova por asserção com uma mensagem clara, e não por erro de import que quebraria a coleta do arquivo.
@@ -41,32 +41,20 @@ export function sandboxWithScript(file: string): string {
   return dir;
 }
 
-export interface CliResult {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-// Roda `node scripts/<file>` na pasta, com o ambiente limpo de variáveis do git da máquina.
+// Roda `node scripts/<file>` na pasta, com o ambiente do processo sem as variáveis do git da máquina, mais `env`.
 export function runScript(
   dir: string,
   file: string,
   env: Record<string, string> = {},
-): CliResult {
+): NodeRun {
   const clean = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
         entry[1] !== undefined && !entry[0].startsWith('GIT_'),
     ),
   );
-  const result = spawnSync(process.execPath, [join('scripts', file)], {
+  return runNode(join('scripts', file), [], {
     cwd: dir,
     env: { ...clean, ...env },
-    encoding: 'utf8',
   });
-  return {
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
 }

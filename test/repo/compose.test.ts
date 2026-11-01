@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface ComposeService {
   image?: string;
@@ -15,8 +16,6 @@ interface ComposeFile {
   services?: Record<string, ComposeService>;
   volumes?: Record<string, unknown>;
 }
-
-const root = join(import.meta.dirname, '..', '..');
 
 // Endereços que obrigam o pg_isready a usar TCP. Um caminho (começa por `/`) escolhe o socket Unix.
 const TCP_HOSTS = new Set(['localhost', '127.0.0.1']);
@@ -146,8 +145,12 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
   const elasticmq = compose.services?.['elasticmq'];
   const worker = compose.services?.['worker'];
 
-  it('FND-01 o serviço elasticmq usa a imagem nativa fixada em softwaremill/elasticmq-native:1.7.1', () => {
-    expect(elasticmq?.image).toBe('softwaremill/elasticmq-native:1.7.1');
+  // A versão mora só no compose.yaml (os testes de integração a leem de lá, em test/helpers/compose-image.ts): aqui se
+  // confere a imagem nativa e a versão fixada, sem repetir o número.
+  it('FND-01 o serviço elasticmq usa a imagem nativa softwaremill/elasticmq-native fixada em versão X.Y.Z, nunca latest', () => {
+    expect(elasticmq?.image).toMatch(
+      /^softwaremill\/elasticmq-native:\d+\.\d+\.\d+$/,
+    );
   });
 
   it('FND-01 as mensagens do elasticmq ficam num volume nomeado declarado no compose, para sobreviver ao reinício', () => {

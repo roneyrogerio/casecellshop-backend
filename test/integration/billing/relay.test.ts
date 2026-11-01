@@ -762,7 +762,8 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
     const round = relay.publishOnce();
     try {
       // O prazo de 5 s corre em tempo real dentro do SDK, não no relógio injetável: o teste mede o tempo decorrido.
-      const outcome = await observe(round, 12_000);
+      // O guarda da espera é o de sempre (FND-13); quem decide o ORD-22 é o limite de 9 s da asserção abaixo.
+      const outcome = await observe(round, WAIT_GUARD_MS);
 
       expect(
         blackHole.requestCount(),
@@ -779,7 +780,7 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
     } finally {
       // Sem prazo na porta a rodada nunca termina; soltar a conexão evita que ela trave os testes seguintes.
       hole.destroy();
-      await observe(round, 10_000);
+      await observe(round, WAIT_GUARD_MS);
     }
   });
 

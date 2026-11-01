@@ -49,15 +49,6 @@ class RollbackFailingClient extends pg.Client {
   }
 }
 
-const noop = (): void => undefined;
-
-function createTestPool(options: pg.PoolConfig): pg.Pool {
-  const pool = new pg.Pool({ connectionString: database.uri, ...options });
-  // Um erro de conexão ociosa não pode derrubar o processo do teste.
-  pool.on('error', noop);
-  return pool;
-}
-
 // Adaptador ingênuo: só repassa connect e chama release() sem argumento, como o Kysely faz. É o
 // controle negativo do descarte: o pg-pool só descarta a conexão quando o release recebe o erro.
 function createNaivePoolAdapter(pool: pg.Pool): PostgresPool {
@@ -99,7 +90,7 @@ async function destroySocketDuringQuery(
   };
   process.on('uncaughtException', onUncaught);
   const clients: pg.Client[] = [];
-  const pool = createTestPool({ max: 2 });
+  const pool = database.newPool({ max: 2 });
   pool.on('connect', (client) => clients.push(client));
   const db = createErpDb(pool);
   try {
@@ -173,7 +164,7 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
   }
 
   it('FND-10 um ROLLBACK que falha com a conexão ainda viva deixa a conexão fora do pool: a seguinte tem outro pg_backend_pid()', async () => {
-    const pool = createTestPool({ max: 1, Client: RollbackFailingClient });
+    const pool = database.newPool({ max: 1, Client: RollbackFailingClient });
     const db = createErpDb(pool);
     try {
       const pidInTransaction = await failTransaction(db);
@@ -193,7 +184,7 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
   });
 
   it('FND-10 controle negativo: com um adaptador ingênuo, o mesmo cenário devolve ao pool a mesma conexão (o mesmo pg_backend_pid())', async () => {
-    const pool = createTestPool({ max: 1, Client: RollbackFailingClient });
+    const pool = database.newPool({ max: 1, Client: RollbackFailingClient });
     const db = new Kysely<ErpSimDb>({
       dialect: new PostgresDialect({ pool: createNaivePoolAdapter(pool) }),
     });
@@ -208,7 +199,7 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
   });
 
   it('FND-10 um ROLLBACK que funciona devolve a conexão ao pool: a seguinte é a mesma', async () => {
-    const pool = createTestPool({ max: 1 });
+    const pool = database.newPool({ max: 1 });
     const db = createErpDb(pool);
     try {
       const pidInTransaction = await failTransaction(db);

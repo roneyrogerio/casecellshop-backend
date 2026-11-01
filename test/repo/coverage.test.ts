@@ -9,6 +9,7 @@ import {
   workflowOf,
   type CiStep,
 } from '../helpers/ci-workflow.ts';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // AI-37: o CI mede a cobertura de src/ (v8) em todos os testes e reprova abaixo do piso do vitest.config.ts.
 // O valor do piso é medido no PR que o criou; aqui só se confere que ele existe, que é positivo e que o CI o aplica.
@@ -118,10 +119,7 @@ describe('AI-37 o ci.yml mede a cobertura só na perna do .nvmrc', () => {
 
   it('AI-37 o @vitest/coverage-v8 está nas devDependencies com versão exata', () => {
     const pkg = JSON.parse(
-      readFileSync(
-        join(import.meta.dirname, '..', '..', 'package.json'),
-        'utf8',
-      ),
+      readFileSync(join(repoRoot, 'package.json'), 'utf8'),
     ) as { devDependencies?: Record<string, string> };
 
     expect(pkg.devDependencies?.['@vitest/coverage-v8']).toMatch(

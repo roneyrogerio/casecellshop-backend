@@ -7,6 +7,7 @@ import {
   oxlintBin,
   typecheckSample,
 } from '../helpers/lint-tree.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // AI-19: a conferência do Kysely é parte do `npm run lint`. Aqui o oxlint roda com o .oxlintrc.json do projeto
 // sobre uma árvore temporária que tem uma pasta src/, com cwd nela. Os `files` dos overrides (src/**) casam pelo
@@ -25,8 +26,6 @@ interface Diagnostic {
 const KYSELY_RULE = /kysely|no-restricted-properties/;
 
 afterAll(cleanupTempDirs);
-
-const root = join(import.meta.dirname, '..', '..');
 
 function newTree(): string {
   return newLintTree('ai19-lint-');

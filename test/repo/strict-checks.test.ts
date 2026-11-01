@@ -8,13 +8,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
+import { typecheckSample } from '../helpers/lint-tree.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface TsConfig {
   compilerOptions: Record<string, unknown>;
@@ -436,44 +433,13 @@ describe('AI-20 controle negativo do lint: switch sem todos os casos da união r
 });
 
 describe('AI-20 controle negativo do typecheck: undefined explícito em propriedade opcional reprova', () => {
-  let tree: string;
-
-  beforeEach(() => {
-    tree = mkdtempSync(path.join(tmpdir(), 'ai20-tsc-'));
-    // A pasta herda as opções do repositório por caminho absoluto. `include` é refeito porque o herdado
-    // valeria para as pastas do repositório; `typeRoots` aponta para o repositório porque, fora dele,
-    // os tipos do Node não são achados.
-    writeFileSync(
-      path.join(tree, 'tsconfig.json'),
-      JSON.stringify({
-        extends: path.join(root, 'tsconfig.json'),
-        compilerOptions: {
-          typeRoots: [path.join(root, 'node_modules', '@types')],
-        },
-        include: ['amostra.mts'],
-      }),
-    );
-  });
-
-  afterEach(() => {
-    rmSync(tree, { recursive: true, force: true });
-  });
+  afterEach(cleanupTempDirs);
 
   function typecheck(source: string): {
     status: number | null;
     output: string;
   } {
-    // `.mts`: fora do repositório não há `"type": "module"`, e o `export` da amostra seria lido como CommonJS.
-    writeFileSync(path.join(tree, 'amostra.mts'), source);
-    const result = spawnSync(
-      path.join(root, 'node_modules', '.bin', 'tsc'),
-      ['--noEmit', '-p', path.join(tree, 'tsconfig.json')],
-      { cwd: root, encoding: 'utf8' },
-    );
-    return {
-      status: result.status,
-      output: `${result.stdout}${result.stderr}`,
-    };
+    return typecheckSample('ai20-tsc-', source);
   }
 
   it('AI-20 propriedade opcional recebendo undefined explícito reprova no tsc com exactOptionalPropertyTypes', () => {

@@ -5,10 +5,10 @@ import { getFileInfo } from 'prettier';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { cleanupTempDirs, makeTempDir } from '../helpers/git-sandbox.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // AI-34: o formato do código é o do Prettier. A configuração, o `.prettierignore`, o `verify`, o CI e o hook
 // do settings.json são conferidos aqui; a decisão do hook fica em .claude/hooks/format-edited.test.ts.
-const root = join(import.meta.dirname, '..', '..');
 const prettierBin = join(root, 'node_modules', '.bin', 'prettier');
 
 afterAll(cleanupTempDirs);

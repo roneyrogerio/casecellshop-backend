@@ -6,7 +6,6 @@ import {
   parseYaml,
   readRepoYaml,
   readWorkflowFile,
-  repoRoot,
   same,
   stepsOfWorkflow,
   workflowsDir,
@@ -14,6 +13,7 @@ import {
   type CiStep,
   type CiWorkflow,
 } from '../helpers/ci-workflow.ts';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // AI-10: o merge segue a aprovação do dono e sai em nome de um GitHub App. Dois workflows:
 // - merge-on-approval.yml roda a versão que está no PR; por isso não tem secret nem permissão, e só confere a revisão;

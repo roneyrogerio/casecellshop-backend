@@ -7,6 +7,7 @@ import {
   uriOfDatabase,
   type TestDatabase,
 } from '../../helpers/database.ts';
+import { createTestPool } from '../../helpers/pool.ts';
 import {
   createBillingQueues,
   drain,
@@ -25,11 +26,7 @@ let second: TestDatabase;
 let fileA: TestElasticMq;
 let fileB: TestElasticMq;
 const scratchDatabases: string[] = [];
-const adminPool = new pg.Pool({
-  connectionString: inject('pgAdminUri'),
-  max: 2,
-});
-adminPool.on('error', () => undefined);
+const adminPool = createTestPool(inject('pgAdminUri'), { max: 2 });
 
 beforeAll(async () => {
   [first, second] = await Promise.all([
