@@ -6,6 +6,7 @@ import {
   FUZZ_UPLOAD_IF,
   REPORT_DIR_STEP,
   reportDirAfterFuzz,
+  reportDirBeforeCheckout,
   SHARED_FUZZ_CASES,
   type FuzzCase,
   type FuzzJob,
@@ -1006,6 +1007,18 @@ describe('FND-16 as conferências do api-fuzz do CI enxergam o que procuram (con
 
     expect(ciFuzzViolations(late)).toEqual([
       'o diretório do relatório é criado depois do fuzzing',
+    ]);
+  });
+
+  it('FND-16 o api-fuzz do CI que cria o schemathesis-report antes do checkout reprova', () => {
+    const early = parseWorkflow(
+      GOOD_WITH_FUZZ.replace(CI_FUZZ_JOB, () =>
+        reportDirBeforeCheckout(CI_FUZZ_JOB),
+      ),
+    );
+
+    expect(ciFuzzViolations(early)).toEqual([
+      'o diretório do relatório é criado antes do checkout',
     ]);
   });
 
