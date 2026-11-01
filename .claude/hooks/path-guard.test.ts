@@ -219,6 +219,8 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     'test/vitest.config.ts',
     'test/knip.json',
     'test/.editorconfig',
+    'test/.eslintignore',
+    'test/package.json',
     'src/vitest.config.ts',
   ])(
     'FND-08 o test-writer não pode editar a configuração da verificação %s',
@@ -393,6 +395,12 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   'src/.editorconfig',
   'src/package.yaml',
   'src/knip.json',
+  // O oxlint lê o .eslintignore por padrão (AI-48) e o Prettier lê a chave `prettier` de um package.json aninhado.
+  '.eslintignore',
+  'src/.eslintignore',
+  'src/package.json',
+  'src/x/package.json',
+  'migrations/package.json',
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
