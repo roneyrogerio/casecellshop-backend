@@ -42,7 +42,7 @@ Update `spec.md`, `design.md`, the contract in `src/contract/` (then `npm run op
 
 ## 4. Each slice
 
-[delegation.md](delegation.md) holds how to bring an agent's work in (also when `isolation` did not apply and it edited the main folder), how to read and route the CI, how to post the review report, and how to wait for the CI and long commands without a fixed timer.
+Read [delegation.md](delegation.md) before the first delegation of each slice and before a whole-PR round: it holds how to bring an agent's work in (also when `isolation` did not apply and it edited the main folder), how to read and route the CI, the `git fetch` and the posting of the review report, and how to wait for the CI and long commands without a fixed timer.
 
 1. `test-writer` with the map: failing tests for the slice criteria. Its stop hook requires lint and typecheck green. Bring its work in, check `git status` against the role, then commit `test(<escopo>): …`. The tests must fail by assertion; a collection error goes back to it.
 2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Bring its work in, check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
