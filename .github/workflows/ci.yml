@@ -17,64 +17,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
-    name: Node ${{ matrix.node }}
+  # AI-42: o que não depende da versão do Node roda uma vez, aqui, em paralelo
+  # com os testes; um lint vermelho já não impede os testes de darem o resultado.
+  checks:
+    name: Checagens
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # "nvmrc" lê a versão do .nvmrc; a 24.12.0 é o piso do engines.
-        node: [nvmrc, '24.12.0']
     env:
       REDOCLY_TELEMETRY: 'off'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # A conferência das migrações compara com a base do PR, então precisa do histórico.
+          # As conferências das migrações e dos commits comparam com a base do PR.
           fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Se os dois inputs vierem preenchidos, o setup-node usa só o node-version
-          # e avisa; por isso um deles fica sempre vazio.
-          node-version: ${{ matrix.node != 'nvmrc' && matrix.node || '' }}
-          node-version-file: ${{ matrix.node == 'nvmrc' && '.nvmrc' || '' }}
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
+      # AI-42: a assinatura do registro e a atestação de cada pacote que o npm ci
+      # baixou; pega um pacote adulterado, que o npm audit não vê.
+      - run: npm audit signatures
       - run: npm run lint
       # AI-34: o código no formato do Prettier. Roda pelo binário, e não por npm run (AI-05).
       - run: node_modules/.bin/prettier --check .
       - run: npm run typecheck
       # AI-35, AI-36 e AI-39: código sem uso, código repetido novo (contra a linha de
-      # base) e vulnerabilidade numa dependência de produção. O resultado não depende
-      # da versão do Node, então roda uma vez só. Pelo binário, e não por npm run (AI-05).
-      - if: matrix.node == 'nvmrc'
-        run: node_modules/.bin/knip --no-progress
-      - if: matrix.node == 'nvmrc'
-        run: node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones
-      - if: matrix.node == 'nvmrc'
-        run: npm audit --omit=dev
-      # Os testes de integração usam o Docker do runner (Testcontainers e compose).
-      # O relatório JSON alimenta a tabela critério × teste do resumo (AI-18).
-      # FND-12: na perna do piso, os testes que sobem o compose ficam de fora, porque a
-      # imagem fixa o Node do Dockerfile e repetiria o que a perna do .nvmrc já testou.
-      # AI-37: a cobertura de src/ e o piso dela, uma vez só, na perna do .nvmrc.
-      - run: npm test -- --reporter=default --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
-
-      # AI-18: a tabela que o dono lê antes de aprovar; informa e não reprova. Roda
-      # também com teste vermelho, que é quando ela mais ajuda, e uma vez só.
-      - name: Tabela critério × teste
-        if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
-        run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
-
-      # FND-09: os tipos do banco versionados batem com o banco migrado. Sobe o
-      # próprio PostgreSQL pelo Testcontainers; uma vez só, porque o resultado não
-      # depende da versão do Node. Roda com node, e não por npm run (AI-05).
-      - name: Tipos do banco em dia
-        if: matrix.node == 'nvmrc'
-        run: node scripts/check-db-types.ts
+      # base) e vulnerabilidade numa dependência de produção. Pelo binário, e não
+      # por npm run (AI-05).
+      - run: node_modules/.bin/knip --no-progress
+      - run: node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones
+      - run: npm audit --omit=dev
 
       # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
       - run: npm run openapi -- --check
@@ -95,33 +70,114 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: node scripts/check-migrations.ts
 
-      # AI-05: os scripts do package.json definem o que este CI e o hook de parada
-      # rodam; só um commit ci: ou build: da sessão principal pode mudá-los.
-      - name: Scripts do package.json intactos
+      # AI-05: o package.json fora dos blocos de dependências define o que este CI e
+      # o hook de parada rodam; só um commit ci: ou build: da sessão principal o muda.
+      - name: package.json fora das dependências intacto
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: node scripts/check-scripts.ts
 
-  # CONVENTIONS.md, "Commits": confere o cabeçalho de cada commit do PR, como no guia de CI
-  # do commitlint. Job à parte para rodar uma vez, e não por versão do Node.
-  commits:
-    name: Commits do PR
-    if: github.event_name == 'pull_request'
+      # CONVENTIONS.md, "Commits": o cabeçalho de cada commit do PR, como no guia de
+      # CI do commitlint. Os commits do Dependabot ficam de fora (AI-45).
+      # Os SHAs entram pelo ambiente, e não interpolados no script, como a BASE_REF.
+      - name: Valida os commits do PR com o commitlint
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npx commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
+
+  test:
+    name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # "nvmrc" lê a versão do .nvmrc; a 24.12.0 é o piso do engines.
+        node: [nvmrc, '24.12.0']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Testes de test/repo/ leem o histórico do git.
           fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: .nvmrc
+          # Se os dois inputs vierem preenchidos, o setup-node usa só o node-version
+          # e avisa; por isso um deles fica sempre vazio.
+          node-version: ${{ matrix.node != 'nvmrc' && matrix.node || '' }}
+          node-version-file: ${{ matrix.node == 'nvmrc' && '.nvmrc' || '' }}
           cache: npm
 
       - run: npm ci
-      - name: Valida os commits do PR com o commitlint
-        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+      # Os testes de integração usam o Docker do runner (Testcontainers e compose).
+      # AI-42: a lista própria de reporters substitui os padrões do Vitest, então o
+      # github-actions (a anotação da falha no diff) entra por nome; o JSON alimenta
+      # a tabela critério × teste do resumo (AI-18). Nenhum retry: uma falha que some
+      # na repetição é o sinal de uma corrida.
+      # FND-12: na perna do piso, os testes que sobem o compose ficam de fora, porque a
+      # imagem fixa o Node do Dockerfile e repetiria o que a perna do .nvmrc já testou.
+      # AI-37: a cobertura de src/ e o piso dela, uma vez só, na perna do .nvmrc.
+      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json" ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
+
+      # AI-18: a tabela que o dono lê antes de aprovar; informa e não reprova. Roda
+      # também com teste vermelho, que é quando ela mais ajuda, e uma vez só.
+      - name: Tabela critério × teste
+        if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
+        run: node scripts/criteria-report.ts "$RUNNER_TEMP/vitest-report.json" >> "$GITHUB_STEP_SUMMARY"
+
+      # FND-09: os tipos do banco versionados batem com o banco migrado. Sobe o
+      # próprio PostgreSQL pelo Testcontainers, por isso fica no job que já usa o
+      # Docker; uma vez só. Roda com node, e não por npm run (AI-05).
+      - name: Tipos do banco em dia
+        if: matrix.node == 'nvmrc'
+        run: node scripts/check-db-types.ts
+
+  # AI-43: os workflows conferidos sem Node. O actionlint pega o YAML que não roda
+  # (expressão, contexto, shellcheck do run:); o zizmor, o que roda e é inseguro
+  # (action sem SHA, commit de fork, permissão demais, injeção no shell).
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Versão fixa, e o tarball só é extraído depois de bater com o checksums da
+      # mesma release; o script oficial de instalação vem da branch e não confere nada.
+      - name: actionlint
+        run: |
+          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
+          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          ./actionlint
+
+      # advanced-security: false faz o achado reprovar o job pelo código de saída,
+      # sem pedir escrita no code scanning; o token de leitura liga as auditorias que
+      # consultam a API (commit de fork no lugar do da action, action vulnerável).
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
+          advanced-security: false
+          token: ${{ github.token }}
+
+  # AI-42: o único check que o ruleset exige. Um job pulado conta como verde, e um
+  # job que depende de outro que falhou é pulado; por isso este roda sempre e olha
+  # o resultado de cada um. Mudar os jobs acima não mexe no ruleset.
+  ci-ok:
+    name: ci-ok
+    needs: [checks, test, workflows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            echo "Um job falhou ou foi cancelado."
+            exit 1
+          fi

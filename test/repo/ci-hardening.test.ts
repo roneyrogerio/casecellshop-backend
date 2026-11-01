@@ -303,8 +303,13 @@ describe('AI-17 o ci.yml cancela a execução anterior do mesmo PR e nunca a da 
 
 // AI-18: o npm test grava o relatório JSON do Vitest, e um passo à parte, só no Node do .nvmrc e mesmo com teste
 // falhando, roda o criteria-report.ts sobre esse arquivo e anexa a saída ao resumo da execução.
+// AI-42: o teste e a tabela vivem no job `test`; o `checks` não roda teste.
+function testJobSteps(workflow: Workflow): Step[] {
+  return workflow.jobs?.test?.steps ?? [];
+}
+
 function testStep(workflow: Workflow): Step | undefined {
-  return stepsOf(workflow).find((step) =>
+  return testJobSteps(workflow).find((step) =>
     /(^|\s)npm\s+(?:run\s+)?test(\s|$)/.test(step.run ?? ''),
   );
 }
@@ -319,7 +324,7 @@ function reportFileOf(workflow: Workflow): string | null {
 const REPORT_SCRIPT = 'scripts/criteria-report.ts';
 
 function summaryStep(workflow: Workflow): Step | undefined {
-  return stepsOf(workflow).find((step) =>
+  return testJobSteps(workflow).find((step) =>
     runsNode({ jobs: { j: { steps: [step] } } }, REPORT_SCRIPT),
   );
 }
@@ -330,6 +335,14 @@ function summaryReadsTheTestReport(workflow: Workflow): boolean {
   const run = summaryStep(workflow)?.run ?? '';
   if (file === null) return false;
   return run.includes(`node ${REPORT_SCRIPT} ${file}`);
+}
+
+// O shellcheck do actionlint (AI-43) reprova a variável do shell sem aspas (SC2086): o caminho com `$` vai entre aspas
+// duplas, no npm test e no passo do resumo.
+function reportPathIsQuoted(workflow: Workflow): boolean {
+  const file = reportFileOf(workflow);
+  if (file === null) return false;
+  return !file.includes('$') || /^"[^"]+"$/.test(file);
 }
 
 function appendsToStepSummary(step: Step | undefined): boolean {
@@ -345,7 +358,7 @@ function runsEvenWhenTestsFail(step: Step | undefined): boolean {
 }
 
 function summaryAfterTests(workflow: Workflow): boolean {
-  const steps = stepsOf(workflow);
+  const steps = testJobSteps(workflow);
   const test = testStep(workflow);
   const summary = summaryStep(workflow);
   return (
@@ -364,7 +377,7 @@ function reportByNpmRun(workflow: Workflow): string[] {
 describe('AI-18 as conferências do resumo da execução enxergam o que procuram (controle negativo)', () => {
   const GOOD_SUMMARY = parse(`
 jobs:
-  j:
+  test:
     steps:
       - run: npm test -- --reporter=default --reporter=json --outputFile.json=vitest-report.json
       - name: Tabela critério × teste
@@ -374,7 +387,7 @@ jobs:
 
   const BAD_SUMMARY = parse(`
 jobs:
-  j:
+  test:
     steps:
       - run: node scripts/criteria-report.ts other.json
       - run: npm test
@@ -388,28 +401,48 @@ jobs:
     expect(reportFileOf(BAD_SUMMARY)).toBeNull();
     expect(
       reportFileOf({
-        jobs: { j: { steps: [{ run: 'npm test -- --reporter=json' }] } },
+        jobs: { test: { steps: [{ run: 'npm test -- --reporter=json' }] } },
       }),
     ).toBeNull();
     expect(
       reportFileOf({
         jobs: {
-          j: { steps: [{ run: 'npm test -- --outputFile.json=r.json' }] },
+          test: { steps: [{ run: 'npm test -- --outputFile.json=r.json' }] },
         },
       }),
     ).toBeNull();
     expect(
       reportFileOf({
         jobs: {
-          j: {
+          test: {
             steps: [{ run: 'npm test -- --reporter=json --outputFile=r.json' }],
           },
         },
       }),
     ).toBe('r.json');
+    // O relatório de um npm test fora do job `test` não vale.
+    expect(
+      reportFileOf({
+        jobs: {
+          checks: {
+            steps: [{ run: 'npm test -- --reporter=json --outputFile=r.json' }],
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it('AI-18 o passo do resumo só vale com node, o mesmo arquivo do npm test e depois dele', () => {
+    // Só o job `test` conta: o mesmo passo no `checks` não é a tabela do AI-18.
+    expect(
+      summaryStep({
+        jobs: {
+          checks: {
+            steps: [{ run: 'node scripts/criteria-report.ts r.json' }],
+          },
+        },
+      }),
+    ).toBeUndefined();
     expect(summaryReadsTheTestReport(GOOD_SUMMARY)).toBe(true);
     expect(summaryAfterTests(GOOD_SUMMARY)).toBe(true);
     expect(summaryReadsTheTestReport(BAD_SUMMARY)).toBe(false);
@@ -419,6 +452,29 @@ jobs:
         jobs: { j: { steps: [{ run: 'npm run criteria-report x.json' }] } },
       }),
     ).toBeUndefined();
+  });
+
+  it('AI-18 o caminho do relatório com $RUNNER_TEMP exige aspas duplas, e a forma sem aspas reprova', () => {
+    const withPath = (path: string): Workflow =>
+      parse(`
+jobs:
+  test:
+    steps:
+      - run: npm test -- --reporter=json --outputFile.json=${path}
+      - run: node scripts/criteria-report.ts ${path} >> "$GITHUB_STEP_SUMMARY"
+`) as Workflow;
+
+    expect(reportPathIsQuoted(GOOD_SUMMARY)).toBe(true);
+    expect(
+      reportPathIsQuoted(withPath('"$RUNNER_TEMP/vitest-report.json"')),
+    ).toBe(true);
+    expect(summaryReadsTheTestReport(withPath('"$RUNNER_TEMP/r.json"'))).toBe(
+      true,
+    );
+    expect(
+      reportPathIsQuoted(withPath('$RUNNER_TEMP/vitest-report.json')),
+    ).toBe(false);
+    expect(reportPathIsQuoted(BAD_SUMMARY)).toBe(false);
   });
 
   it('AI-18 anexar ao resumo exige >> $GITHUB_STEP_SUMMARY', () => {
@@ -468,6 +524,14 @@ describe('AI-18 o ci.yml publica a tabela critério × teste no resumo da execu�
     expect(summaryReadsTheTestReport(ci)).toBe(true);
   });
 
+  it('AI-18 o caminho do relatório vai entre aspas duplas no npm test e no passo do resumo', () => {
+    expect(reportFileOf(ci)).toBe('"$RUNNER_TEMP/vitest-report.json"');
+    expect(reportPathIsQuoted(ci)).toBe(true);
+    expect(summaryStep(ci)?.run).toContain(
+      'node scripts/criteria-report.ts "$RUNNER_TEMP/vitest-report.json"',
+    );
+  });
+
   it('AI-18 o passo roda depois do npm test e anexa a saída ao $GITHUB_STEP_SUMMARY', () => {
     expect(summaryAfterTests(ci)).toBe(true);
     expect(appendsToStepSummary(summaryStep(ci))).toBe(true);
@@ -494,8 +558,9 @@ describe('AI-18 o ci.yml publica a tabela critério × teste no resumo da execu�
 const DB_TYPES_SCRIPT = 'scripts/check-db-types.ts';
 const OLD_KYSELY_SCRIPT = 'scripts/check-kysely-usage.ts';
 
+// Os tipos do banco rodam no job `test`, só no Node do .nvmrc (AI-42).
 function stepRunningNode(workflow: Workflow, file: string): Step | undefined {
-  return stepsOf(workflow).find((step) =>
+  return testJobSteps(workflow).find((step) =>
     runsNode({ jobs: { j: { steps: [step] } } }, file),
   );
 }
@@ -527,7 +592,7 @@ describe('AI-05 as conferências dos tipos do banco e do Kysely no ci.yml enxerg
 
   const GOOD_M2 = parse(`
 jobs:
-  j:
+  test:
     steps:
       - name: Tipos
         if: matrix.node == 'nvmrc'
@@ -537,7 +602,7 @@ jobs:
 
   const BAD_M2 = parse(`
 jobs:
-  j:
+  test:
     steps:
       - run: npm run check:db-types
       - run: npm run lint
@@ -557,6 +622,17 @@ jobs:
     expect(stepRunningNode(GOOD_M2, DB_TYPES_SCRIPT)).toBeDefined();
     expect(stepRunningNode(BAD_M2, DB_TYPES_SCRIPT)).toBeUndefined();
     expect(stepRunningNode({}, DB_TYPES_SCRIPT)).toBeUndefined();
+    // No job `checks` não vale: a conferência sobe o PostgreSQL e roda uma vez, no job `test`.
+    expect(
+      stepRunningNode(
+        {
+          jobs: {
+            checks: { steps: [{ run: 'node scripts/check-db-types.ts' }] },
+          },
+        },
+        DB_TYPES_SCRIPT,
+      ),
+    ).toBeUndefined();
   });
 
   it('AI-05 a conferência por npm run enxerga a dos tipos do banco e só ela', () => {

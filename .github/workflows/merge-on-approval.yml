@@ -16,13 +16,15 @@ on:
   pull_request_review:
     types: [submitted]
 
-permissions:
-  contents: write
-  pull-requests: write
+# AI-05: nada no topo; a escrita fica só no job que liga o auto-merge.
+permissions: {}
 
 jobs:
   auto-merge:
     name: Liga o auto-merge
+    permissions:
+      contents: write
+      pull-requests: write
     # Só a aprovação do dono, e só para PR de branch deste repositório (nunca de fork).
     if: >-
       github.event.review.state == 'approved' &&

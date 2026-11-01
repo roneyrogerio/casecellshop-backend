@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import config from '../../vitest.config.ts';
 import {
   readCi,
+  stepsOfJob,
   stepsOfWorkflow,
   workflowOf,
   type CiStep,
@@ -95,19 +96,21 @@ describe('AI-37 o ci.yml mede a cobertura só na perna do .nvmrc', () => {
     ).toBe(true);
   });
 
-  it('AI-37 o CI roda os testes com --coverage', () => {
-    expect(coverageSteps(stepsOfWorkflow(readCi())).length).toBeGreaterThan(0);
+  it('AI-37 o CI roda os testes com --coverage, no job test', () => {
+    expect(coverageSteps(stepsOfJob(readCi(), 'test')).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('AI-37 o --coverage vale só na perna do Node do .nvmrc, e não na do piso (24.12.0)', () => {
-    const steps = coverageSteps(stepsOfWorkflow(readCi()));
+    const steps = coverageSteps(stepsOfJob(readCi(), 'test'));
 
     expect(steps.length).toBeGreaterThan(0);
     for (const step of steps) expect(isRestrictedToNvmrc(step)).toBe(true);
   });
 
   it('AI-37 a cobertura vale para todos os testes, os de integração inclusive (sem --project)', () => {
-    const steps = coverageSteps(stepsOfWorkflow(readCi()));
+    const steps = coverageSteps(stepsOfJob(readCi(), 'test'));
 
     expect(steps.length).toBeGreaterThan(0);
     for (const step of steps) expect(coversAllTests(step)).toBe(true);

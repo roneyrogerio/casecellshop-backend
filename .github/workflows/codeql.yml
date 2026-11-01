@@ -1,0 +1,44 @@
+name: CodeQL
+
+# AI-44: análise estática de segurança do TypeScript, que segue o dado da
+# requisição até a consulta entre arquivos, o que o lint não faz. Configuração
+# avançada, versionada aqui, e não a chave das configurações do repositório. Os
+# workflows ficam com o zizmor (AI-43), que reprova no PR.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # O merge pelo auto-merge não dispara o push na main (GITHUB_TOKEN); a semana
+  # cobre a main e as consultas novas do CodeQL.
+  schedule:
+    - cron: '41 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # build-mode none: o CodeQL lê o código-fonte sem rodar nenhum script do PR.
+      # Os testes ficam de fora: não vão para a imagem e só rodam com entrada fixa,
+      # então um alerta neles é ruído; src/, scripts/ e os hooks continuam.
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          config: |
+            paths-ignore:
+              - test
+              - '**/*.test.ts'
+
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1

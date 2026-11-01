@@ -65,12 +65,14 @@ function jobsRequireOwnerApproval(workflow: Workflow): boolean {
   );
 }
 
+// AI-05: a escrita fica no job; o topo do arquivo só lê (vazio ou read).
 function permissionsAreExact(workflow: Workflow): boolean {
-  const blocks = [
-    workflow.permissions,
-    ...jobsOf(workflow).map((job) => job.permissions),
-  ].filter((block): block is Record<string, string> => block !== undefined);
+  const blocks = jobsOf(workflow)
+    .map((job) => job.permissions)
+    .filter((block): block is Record<string, string> => block !== undefined);
+  const topWrites = Object.values(workflow.permissions ?? {}).includes('write');
   return (
+    !topWrites &&
     blocks.length > 0 &&
     blocks.every(
       (block) =>
@@ -136,16 +138,28 @@ describe('AI-10 workflow merge-on-approval', () => {
     expect(jobsRequireOwnerApproval({ jobs: { merge: {} } })).toBe(false);
   });
 
-  it('AI-10 tem exatamente as permissões contents: write e pull-requests: write', () => {
+  it('AI-10 tem exatamente as permissões contents: write e pull-requests: write, só no job', () => {
     const workflow = loadWorkflow();
+    const job = { permissions: { ...EXPECTED_PERMISSIONS } };
 
     expect(permissionsAreExact(workflow)).toBe(true);
     expect(permissionsAreExact({ permissions: { contents: 'write' } })).toBe(
       false,
     );
+    expect(permissionsAreExact({ permissions: {}, jobs: { merge: job } })).toBe(
+      true,
+    );
     expect(
       permissionsAreExact({
-        permissions: { ...EXPECTED_PERMISSIONS, actions: 'write' },
+        permissions: { ...EXPECTED_PERMISSIONS },
+        jobs: { merge: job },
+      }),
+    ).toBe(false);
+    expect(
+      permissionsAreExact({
+        jobs: {
+          merge: { permissions: { ...EXPECTED_PERMISSIONS, actions: 'write' } },
+        },
       }),
     ).toBe(false);
     expect(

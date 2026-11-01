@@ -1,0 +1,117 @@
+name: Agendado
+
+# AI-46: o que muda sem commit e o que o CI do PR não cobre. O merge pelo
+# auto-merge usa o GITHUB_TOKEN, que não dispara o CI da main; uma
+# vulnerabilidade nova chega sem commit; e um teste que depende da ordem só
+# aparece com a ordem embaralhada. Fora da hora cheia, quando o GitHub atrasa os
+# agendamentos; workflow_dispatch para rodar à mão.
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Uma execução não cancela a outra: cada dia tem o seu resultado.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  # Na main, as checagens do job checks, a suíte com cobertura e os tipos do banco;
+  # ficam de fora o que só existe num PR (migrações, package.json e commits contra a
+  # base), o job workflows e a perna do piso.
+  main-full:
+    name: CI completo na main
+    runs-on: ubuntu-latest
+    env:
+      REDOCLY_TELEMETRY: 'off'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - run: npm audit signatures
+      - run: npm run lint
+      - run: node_modules/.bin/prettier --check .
+      - run: npm run typecheck
+      - run: node_modules/.bin/knip --no-progress
+      - run: node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones
+      - run: npm audit --omit=dev
+      - run: npm run openapi -- --check
+      - run: npm run lint:openapi
+      - run: npm run check:instructions
+      - run: npm test -- --reporter=default --reporter=github-actions --coverage
+      - run: node scripts/check-db-types.ts
+
+  # A ordem dos arquivos e dos testes muda a cada perna; a semente vai para o log,
+  # e quem acha uma falha a reproduz com --sequence.seed.
+  flaky-hunt:
+    name: Testes embaralhados (${{ matrix.seed }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # Testes de test/repo/ leem o histórico do git.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+      - name: Suíte com a ordem embaralhada
+        env:
+          SEED: ${{ github.run_id }}${{ matrix.seed }}
+        run: |
+          echo "Semente: $SEED"
+          npm test -- --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED" --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: vitest-embaralhado-${{ matrix.seed }}
+          path: ${{ runner.temp }}/vitest-report.json
+          retention-days: 7
+
+  # O aviso de falha de um agendamento vai para quem mexeu no cron por último, que
+  # é a conta de máquina; a issue chega ao dono. Sem checkout e sem instalar nada:
+  # a escrita fica num job que não roda código do repositório.
+  report:
+    name: Avisa a falha
+    needs: [main-full, flaky-hunt]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Abre ou comenta a issue da execução agendada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Execução agendada falhou"
+          body="A execução agendada falhou: $RUN_URL"
+          number=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
