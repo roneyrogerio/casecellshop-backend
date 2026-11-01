@@ -105,6 +105,15 @@ export function coverageFloorViolations(
   return violations;
 }
 
+// AI-49, conferência da medida: o relatório json-summary do Vitest contra o piso
+// da base.
+export function measuredCoverageViolations(
+  _baseFloorJson: string,
+  _summaryJson: string,
+): string[] {
+  throw new Error('não implementado');
+}
+
 function fingerprintsOf(json: string): Record<string, number> {
   // Sem arquivo no PR, não há repetição listada.
   if (json.trim() === '') return {};
