@@ -5,7 +5,11 @@ import * as fc from 'fast-check';
 import type { Logger } from 'pino';
 import { afterAll, describe, expect, it } from 'vitest';
 import { captureLogs } from '../../test/helpers/logs.ts';
-import { scrapeMetrics } from '../../test/helpers/metrics.ts';
+import {
+  promLabel,
+  promName,
+  scrapeMetrics,
+} from '../../test/helpers/metrics.ts';
 import {
   expectFalsified,
   expectProperty,
@@ -19,16 +23,18 @@ import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { requestContext } from './request-context.ts';
 
 // FND-15, "Contexto da requisição": qualquer X-Request-Id recebido vira um correlationId válido pelo contrato, e
-// qualquer status vira uma das classes 1xx a 5xx no label da métrica. O middleware roda direto sobre objetos de
-// requisição e resposta do Node: um status 1xx não sai por uma conexão HTTP de verdade (o cliente o trata como
-// resposta parcial).
+// qualquer status de 100 a 599 vira o atributo `http.response.status_code` da duração HTTP (o `error.type` só nas
+// respostas 5xx), no lugar da antiga classe `Nxx` (AD-029). O middleware roda direto sobre objetos de requisição
+// e resposta do Node: um status 1xx não sai por uma conexão HTTP de verdade (o cliente o trata como resposta
+// parcial).
 
 type Factory = (telemetry: Telemetry, logger: Logger) => RequestHandler;
 
 const telemetry = createTelemetry();
 const { logger } = captureLogs('casecellshop-api', 'silent');
-const DURATION = 'http_server_request_duration_seconds';
-const CLASSES = ['1xx', '2xx', '3xx', '4xx', '5xx'];
+const STATUS_ATTRIBUTE = 'http.response.status_code';
+const ERROR_ATTRIBUTE = 'error.type';
+type RecordedAttributes = Record<string, string | number | undefined>;
 
 afterAll(() => telemetry.shutdown());
 
@@ -64,12 +70,14 @@ function run(
   });
 }
 
-async function classCounts(): Promise<Map<string, number>> {
+// Quantas medições o /metrics acumulou por código de status.
+async function statusCounts(): Promise<Map<string, number>> {
   const families = await scrapeMetrics(telemetry);
-  const counts = new Map<string, number>(CLASSES.map((name) => [name, 0]));
-  for (const sample of families.get(DURATION)?.samples ?? []) {
-    const label = sample.labels['status_class'];
-    if (sample.name === `${DURATION}_count` && label !== undefined)
+  const duration = promName('http.server.request.duration');
+  const counts = new Map<string, number>();
+  for (const sample of families.get(duration)?.samples ?? []) {
+    const label = sample.labels[promLabel(STATUS_ATTRIBUTE)];
+    if (sample.name === `${duration}_count` && label !== undefined)
       counts.set(label, (counts.get(label) ?? 0) + sample.value);
   }
   return counts;
@@ -109,25 +117,25 @@ function correlationIdIsValid(make: Factory) {
   });
 }
 
-// A telemetria entregue ao middleware repassa a medição à real e guarda o label `status_class` de cada uma: a
-// propriedade confere a classe de cada caso sem raspar o /metrics 2 vezes por caso (com 1000 casos, eram 2.000
+// A telemetria entregue ao middleware repassa a medição à real e guarda os atributos de cada uma: a propriedade
+// confere os atributos de cada caso sem raspar o /metrics 2 vezes por caso (com 1000 casos, eram 2.000
 // raspagens e estourava o prazo); o /metrics é raspado uma vez antes e uma depois da propriedade inteira.
-function recordingTelemetry(labels: (string | undefined)[]): Telemetry {
+function recordingTelemetry(recorded: RecordedAttributes[]): Telemetry {
   return {
     ...telemetry,
     httpRequestDuration: {
-      record: (value: number, attributes?: Record<string, string>) => {
-        labels.push(attributes?.['status_class']);
+      record: (value: number, attributes?: RecordedAttributes) => {
+        recorded.push({ ...attributes });
         telemetry.httpRequestDuration.record(value, attributes);
       },
     },
   };
 }
 
-// `executed` conta, por classe esperada, os casos que passaram pelo middleware (inclusive os da redução do
+// `executed` conta, por código de status, os casos que passaram pelo middleware (inclusive os da redução do
 // contraexemplo), para somar com o que o /metrics acumulou.
-function statusBecomesItsClass(make: Factory, executed: Map<string, number>) {
-  const recorded: (string | undefined)[] = [];
+function statusBecomesItsCode(make: Factory, executed: Map<string, number>) {
+  const recorded: RecordedAttributes[] = [];
   const target = recordingTelemetry(recorded);
   return fc.property(fc.integer({ min: 100, max: 599 }), (status) => {
     recorded.length = 0;
@@ -135,9 +143,21 @@ function statusBecomesItsClass(make: Factory, executed: Map<string, number>) {
     run(make, exchange, target);
     exchange.res.emit('finish');
 
-    const expected = `${Math.floor(status / 100)}xx`;
-    executed.set(expected, (executed.get(expected) ?? 0) + 1);
-    expect(recorded).toEqual([expected]);
+    executed.set(String(status), (executed.get(String(status)) ?? 0) + 1);
+    expect(recorded).toHaveLength(1);
+    const attributes = recorded[0] ?? {};
+    // O código sai como está, sem arredondar para a classe.
+    expect(String(attributes[STATUS_ATTRIBUTE])).toBe(String(status));
+    // O error.type só existe na resposta 5xx, com o código como texto.
+    expect(attributes[ERROR_ATTRIBUTE]).toBe(
+      status >= 500 ? String(status) : undefined,
+    );
+    expect(attributes['http.request.method']).toBe('GET');
+    expect(attributes['http.route']).toBe('unmatched');
+    expect(['http', 'https']).toContain(attributes['url.scheme']);
+    // Os nomes antigos (rótulos próprios do Prometheus) não voltam.
+    for (const old of ['route', 'method', 'status_class'])
+      expect(Object.keys(attributes)).not.toContain(old);
   });
 }
 
@@ -163,16 +183,35 @@ const generatesNothingForList: Factory = (target, log) => {
   };
 };
 
-// Só as classes 2xx e 5xx: o resto cai na 2xx. A telemetria entregue ao middleware troca o label.
-const collapsedClasses: Factory = (target, log) =>
+// Só o 200 e o 5xx: o resto das respostas cai no 200 (a classe 2xx inteira, 3xx e 4xx incluídas). A telemetria
+// entregue ao middleware troca o atributo.
+const collapsedStatus: Factory = (target, log) =>
   requestContext(
     {
       ...target,
       httpRequestDuration: {
-        record: (value: number, labels?: Record<string, string>) => {
+        record: (value: number, attributes?: RecordedAttributes) => {
+          const status = Number(attributes?.[STATUS_ATTRIBUTE]);
           target.httpRequestDuration.record(value, {
-            ...labels,
-            status_class: labels?.['status_class'] === '5xx' ? '5xx' : '2xx',
+            ...attributes,
+            [STATUS_ATTRIBUTE]: status >= 500 ? status : 200,
+          });
+        },
+      },
+    },
+    log,
+  );
+
+// O 5xx sem o error.type: a propriedade tem de exigir o atributo da convenção.
+const omitsErrorType: Factory = (target, log) =>
+  requestContext(
+    {
+      ...target,
+      httpRequestDuration: {
+        record: (value: number, attributes?: RecordedAttributes) => {
+          target.httpRequestDuration.record(value, {
+            ...attributes,
+            [ERROR_ATTRIBUTE]: undefined,
           });
         },
       },
@@ -199,19 +238,19 @@ describe('FND-15 requestContext: X-Request-Id', () => {
   );
 });
 
-describe('FND-15 requestContext: classe do status', () => {
+describe('FND-15 requestContext: código do status', () => {
   it(
-    'FND-15 qualquer status de 100 a 599 vira a classe Nxx correspondente no label da métrica',
+    'FND-15 qualquer status de 100 a 599 vira o atributo http.response.status_code da duração HTTP, e o error.type só no 5xx',
     async () => {
       const executed = new Map<string, number>();
-      const before = await classCounts();
-      expectProperty(statusBecomesItsClass(requestContext, executed));
-      const after = await classCounts();
+      const before = await statusCounts();
+      expectProperty(statusBecomesItsCode(requestContext, executed));
+      const after = await statusCounts();
 
-      // O /metrics acumulou exatamente os casos executados, cada um na classe do seu status.
-      for (const name of CLASSES) {
-        expect((after.get(name) ?? 0) - (before.get(name) ?? 0)).toBe(
-          executed.get(name) ?? 0,
+      // O /metrics acumulou exatamente os casos executados, cada um no código do seu status.
+      for (const code of new Set([...before.keys(), ...after.keys()])) {
+        expect((after.get(code) ?? 0) - (before.get(code) ?? 0)).toBe(
+          executed.get(code) ?? 0,
         );
       }
       expect(
@@ -221,7 +260,11 @@ describe('FND-15 requestContext: classe do status', () => {
     propertyTimeoutMs(),
   );
 
-  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que junta as classes 1xx a 4xx numa só', () => {
-    expectFalsified(statusBecomesItsClass(collapsedClasses, new Map()));
+  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que junta todos os status que não são 5xx no 200', () => {
+    expectFalsified(statusBecomesItsCode(collapsedStatus, new Map()));
+  });
+
+  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que deixa o 5xx sem error.type', () => {
+    expectFalsified(statusBecomesItsCode(omitsErrorType, new Map()));
   });
 });

@@ -55,7 +55,7 @@ import {
   type TestDatabase,
 } from '../../helpers/database.ts';
 import { captureLogs } from '../../helpers/logs.ts';
-import { scrapeMetrics, valueOf } from '../../helpers/metrics.ts';
+import { familyOf, metricValue, scrapeMetrics } from '../../helpers/metrics.ts';
 import {
   drain,
   duplicatedOrderIds,
@@ -570,10 +570,13 @@ describe('ORD-22 relay publica as linhas da outbox', () => {
 async function publishedCount(
   telemetry: Telemetry,
 ): Promise<number | undefined> {
-  return valueOf(await scrapeMetrics(telemetry), 'outbox_published_total');
+  return metricValue(
+    await scrapeMetrics(telemetry),
+    'casecellshop.outbox.published.messages',
+  );
 }
 
-describe('ORD-22 outbox_published_total', () => {
+describe('ORD-22 casecellshop.outbox.published.messages', () => {
   it('ORD-22 conta no /metrics as linhas que o relay publicou, sem label', async () => {
     const queues = await freshQueues();
     await acceptMany(3);
@@ -586,8 +589,17 @@ describe('ORD-22 outbox_published_total', () => {
     expect(await relay.publishOnce()).toBe(0);
 
     const families = await scrapeMetrics(telemetry);
-    expect(families.get('outbox_published_total')?.type).toBe('counter');
-    expect(valueOf(families, 'outbox_published_total')).toBe(3);
+    expect(
+      familyOf(families, 'casecellshop.outbox.published.messages')?.type,
+    ).toBe('counter');
+    expect(
+      metricValue(families, 'casecellshop.outbox.published.messages'),
+    ).toBe(3);
+    // O contador não tem atributo: só o escopo do exportador acompanha a série.
+    expect(
+      familyOf(families, 'casecellshop.outbox.published.messages')?.samples[0]
+        ?.labels,
+    ).toEqual({});
     await telemetry.shutdown();
   });
 });

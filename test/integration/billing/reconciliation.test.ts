@@ -29,7 +29,11 @@ import {
 } from '../../helpers/dlq.ts';
 import { countInvoices } from '../../helpers/erp.ts';
 import { captureLogs, type CapturedLogs } from '../../helpers/logs.ts';
-import { scrapeMetrics, valueOf } from '../../helpers/metrics.ts';
+import {
+  histogramCount,
+  metricValue,
+  scrapeMetrics,
+} from '../../helpers/metrics.ts';
 import { countsOf } from '../../helpers/sqs.ts';
 import {
   ageLastCall,
@@ -189,10 +193,10 @@ async function expectStillPending(
 
 async function outcomeCount(rig: Rig, outcome: string): Promise<number> {
   return (
-    valueOf(
+    metricValue(
       await scrapeMetrics(rig.telemetry),
-      'outbox_attempt_outcome_total',
-      { outcome },
+      'casecellshop.outbox.attempts',
+      { 'casecellshop.outbox.attempt.outcome': outcome },
     ) ?? 0
   );
 }
@@ -344,12 +348,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     expect(await outcomeCount(rig, 'invoiced')).toBe(1);
     const families = await scrapeMetrics(rig.telemetry);
     expect(
-      valueOf(
-        families,
-        'order_accept_to_invoice_seconds',
-        {},
-        'order_accept_to_invoice_seconds_count',
-      ),
+      histogramCount(families, 'casecellshop.order.accept_to_invoice.duration'),
     ).toBe(1);
     await expectInvoiced(world, order, { queueEmpty: false });
   });
@@ -796,7 +795,7 @@ describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
   });
 });
 
-describe('OBS-02 dead em outbox_attempt_outcome_total', () => {
+describe('OBS-02 dead em casecellshop.outbox.attempts', () => {
   it('OBS-02 dead soma 1 na primeira vez que a reconciliação vê a mensagem, e uma segunda rodada sobre a mesma mensagem não soma de novo', async () => {
     const rig = await createRig();
     const { world } = rig;
