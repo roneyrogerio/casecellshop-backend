@@ -317,7 +317,8 @@ function prSandbox(options: {
   writeFileIn(dir, 'vitest.config.ts', options.head.config);
   writeFileIn(dir, '.jscpd-baseline.json', options.head.baseline);
   git(dir, 'add', '-A');
-  git(dir, 'commit', '-q', '-m', 'pr');
+  // --allow-empty: com pisos e linha de base iguais aos da base o PR não muda arquivo, e o git recusaria o commit.
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'pr');
   return { dir, run: () => runScript(dir, FILE, { BASE_REF: 'main' }) };
 }
 
