@@ -29,6 +29,8 @@ const COMMON = [
   'check:instructions',
   'check:migrations',
   'check:scripts',
+  // AI-34: o pre-push reprova um arquivo fora do formato do Prettier.
+  'format:check',
 ];
 
 // O critério não dá o nome dos scripts das conferências do M2 (FND-09, AI-19): elas são achadas pelo corpo, que chama
