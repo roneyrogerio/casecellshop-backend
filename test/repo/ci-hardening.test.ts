@@ -487,11 +487,12 @@ describe('AI-18 o ci.yml publica a tabela critério × teste no resumo da execu�
   });
 });
 
-// AI-05, M2 primeira fatia: as conferências dos tipos do banco (FND-09) e das formas do Kysely (AI-19) também rodam
-// com node, e nunca por npm run. O nome do script no package.json não está no critério: a forma por npm run é
-// reconhecida pelo corpo do script, que chama o arquivo de scripts/.
+// AI-05, M2: a conferência dos tipos do banco (FND-09) também roda com node, e nunca por npm run. O nome do
+// script no package.json não está no critério: a forma por npm run é reconhecida pelo corpo do script, que chama
+// o arquivo de scripts/. As formas do Kysely (AI-19) saíram do ci.yml: viraram regra de lint, que o passo
+// `npm run lint` já roda, e o script antigo não tem mais passo.
 const DB_TYPES_SCRIPT = 'scripts/check-db-types.ts';
-const KYSELY_SCRIPT = 'scripts/check-kysely-usage.ts';
+const OLD_KYSELY_SCRIPT = 'scripts/check-kysely-usage.ts';
 
 function stepRunningNode(workflow: Workflow, file: string): Step | undefined {
   return stepsOf(workflow).find((step) =>
@@ -521,7 +522,6 @@ function npmRunsOf(
 describe('AI-05 as conferências dos tipos do banco e do Kysely no ci.yml enxergam o que procuram (controle negativo)', () => {
   const SCRIPTS = {
     'check:db-types': 'node scripts/check-db-types.ts',
-    'check:kysely': 'node scripts/check-kysely-usage.ts',
     lint: 'oxlint',
   };
 
@@ -532,7 +532,7 @@ jobs:
       - name: Tipos
         if: matrix.node == 'nvmrc'
         run: node scripts/check-db-types.ts
-      - run: node scripts/check-kysely-usage.ts
+      - run: npm run lint
 `) as Workflow;
 
   const BAD_M2 = parse(`
@@ -540,41 +540,60 @@ jobs:
   j:
     steps:
       - run: npm run check:db-types
-      - run: npm run --silent check:kysely
+      - run: npm run lint
+`) as Workflow;
+
+  // O passo antigo das formas do Kysely: a conferência de que ele sumiu só vale se enxerga um que exista.
+  const WITH_OLD_KYSELY_STEP = parse(`
+jobs:
+  j:
+    steps:
+      - name: Formas do Kysely
+        run: node scripts/check-kysely-usage.ts
       - run: npm run lint
 `) as Workflow;
 
   it('AI-05 a conferência do passo reprova a falta dele e a forma por npm run, e aceita node scripts/...', () => {
     expect(stepRunningNode(GOOD_M2, DB_TYPES_SCRIPT)).toBeDefined();
-    expect(stepRunningNode(GOOD_M2, KYSELY_SCRIPT)).toBeDefined();
     expect(stepRunningNode(BAD_M2, DB_TYPES_SCRIPT)).toBeUndefined();
-    expect(stepRunningNode(BAD_M2, KYSELY_SCRIPT)).toBeUndefined();
-    expect(stepRunningNode({}, KYSELY_SCRIPT)).toBeUndefined();
+    expect(stepRunningNode({}, DB_TYPES_SCRIPT)).toBeUndefined();
   });
 
-  it('AI-05 a conferência das formas por npm run enxerga as duas e só elas', () => {
-    expect(
-      npmRunsOf(BAD_M2, SCRIPTS, [DB_TYPES_SCRIPT, KYSELY_SCRIPT]),
-    ).toEqual(['npm run check:db-types', 'npm run --silent check:kysely']);
-    expect(
-      npmRunsOf(GOOD_M2, SCRIPTS, [DB_TYPES_SCRIPT, KYSELY_SCRIPT]),
-    ).toEqual([]);
+  it('AI-05 a conferência por npm run enxerga a dos tipos do banco e só ela', () => {
+    expect(npmRunsOf(BAD_M2, SCRIPTS, [DB_TYPES_SCRIPT])).toEqual([
+      'npm run check:db-types',
+    ]);
+    expect(npmRunsOf(GOOD_M2, SCRIPTS, [DB_TYPES_SCRIPT])).toEqual([]);
   });
 
   it('AI-05 a condição do Node do .nvmrc enxerga a falta dela', () => {
     expect(runsOnlyOnNvmrcNode(stepRunningNode(GOOD_M2, DB_TYPES_SCRIPT))).toBe(
       true,
     );
-    expect(runsOnlyOnNvmrcNode(stepRunningNode(GOOD_M2, KYSELY_SCRIPT))).toBe(
-      false,
-    );
     expect(runsOnlyOnNvmrcNode(stepRunningNode(BAD_M2, DB_TYPES_SCRIPT))).toBe(
       false,
     );
   });
+
+  it('AI-05 a conferência da falta do passo antigo do Kysely enxerga um passo que ainda exista', () => {
+    expect(runsNode(WITH_OLD_KYSELY_STEP, OLD_KYSELY_SCRIPT)).toBe(true);
+    expect(runsNode(GOOD_M2, OLD_KYSELY_SCRIPT)).toBe(false);
+    expect(
+      citingKysely(WITH_OLD_KYSELY_STEP).length,
+      'o detector enxerga o passo antigo',
+    ).toBe(1);
+    expect(citingKysely(GOOD_M2)).toEqual([]);
+  });
 });
 
-describe('AI-05 o ci.yml roda as conferências dos tipos do banco e das formas do Kysely', () => {
+// Os run: que citam a conferência antiga do Kysely, pelo arquivo ou pelo nome do script.
+function citingKysely(workflow: Workflow): string[] {
+  return stepsOf(workflow)
+    .map((step) => step.run ?? '')
+    .filter((run) => /check[-:]kysely/.test(run));
+}
+
+describe('AI-05 o ci.yml roda a conferência dos tipos do banco e não tem mais a do Kysely', () => {
   const pkgScripts = (
     JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
       scripts: Record<string, string>;
@@ -591,25 +610,34 @@ describe('AI-05 o ci.yml roda as conferências dos tipos do banco e das formas d
     );
   });
 
-  it('AI-05 o passo das formas do Kysely roda node scripts/check-kysely-usage.ts', () => {
-    expect(runsNode(ci, KYSELY_SCRIPT)).toBe(true);
+  it('AI-05 o ci.yml não tem mais o passo node scripts/check-kysely-usage.ts', () => {
+    expect(runsNode(ci, OLD_KYSELY_SCRIPT)).toBe(false);
+    expect(stepRunningNode(ci, OLD_KYSELY_SCRIPT)).toBeUndefined();
   });
 
-  it('AI-05 as duas conferências não rodam por npm run, qualquer que seja o nome do script no package.json', () => {
-    expect(npmRunsOf(ci, pkgScripts, [DB_TYPES_SCRIPT, KYSELY_SCRIPT])).toEqual(
-      [],
+  it('AI-05 nenhum run: do ci.yml cita a conferência antiga do Kysely, nem pelo arquivo nem por npm run check:kysely', () => {
+    expect(citingKysely(ci)).toEqual([]);
+  });
+
+  it('AI-05 as formas do Kysely vão pelo lint: o ci.yml roda npm run lint, que carrega a regra (AI-19)', () => {
+    const lintSteps = stepsOf(ci).filter(
+      (step) => (step.run ?? '').trim() === 'npm run lint',
     );
+
+    expect(lintSteps).toHaveLength(1);
+    expect(lintSteps[0]?.if).toBeUndefined();
   });
 
-  it('AI-05 nenhum run: do ci.yml cita as duas conferências sem ser por node scripts/...', () => {
+  it('AI-05 a conferência dos tipos do banco não roda por npm run, qualquer que seja o nome do script no package.json', () => {
+    expect(npmRunsOf(ci, pkgScripts, [DB_TYPES_SCRIPT])).toEqual([]);
+  });
+
+  it('AI-05 nenhum run: do ci.yml cita a conferência dos tipos do banco sem ser por node scripts/...', () => {
     const offenders = stepsOf(ci)
       .map((step) => step.run ?? '')
-      .filter((run) => /check-(?:db-types|kysely-usage)/.test(run))
+      .filter((run) => /check-db-types/.test(run))
       .filter(
-        (run) =>
-          !/(^|\s)node scripts\/check-(?:db-types|kysely-usage)\.ts(\s|$)/.test(
-            run,
-          ),
+        (run) => !/(^|\s)node scripts\/check-db-types\.ts(\s|$)/.test(run),
       );
 
     expect(offenders).toEqual([]);

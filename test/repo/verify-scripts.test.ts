@@ -35,8 +35,9 @@ const COMMON = [
   'format:check',
 ];
 
-// O critério não dá o nome dos scripts das conferências do M2 (FND-09, AI-19): elas são achadas pelo corpo, que chama
-// o arquivo de scripts/ com node, como o ci.yml (AI-05).
+// O critério não dá o nome do script da conferência dos tipos do banco (FND-09): ele é achado pelo corpo, que chama
+// o arquivo de scripts/ com node, como o ci.yml (AI-05). As formas do Kysely (AI-19) saíram dos scripts: viraram
+// regra do lint, que já está na lista comum.
 function scriptsRunning(
   file: string,
   scripts: Record<string, string>,
@@ -57,10 +58,10 @@ function scriptsCalling(
     .map(([name]) => name);
 }
 
-const KYSELY_CHECK = scriptsRunning(
-  'scripts/check-kysely-usage.ts',
-  pkg.scripts,
-);
+// A conferência antiga do Kysely: nenhum script do package.json pode chamá-la nem citá-la.
+const OLD_KYSELY_CHECK = Object.entries(pkg.scripts)
+  .filter(([name, body]) => /kysely/i.test(name) || /check-kysely/.test(body))
+  .map(([name]) => name);
 const DB_TYPES_CHECK = scriptsRunning('scripts/check-db-types.ts', pkg.scripts);
 const UNUSED_CHECK = scriptsCalling('knip', pkg.scripts);
 const DUPLICATION_CHECK = scriptsCalling('jscpd', pkg.scripts);
@@ -81,23 +82,21 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(pkg.scripts['verify:full']).toBeTruthy();
   });
 
-  it('AI-17 existe um script do package.json para cada conferência do M2: node scripts/check-kysely-usage.ts e node scripts/check-db-types.ts', () => {
-    expect(KYSELY_CHECK).toHaveLength(1);
+  it('AI-17 existe um script do package.json para a conferência dos tipos do banco e nenhum para a do Kysely, que virou regra do lint', () => {
     expect(DB_TYPES_CHECK).toHaveLength(1);
+    expect(OLD_KYSELY_CHECK).toEqual([]);
   });
 
   it('AI-17 o leitor de scripts acha o script pelo corpo e recusa um corpo que só cita o arquivo', () => {
     const sample = {
-      a: 'node scripts/check-kysely-usage.ts',
-      b: 'node scripts/check-kysely-usage.ts --write',
-      c: 'echo scripts/check-kysely-usage.ts',
+      a: 'node scripts/check-db-types.ts',
+      b: 'node scripts/check-db-types.ts --write',
+      c: 'echo scripts/check-db-types.ts',
       d: 'node scripts/check-migrations.ts',
     };
 
-    expect(scriptsRunning('scripts/check-kysely-usage.ts', sample)).toEqual([
-      'a',
-    ]);
-    expect(scriptsRunning('scripts/check-db-types.ts', sample)).toEqual([]);
+    expect(scriptsRunning('scripts/check-db-types.ts', sample)).toEqual(['a']);
+    expect(scriptsRunning('scripts/check-kysely-usage.ts', sample)).toEqual([]);
   });
 
   it('AI-17 existe um script do package.json para o knip (AI-35) e outro para o jscpd (AI-36)', () => {
@@ -118,29 +117,22 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(scriptsCalling('jscpd', sample)).toEqual(['d']);
   });
 
-  it('AI-17 o verify roda lint, formato, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations, check:scripts, a conferência das formas do Kysely, o knip e o jscpd', () => {
+  it('AI-17 o verify roda lint (que traz as formas do Kysely), formato, typecheck, test:unit, openapi -- --check, lint:openapi, check:instructions, check:migrations, check:scripts, o knip e o jscpd, e nenhum passo do Kysely', () => {
     const steps = stepsOf(pkg.scripts.verify);
 
     expect(steps).not.toContain(null);
-    expect(KYSELY_CHECK).toHaveLength(1);
     expect(UNUSED_CHECK).toHaveLength(1);
     expect(DUPLICATION_CHECK).toHaveLength(1);
     expect([...steps].map(String).sort()).toEqual(
-      [
-        ...COMMON,
-        'test:unit',
-        ...KYSELY_CHECK,
-        ...UNUSED_CHECK,
-        ...DUPLICATION_CHECK,
-      ].sort(),
+      [...COMMON, 'test:unit', ...UNUSED_CHECK, ...DUPLICATION_CHECK].sort(),
     );
+    expect(pkg.scripts.verify ?? '').not.toMatch(/kysely/i);
   });
 
   it('AI-17 o verify:full roda os mesmos passos, com todos os testes (npm test) no lugar de test:unit, e mais a conferência dos tipos do banco', () => {
     const steps = stepsOf(pkg.scripts['verify:full']);
 
     expect(steps).not.toContain(null);
-    expect(KYSELY_CHECK).toHaveLength(1);
     expect(DB_TYPES_CHECK).toHaveLength(1);
     expect(UNUSED_CHECK).toHaveLength(1);
     expect(DUPLICATION_CHECK).toHaveLength(1);
@@ -148,29 +140,33 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
       [
         ...COMMON,
         'test',
-        ...KYSELY_CHECK,
         ...DB_TYPES_CHECK,
         ...UNUSED_CHECK,
         ...DUPLICATION_CHECK,
       ].sort(),
     );
+    expect(pkg.scripts['verify:full'] ?? '').not.toMatch(/kysely/i);
   });
 
   // A conferência dos tipos sobe o PostgreSQL pelo Docker, e o verify é o do pre-push.
-  it('AI-17 o verify roda a conferência das formas do Kysely e não a dos tipos do banco', () => {
+  it('AI-17 o verify roda o lint e não a conferência dos tipos do banco', () => {
     const steps = stepsOf(pkg.scripts.verify);
 
-    expect(KYSELY_CHECK.length + DB_TYPES_CHECK.length).toBe(2);
-    for (const name of KYSELY_CHECK) expect(steps).toContain(name);
+    expect(steps).toContain('lint');
+    expect(DB_TYPES_CHECK).toHaveLength(1);
     for (const name of DB_TYPES_CHECK) expect(steps).not.toContain(name);
   });
 
-  it('AI-17 o verify:full roda as duas conferências do M2', () => {
+  it('AI-17 o verify:full roda o lint, onde estão as formas do Kysely, e a conferência dos tipos do banco', () => {
     const steps = stepsOf(pkg.scripts['verify:full']);
 
-    expect(KYSELY_CHECK.length + DB_TYPES_CHECK.length).toBe(2);
-    for (const name of [...KYSELY_CHECK, ...DB_TYPES_CHECK])
-      expect(steps).toContain(name);
+    expect(steps).toContain('lint');
+    expect(DB_TYPES_CHECK).toHaveLength(1);
+    for (const name of DB_TYPES_CHECK) expect(steps).toContain(name);
+  });
+
+  it('AI-17 nenhum script do package.json chama nem cita a conferência antiga do Kysely (check:kysely, check-kysely-usage.ts)', () => {
+    expect(OLD_KYSELY_CHECK).toEqual([]);
   });
 
   // Controle negativo: o verify é o do pre-push e não pode carregar a integração (Docker).
