@@ -65,6 +65,7 @@
     "kysely-codegen": "0.20.0",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
+    "prettier": "3.9.10",
     "supertest": "7.3.1",
     "testcontainers": "12.2.1",
     "typescript": "7.0.2",
