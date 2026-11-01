@@ -154,10 +154,9 @@ function interpolate(run: string, leg: string): string {
   );
 }
 
+// AI-42: a matriz vive no job `test`; o `checks` roda uma vez e o `ci-ok` só agrega.
 function matrixJob(workflow: Workflow): Job | undefined {
-  return Object.values(workflow.jobs ?? {}).find(
-    (job) => job.strategy?.matrix?.node !== undefined,
-  );
+  return workflow.jobs?.test;
 }
 
 const IS_TEST_RUN = /^\s*npm\s+(?:run\s+)?test(?:\s|$)/;
@@ -189,9 +188,11 @@ function excludesOf(command: string): string[] {
   return found.map((path) => path.replace(/^\.\//, '')).sort();
 }
 
-// Os argumentos de relatório que o CI já usa no passo de teste (AI-18).
+// Os argumentos de relatório do passo de teste: o json alimenta a tabela (AI-18) e o github-actions anota a falha
+// no diff (AI-42).
 const REPORTER_ARGS = [
   '--reporter=default',
+  '--reporter=github-actions',
   '--reporter=json',
   '--outputFile.json=$RUNNER_TEMP/vitest-report.json',
 ];
@@ -283,12 +284,12 @@ const BASE_PKG: Pkg = {
 };
 
 const REPORTER =
-  '--reporter=default --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json';
+  '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json';
 
 // Forma 1: um passo, com o argumento condicionado pela matriz.
 const ONE_STEP = `
 jobs:
-  verify:
+  test:
     strategy:
       matrix:
         node: [nvmrc, '24.12.0']
@@ -302,7 +303,7 @@ jobs:
 // Forma 2: dois passos, cada um com o seu `if`.
 const TWO_STEPS = `
 jobs:
-  verify:
+  test:
     strategy:
       matrix:
         node: [nvmrc, '24.12.0']

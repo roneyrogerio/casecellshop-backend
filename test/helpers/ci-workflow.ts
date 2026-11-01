@@ -10,16 +10,36 @@ export interface CiStep {
   run?: string;
   'continue-on-error'?: unknown;
   with?: Record<string, unknown>;
+  env?: Record<string, unknown>;
+}
+
+export interface CiJob {
+  name?: string;
+  needs?: string | string[];
+  if?: string;
+  strategy?: {
+    'fail-fast'?: unknown;
+    matrix?: { node?: string[] };
+  };
+  steps?: CiStep[];
 }
 
 export interface CiWorkflow {
-  jobs?: Record<string, { steps?: CiStep[] }>;
+  jobs?: Record<string, CiJob>;
 }
 
 export const repoRoot = join(import.meta.dirname, '..', '..');
 
-function parseWorkflow(text: string): CiWorkflow {
+export function parseWorkflow(text: string): CiWorkflow {
   return parse(text) as CiWorkflow;
+}
+
+export function jobOf(workflow: CiWorkflow, id: string): CiJob | undefined {
+  return workflow.jobs?.[id];
+}
+
+export function stepsOfJob(workflow: CiWorkflow, id: string): CiStep[] {
+  return jobOf(workflow, id)?.steps ?? [];
 }
 
 export function readCi(): CiWorkflow {
