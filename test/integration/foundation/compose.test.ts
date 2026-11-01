@@ -8,7 +8,16 @@ import {
   getContainerRuntimeClient,
   type StartedDockerComposeEnvironment,
 } from 'testcontainers';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
 import { HealthStatus } from '../../../src/contract/index.ts';
 import {
   expectMatchesContract,
@@ -42,6 +51,30 @@ type ComposeContainer = ReturnType<
 async function inspect(container: ComposeContainer) {
   const client = await getContainerRuntimeClient();
   return client.container.getById(container.getId()).inspect();
+}
+
+// Espera, com prazo e intervalo curto, o serviço estar em execução. Confere o estado no Docker a cada
+// tentativa, sem pausa fixa: termina assim que o contêiner sobe e falha com o nome do serviço se o prazo acaba.
+async function waitUntilRunning(service: string, timeout = 60_000) {
+  await vi.waitFor(
+    async () => {
+      const { State } = await inspect(environment.getContainer(service));
+      expect(State.Running, `${service} deveria estar rodando`).toBe(true);
+    },
+    { timeout, interval: 250 },
+  );
+}
+
+// Liga um contêiner parado direto no Docker e espera ele rodar. Não usa `docker compose start`: o compose
+// segue o depends_on e executa o migrate de novo, o que adia o FinishedAt dele e quebra o teste que compara
+// o fim das migrações com o início da API e do worker.
+async function ensureRunning(service: string) {
+  const container = environment.getContainer(service);
+  if (!(await inspect(container)).State.Running) {
+    const client = await getContainerRuntimeClient();
+    await client.container.dockerode.getContainer(container.getId()).start();
+  }
+  await waitUntilRunning(service);
 }
 
 // O Testcontainers só lista contêineres em execução, e o migrate (execução única)
@@ -363,8 +396,16 @@ describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
     expect(Number(redrive.maxReceiveCount)).toBe(12);
   });
 
-  // Por último: o restart muda o estado do emulador, e o worker fica parado para os testes que viessem depois.
   it('FND-01 uma mensagem enviada à billing continua lá depois de docker compose restart elasticmq', async () => {
+    // O teste para o worker e reinicia o ElasticMQ, e o arquivo roda embaralhado (o nightly): os outros
+    // testes esperam os dois serviços de pé. Por isso o ambiente é devolvido como estava, mesmo quando uma
+    // asserção falha. O onTestFinished (e não um finally) guarda a falha original se a restauração também
+    // falhar. O ElasticMQ sobe primeiro, para o worker voltar depois dele, como no `up`.
+    onTestFinished(async () => {
+      await ensureRunning('elasticmq-1');
+      await ensureRunning('worker-1');
+    }, 120_000);
+
     // O worker do compose consome a billing: ele receberia esta mensagem (que não passa no schema do
     // faturamento), a deixaria sem resposta e ela ficaria invisível por 60 s, e a leitura abaixo não a
     // acharia. Com o worker parado, só o teste lê a fila, e o que se prova é a persistência no volume.
