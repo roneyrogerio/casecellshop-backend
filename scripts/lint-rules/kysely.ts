@@ -104,9 +104,16 @@ const noCallbackValues = {
 const ALIAS_MESSAGE =
   'o sql do Kysely por outro nome escapa da conferência; importe e use como sql';
 
+// Membros que devolvem o sql por outro nome: o sql do Kysely não os usa como API.
+const ALIAS_METHODS = new Set(['bind', 'call', 'apply']);
+
 function isKyselyDynamicImport(node: Node | undefined): boolean {
+  const unwrapped =
+    node?.type === 'ParenthesizedExpression' ? child(node, 'expression') : node;
   const inner =
-    node?.type === 'AwaitExpression' ? child(node, 'argument') : node;
+    unwrapped?.type === 'AwaitExpression'
+      ? child(unwrapped, 'argument')
+      : unwrapped;
   const source =
     inner?.type === 'ImportExpression' ? child(inner, 'source') : undefined;
   return source?.['value'] === 'kysely';
@@ -193,12 +200,15 @@ const noSqlAlias = {
     const report = (node: Node) =>
       context.report({ node, message: ALIAS_MESSAGE });
     return visit({
+      // O namespace só conta quando vem do kysely; o sql renomeado reprova de
+      // qualquer módulo, porque um módulo nosso pode reexportar o do Kysely e a
+      // regra não segue o import entre arquivos (A14 do #21).
       ImportDeclaration(node) {
-        if (child(node, 'source')?.['value'] !== 'kysely') return;
+        const fromKysely = child(node, 'source')?.['value'] === 'kysely';
         for (const specifier of node['specifiers'] as Node[]) {
           if (specifier.type === 'ImportNamespaceSpecifier') {
             const local = nameOf(child(specifier, 'local'));
-            if (local) namespaces.add(local);
+            if (fromKysely && local) namespaces.add(local);
           } else if (
             specifier.type === 'ImportSpecifier' &&
             nameOf(child(specifier, 'imported')) === 'sql' &&
@@ -208,10 +218,21 @@ const noSqlAlias = {
           }
         }
       },
-      // const { sql: s } = k, ou de um import('kysely') dinâmico.
+      // export * from 'kysely' entrega o sql a quem importa deste módulo, por
+      // qualquer nome.
+      ExportAllDeclaration(node) {
+        if (child(node, 'source')?.['value'] === 'kysely') report(node);
+      },
+      // const { sql: s } = k, ou de um import('kysely') dinâmico; e o
+      // namespace do import('kysely') guardado num nome, como o import * as.
       VariableDeclarator(node) {
         const id = child(node, 'id');
         const init = child(node, 'init');
+        if (id?.type === 'Identifier' && isKyselyDynamicImport(init)) {
+          const name = nameOf(id);
+          if (name) namespaces.add(name);
+          return;
+        }
         if (id?.type !== 'ObjectPattern') return;
         const fromKysely =
           namespaces.has(nameOf(init) ?? '') || isKyselyDynamicImport(init);
@@ -225,9 +246,16 @@ const noSqlAlias = {
       },
       MemberExpression(node) {
         const object = child(node, 'object');
-        if (
-          namespaces.has(nameOf(object) ?? '') &&
-          propertyName(node) === 'sql'
+        const property = propertyName(node);
+        const isNamespace =
+          namespaces.has(nameOf(object) ?? '') || isKyselyDynamicImport(object);
+        if (isNamespace && property === 'sql') report(node);
+        // bind, call e apply devolvem o sql por outro nome; o computado
+        // (sql['bind']) já cai no Identifier, que não aceita colchete (A13 do #21).
+        else if (
+          nameOf(object) === 'sql' &&
+          !node['computed'] &&
+          ALIAS_METHODS.has(property ?? '')
         )
           report(node);
       },
