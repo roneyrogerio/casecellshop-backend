@@ -449,7 +449,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-016 · Segurança em três camadas, com o `/security-review` antes de o PR sair do rascunho
 
-**Status:** aceita (30/10/2026, PR #6).
+**Status:** aceita (30/10/2026, PR #6). Na camada 1, o CodeQL na configuração padrão é substituído pela configuração avançada versionada do AI-44 (linha "Análise estática de segurança" da tabela de ferramentas).
 
 **Contexto.** O repositório é público, os agentes agem no GitHub com um token, e o serviço recebe pedidos sem autenticação. O `reviewer` confere segurança em toda rodada, mas lê o delta pelo critério da fatia. Vulnerabilidade conhecida em dependência e segredo vazado não aparecem no diff. Um agente de segurança a cada fatia repetiria a leitura do `reviewer` e gastaria tokens em todo delta.
 
