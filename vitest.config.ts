@@ -1,7 +1,9 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-// Sem globalSetup: cada teste de integração sobe o próprio contêiner,
-// para que as pastas rodem isoladas e em qualquer ordem.
+// O projeto integration sobe um PostgreSQL e um ElasticMQ por rodada, no
+// globalSetup; cada arquivo clona o próprio banco do modelo migrado e usa
+// filas com prefixo próprio, então as pastas seguem isoladas e em qualquer
+// ordem (FND-14).
 export default defineConfig({
   test: {
     // AI-37: só vale com --coverage, que o CI passa na perna do .nvmrc. Os
@@ -44,10 +46,10 @@ export default defineConfig({
           testTimeout: 60_000,
           hookTimeout: 120_000,
           sequence: { groupOrder: 2 },
-          // Cada arquivo de integração sobe o próprio PostgreSQL e ElasticMQ;
-          // com mais de 4 ao mesmo tempo, o Docker de 4 CPUs e 6 GB derrubou um
-          // banco no meio da suíte (FND-13). O PR C troca isso por um PostgreSQL
-          // e um ElasticMQ por rodada (FND-14), e aí este limite é revisto.
+          globalSetup: ['./test/integration/global-setup.ts'],
+          // Com um contêiner por arquivo, mais de 4 arquivos ao mesmo tempo
+          // derrubaram um banco no Docker de 4 CPUs e 6 GB (FND-13). Com os
+          // contêineres da rodada (FND-14), o limite é revisto pela medição.
           maxWorkers: 4,
         },
       },
