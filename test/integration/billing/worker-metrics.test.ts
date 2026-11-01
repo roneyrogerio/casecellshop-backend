@@ -138,6 +138,20 @@ function activeOperations(families: Exposition): number | undefined {
   return metricValue(families, 'casecellshop.erp.client.active_operations');
 }
 
+// Um pedido cuja criação no ERP falha uma vez por indisponibilidade, uma rodada do worker e o /metrics depois dela.
+async function scrapeAfterTransientCreateError(): Promise<Exposition> {
+  const rig = await createRig();
+  const order = await rig.submit();
+  rig.world.sim.script.enqueue(
+    { mode: 'unavailable' },
+    { op: 'createOrder', reference: order.orderId },
+  );
+
+  await rig.run();
+
+  return rig.scrape();
+}
+
 describe('OBS-02 /metrics do worker: nomes, tipos e labels do design', () => {
   it('OBS-02 depois de cenários que exercitam cada métrica, o /metrics expõe todas com o tipo do design', async () => {
     const rig = await createRig();
@@ -319,16 +333,8 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
   });
 
   it('OBS-02 um erro transitório do ERP soma 1 em retry e 1 em transient na criação', async () => {
-    const rig = await createRig();
-    const order = await rig.submit();
-    rig.world.sim.script.enqueue(
-      { mode: 'unavailable' },
-      { op: 'createOrder', reference: order.orderId },
-    );
+    const families = await scrapeAfterTransientCreateError();
 
-    await rig.run();
-
-    const families = await rig.scrape();
     expect(attemptOutcome(families, 'retry')).toBe(1);
     expect(erpRequests(families, 'create_order', 'transient')).toBe(1);
     expect(acceptCount(families)).toBe(0);
@@ -593,16 +599,8 @@ describe('ORD-10 erro de configuração do ERP conta no alerta', () => {
   });
 
   it('ORD-10 um erro transitório comum não soma o desfecho config_error', async () => {
-    const rig = await createRig();
-    const order = await rig.submit();
-    rig.world.sim.script.enqueue(
-      { mode: 'unavailable' },
-      { op: 'createOrder', reference: order.orderId },
-    );
+    const families = await scrapeAfterTransientCreateError();
 
-    await rig.run();
-
-    const families = await rig.scrape();
     expect(attemptOutcome(families, 'retry')).toBe(1);
     expect(erpRequests(families, 'create_order', 'transient')).toBe(1);
     expect(erpRequests(families, 'create_order', 'config_error') ?? 0).toBe(0);

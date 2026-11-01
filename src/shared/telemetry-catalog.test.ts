@@ -26,6 +26,7 @@ const VALID_COUNTER: MetricSpec = {
   attributes: {
     'casecellshop.checkout.outcome': {
       description: 'Desfecho do checkout.',
+      requirement: 'required',
       values: { kind: 'enum', values: ['accepted', 'out_of_stock'] },
     },
   },
@@ -56,22 +57,27 @@ const VALID_HTTP: MetricSpec = {
   attributes: {
     [ATTR_HTTP_REQUEST_METHOD]: {
       description: 'Método HTTP.',
+      requirement: 'required',
       values: { kind: 'enum', values: ['GET', 'POST', '_OTHER'] },
     },
     [ATTR_HTTP_ROUTE]: {
       description: 'Rota.',
+      requirement: 'required',
       values: { kind: 'http_route' },
     },
     [ATTR_HTTP_RESPONSE_STATUS_CODE]: {
       description: 'Status.',
+      requirement: 'required',
       values: { kind: 'http_status_code' },
     },
     [ATTR_URL_SCHEME]: {
       description: 'Esquema.',
+      requirement: 'required',
       values: { kind: 'enum', values: ['http', 'https'] },
     },
     [ATTR_ERROR_TYPE]: {
       description: 'Só no 5xx.',
+      requirement: 'conditionally_required',
       values: { kind: 'http_status_code' },
     },
   },
@@ -139,9 +145,24 @@ function withAttribute(attribute: string, values: string[]): MetricSpec {
     attributes: {
       [attribute]: {
         description: 'Atributo.',
+        requirement: 'required',
         values: { kind: 'enum', values },
       },
     },
+  };
+}
+
+// Um atributo cujo `requirement` o tipo não deixaria passar: o objeto vem de um JSON ou de um cast, e a função
+// tem de acusá-lo mesmo assim.
+function withRequirement(requirement: unknown): MetricSpec {
+  const attribute = {
+    description: 'Atributo.',
+    values: { kind: 'enum', values: ['accepted'] },
+    ...(requirement === undefined ? {} : { requirement }),
+  } as unknown as MetricSpec['attributes'][string];
+  return {
+    ...VALID_COUNTER,
+    attributes: { 'casecellshop.broken.kind': attribute },
   };
 }
 
@@ -225,6 +246,35 @@ describe('OBS-07 controles negativos: os atributos da métrica', () => {
       ['casecellshop.broken.kind', METRIC],
     );
   });
+
+  it('OBS-07 controle negativo: o atributo sem requirement é acusado', () => {
+    expectMetricRejected(METRIC, withRequirement(undefined), [
+      'casecellshop.broken.kind',
+      METRIC,
+    ]);
+  });
+
+  it.each(['optional', 'recommended', 'Required', '', null, true])(
+    'OBS-07 controle negativo: o atributo com requirement %j, fora de required e conditionally_required, é acusado',
+    (requirement) => {
+      expectMetricRejected(METRIC, withRequirement(requirement), [
+        'casecellshop.broken.kind',
+        METRIC,
+      ]);
+    },
+  );
+
+  it.each(['required', 'conditionally_required'])(
+    'OBS-07 o atributo com requirement %s não tem violação',
+    (requirement) => {
+      expect(
+        catalogViolations(
+          { ...BASE_METRICS, [METRIC]: withRequirement(requirement) },
+          BASE_EVENTS,
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it.each(['OutOfStock', 'out-of-stock', 'Accepted', 'a b', ''])(
     'OBS-07 controle negativo: o valor de enum "%s" fora do snake_case é acusado',
