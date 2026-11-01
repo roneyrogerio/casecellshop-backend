@@ -34,10 +34,18 @@ export function lockfileViolations(lockText: string): string[] {
   const violations: string[] = [];
   for (const [name, raw] of Object.entries(lock.packages)) {
     const entry = (raw ?? {}) as LockEntry;
-    // A raiz (""), um link de workspace e a pasta de um workspace (chave fora de
-    // node_modules/) não são pacotes baixados do registro.
-    if (name === '' || entry.link === true || !name.startsWith('node_modules/'))
+    // Só a raiz ("") não é pacote baixado. O projeto não usa workspaces: um link
+    // ou uma pasta fora de node_modules/ trocaria um pacote por código local com
+    // o mesmo nome, e o npm instala também o node_modules/ aninhado numa pasta.
+    if (name === '') continue;
+    if (entry.link === true) {
+      violations.push(`${name}: link para código local, sem workspaces`);
       continue;
+    }
+    if (!/(^|\/)node_modules\//.test(name)) {
+      violations.push(`${name}: pasta fora de node_modules/, sem workspaces`);
+      continue;
+    }
     const resolved =
       typeof entry.resolved === 'string'
         ? entry.resolved
