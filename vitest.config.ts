@@ -31,6 +31,10 @@ export default defineConfig({
             'test/integration/**',
             '.claude/worktrees/**',
           ],
+          // AI-52: o unit roda antes do integration, na mesma execução e no
+          // mesmo relatório. Os testes de hooks abrem centenas de processos git
+          // e node, e não disputam a CPU com os prazos da integração (FND-13).
+          sequence: { groupOrder: 1 },
         },
       },
       {
@@ -39,6 +43,7 @@ export default defineConfig({
           include: ['test/integration/**/*.test.ts'],
           testTimeout: 60_000,
           hookTimeout: 120_000,
+          sequence: { groupOrder: 2 },
         },
       },
     ],
