@@ -759,7 +759,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-027 · Agentes em worktree própria, conferidos pelo que mudou durante a execução
 
-**Status:** proposta (01/11/2026)
+**Status:** proposta (31/10/2026)
 
 **Contexto.** A guarda do Bash lê o texto dos comandos e sempre tem uma grafia que escapa: 12 dos cerca de 50 achados de guarda dos PRs #4 a #16 foram brechas na leitura do shell. O hook de parada comparava o `git status` inteiro com o papel, então atribuía ao agente o que a sessão principal tinha deixado sem commit, e o `reviewer` não tinha conferência de escrita. Os agentes também não conseguiam mover nem apagar arquivos, e uma refatoração só de lugar precisava da sessão principal.
 
@@ -782,10 +782,10 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 **Referências:**
 
-- [Anthropic, *Run parallel sessions with worktrees*](https://code.claude.com/docs/en/worktrees), consultado em 01/11/2026: `worktree.baseRef`, as checagens de isolamento e o `cwd` nos hooks.
-- [Anthropic, *Create custom subagents*](https://code.claude.com/docs/en/sub-agents), consultado em 01/11/2026: o campo `isolation`.
-- [Anthropic, *Hooks reference*](https://code.claude.com/docs/en/hooks), consultado em 01/11/2026: o `onFailure`, que não vale para `Stop` e `SubagentStop`.
-- [Anthropic, *Settings reference*](https://code.claude.com/docs/en/settings-reference), consultado em 01/11/2026: `worktree.symlinkDirectories`.
+- [Anthropic, *Run parallel sessions with worktrees*](https://code.claude.com/docs/en/worktrees), consultado em 31/10/2026: `worktree.baseRef`, as checagens de isolamento e o `cwd` nos hooks.
+- [Anthropic, *Create custom subagents*](https://code.claude.com/docs/en/sub-agents), consultado em 31/10/2026: o campo `isolation`.
+- [Anthropic, *Hooks reference*](https://code.claude.com/docs/en/hooks), consultado em 31/10/2026: o `onFailure`, que não vale para `Stop` e `SubagentStop`.
+- [Anthropic, *Settings reference*](https://code.claude.com/docs/en/settings-reference), consultado em 31/10/2026: `worktree.symlinkDirectories`.
 
 ## Escolhas de ferramenta
 

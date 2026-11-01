@@ -110,7 +110,7 @@ Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de 
 - **AI-30** Se uma guarda de ferramenta (guarda de caminho, do Bash ou do GitHub) não roda ou quebra, a ferramenta é bloqueada (`"onFailure": "block"`); se o hook de parada lança um erro interno, o agente volta ao trabalho com a mensagem do erro, em vez de parar sem a checagem.
 - **AI-31** Todo comando de shell de um bloco de código das skills de `.claude/skills/` passa pelas regras `deny` do `.claude/settings.json` e pela guarda do Bash da sessão principal; um comando de skill que a guarda recusaria reprova o teste. Controle negativo: um bloco com `curl` reprova.
 - **AI-32** As regras de cada tipo de arquivo carregam só quando um arquivo desse tipo é lido ou escrito: `.claude/rules/architecture.md` declara `paths:` para `src/**`, e `.claude/rules/docs.md`, para `**/*.md` e `.specs/**`; as duas ficam nos limites do `FND-06`.
-- **AI-33** O retrato do git não atribui ao agente o que outra sessão faz no mesmo repositório: o ref de uma branch em uso por outra worktree e os refs remotos ficam fora da comparação. Controle negativo: uma branch que nenhuma outra worktree usa, criada durante o agente, continua atribuída a ele.
+- **AI-33** O retrato do git não atribui ao agente o que outra sessão faz no mesmo repositório: o ref de uma branch que já estava em uso por outra worktree no início e os refs remotos ficam fora da comparação. Controle negativo: uma branch que nenhuma outra worktree usa, criada durante o agente, continua atribuída a ele.
 
 ## Checkout
 

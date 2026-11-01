@@ -107,8 +107,6 @@ export function hookOwned(rel) {
 const HOOK_OWNED_REASON =
   '.claude/reviews/ e .claude/state/ são gravados só pelos hooks (AI-15): o relatório do reviewer e os registros não se editam à mão.';
 
-// A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
-// para deixar passar. O main só lê a entrada e escreve a resposta do hook.
 // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
 // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
 function relativeTo(root, target) {
@@ -119,6 +117,8 @@ function relativeTo(root, target) {
     .toLowerCase();
 }
 
+// A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
+// para deixar passar. O main só lê a entrada e escreve a resposta do hook.
 // root é a raiz das regras de papel (a worktree do agente isolado, AI-26);
 // projectDir é a pasta principal, onde ficam as pastas gravadas pelos hooks,
 // conferidas para qualquer sessão (AI-15).
