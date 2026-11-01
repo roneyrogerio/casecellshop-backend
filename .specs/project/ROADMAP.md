@@ -168,7 +168,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
     - A12, o `scriptsDiffer` de `scripts/check-scripts.ts` ficou sem uso fora dos testes.
     - A13, a `no-sql-alias` aceita qualquer membro do `sql`, então `sql.bind`, `sql.call` e `sql.apply` o guardam com outro nome (reprovar esses três ou aceitar só os membros do Kysely);
     - A14, a `no-sql-alias` só reconhece o `sql` importado de `'kysely'`: passam `export * from 'kysely'`, o `sql` renomeado vindo de um módulo que o reexporta e o namespace de `import('kysely')`;
-    - da Revisão 2, a confirmar com o oxlint do projeto: se o `no-restricted-properties` pega `sql?.raw(1)`, e se o typecheck recusa `export = sql` e `import s = sql`.
+    - da Revisão 2, a confirmar: com o oxlint do projeto, se o `no-restricted-properties` pega `sql?.raw(1)`; com o `npm run typecheck`, se `export = sql` e `import s = sql` são recusados.
 - **Ambiente da sessão remota do Claude Code (PR de ambiente):** a VM traz o Node até a 22, e o projeto pede a 26; um script de preparo do ambiente (configurado em claude.ai/code pelo mantenedor) instala o Node 26, e um hook de início roda o `npm ci` só na nuvem (`CLAUDE_CODE_REMOTE`), como na documentação dos ambientes de nuvem. O GitHub MCP também não está disponível lá (AD-013). Até lá, o trabalho com agentes é local, no terminal ou no VS Code, onde os hooks valem igual.
 - **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
