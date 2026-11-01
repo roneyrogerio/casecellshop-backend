@@ -108,6 +108,34 @@ services:
       - '${JAEGER_UI_PORT:-16686}:16686'
     restart: unless-stopped
 
+  # FND-16: fuzzing guiado pelo openapi.yaml, só no perfil fuzz (fora do docker compose up).
+  # Fala com a API pela rede do compose; a versão e o digest da imagem moram só aqui, e o
+  # Dependabot sobe os dois juntos. A semente e o número de exemplos vêm do ambiente.
+  schemathesis:
+    image: ghcr.io/schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b393ddd1b525a11bb560d593fd06268491595c2e439090bf0
+    profiles: ['fuzz']
+    command:
+      - run
+      - /schema/openapi.yaml
+      - --url
+      - http://api:3000
+      - --checks
+      - not_a_server_error,status_code_conformance,content_type_conformance,response_headers_conformance,response_schema_conformance,negative_data_rejection
+      - --seed
+      - ${FUZZ_SEED:-20261101}
+      - --max-examples
+      - ${FUZZ_MAX_EXAMPLES:-50}
+      - --report
+      - junit
+      - --report-dir
+      - /reports
+    volumes:
+      - ./openapi.yaml:/schema/openapi.yaml:ro
+      - ./schemathesis-report:/reports
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   pgdata:
   elasticmq-data:

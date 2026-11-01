@@ -12,3 +12,4 @@ package-lock.json
 .claude/state/
 .claude/worktrees/
 coverage/
+schemathesis-report/

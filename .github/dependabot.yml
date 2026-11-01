@@ -33,3 +33,20 @@ updates:
     groups:
       actions:
         patterns: ['*']
+
+  # As imagens do compose.yaml; com tag e digest juntos, o Dependabot sobe os dois.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Uma versão maior do PostgreSQL pede migrar o diretório de dados do volume.
+    ignore:
+      - dependency-name: postgres
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: build(deps)
+    groups:
+      compose:
+        patterns: ['*']
