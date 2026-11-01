@@ -15,12 +15,17 @@ export function envPort(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
   const port = Number(raw);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Porta inválida em ${name}: ${raw}`);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535)
+    throw new Error(`Porta inválida em ${name}: ${raw}`);
   return port;
 }
 
 // Variável de lista fechada: só o `undefined` usa o padrão; valor vazio ou fora da lista é erro na partida.
-export function envChoice<T extends string>(name: string, choices: readonly T[], fallback: T): T {
+export function envChoice<T extends string>(
+  name: string,
+  choices: readonly T[],
+  fallback: T,
+): T {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
   const choice = choices.find((candidate) => candidate === raw);

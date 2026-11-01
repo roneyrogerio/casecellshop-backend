@@ -10,7 +10,8 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
+export type Identity =
+  { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
 
 // Onde o token do modo bot fica: o chaveiro do sistema (o Chaveiro no macOS, o
 // Secret Service no Linux) ou, só por escolha explícita, um arquivo fora do
@@ -27,13 +28,19 @@ const KEYS = {
 } as const;
 
 function readLocal(root: string, key: string): string | undefined {
-  const result = spawnSync('git', ['-C', root, 'config', '--local', '--get', key], { encoding: 'utf8' });
+  const result = spawnSync(
+    'git',
+    ['-C', root, 'config', '--local', '--get', key],
+    { encoding: 'utf8' },
+  );
   const value = result.status === 0 ? result.stdout.trim() : '';
   return value || undefined;
 }
 
 function git(root: string, ...args: string[]): void {
-  spawnSync('git', ['-C', root, 'config', '--local', ...args], { encoding: 'utf8' });
+  spawnSync('git', ['-C', root, 'config', '--local', ...args], {
+    encoding: 'utf8',
+  });
 }
 
 export function defaultKeychainService(login: string): string {
@@ -46,7 +53,9 @@ export function readIdentity(root: string): Identity | undefined {
   if (mode !== 'bot') return undefined;
   const login = readLocal(root, KEYS.botLogin);
   const keychainService = readLocal(root, KEYS.keychainService);
-  return login && keychainService ? { mode: 'bot', login, keychainService } : undefined;
+  return login && keychainService
+    ? { mode: 'bot', login, keychainService }
+    : undefined;
 }
 
 export function writeIdentity(root: string, identity: Identity): void {
@@ -76,12 +85,20 @@ export function writeTokenStore(root: string, store: TokenStore): void {
 // um item estranho não sair da pasta.
 export function tokenFilePath(service: string, env: Env = process.env): string {
   const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config');
-  return join(base, 'casecellshop', service.replaceAll('..', '_').replaceAll(/[/\\]/g, '_'));
+  return join(
+    base,
+    'casecellshop',
+    service.replaceAll('..', '_').replaceAll(/[/\\]/g, '_'),
+  );
 }
 
 // Permissão 600, inclusive ao regravar um arquivo que já existia mais aberto:
 // o writeFileSync só aplica o mode na criação.
-export function writeTokenFile(service: string, token: string, env: Env = process.env): string {
+export function writeTokenFile(
+  service: string,
+  token: string,
+  env: Env = process.env,
+): string {
   const path = tokenFilePath(service, env);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, token, { mode: 0o600 });
@@ -97,7 +114,10 @@ function readTokenFile(service: string, env: Env): string | undefined {
   }
 }
 
-type Run = (cmd: string, args: string[]) => { status: number | null; stderr: string; error?: { code?: string } };
+type Run = (
+  cmd: string,
+  args: string[],
+) => { status: number | null; stderr: string; error?: { code?: string } };
 
 const defaultRun: Run = (cmd, args) => {
   const result = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5000 });
@@ -113,11 +133,18 @@ const defaultRun: Run = (cmd, args) => {
 // No Linux, o Secret Service só existe numa sessão com D-Bus e um provedor
 // (GNOME Keyring, KWallet); em servidor, contêiner e WSL ele falta. Uma busca
 // que não acha nada sai com 1 sem erro de D-Bus, e isso conta como chaveiro ok.
-export function keychainStatus(deps: { platform?: NodeJS.Platform; run?: Run } = {}): 'ok' | 'missing-tool' | 'no-service' {
+export function keychainStatus(
+  deps: { platform?: NodeJS.Platform; run?: Run } = {},
+): 'ok' | 'missing-tool' | 'no-service' {
   if ((deps.platform ?? process.platform) !== 'linux') return 'ok';
-  const probe = (deps.run ?? defaultRun)('secret-tool', ['search', 'service', 'casecellshop-probe']);
+  const probe = (deps.run ?? defaultRun)('secret-tool', [
+    'search',
+    'service',
+    'casecellshop-probe',
+  ]);
   if (probe.error?.code === 'ENOENT') return 'missing-tool';
-  if (/d-?bus|org\.freedesktop\.secrets/i.test(probe.stderr)) return 'no-service';
+  if (/d-?bus|org\.freedesktop\.secrets/i.test(probe.stderr))
+    return 'no-service';
   return 'ok';
 }
 
@@ -133,8 +160,12 @@ export function keychainHelp(status: 'missing-tool' | 'no-service'): string {
 function systemKeychain(service: string): string | undefined {
   const lookup =
     process.platform === 'darwin'
-      ? spawnSync('security', ['find-generic-password', '-s', service, '-w'], { encoding: 'utf8' })
-      : spawnSync('secret-tool', ['lookup', 'service', service], { encoding: 'utf8' });
+      ? spawnSync('security', ['find-generic-password', '-s', service, '-w'], {
+          encoding: 'utf8',
+        })
+      : spawnSync('secret-tool', ['lookup', 'service', service], {
+          encoding: 'utf8',
+        });
   return lookup.status === 0 ? lookup.stdout : undefined;
 }
 
@@ -144,16 +175,32 @@ function systemKeychain(service: string): string | undefined {
 function machineCredential(root: string): string | undefined {
   const result = spawnSync(
     'git',
-    ['-C', root, '-c', 'credential.interactive=false', '-c', 'core.askPass=', 'credential', 'fill'],
+    [
+      '-C',
+      root,
+      '-c',
+      'credential.interactive=false',
+      '-c',
+      'core.askPass=',
+      'credential',
+      'fill',
+    ],
     {
       input: 'protocol=https\nhost=github.com\n\n',
       encoding: 'utf8',
       timeout: 10_000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '' },
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: '',
+        SSH_ASKPASS: '',
+      },
     },
   );
   if (result.status !== 0) return undefined;
-  const line = (result.stdout ?? '').split('\n').find((entry) => entry.startsWith('password='));
+  const line = (result.stdout ?? '')
+    .split('\n')
+    .find((entry) => entry.startsWith('password='));
   return line?.slice('password='.length);
 }
 
@@ -165,7 +212,8 @@ export function readToken(
   if (!identity) return undefined;
   let raw: string | undefined;
   if (identity.mode === 'self') raw = machineCredential(root);
-  else if (readTokenStore(root) === 'file') raw = readTokenFile(identity.keychainService, deps.env ?? process.env);
+  else if (readTokenStore(root) === 'file')
+    raw = readTokenFile(identity.keychainService, deps.env ?? process.env);
   else raw = (deps.keychain ?? systemKeychain)(identity.keychainService);
   const token = raw?.trim();
   return token || undefined;

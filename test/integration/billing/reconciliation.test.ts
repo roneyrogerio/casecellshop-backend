@@ -1,8 +1,20 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { startRedrive } from '../../../src/queue/sqs.ts';
 import { resolveServiceIdentity } from '../../../src/shared/service-identity.ts';
-import { createTelemetry, type Telemetry } from '../../../src/shared/telemetry.ts';
+import {
+  createTelemetry,
+  type Telemetry,
+} from '../../../src/shared/telemetry.ts';
 import { settle } from '../../helpers/async.ts';
 import { readInventory } from '../../helpers/checkout.ts';
 import {
@@ -87,7 +99,11 @@ async function createRig(options: RigOptions = {}): Promise<Rig> {
     telemetries.push(telemetry);
   }
   const maxReceiveCount = options.maxReceiveCount ?? 1;
-  const world = await createWorld(suite, { withoutH1b: true, maxReceiveCount, telemetry });
+  const world = await createWorld(suite, {
+    withoutH1b: true,
+    maxReceiveCount,
+    telemetry,
+  });
   const logs = captureLogs();
   const built = buildReconciler(world, {
     logger: logs.logger,
@@ -99,10 +115,19 @@ async function createRig(options: RigOptions = {}): Promise<Rig> {
 }
 
 // O ERP já faturou o pedido numa chamada cuja resposta se perdeu.
-async function erpHasInvoice(world: QueueWorld, order: AcceptedOrder): Promise<void> {
+async function erpHasInvoice(
+  world: QueueWorld,
+  order: AcceptedOrder,
+): Promise<void> {
   const created = await world.erp.createOrder({
     reference: order.orderId,
-    items: [{ sku: order.sku, quantity: order.quantity, unitPriceCents: order.priceCents }],
+    items: [
+      {
+        sku: order.sku,
+        quantity: order.quantity,
+        unitPriceCents: order.priceCents,
+      },
+    ],
   });
   expect(created.kind).toBe('ok');
 }
@@ -114,16 +139,26 @@ interface DeadSpec {
 
 // Pedidos aceitos, com a mensagem na DLQ: `first_sent_at` e `last_call_at` de 5 min atrás (o atraso mínimo
 // já passou) e, para os que o ERP "já tem", a fatura criada antes. Corpos crus entram na mesma fila.
-async function seedDead(rig: Rig, specs: DeadSpec[], rawBodies: string[] = []): Promise<AcceptedOrder[]> {
+async function seedDead(
+  rig: Rig,
+  specs: DeadSpec[],
+  rawBodies: string[] = [],
+): Promise<AcceptedOrder[]> {
   const orders: AcceptedOrder[] = [];
   for (const spec of specs) {
-    const order = await submitOrder(suite, rig.world, { quantity: spec.quantity ?? 2 });
+    const order = await submitOrder(suite, rig.world, {
+      quantity: spec.quantity ?? 2,
+    });
     if (spec.erpHas) await erpHasInvoice(rig.world, order);
     await markSentBefore(suite.pool, order.orderId);
     orders.push(order);
   }
   for (const body of rawBodies) await enqueueRaw(rig.world, body);
-  await moveToDlq(rig.world, orders.length + rawBodies.length, rig.maxReceiveCount);
+  await moveToDlq(
+    rig.world,
+    orders.length + rawBodies.length,
+    rig.maxReceiveCount,
+  );
   return orders;
 }
 
@@ -133,17 +168,32 @@ function invoices(orderId: string): Promise<number> {
 
 async function expectReservationKept(order: AcceptedOrder): Promise<void> {
   const inventory = await readInventory(suite.pool, order.sku);
-  expect(ledgerViolations(inventory, { onHand: order.onHand, reserved: order.quantity, soldTotal: 0 })).toEqual([]);
+  expect(
+    ledgerViolations(inventory, {
+      onHand: order.onHand,
+      reserved: order.quantity,
+      soldTotal: 0,
+    }),
+  ).toEqual([]);
 }
 
-async function expectStillPending(rig: Rig, order: AcceptedOrder): Promise<void> {
+async function expectStillPending(
+  rig: Rig,
+  order: AcceptedOrder,
+): Promise<void> {
   expect((await readOrder(suite.pool, order.orderId)).status).toBe('pending');
   await expectReservationKept(order);
   expect(rig.dlq.deletesOf(order.orderId)).toEqual([]);
 }
 
 async function outcomeCount(rig: Rig, outcome: string): Promise<number> {
-  return valueOf(await scrapeMetrics(rig.telemetry), 'outbox_attempt_outcome_total', { outcome }) ?? 0;
+  return (
+    valueOf(
+      await scrapeMetrics(rig.telemetry),
+      'outbox_attempt_outcome_total',
+      { outcome },
+    ) ?? 0
+  );
 }
 
 describe('ORD-14 ERP fora por mais que a janela de retry', () => {
@@ -166,7 +216,9 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     expect(await worker.pollOnce()).toBe(0);
     await waitForDlq(world, 2);
     for (const order of [has, lacks]) {
-      expect((await readOrder(suite.pool, order.orderId)).status).toBe('pending');
+      expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+        'pending',
+      );
       await expectReservationKept(order);
     }
     expect(await invoices(has.orderId)).toBe(1);
@@ -184,14 +236,23 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     // O que o ERP tem vira faturado, uma fatura só, com o estoque baixado uma vez, e sai da DLQ.
     expect(await invoices(has.orderId)).toBe(1);
     await expectInvoiced(world, has, { queueEmpty: false });
-    expect(rig.dlq.deletesOf(has.orderId).map((call) => call.result)).toEqual(['ok']);
+    expect(rig.dlq.deletesOf(has.orderId).map((call) => call.result)).toEqual([
+      'ok',
+    ]);
     // O que ele não tem fica como estava: pedido pending, reserva, nenhuma fatura e a mensagem na DLQ.
     expect(await invoices(lacks.orderId)).toBe(0);
     await expectStillPending(rig, lacks);
     expect(await dlqTotal(world)).toBe(1);
     // A reconciliação só consulta: quem cria é o worker.
     expect(world.transport.sendsOf('createOrder')).toHaveLength(createsBefore);
-    expect(world.transport.sendsOf('findOrder').some((request) => request.op === 'findOrder' && request.reference === lacks.orderId)).toBe(true);
+    expect(
+      world.transport
+        .sendsOf('findOrder')
+        .some(
+          (request) =>
+            request.op === 'findOrder' && request.reference === lacks.orderId,
+        ),
+    ).toBe(true);
   });
 
   it('ORD-14 com o ERP ainda fora, a consulta falha: a mensagem fica na DLQ com o pedido pending e a reserva; na rodada seguinte, com o ERP de volta, o pedido é faturado', async () => {
@@ -214,7 +275,11 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     await releaseFromDlq(world, rig.dlq, order.orderId);
     await ageLastCall(suite.pool, order.orderId);
 
-    expect(await rig.reconciler.reconcileOnce()).toEqual({ seen: 1, invoiced: 1, closed: 0 });
+    expect(await rig.reconciler.reconcileOnce()).toEqual({
+      seen: 1,
+      invoiced: 1,
+      closed: 0,
+    });
     expect(await invoices(order.orderId)).toBe(1);
     await expectInvoiced(world, order, { queueEmpty: false });
     expect(await dlqTotal(world)).toBe(0);
@@ -247,25 +312,44 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     const [order] = await seedDead(rig, [{ erpHas: true }]);
     if (!order) throw new Error('pedido não semeado');
     let heldDuringCall: number | undefined;
-    world.transport.afterErp({ op: 'findOrder', reference: order.orderId }, () => {
-      heldDuringCall = semaphore.held;
-      return Promise.resolve();
-    });
+    world.transport.afterErp(
+      { op: 'findOrder', reference: order.orderId },
+      () => {
+        heldDuringCall = semaphore.held;
+        return Promise.resolve();
+      },
+    );
 
     await rig.reconciler.reconcileOnce();
 
-    expect(heldDuringCall, 'uma só permissão do semáforo durante a consulta').toBe(1);
+    expect(
+      heldDuringCall,
+      'uma só permissão do semáforo durante a consulta',
+    ).toBe(1);
     expect(semaphore.held, 'a permissão volta ao semáforo').toBe(0);
     const outbox = await readOutbox(suite.pool, order.orderId);
-    expect(outbox.callToken, 'a permissão de chamada foi tomada').not.toBeNull();
+    expect(
+      outbox.callToken,
+      'a permissão de chamada foi tomada',
+    ).not.toBeNull();
     expect(outbox.sinceLastCallMs ?? Infinity).toBeLessThan(30_000);
-    expect(outbox.deadAt, 'a permissão da reconciliação não zera o dead_at').not.toBeNull();
+    expect(
+      outbox.deadAt,
+      'a permissão da reconciliação não zera o dead_at',
+    ).not.toBeNull();
     const invoiced = rig.logs.eventsOf('order.invoiced', order.orderId);
     expect(invoiced).toHaveLength(1);
     expect(invoiced[0]?.['level']).toBe('info');
     expect(await outcomeCount(rig, 'invoiced')).toBe(1);
     const families = await scrapeMetrics(rig.telemetry);
-    expect(valueOf(families, 'order_accept_to_invoice_seconds', {}, 'order_accept_to_invoice_seconds_count')).toBe(1);
+    expect(
+      valueOf(
+        families,
+        'order_accept_to_invoice_seconds',
+        {},
+        'order_accept_to_invoice_seconds_count',
+      ),
+    ).toBe(1);
     await expectInvoiced(world, order, { queueEmpty: false });
   });
 
@@ -274,14 +358,19 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     const { world } = rig;
     const [order] = await seedDead(rig, [{}]);
     if (!order) throw new Error('pedido não semeado');
-    await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    await suite.pool.query(
+      "update orders set status = 'invoiced', outcome_at = now() where id = $1",
+      [order.orderId],
+    );
     const sendsBefore = world.transport.sends.length;
 
     const result = await rig.reconciler.reconcileOnce();
 
     expect(result).toEqual({ seen: 1, invoiced: 0, closed: 1 });
     expect(world.transport.sends).toHaveLength(sendsBefore);
-    expect(rig.dlq.deletesOf(order.orderId).map((call) => call.result)).toEqual(['ok']);
+    expect(rig.dlq.deletesOf(order.orderId).map((call) => call.result)).toEqual(
+      ['ok'],
+    );
     expect(await dlqTotal(world)).toBe(0);
     const closed = rig.logs.eventsOf('outbox.closed', order.orderId);
     expect(closed).toHaveLength(1);
@@ -293,7 +382,11 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
   it('ORD-14 o corpo fora do schema fica na DLQ para o runbook, sem ser apagado nem consultado, e não impede as outras mensagens da rodada', async () => {
     const rig = await createRig();
     const { world } = rig;
-    const [order] = await seedDead(rig, [{ erpHas: true }], ['isto nao e json']);
+    const [order] = await seedDead(
+      rig,
+      [{ erpHas: true }],
+      ['isto nao e json'],
+    );
     if (!order) throw new Error('pedido não semeado');
 
     const result = await rig.reconciler.reconcileOnce();
@@ -309,7 +402,10 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
   it('ORD-14 recebe da DLQ até maxMessages em lotes de no máximo 10, com a visibilidade configurada, e deixa o resto para a rodada seguinte', async () => {
     const rig = await createRig({ config: { maxMessages: 12 } });
     const { world } = rig;
-    await seedDead(rig, Array.from({ length: 15 }, () => ({ quantity: 1 })));
+    await seedDead(
+      rig,
+      Array.from({ length: 15 }, () => ({ quantity: 1 })),
+    );
 
     const first = await rig.reconciler.reconcileOnce();
 
@@ -321,7 +417,10 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
       expect(options.visibilitySeconds).toBe(300);
     }
     // Nenhuma das 12 voltou: as 3 que sobraram são as visíveis.
-    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({ visible: 3, notVisible: 12 });
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 3,
+      notVisible: 12,
+    });
 
     const second = await rig.reconciler.reconcileOnce();
 
@@ -336,7 +435,10 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     await rig.reconciler.reconcileOnce();
 
     expect(rig.dlq.receives.length).toBeGreaterThanOrEqual(1);
-    expect(rig.dlq.receives[0]).toMatchObject({ max: 10, visibilitySeconds: 300 });
+    expect(rig.dlq.receives[0]).toMatchObject({
+      max: 10,
+      visibilitySeconds: 300,
+    });
     expect(rig.dlq.receives.every((options) => options.max <= 10)).toBe(true);
   });
 });
@@ -353,10 +455,19 @@ describe('ORD-14 o laço da reconciliação', () => {
       await vi.waitFor(
         async () => {
           world.clock.advance(1_000);
-          expect((await readOrder(suite.pool, order.orderId)).status).toBe('invoiced');
-          const summaries = rig.logs.eventsOf('outbox.reconciled').filter((line) => line['invoiced'] === 1);
+          expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+            'invoiced',
+          );
+          const summaries = rig.logs
+            .eventsOf('outbox.reconciled')
+            .filter((line) => line['invoiced'] === 1);
           expect(summaries).toHaveLength(1);
-          expect(summaries[0]).toMatchObject({ level: 'info', seen: 1, invoiced: 1, closed: 0 });
+          expect(summaries[0]).toMatchObject({
+            level: 'info',
+            seen: 1,
+            invoiced: 1,
+            closed: 0,
+          });
         },
         { timeout: 20_000, interval: 25 },
       );
@@ -374,7 +485,10 @@ describe('ORD-14 o laço da reconciliação', () => {
 
     void rig.reconciler.start();
     try {
-      await vi.waitFor(() => expect(rig.sleeps.length).toBeGreaterThanOrEqual(1), { timeout: 20_000, interval: 25 });
+      await vi.waitFor(
+        () => expect(rig.sleeps.length).toBeGreaterThanOrEqual(1),
+        { timeout: 20_000, interval: 25 },
+      );
     } finally {
       await driveClock(rig.reconciler.stop(), world.clock, 60_000);
     }
@@ -394,7 +508,9 @@ describe('ORD-14 o laço da reconciliação', () => {
       await vi.waitFor(
         async () => {
           world.clock.advance(1_000);
-          expect((await readOrder(suite.pool, order.orderId)).status).toBe('invoiced');
+          expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+            'invoiced',
+          );
         },
         { timeout: 20_000, interval: 25 },
       );
@@ -457,7 +573,10 @@ function holdFirstFindOrder(world: QueueWorld): Gate {
 
 // Várias mensagens na DLQ, todas de pedidos que o ERP já tem; o stop() chega com a primeira consulta em voo.
 // Devolve o pedido da consulta em voo e os que a rodada não deveria ter tocado.
-async function stopWhileQueryInFlight(rig: Rig, messages: number): Promise<InterruptedRound> {
+async function stopWhileQueryInFlight(
+  rig: Rig,
+  messages: number,
+): Promise<InterruptedRound> {
   const { world } = rig;
   const orders = await seedDead(
     rig,
@@ -474,7 +593,9 @@ async function stopWhileQueryInFlight(rig: Rig, messages: number): Promise<Inter
       stopped = true;
     });
     await settle();
-    expect(stopped, 'o stop() espera a consulta que já estava em voo').toBe(false);
+    expect(stopped, 'o stop() espera a consulta que já estava em voo').toBe(
+      false,
+    );
   } finally {
     gate.releaseAll();
   }
@@ -483,8 +604,12 @@ async function stopWhileQueryInFlight(rig: Rig, messages: number): Promise<Inter
   const first = world.transport.sendsOf('findOrder')[0];
   const inFlightId = first?.op === 'findOrder' ? first.reference : undefined;
   const inFlight = orders.find((order) => order.orderId === inFlightId);
-  if (!inFlight) throw new Error('a consulta em voo não é de um pedido semeado');
-  return { inFlight, untouched: orders.filter((order) => order.orderId !== inFlight.orderId) };
+  if (!inFlight)
+    throw new Error('a consulta em voo não é de um pedido semeado');
+  return {
+    inFlight,
+    untouched: orders.filter((order) => order.orderId !== inFlight.orderId),
+  };
 }
 
 describe('ORD-14 o stop() no meio de uma rodada', () => {
@@ -495,9 +620,14 @@ describe('ORD-14 o stop() no meio de uma rodada', () => {
     const { inFlight, untouched } = await stopWhileQueryInFlight(rig, 3);
 
     // A consulta em voo termina o que começou: o pedido é faturado e a mensagem, apagada.
-    expect(world.transport.sendsOf('findOrder'), 'consultas ao ERP').toHaveLength(1);
+    expect(
+      world.transport.sendsOf('findOrder'),
+      'consultas ao ERP',
+    ).toHaveLength(1);
     await expectInvoiced(world, inFlight, { queueEmpty: false });
-    expect(rig.dlq.deletesOf(inFlight.orderId).map((call) => call.result)).toEqual(['ok']);
+    expect(
+      rig.dlq.deletesOf(inFlight.orderId).map((call) => call.result),
+    ).toEqual(['ok']);
     // As outras ficam como estavam; a visibilidade de 5 min as devolve à DLQ para a rodada seguinte.
     for (const order of untouched) {
       expect(await invoices(order.orderId)).toBe(1);
@@ -514,8 +644,14 @@ describe('ORD-14 o stop() no meio de uma rodada', () => {
 
     // O primeiro lote tem 10 mensagens; a 11ª fica visível, sem ninguém a receber depois do stop().
     expect(rig.dlq.receives, 'leituras da DLQ').toHaveLength(1);
-    expect(world.transport.sendsOf('findOrder'), 'consultas ao ERP').toHaveLength(1);
-    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({ visible: 1, notVisible: untouched.length - 1 });
+    expect(
+      world.transport.sendsOf('findOrder'),
+      'consultas ao ERP',
+    ).toHaveLength(1);
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 1,
+      notVisible: untouched.length - 1,
+    });
   });
 });
 
@@ -532,11 +668,22 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     const dead = rig.logs.eventsOf('outbox.dead', order.orderId);
     expect(dead).toHaveLength(1);
     const line = dead[0] ?? {};
-    for (const field of ['time', 'level', 'service', 'msg', 'event', 'correlationId', 'trace_id', 'span_id']) {
+    for (const field of [
+      'time',
+      'level',
+      'service',
+      'msg',
+      'event',
+      'correlationId',
+      'trace_id',
+      'span_id',
+    ]) {
       expect(line[field], `falta ${field}`).toBeDefined();
     }
     expect(line['level']).toBe('error');
-    expect(line['service']).toBe(resolveServiceIdentity('casecellshop-worker').service);
+    expect(line['service']).toBe(
+      resolveServiceIdentity('casecellshop-worker').service,
+    );
     expect(line['orderId']).toBe(order.orderId);
     expect(line['correlationId']).toBe(order.requestId);
     expect(line['trace_id']).toMatch(/^[0-9a-f]{32}$/);
@@ -544,8 +691,14 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     expect((await readOutbox(suite.pool, order.orderId)).deadAt).not.toBeNull();
     const settleSpans = suite.checkout.exporter
       .getFinishedSpans()
-      .filter((span) => span.name === 'outbox.settle' && span.attributes['orderId'] === order.orderId);
-    expect(settleSpans.map((span) => span.spanContext().spanId)).toContain(line['span_id']);
+      .filter(
+        (span) =>
+          span.name === 'outbox.settle' &&
+          span.attributes['orderId'] === order.orderId,
+      );
+    expect(settleSpans.map((span) => span.spanContext().spanId)).toContain(
+      line['span_id'],
+    );
   });
 
   it('OBS-01 a mensagem que aparece outra vez na DLQ, sem o worker tomar a permissão, não loga outbox.dead de novo; a nova chegada depois de um redrive e de nova tentativa loga', async () => {
@@ -566,12 +719,18 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     // Redrive; o worker toma a permissão (o que zera o dead_at) e o ERP segue fora, até a DLQ de novo.
     await releaseFromDlq(world, rig.dlq, id);
     await startRedrive(world.queues.client, world.queues.dlqUrl);
-    await vi.waitFor(async () => expect(await world.queues.queue.approximateCount()).toBe(1), { timeout: 20_000, interval: 50 });
+    await vi.waitFor(
+      async () => expect(await world.queues.queue.approximateCount()).toBe(1),
+      { timeout: 20_000, interval: 50 },
+    );
     world.sim.script.setDefault({ mode: 'unavailable' });
     await ageLastCall(suite.pool, id);
     const worker = buildWorker(world);
     expect(await worker.pollOnce()).toBe(1);
-    expect((await readOutbox(suite.pool, id)).deadAt, 'a permissão do worker zera o dead_at').toBeNull();
+    expect(
+      (await readOutbox(suite.pool, id)).deadAt,
+      'a permissão do worker zera o dead_at',
+    ).toBeNull();
     await makeClaimable(world, id);
     expect(await worker.pollOnce()).toBe(0);
     await waitForDlq(world, 1);
@@ -591,21 +750,33 @@ describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
     const orders = await seedDead(rig, [{}, {}]);
     // Os dois já têm desfecho: cada mensagem só precisa do DeleteMessage, e a falha injetada cai em uma.
     for (const order of orders) {
-      await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+      await suite.pool.query(
+        "update orders set status = 'invoiced', outcome_at = now() where id = $1",
+        [order.orderId],
+      );
     }
     const injection = rig.dlq.inject('delete');
 
     const result = await rig.reconciler.reconcileOnce();
 
     expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
-    expect(result, 'a rodada segue com a outra mensagem').toEqual({ seen: 2, invoiced: 0, closed: 1 });
-    const rejected = rig.dlq.deletes.filter((call) => call.result === 'rejected');
+    expect(result, 'a rodada segue com a outra mensagem').toEqual({
+      seen: 2,
+      invoiced: 0,
+      closed: 1,
+    });
+    const rejected = rig.dlq.deletes.filter(
+      (call) => call.result === 'rejected',
+    );
     expect(rejected).toHaveLength(1);
     const failedId = rig.dlq.orderIdOf(rejected[0]?.receiptHandle ?? '');
     const failed = orders.find((order) => order.orderId === failedId);
     const other = orders.find((order) => order.orderId !== failedId);
-    if (!failed || !other) throw new Error('a mensagem que falhou não é de um pedido semeado');
-    expect(rig.dlq.deletesOf(other.orderId).map((call) => call.result)).toEqual(['ok']);
+    if (!failed || !other)
+      throw new Error('a mensagem que falhou não é de um pedido semeado');
+    expect(rig.dlq.deletesOf(other.orderId).map((call) => call.result)).toEqual(
+      ['ok'],
+    );
     expect(await dlqTotal(world)).toBe(1);
 
     const errors = rig.logs.eventsOf('outbox.reconcile_error');
@@ -614,10 +785,21 @@ describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
     expect(line['level']).toBe('warn');
     expect(line['orderId']).toBe(failed.orderId);
     expect(line['correlationId']).toBe(failed.requestId);
-    for (const field of ['time', 'level', 'service', 'msg', 'event', 'correlationId', 'trace_id', 'span_id']) {
+    for (const field of [
+      'time',
+      'level',
+      'service',
+      'msg',
+      'event',
+      'correlationId',
+      'trace_id',
+      'span_id',
+    ]) {
       expect(line[field], `falta ${field}`).toBeDefined();
     }
-    expect(line['service']).toBe(resolveServiceIdentity('casecellshop-worker').service);
+    expect(line['service']).toBe(
+      resolveServiceIdentity('casecellshop-worker').service,
+    );
     expect(line['trace_id']).toMatch(/^[0-9a-f]{32}$/);
     expect(line['span_id']).toMatch(/^[0-9a-f]{16}$/);
   });
@@ -652,7 +834,10 @@ describe('OBS-02 dead em outbox_attempt_outcome_total', () => {
 
     await releaseFromDlq(world, rig.dlq, id);
     await startRedrive(world.queues.client, world.queues.dlqUrl);
-    await vi.waitFor(async () => expect(await world.queues.queue.approximateCount()).toBe(1), { timeout: 20_000, interval: 50 });
+    await vi.waitFor(
+      async () => expect(await world.queues.queue.approximateCount()).toBe(1),
+      { timeout: 20_000, interval: 50 },
+    );
     world.sim.script.setDefault({ mode: 'unavailable' });
     await ageLastCall(suite.pool, id);
     const worker = buildWorker(world);
@@ -672,7 +857,10 @@ describe('OBS-02 dead em outbox_attempt_outcome_total', () => {
     const { world } = rig;
     const [order] = await seedDead(rig, [{}]);
     if (!order) throw new Error('pedido não semeado');
-    await suite.pool.query("update orders set status = 'invoiced', outcome_at = now() where id = $1", [order.orderId]);
+    await suite.pool.query(
+      "update orders set status = 'invoiced', outcome_at = now() where id = $1",
+      [order.orderId],
+    );
     const injection = rig.dlq.inject('delete');
 
     // O SQS falha ao apagar: a mensagem fica, e a rodada não conta o encerramento que não aconteceu. O spec não

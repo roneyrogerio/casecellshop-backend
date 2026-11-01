@@ -8,8 +8,11 @@ import { buildOpenApiDocument } from '../src/contract/index.ts';
 
 const fileIndex = process.argv.indexOf('--file');
 const target =
-  fileIndex === -1 ? new URL('../openapi.yaml', import.meta.url) : resolve(process.argv[fileIndex + 1] ?? '');
-const header = '# Gerado por `npm run openapi` a partir de src/contract/. Não edite à mão.\n';
+  fileIndex === -1
+    ? new URL('../openapi.yaml', import.meta.url)
+    : resolve(process.argv[fileIndex + 1] ?? '');
+const header =
+  '# Gerado por `npm run openapi` a partir de src/contract/. Não edite à mão.\n';
 const generated = header + stringify(buildOpenApiDocument(), { lineWidth: 0 });
 
 if (process.argv.includes('--check')) {
@@ -20,7 +23,9 @@ if (process.argv.includes('--check')) {
     // Sem arquivo, a comparação abaixo já falha com a mensagem certa.
   }
   if (committed !== generated) {
-    process.stderr.write('openapi.yaml diverge do contrato em src/contract/. Rode `npm run openapi` e commite.\n');
+    process.stderr.write(
+      'openapi.yaml diverge do contrato em src/contract/. Rode `npm run openapi` e commite.\n',
+    );
     process.exit(1);
   }
 } else {

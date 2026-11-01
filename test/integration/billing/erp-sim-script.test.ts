@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPool, startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  createPool,
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 import {
   advanceAndDrain,
   begin,
@@ -62,7 +66,10 @@ describe('normal, lento e indisponível', () => {
 
   it('ORD-21 slow acima do timeout: a camada anticorrupção desiste no timeout e a criação é ambígua', async () => {
     const harness = await newScenario();
-    harness.sim.script.enqueue({ mode: 'slow', delayMs: ERP_TIMEOUT_MS + 5_000 });
+    harness.sim.script.enqueue({
+      mode: 'slow',
+      delayMs: ERP_TIMEOUT_MS + 5_000,
+    });
 
     const call = await begin(harness.client.createOrder(harness.order));
     await advanceAndDrain(harness, ERP_TIMEOUT_MS);
@@ -77,9 +84,15 @@ describe('normal, lento e indisponível', () => {
 
   it('ORD-21 status 404 com o corpo order_not_found na criação é config_error, sem fatura', async () => {
     const { client, sim, order, reference } = await newScenario();
-    sim.script.enqueue({ mode: 'status', status: 404, body: { code: 'order_not_found' } }, { op: 'createOrder' });
+    sim.script.enqueue(
+      { mode: 'status', status: 404, body: { code: 'order_not_found' } },
+      { op: 'createOrder' },
+    );
 
-    expect(await client.createOrder(order)).toEqual({ kind: 'config_error', status: 404 });
+    expect(await client.createOrder(order)).toEqual({
+      kind: 'config_error',
+      status: 404,
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
@@ -91,7 +104,9 @@ describe('normal, lento e indisponível', () => {
       await seedErpProduct(database.pool, { sku });
       harness.sim.script.enqueue({ mode: 'slow', delayMs: 5_000 });
 
-      const call = await begin(harness.client.createOrder(orderFor(uniqueName('pedido-lento'), sku)));
+      const call = await begin(
+        harness.client.createOrder(orderFor(uniqueName('pedido-lento'), sku)),
+      );
 
       expect(call.settled).toBe(false);
       expect(pool.totalCount - pool.idleCount).toBe(0);
@@ -107,7 +122,9 @@ describe('normal, lento e indisponível', () => {
     const { client, sim, order, reference } = await newScenario();
     sim.script.enqueue({ mode: 'unavailable' });
 
-    expect(await client.createOrder(order)).toMatchObject({ kind: 'transient' });
+    expect(await client.createOrder(order)).toMatchObject({
+      kind: 'transient',
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
@@ -126,62 +143,107 @@ describe('reject e status', () => {
     const { client, sim, order, reference } = await newScenario();
     sim.script.enqueue({ mode: 'reject' });
 
-    expect(await client.createOrder(order)).toEqual({ kind: 'permanent', reason: 'rejected' });
+    expect(await client.createOrder(order)).toEqual({
+      kind: 'permanent',
+      reason: 'rejected',
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
   it.each([
-    { status: 400, expected: { kind: 'config_error', status: 400 }, id: 'ORD-10' },
-    { status: 401, expected: { kind: 'config_error', status: 401 }, id: 'ORD-10' },
-    { status: 403, expected: { kind: 'config_error', status: 403 }, id: 'ORD-10' },
-    { status: 404, expected: { kind: 'config_error', status: 404 }, id: 'ORD-21' },
+    {
+      status: 400,
+      expected: { kind: 'config_error', status: 400 },
+      id: 'ORD-10',
+    },
+    {
+      status: 401,
+      expected: { kind: 'config_error', status: 401 },
+      id: 'ORD-10',
+    },
+    {
+      status: 403,
+      expected: { kind: 'config_error', status: 403 },
+      id: 'ORD-10',
+    },
+    {
+      status: 404,
+      expected: { kind: 'config_error', status: 404 },
+      id: 'ORD-21',
+    },
     { status: 429, expected: { kind: 'transient' }, id: 'ORD-21' },
     { status: 503, expected: { kind: 'transient' }, id: 'ORD-21' },
     { status: 500, expected: { kind: 'ambiguous' }, id: 'ORD-21' },
     { status: 504, expected: { kind: 'ambiguous' }, id: 'ORD-21' },
-  ])('$id status $status na criação é classificado e não processa: nenhuma fatura', async ({ status, expected }) => {
-    const { client, sim, order, reference } = await newScenario();
-    sim.script.enqueue({ mode: 'status', status });
+  ])(
+    '$id status $status na criação é classificado e não processa: nenhuma fatura',
+    async ({ status, expected }) => {
+      const { client, sim, order, reference } = await newScenario();
+      sim.script.enqueue({ mode: 'status', status });
 
-    expect(await client.createOrder(order)).toMatchObject(expected);
-    expect(await countInvoices(database.pool, reference)).toBe(0);
-  });
+      expect(await client.createOrder(order)).toMatchObject(expected);
+      expect(await countInvoices(database.pool, reference)).toBe(0);
+    },
+  );
 
-  it.each([400, 401, 403])('ORD-10 status %i na consulta é config_error e nunca not_found', async (status) => {
-    const { client, sim, reference } = await newScenario();
-    sim.script.enqueue({ mode: 'status', status });
+  it.each([400, 401, 403])(
+    'ORD-10 status %i na consulta é config_error e nunca not_found',
+    async (status) => {
+      const { client, sim, reference } = await newScenario();
+      sim.script.enqueue({ mode: 'status', status });
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'config_error', status });
-  });
+      expect(await client.findOrderByReference(reference)).toEqual({
+        kind: 'config_error',
+        status,
+      });
+    },
+  );
 
   it('ORD-09 status 404 sem corpo na consulta é config_error, e quem decide não cria fatura', async () => {
     const { client, sim, reference } = await newScenario();
     sim.script.enqueue({ mode: 'status', status: 404 });
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'config_error', status: 404 });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'config_error',
+      status: 404,
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
   it('ORD-09 status 404 com o corpo order_not_found na consulta é not_found', async () => {
     const { client, sim, reference } = await newScenario();
-    sim.script.enqueue({ mode: 'status', status: 404, body: { code: 'order_not_found' } });
+    sim.script.enqueue({
+      mode: 'status',
+      status: 404,
+      body: { code: 'order_not_found' },
+    });
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'not_found' });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'not_found',
+    });
   });
 
-  it.each([429, 500, 503, 504])('ORD-09 status %i na consulta é transitório, nunca not_found', async (status) => {
-    const { client, sim, reference } = await newScenario();
-    sim.script.enqueue({ mode: 'status', status });
+  it.each([429, 500, 503, 504])(
+    'ORD-09 status %i na consulta é transitório, nunca not_found',
+    async (status) => {
+      const { client, sim, reference } = await newScenario();
+      sim.script.enqueue({ mode: 'status', status });
 
-    expect((await client.findOrderByReference(reference)).kind).toBe('transient');
-  });
+      expect((await client.findOrderByReference(reference)).kind).toBe(
+        'transient',
+      );
+    },
+  );
 
   it('ORD-21 status 401 no catálogo é config_error, e 503 é transitório', async () => {
     const { client, sim } = await newScenario();
     sim.script.enqueue({ mode: 'status', status: 401 });
     sim.script.enqueue({ mode: 'status', status: 503 });
 
-    expect(await client.listCatalog(1)).toEqual({ kind: 'config_error', status: 401 });
+    expect(await client.listCatalog(1)).toEqual({
+      kind: 'config_error',
+      status: 401,
+    });
     expect((await client.listCatalog(1)).kind).toBe('transient');
   });
 });
@@ -190,22 +252,27 @@ describe('invoice_no_response: o ERP fatura e não responde', () => {
   it.each([
     { withoutH1b: false, label: 'com a H1b' },
     { withoutH1b: true, label: 'sem a H1b' },
-  ])('ORD-03 $label: fatura, a chamada estoura o timeout ambígua e a consulta acha a única fatura', async ({ withoutH1b }) => {
-    const harness = await newScenario({ withoutH1b });
-    harness.sim.script.enqueue({ mode: 'invoice_no_response' });
+  ])(
+    'ORD-03 $label: fatura, a chamada estoura o timeout ambígua e a consulta acha a única fatura',
+    async ({ withoutH1b }) => {
+      const harness = await newScenario({ withoutH1b });
+      harness.sim.script.enqueue({ mode: 'invoice_no_response' });
 
-    const call = await begin(harness.client.createOrder(harness.order));
-    await harness.sim.script.drain();
-    expect(call.settled).toBe(false);
-    expect(await countInvoices(database.pool, harness.reference)).toBe(1);
+      const call = await begin(harness.client.createOrder(harness.order));
+      await harness.sim.script.drain();
+      expect(call.settled).toBe(false);
+      expect(await countInvoices(database.pool, harness.reference)).toBe(1);
 
-    await advanceAndDrain(harness, ERP_TIMEOUT_MS);
+      await advanceAndDrain(harness, ERP_TIMEOUT_MS);
 
-    expect(await call.result).toMatchObject({ kind: 'ambiguous' });
-    const found = await harness.client.findOrderByReference(harness.reference);
-    expect(found.kind).toBe('found');
-    expect(await countInvoices(database.pool, harness.reference)).toBe(1);
-  });
+      expect(await call.result).toMatchObject({ kind: 'ambiguous' });
+      const found = await harness.client.findOrderByReference(
+        harness.reference,
+      );
+      expect(found.kind).toBe('found');
+      expect(await countInvoices(database.pool, harness.reference)).toBe(1);
+    },
+  );
 });
 
 describe('invoice_after: a fatura sai depois da chamada, mesmo abortada', () => {
@@ -228,22 +295,37 @@ describe('invoice_after: a fatura sai depois da chamada, mesmo abortada', () => 
 
   it('ORD-04 dentro da H4: no atraso mínimo de 45 s a consulta já acha a única fatura, e nada mais é criado', async () => {
     const harness = await newScenario({ withoutH1b: true });
-    harness.sim.script.enqueue({ mode: 'invoice_after', delayMs: H4_LIMIT_MS - 10_000 });
+    harness.sim.script.enqueue({
+      mode: 'invoice_after',
+      delayMs: H4_LIMIT_MS - 10_000,
+    });
 
     const call = await begin(harness.client.createOrder(harness.order));
     await advanceAndDrain(harness, ERP_TIMEOUT_MS);
     await call.result;
-    expect((await harness.client.findOrderByReference(harness.reference)).kind).toBe('not_found');
+    expect(
+      (await harness.client.findOrderByReference(harness.reference)).kind,
+    ).toBe('not_found');
 
     await advanceAndDrain(harness, MIN_RETRY_DELAY_MS - ERP_TIMEOUT_MS);
 
-    expect((await harness.client.findOrderByReference(harness.reference)).kind).toBe('found');
+    expect(
+      (await harness.client.findOrderByReference(harness.reference)).kind,
+    ).toBe('found');
     expect(await countInvoices(database.pool, harness.reference)).toBe(1);
   });
 
   it.each([
-    { withoutH1b: false, invoices: 1, label: 'com a H1b a criação do worker não duplica' },
-    { withoutH1b: true, invoices: 2, label: 'sem a H1b a fatura duplicada que o README declara' },
+    {
+      withoutH1b: false,
+      invoices: 1,
+      label: 'com a H1b a criação do worker não duplica',
+    },
+    {
+      withoutH1b: true,
+      invoices: 2,
+      label: 'sem a H1b a fatura duplicada que o README declara',
+    },
   ])(
     'ORD-06 acima da H4 (60 s): a consulta aos 45 s não acha, o worker cria, e a fatura atrasada chega aos 60 s: $label ($invoices fatura(s))',
     async ({ withoutH1b, invoices }) => {
@@ -255,7 +337,9 @@ describe('invoice_after: a fatura sai depois da chamada, mesmo abortada', () => 
       expect(await call.result).toMatchObject({ kind: 'ambiguous' });
 
       await advanceAndDrain(harness, MIN_RETRY_DELAY_MS - ERP_TIMEOUT_MS);
-      expect(await harness.client.findOrderByReference(harness.reference)).toEqual({ kind: 'not_found' });
+      expect(
+        await harness.client.findOrderByReference(harness.reference),
+      ).toEqual({ kind: 'not_found' });
       expect(await countInvoices(database.pool, harness.reference)).toBe(0);
 
       // O worker, com a consulta dizendo "não existe", cria; o roteiro já foi consumido (vale a normal).
@@ -264,7 +348,9 @@ describe('invoice_after: a fatura sai depois da chamada, mesmo abortada', () => 
 
       await advanceAndDrain(harness, 60_000 - MIN_RETRY_DELAY_MS);
 
-      expect(await countInvoices(database.pool, harness.reference)).toBe(invoices);
+      expect(await countInvoices(database.pool, harness.reference)).toBe(
+        invoices,
+      );
     },
   );
 });
@@ -272,7 +358,10 @@ describe('invoice_after: a fatura sai depois da chamada, mesmo abortada', () => 
 describe('fast_502_then_invoice: erro rápido e fatura depois', () => {
   it('ORD-05 responde 502 na hora (ambígua, sem avançar o relógio) e grava a fatura no atraso', async () => {
     const harness = await newScenario({ withoutH1b: true });
-    harness.sim.script.enqueue({ mode: 'fast_502_then_invoice', delayMs: 20_000 });
+    harness.sim.script.enqueue({
+      mode: 'fast_502_then_invoice',
+      delayMs: 20_000,
+    });
 
     const call = await begin(harness.client.createOrder(harness.order));
 
@@ -289,12 +378,17 @@ describe('fast_502_then_invoice: erro rápido e fatura depois', () => {
 
   it('ORD-05 depois do atraso mínimo de 45 s a consulta acha a única fatura e o worker não cria outra', async () => {
     const harness = await newScenario({ withoutH1b: true });
-    harness.sim.script.enqueue({ mode: 'fast_502_then_invoice', delayMs: 20_000 });
+    harness.sim.script.enqueue({
+      mode: 'fast_502_then_invoice',
+      delayMs: 20_000,
+    });
     await harness.client.createOrder(harness.order);
 
     await advanceAndDrain(harness, MIN_RETRY_DELAY_MS);
 
-    expect((await harness.client.findOrderByReference(harness.reference)).kind).toBe('found');
+    expect(
+      (await harness.client.findOrderByReference(harness.reference)).kind,
+    ).toBe('found');
     expect(await countInvoices(database.pool, harness.reference)).toBe(1);
   });
 });
@@ -313,7 +407,9 @@ describe('hang: nunca responde nem fatura', () => {
 
     await advanceAndDrain(harness, H4_LIMIT_MS * 10);
     expect(await countInvoices(database.pool, harness.reference)).toBe(0);
-    expect(await harness.client.findOrderByReference(harness.reference)).toEqual({ kind: 'not_found' });
+    expect(
+      await harness.client.findOrderByReference(harness.reference),
+    ).toEqual({ kind: 'not_found' });
   });
 });
 
@@ -345,16 +441,23 @@ describe('fila do roteiro', () => {
     // A criação não casa: não consome o comportamento e responde como no normal.
     expect((await client.createOrder(order)).kind).toBe('ok');
     expect((await client.listCatalog(1)).kind).toBe('ok');
-    expect((await client.findOrderByReference(reference)).kind).toBe('transient');
+    expect((await client.findOrderByReference(reference)).kind).toBe(
+      'transient',
+    );
     expect((await client.findOrderByReference(reference)).kind).toBe('found');
   });
 
   it('ORD-21 o comportamento com reference só casa com essa referência', async () => {
     const harness = await newScenario();
     const otherReference = uniqueName('pedido-roteiro-outro');
-    harness.sim.script.enqueue({ mode: 'reject' }, { op: 'createOrder', reference: harness.reference });
+    harness.sim.script.enqueue(
+      { mode: 'reject' },
+      { op: 'createOrder', reference: harness.reference },
+    );
 
-    const other = await harness.client.createOrder(orderFor(otherReference, harness.sku));
+    const other = await harness.client.createOrder(
+      orderFor(otherReference, harness.sku),
+    );
     const target = await harness.client.createOrder(harness.order);
 
     expect(other.kind).toBe('ok');
@@ -365,11 +468,20 @@ describe('fila do roteiro', () => {
 
   it('ORD-21 o comportamento com reference também casa na consulta', async () => {
     const harness = await newScenario();
-    harness.sim.script.enqueue({ mode: 'status', status: 401 }, { reference: harness.reference });
+    harness.sim.script.enqueue(
+      { mode: 'status', status: 401 },
+      { reference: harness.reference },
+    );
 
-    expect(await harness.client.findOrderByReference(uniqueName('pedido-outra-ref'))).toEqual({ kind: 'not_found' });
-    expect(await harness.client.findOrderByReference(harness.reference)).toEqual({ kind: 'config_error', status: 401 });
-    expect(await harness.client.findOrderByReference(harness.reference)).toEqual({ kind: 'not_found' });
+    expect(
+      await harness.client.findOrderByReference(uniqueName('pedido-outra-ref')),
+    ).toEqual({ kind: 'not_found' });
+    expect(
+      await harness.client.findOrderByReference(harness.reference),
+    ).toEqual({ kind: 'config_error', status: 401 });
+    expect(
+      await harness.client.findOrderByReference(harness.reference),
+    ).toEqual({ kind: 'not_found' });
   });
 
   it('ORD-21 o padrão do setDefault vale quando a fila não casa, sem ser consumido', async () => {
@@ -380,7 +492,10 @@ describe('fila do roteiro', () => {
     expect((await client.createOrder(order)).kind).toBe('transient');
 
     sim.script.enqueue({ mode: 'status', status: 400 });
-    expect(await client.createOrder(order)).toEqual({ kind: 'config_error', status: 400 });
+    expect(await client.createOrder(order)).toEqual({
+      kind: 'config_error',
+      status: 400,
+    });
     expect((await client.createOrder(order)).kind).toBe('transient');
 
     sim.script.setDefault({ mode: 'normal' });

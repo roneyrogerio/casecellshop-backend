@@ -2,19 +2,29 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
-import { isolatedEnv, makeScriptsSandbox, runScript, setFakeCredential } from '../test/helpers/identity-sandbox.ts';
+import {
+  isolatedEnv,
+  makeScriptsSandbox,
+  runScript,
+  setFakeCredential,
+} from '../test/helpers/identity-sandbox.ts';
 
 interface HeadersModule {
   GITHUB_TOOLS: readonly string[];
   buildHeaders(token: string): Record<string, string>;
-  headersFor(env: { remote: boolean }, token: string | undefined): Record<string, string> | null;
+  headersFor(
+    env: { remote: boolean },
+    token: string | undefined,
+  ): Record<string, string> | null;
 }
 
 let mod: HeadersModule;
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
-  mod = (await import(pathToFileURL(join(import.meta.dirname, 'github-mcp-headers.ts')).href)) as HeadersModule;
+  mod = (await import(
+    pathToFileURL(join(import.meta.dirname, 'github-mcp-headers.ts')).href
+  )) as HeadersModule;
 });
 
 const EXPECTED_TOOLS = [
@@ -32,7 +42,9 @@ const EXPECTED_TOOLS = [
 describe('AI-08 cabeçalhos do MCP do GitHub (headersHelper)', () => {
   it('AI-08 a lista fechada tem exatamente as nove ferramentas do fluxo, sem o prefixo mcp__github__', () => {
     expect([...mod.GITHUB_TOOLS].sort()).toEqual([...EXPECTED_TOOLS].sort());
-    expect(mod.GITHUB_TOOLS.some((tool) => tool.startsWith('mcp__'))).toBe(false);
+    expect(mod.GITHUB_TOOLS.some((tool) => tool.startsWith('mcp__'))).toBe(
+      false,
+    );
   });
 
   it.each([
@@ -77,7 +89,9 @@ describe('AI-08 headersFor decide o que o headersHelper imprime', () => {
   });
 
   it('AI-08 na máquina, com token, devolve buildHeaders(token)', () => {
-    expect(mod.headersFor({ remote: false }, 'tok-123')).toEqual(mod.buildHeaders('tok-123'));
+    expect(mod.headersFor({ remote: false }, 'tok-123')).toEqual(
+      mod.buildHeaders('tok-123'),
+    );
   });
 
   it('AI-08 na máquina, sem token, devolve null: o CLI falha sem imprimir cabeçalho', () => {
@@ -131,7 +145,9 @@ describe('AI-08 o headersHelper (CLI) age como a identidade configurada no clone
   it('AI-08 na nuvem devolve {} mesmo sem identidade', () => {
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'github-mcp-headers.ts', [], { env: isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' }) });
+    const result = runScript(dir, 'github-mcp-headers.ts', [], {
+      env: isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' }),
+    });
 
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({});

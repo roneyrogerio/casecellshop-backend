@@ -17,7 +17,9 @@ interface Settings {
   hooks?: Record<string, HookEntry[]>;
 }
 
-const settings = JSON.parse(readFileSync(join(import.meta.dirname, 'settings.json'), 'utf8')) as Settings;
+const settings = JSON.parse(
+  readFileSync(join(import.meta.dirname, 'settings.json'), 'utf8'),
+) as Settings;
 
 const GITHUB_TOOLS = [
   'get_me',
@@ -32,7 +34,9 @@ const GITHUB_TOOLS = [
 ].map((name) => `mcp__github__${name}`);
 
 function commandsOf(entries: HookEntry[]): string[] {
-  return entries.flatMap((entry) => entry.hooks.map((hook) => hook.command ?? ''));
+  return entries.flatMap((entry) =>
+    entry.hooks.map((hook) => hook.command ?? ''),
+  );
 }
 
 // O matcher do Claude Code é uma regex ancorada sobre o nome da ferramenta.
@@ -41,12 +45,17 @@ function matches(matcher: string | undefined, toolName: string): boolean {
 }
 
 describe('AI-06 permissões do .claude/settings.json', () => {
-  it.each(['Bash(git commit *)', 'Bash(git push *)', ...GITHUB_TOOLS])('AI-06 libera %s', (rule) => {
-    expect(settings.permissions.allow ?? []).toContain(rule);
-  });
+  it.each(['Bash(git commit *)', 'Bash(git push *)', ...GITHUB_TOOLS])(
+    'AI-06 libera %s',
+    (rule) => {
+      expect(settings.permissions.allow ?? []).toContain(rule);
+    },
+  );
 
   it('AI-06 libera exatamente as nove ferramentas do GitHub, sem nenhuma outra mcp__github__', () => {
-    const allowed = (settings.permissions.allow ?? []).filter((rule) => rule.startsWith('mcp__github__'));
+    const allowed = (settings.permissions.allow ?? []).filter((rule) =>
+      rule.startsWith('mcp__github__'),
+    );
 
     expect([...allowed].sort()).toEqual([...GITHUB_TOOLS].sort());
   });
@@ -98,7 +107,9 @@ describe('AI-06 permissões do .claude/settings.json', () => {
   it('AI-06 não tem regra ask para git push, gh pr nem git commit', () => {
     const ask = settings.permissions.ask ?? [];
 
-    expect(ask.filter((rule) => /git push|gh pr|git commit/.test(rule))).toEqual([]);
+    expect(
+      ask.filter((rule) => /git push|gh pr|git commit/.test(rule)),
+    ).toEqual([]);
   });
 
   it('AI-06 desliga o modo bypassPermissions', () => {
@@ -111,11 +122,14 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     const entries = settings.hooks?.SubagentStop ?? [];
 
     const entry = entries.find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/subagent-stop.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/subagent-stop.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
-    for (const agent of ['implementer', 'test-writer', 'reviewer']) expect(matches(entry?.matcher, agent)).toBe(true);
+    for (const agent of ['implementer', 'test-writer', 'reviewer'])
+      expect(matches(entry?.matcher, agent)).toBe(true);
     expect(matches(entry?.matcher, 'general-purpose')).toBe(false);
     expect(matches(entry?.matcher, 'Explore')).toBe(false);
   });
@@ -124,14 +138,17 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     const entries = settings.hooks?.SubagentStart ?? [];
 
     const entry = entries.find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/subagent-start.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/subagent-start.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
     expect(commandsOf(entry ? [entry] : [])).toContain(
       'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-start.mjs"',
     );
-    for (const agent of ['implementer', 'test-writer', 'reviewer']) expect(matches(entry?.matcher, agent)).toBe(true);
+    for (const agent of ['implementer', 'test-writer', 'reviewer'])
+      expect(matches(entry?.matcher, agent)).toBe(true);
     expect(matches(entry?.matcher, 'general-purpose')).toBe(false);
     expect(matches(entry?.matcher, 'Explore')).toBe(false);
   });
@@ -139,10 +156,14 @@ describe('AI-06 hooks do .claude/settings.json', () => {
   // Controle: o retrato e a parada cobrem os mesmos três papéis, senão um papel teria parada sem retrato.
   it('AI-06 o SubagentStart e o SubagentStop cobrem exatamente os mesmos agentes', () => {
     const startEntry = (settings.hooks?.SubagentStart ?? []).find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('subagent-start.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('subagent-start.mjs'),
+      ),
     );
     const stopEntry = (settings.hooks?.SubagentStop ?? []).find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('subagent-stop.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('subagent-stop.mjs'),
+      ),
     );
 
     expect(startEntry?.matcher).toBeDefined();
@@ -152,12 +173,16 @@ describe('AI-06 hooks do .claude/settings.json', () => {
   it('AI-06 um hook SessionStart chama o scripts/check-env.ts', () => {
     const commands = commandsOf(settings.hooks?.SessionStart ?? []);
 
-    expect(commands.some((command) => command.includes('scripts/check-env.ts'))).toBe(true);
+    expect(
+      commands.some((command) => command.includes('scripts/check-env.ts')),
+    ).toBe(true);
   });
 
   it('AI-06 o SessionStart só roda no início e na retomada da sessão (matcher startup|resume)', () => {
     const entry = (settings.hooks?.SessionStart ?? []).find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('scripts/check-env.ts')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('scripts/check-env.ts'),
+      ),
     );
 
     expect(entry?.matcher).toBe('startup|resume');
@@ -168,12 +193,16 @@ describe('AI-06 hooks do .claude/settings.json', () => {
   });
 
   it('AI-06 um hook PreToolUse com matcher Bash chama o bash-guard.mjs', () => {
-    const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) => candidate.matcher === 'Bash');
+    const entry = (settings.hooks?.PreToolUse ?? []).find(
+      (candidate) => candidate.matcher === 'Bash',
+    );
 
     expect(entry).toBeDefined();
-    expect(commandsOf(entry ? [entry] : []).some((command) => command.includes('.claude/hooks/bash-guard.mjs'))).toBe(
-      true,
-    );
+    expect(
+      commandsOf(entry ? [entry] : []).some((command) =>
+        command.includes('.claude/hooks/bash-guard.mjs'),
+      ),
+    ).toBe(true);
     expect(matches(entry?.matcher, 'Bash')).toBe(true);
     expect(matches(entry?.matcher, 'Edit')).toBe(false);
   });
@@ -182,65 +211,97 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     const entries = settings.hooks?.PreToolUse ?? [];
 
     const entry = entries.find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/github-guard.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
-    expect(matches(entry?.matcher, 'mcp__github__create_pull_request')).toBe(true);
-    expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(true);
+    expect(matches(entry?.matcher, 'mcp__github__create_pull_request')).toBe(
+      true,
+    );
+    expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(
+      true,
+    );
   });
 
   it('AI-06 o matcher do github-guard cobre também o update_pull_request (AI-16)', () => {
     const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/github-guard.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
-    expect(matches(entry?.matcher, 'mcp__github__update_pull_request')).toBe(true);
-    expect(matches(entry?.matcher, 'mcp__github__create_pull_request')).toBe(true);
-    expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(true);
+    expect(matches(entry?.matcher, 'mcp__github__update_pull_request')).toBe(
+      true,
+    );
+    expect(matches(entry?.matcher, 'mcp__github__create_pull_request')).toBe(
+      true,
+    );
+    expect(matches(entry?.matcher, 'mcp__github__add_issue_comment')).toBe(
+      true,
+    );
   });
 
   // Controle negativo: o matcher é uma regex ancorada; a ferramenta de nome parecido não entra por engano.
   it('AI-06 o matcher do github-guard não cobre update_pull_request_branch nem a leitura de PR', () => {
     const entry = (settings.hooks?.PreToolUse ?? []).find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/github-guard.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
-    expect(matches(entry?.matcher, 'mcp__github__update_pull_request_branch')).toBe(false);
-    expect(matches(entry?.matcher, 'mcp__github__pull_request_read')).toBe(false);
+    expect(
+      matches(entry?.matcher, 'mcp__github__update_pull_request_branch'),
+    ).toBe(false);
+    expect(matches(entry?.matcher, 'mcp__github__pull_request_read')).toBe(
+      false,
+    );
   });
 
   it('AI-06 um hook PostToolUse cobre SubagentHandback e Skill e chama o post-tool.mjs', () => {
     const entries = settings.hooks?.PostToolUse ?? [];
 
     const entry = entries.find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/post-tool.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/post-tool.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
-    expect(commandsOf(entry ? [entry] : [])).toContain('node "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool.mjs"');
+    expect(commandsOf(entry ? [entry] : [])).toContain(
+      'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool.mjs"',
+    );
     expect(matches(entry?.matcher, 'SubagentHandback')).toBe(true);
     expect(matches(entry?.matcher, 'Skill')).toBe(true);
   });
 
-  it.each(['Bash', 'Edit', 'Read', 'Write', 'mcp__github__add_issue_comment', 'SkillX'])(
-    'AI-06 o matcher do PostToolUse não cobre %s',
-    (toolName) => {
-      const entry = (settings.hooks?.PostToolUse ?? []).find((candidate) =>
-        commandsOf([candidate]).some((command) => command.includes('.claude/hooks/post-tool.mjs')),
-      );
+  it.each([
+    'Bash',
+    'Edit',
+    'Read',
+    'Write',
+    'mcp__github__add_issue_comment',
+    'SkillX',
+  ])('AI-06 o matcher do PostToolUse não cobre %s', (toolName) => {
+    const entry = (settings.hooks?.PostToolUse ?? []).find((candidate) =>
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/post-tool.mjs'),
+      ),
+    );
 
-      expect(entry).toBeDefined();
-      expect(matches(entry?.matcher, toolName)).toBe(false);
-    },
-  );
+    expect(entry).toBeDefined();
+    expect(matches(entry?.matcher, toolName)).toBe(false);
+  });
 
   it('AI-06 o matcher do github-guard não cobre uma ferramenta sem relação', () => {
     const entries = settings.hooks?.PreToolUse ?? [];
     const entry = entries.find((candidate) =>
-      commandsOf([candidate]).some((command) => command.includes('.claude/hooks/github-guard.mjs')),
+      commandsOf([candidate]).some((command) =>
+        command.includes('.claude/hooks/github-guard.mjs'),
+      ),
     );
 
     expect(entry).toBeDefined();
@@ -250,12 +311,16 @@ describe('AI-06 hooks do .claude/settings.json', () => {
   it('AI-06 o PreToolUse de Edit|Write|NotebookEdit continua chamando o path-guard.mjs', () => {
     const entries = settings.hooks?.PreToolUse ?? [];
 
-    const entry = entries.find((candidate) => candidate.matcher === 'Edit|Write|NotebookEdit');
+    const entry = entries.find(
+      (candidate) => candidate.matcher === 'Edit|Write|NotebookEdit',
+    );
 
     expect(entry).toBeDefined();
-    expect(commandsOf(entry ? [entry] : []).some((command) => command.includes('.claude/hooks/path-guard.mjs'))).toBe(
-      true,
-    );
+    expect(
+      commandsOf(entry ? [entry] : []).some((command) =>
+        command.includes('.claude/hooks/path-guard.mjs'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -263,7 +328,9 @@ describe('AI-06 hooks do .claude/settings.json', () => {
 // bloqueio. A conferência devolve os comandos dos hooks de PreToolUse sem `"onFailure": "block"`.
 function preToolUseWithoutBlock(entries: HookEntry[] | undefined): string[] {
   return (entries ?? []).flatMap((entry) =>
-    entry.hooks.filter((hook) => hook.onFailure !== 'block').map((hook) => hook.command ?? '(sem comando)'),
+    entry.hooks
+      .filter((hook) => hook.onFailure !== 'block')
+      .map((hook) => hook.command ?? '(sem comando)'),
   );
 }
 
@@ -278,7 +345,11 @@ describe('AI-30 toda guarda de ferramenta bloqueia a ferramenta quando falha', (
   it('AI-30 as três guardas (caminho, GitHub e Bash) estão entre os hooks de PreToolUse conferidos', () => {
     const commands = commandsOf(settings.hooks?.PreToolUse ?? []);
 
-    for (const guard of ['path-guard.mjs', 'github-guard.mjs', 'bash-guard.mjs']) {
+    for (const guard of [
+      'path-guard.mjs',
+      'github-guard.mjs',
+      'bash-guard.mjs',
+    ]) {
       expect(commands.some((command) => command.includes(guard))).toBe(true);
     }
   });
@@ -287,8 +358,16 @@ describe('AI-30 toda guarda de ferramenta bloqueia a ferramenta quando falha', (
   it('AI-30 a conferência reprova um hook sem onFailure e um com outro valor', () => {
     const entries: HookEntry[] = [
       { matcher: 'Bash', hooks: [{ type: 'command', command: 'sem-campo' }] },
-      { matcher: 'Edit', hooks: [{ type: 'command', command: 'continua', onFailure: 'continue' }] },
-      { matcher: 'Write', hooks: [{ type: 'command', command: 'ok', onFailure: 'block' }] },
+      {
+        matcher: 'Edit',
+        hooks: [
+          { type: 'command', command: 'continua', onFailure: 'continue' },
+        ],
+      },
+      {
+        matcher: 'Write',
+        hooks: [{ type: 'command', command: 'ok', onFailure: 'block' }],
+      },
     ];
 
     expect(preToolUseWithoutBlock(entries)).toEqual(['sem-campo', 'continua']);
@@ -320,12 +399,19 @@ describe('AI-21 estilo de resposta do .claude/settings.json', () => {
     expect(isConciseOutputStyle(undefined)).toBe(false);
   });
 
-  it.each(['CONCISE', ' Concise', 'Concise ', 'Concisely', '', 'Default', null, 1, ['Concise']])(
-    'AI-21 a conferência reprova o valor %j',
-    (value) => {
-      expect(isConciseOutputStyle(value)).toBe(false);
-    },
-  );
+  it.each([
+    'CONCISE',
+    ' Concise',
+    'Concise ',
+    'Concisely',
+    '',
+    'Default',
+    null,
+    1,
+    ['Concise'],
+  ])('AI-21 a conferência reprova o valor %j', (value) => {
+    expect(isConciseOutputStyle(value)).toBe(false);
+  });
 });
 
 // O estilo de quem prefere outro mora no .claude/settings.local.json, que tem precedência e não é versionado.
@@ -336,11 +422,16 @@ function gitignoreListsFile(gitignore: string, file: string): boolean {
   return gitignore
     .split('\n')
     .map((line) => line.trim())
-    .some((line) => line === file || line === `/${file}` || line === `**/${file}`);
+    .some(
+      (line) => line === file || line === `/${file}` || line === `**/${file}`,
+    );
 }
 
 describe('AI-21 o .claude/settings.local.json não é versionado', () => {
-  const gitignore = readFileSync(join(import.meta.dirname, '..', '.gitignore'), 'utf8');
+  const gitignore = readFileSync(
+    join(import.meta.dirname, '..', '.gitignore'),
+    'utf8',
+  );
 
   it('AI-21 o .gitignore lista o .claude/settings.local.json', () => {
     expect(gitignoreListsFile(gitignore, SETTINGS_LOCAL)).toBe(true);
@@ -360,8 +451,14 @@ describe('AI-21 o .claude/settings.local.json não é versionado', () => {
 
   it.each([
     ['a linha sozinha', '.claude/settings.local.json\n'],
-    ['a linha ancorada na raiz', 'node_modules/\n/.claude/settings.local.json\n'],
-    ['a linha entre outras, com espaço no fim', '.env\n.claude/settings.local.json  \n.DS_Store\n'],
+    [
+      'a linha ancorada na raiz',
+      'node_modules/\n/.claude/settings.local.json\n',
+    ],
+    [
+      'a linha entre outras, com espaço no fim',
+      '.env\n.claude/settings.local.json  \n.DS_Store\n',
+    ],
   ])('AI-21 a conferência aceita %s', (_label, text) => {
     expect(gitignoreListsFile(text, SETTINGS_LOCAL)).toBe(true);
   });

@@ -6,7 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 interface VitestReport {
-  testResults: Array<{ assertionResults: Array<{ title: string; status: string }> }>;
+  testResults: Array<{
+    assertionResults: Array<{ title: string; status: string }>;
+  }>;
 }
 
 let criteriaIds: (specText: string) => string[];
@@ -14,7 +16,14 @@ let testIdOf: (title: string) => string | null;
 let buildReport: (specText: string, report: VitestReport) => string;
 
 const script = join(import.meta.dirname, 'criteria-report.ts');
-const realSpecPath = join(import.meta.dirname, '..', '.specs', 'features', 'casecellshop', 'spec.md');
+const realSpecPath = join(
+  import.meta.dirname,
+  '..',
+  '.specs',
+  'features',
+  'casecellshop',
+  'spec.md',
+);
 
 // Import dinâmico: o teste falha pela asserção, e não por import, enquanto o módulo é só um esboço.
 beforeAll(async () => {
@@ -51,7 +60,9 @@ const SPEC = [
 ].join('\n');
 
 const t = (title: string, status = 'passed') => ({ title, status });
-const report = (...files: Array<Array<{ title: string; status: string }>>): VitestReport => ({
+const report = (
+  ...files: Array<Array<{ title: string; status: string }>>
+): VitestReport => ({
   testResults: files.map((assertionResults) => ({ assertionResults })),
 });
 
@@ -60,19 +71,32 @@ function hasId(line: string, id: string): boolean {
   return new RegExp(`(?<![A-Z0-9-])${id}(?![A-Z0-9-])`).test(line);
 }
 function tableRows(markdown: string, id: string): string[] {
-  return markdown.split('\n').filter((line) => line.trimStart().startsWith('|') && hasId(line, id));
+  return markdown
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('|') && hasId(line, id));
 }
 function nonTableLines(markdown: string): string[] {
-  return markdown.split('\n').filter((line) => !line.trimStart().startsWith('|'));
+  return markdown
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('|'));
 }
 // Os números da linha, sem o ID: passou e falhou, nessa ordem.
 function countsOf(row: string, id: string): string[] {
-  return row.replace(new RegExp(`(?<![A-Z0-9-])${id}(?![A-Z0-9-])`), '').match(/\d+/g) ?? [];
+  return (
+    row
+      .replace(new RegExp(`(?<![A-Z0-9-])${id}(?![A-Z0-9-])`), '')
+      .match(/\d+/g) ?? []
+  );
 }
 
 describe('AI-18 criteriaIds lê os IDs dos itens do spec.md', () => {
   it('AI-18 devolve os IDs dos itens na ordem do spec, sem repetir', () => {
-    expect(criteriaIds(SPEC)).toEqual(['AAA-01', 'BB-02', 'DOC-DIA-03', 'AAA-010']);
+    expect(criteriaIds(SPEC)).toEqual([
+      'AAA-01',
+      'BB-02',
+      'DOC-DIA-03',
+      'AAA-010',
+    ]);
   });
 
   it('AI-18 item aninhado e negrito que não é ID não contam (controle negativo)', () => {
@@ -117,12 +141,17 @@ describe('AI-18 testIdOf devolve o ID que abre o nome do teste', () => {
     expect(testIdOf(title)).toBe(id);
   });
 
-  it.each([['controle: AI-15'], ['ai-15 x'], ['AI-15x'], ['AI-15-x y'], [' AI-15 x'], ['sem ID nenhum'], ['']])(
-    'AI-18 o nome %j não começa por um ID (controle negativo)',
-    (title) => {
-      expect(testIdOf(title)).toBeNull();
-    },
-  );
+  it.each([
+    ['controle: AI-15'],
+    ['ai-15 x'],
+    ['AI-15x'],
+    ['AI-15-x y'],
+    [' AI-15 x'],
+    ['sem ID nenhum'],
+    [''],
+  ])('AI-18 o nome %j não começa por um ID (controle negativo)', (title) => {
+    expect(testIdOf(title)).toBeNull();
+  });
 });
 
 describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do spec.md', () => {
@@ -131,7 +160,11 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
       SPEC,
       report(
         [t('BB-02 um'), t('BB-02 dois'), t('BB-02 três', 'failed')],
-        [t('BB-02 quatro'), t('AAA-01 só falha', 'failed'), t('AAA-01 outra falha', 'failed')],
+        [
+          t('BB-02 quatro'),
+          t('AAA-01 só falha', 'failed'),
+          t('AAA-01 outra falha', 'failed'),
+        ],
       ),
     );
 
@@ -146,7 +179,12 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
   it('AI-18 teste skipped e todo não contam como passou nem como falhou', () => {
     const markdown = buildReport(
       SPEC,
-      report([t('BB-02 passa'), t('BB-02 pulado', 'skipped'), t('BB-02 a fazer', 'todo'), t('BB-02 quebra', 'failed')]),
+      report([
+        t('BB-02 passa'),
+        t('BB-02 pulado', 'skipped'),
+        t('BB-02 a fazer', 'todo'),
+        t('BB-02 quebra', 'failed'),
+      ]),
     );
 
     const rows = tableRows(markdown, 'BB-02');
@@ -184,13 +222,20 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
       expect(rows[0]).toMatch(/sem teste/i);
     }
     const lines = markdown.split('\n');
-    const positions = order.map((id) => lines.findIndex((line) => line.trimStart().startsWith('|') && hasId(line, id)));
+    const positions = order.map((id) =>
+      lines.findIndex(
+        (line) => line.trimStart().startsWith('|') && hasId(line, id),
+      ),
+    );
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(positions.every((position) => position >= 0)).toBe(true);
   });
 
   it('AI-18 ID no meio do nome não conta para o critério (controle negativo)', () => {
-    const markdown = buildReport(SPEC, report([t('controle: BB-02 no meio'), t('o teste do BB-02', 'failed')]));
+    const markdown = buildReport(
+      SPEC,
+      report([t('controle: BB-02 no meio'), t('o teste do BB-02', 'failed')]),
+    );
 
     const rows = tableRows(markdown, 'BB-02');
     expect(rows).toHaveLength(1);
@@ -198,7 +243,14 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
   });
 
   it('AI-18 um ID que é prefixo de outro não rouba os testes dele: AAA-010 não conta para AAA-01 (controle negativo)', () => {
-    const markdown = buildReport(SPEC, report([t('AAA-010 longo'), t('AAA-010 longo dois'), t('AAA-01x colado')]));
+    const markdown = buildReport(
+      SPEC,
+      report([
+        t('AAA-010 longo'),
+        t('AAA-010 longo dois'),
+        t('AAA-01x colado'),
+      ]),
+    );
 
     const short = tableRows(markdown, 'AAA-01');
     const long = tableRows(markdown, 'AAA-010');
@@ -209,7 +261,10 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
   });
 
   it('AI-18 ID composto com duas partes é contado pelo ID inteiro', () => {
-    const markdown = buildReport(SPEC, report([t('DOC-DIA-03 x'), t('DOC-DIA-03 y', 'failed')]));
+    const markdown = buildReport(
+      SPEC,
+      report([t('DOC-DIA-03 x'), t('DOC-DIA-03 y', 'failed')]),
+    );
 
     const rows = tableRows(markdown, 'DOC-DIA-03');
     expect(rows).toHaveLength(1);
@@ -217,23 +272,40 @@ describe('AI-18 buildReport cruza o relatório do Vitest com os critérios do sp
   });
 
   it('AI-18 ID que não existe no spec.md vai para a lista à parte e não vira linha da tabela', () => {
-    const markdown = buildReport(SPEC, report([t('BB-02 ok'), t('XYZ-77 órfão'), t('XYZ-77 outro órfão', 'failed')]));
+    const markdown = buildReport(
+      SPEC,
+      report([
+        t('BB-02 ok'),
+        t('XYZ-77 órfão'),
+        t('XYZ-77 outro órfão', 'failed'),
+      ]),
+    );
 
     expect(tableRows(markdown, 'XYZ-77')).toEqual([]);
-    const apart = nonTableLines(markdown).filter((line) => hasId(line, 'XYZ-77'));
+    const apart = nonTableLines(markdown).filter((line) =>
+      hasId(line, 'XYZ-77'),
+    );
     expect(apart).toHaveLength(1);
   });
 
   it('AI-18 sem ID órfão a lista à parte não cita nenhum ID (controle negativo)', () => {
-    const markdown = buildReport(SPEC, report([t('BB-02 ok'), t('AAA-01 ok'), t('sem ID nenhum')]));
+    const markdown = buildReport(
+      SPEC,
+      report([t('BB-02 ok'), t('AAA-01 ok'), t('sem ID nenhum')]),
+    );
 
     const ids = ['AAA-01', 'BB-02', 'DOC-DIA-03', 'AAA-010', 'ZZ-99', 'YY-98'];
-    const cited = nonTableLines(markdown).filter((line) => ids.some((id) => hasId(line, id)));
+    const cited = nonTableLines(markdown).filter((line) =>
+      ids.some((id) => hasId(line, id)),
+    );
     expect(cited).toEqual([]);
   });
 
   it('AI-18 teste sem ID no nome não entra na tabela nem na lista à parte', () => {
-    const markdown = buildReport(SPEC, report([t('um teste qualquer sem ID', 'failed'), t('outro sem ID')]));
+    const markdown = buildReport(
+      SPEC,
+      report([t('um teste qualquer sem ID', 'failed'), t('outro sem ID')]),
+    );
 
     expect(markdown).not.toContain('um teste qualquer sem ID');
     expect(markdown).not.toContain('outro sem ID');
@@ -257,13 +329,22 @@ describe('AI-18 o processo criteria-report.ts: stdout, código de saída e stder
     writeFileSync(specFile, SPEC);
     writeFileSync(
       reportFile,
-      JSON.stringify(report([t('BB-02 passa'), t('BB-02 falha', 'failed'), t('FND-01 do spec real')])),
+      JSON.stringify(
+        report([
+          t('BB-02 passa'),
+          t('BB-02 falha', 'failed'),
+          t('FND-01 do spec real'),
+        ]),
+      ),
     );
     writeFileSync(garbageFile, '{ isto não é JSON');
   });
 
   function run(args: string[]) {
-    return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', cwd: tmp });
+    return spawnSync(process.execPath, [script, ...args], {
+      encoding: 'utf8',
+      cwd: tmp,
+    });
   }
 
   it('AI-18 imprime a tabela no stdout e sai com 0, mesmo com teste falhando no relatório', () => {

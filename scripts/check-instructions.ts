@@ -51,26 +51,42 @@ export function checkInstructions(rootDir: string): string[] {
     ...[join(rootDir, 'AGENTS.md'), join(rootDir, 'CLAUDE.md')]
       .filter((path) => existsSync(path))
       .map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
-    ...markdownIn(join(rootDir, '.claude', 'agents')).map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
-    ...markdownUnder(join(rootDir, '.claude', 'rules')).map((path) => ({ path, max: MAX_INSTRUCTION_LINES })),
-    ...skillFiles(join(rootDir, '.claude', 'skills')).map((path) => ({ path, max: MAX_SKILL_LINES })),
+    ...markdownIn(join(rootDir, '.claude', 'agents')).map((path) => ({
+      path,
+      max: MAX_INSTRUCTION_LINES,
+    })),
+    ...markdownUnder(join(rootDir, '.claude', 'rules')).map((path) => ({
+      path,
+      max: MAX_INSTRUCTION_LINES,
+    })),
+    ...skillFiles(join(rootDir, '.claude', 'skills')).map((path) => ({
+      path,
+      max: MAX_SKILL_LINES,
+    })),
   ];
 
   const violations: string[] = [];
   for (const { path, max } of limits) {
     const lines = countLines(readFileSync(path, 'utf8'));
-    if (lines > max) violations.push(`${relative(rootDir, path)} tem ${lines} linhas, acima do limite de ${max}`);
+    if (lines > max)
+      violations.push(
+        `${relative(rootDir, path)} tem ${lines} linhas, acima do limite de ${max}`,
+      );
   }
   for (const path of markdownUnder(join(rootDir, '.claude', 'rules'))) {
     const chars = readFileSync(path, 'utf8').length;
     if (chars > MAX_RULE_CHARS) {
-      violations.push(`${relative(rootDir, path)} tem ${chars} caracteres, acima do limite de ${MAX_RULE_CHARS} (o Claude Code entrega só o começo)`);
+      violations.push(
+        `${relative(rootDir, path)} tem ${chars} caracteres, acima do limite de ${MAX_RULE_CHARS} (o Claude Code entrega só o começo)`,
+      );
     }
   }
   for (const path of skillFiles(join(rootDir, '.claude', 'skills'))) {
     const bytes = statSync(path).size;
     if (bytes > MAX_SKILL_BYTES) {
-      violations.push(`${relative(rootDir, path)} tem ${bytes} bytes, acima do limite de ${MAX_SKILL_BYTES} (o que a compactação devolve ao contexto)`);
+      violations.push(
+        `${relative(rootDir, path)} tem ${bytes} bytes, acima do limite de ${MAX_SKILL_BYTES} (o que a compactação devolve ao contexto)`,
+      );
     }
   }
   return violations;

@@ -14,8 +14,14 @@ export interface MigrationFolder {
 
 // Loja antes do erp_sim; os testes do FND-11 passam pastas próprias.
 export const MIGRATION_FOLDERS: readonly MigrationFolder[] = [
-  { dir: fileURLToPath(new URL('../../migrations/store', import.meta.url)), schema: 'public' },
-  { dir: fileURLToPath(new URL('../../migrations/erp_sim', import.meta.url)), schema: 'erp_sim' },
+  {
+    dir: fileURLToPath(new URL('../../migrations/store', import.meta.url)),
+    schema: 'public',
+  },
+  {
+    dir: fileURLToPath(new URL('../../migrations/erp_sim', import.meta.url)),
+    schema: 'erp_sim',
+  },
 ];
 
 // Um arquivo ignorado (extensão errada, sem `up`) seria pulado em silêncio pelo
@@ -32,7 +38,9 @@ function createProvider(dir: string): FileMigrationProvider {
     import: async (filePath: string) => {
       const fileName = path.basename(filePath);
       if (!filePath.endsWith('.ts')) {
-        throw new Error(`migração com extensão inválida (esperado .ts): ${fileName}`);
+        throw new Error(
+          `migração com extensão inválida (esperado .ts): ${fileName}`,
+        );
       }
       const module: unknown = await import(filePath);
       if (typeof (module as { down?: unknown }).down !== 'function') {
@@ -46,9 +54,14 @@ function createProvider(dir: string): FileMigrationProvider {
 // Aplica as migrações dos dois schemas, cada um com a sua tabela de controle.
 // O Migrator espera pelo advisory lock, reprova migração fora de ordem e aplica
 // as pendentes de cada schema numa transação só.
-export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = MIGRATION_FOLDERS): Promise<void> {
+export async function migrate(
+  pool: Pool,
+  folders: readonly MigrationFolder[] = MIGRATION_FOLDERS,
+): Promise<void> {
   // Não chamamos db.destroy(): o pool pertence a quem chamou.
-  const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }) });
+  const db = new Kysely<unknown>({
+    dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }),
+  });
   for (const { dir, schema } of folders) {
     const migrator = new Migrator({
       db,
@@ -58,15 +71,23 @@ export async function migrate(pool: Pool, folders: readonly MigrationFolder[] = 
     const { error, results } = await migrator.migrateToLatest();
     // `if (error)` deixaria passar um erro falso (uma migração que lança null); o
     // resultado com status Error e a presença da chave também reprovam.
-    const failed = results?.some((result) => result.status === 'Error') ?? false;
+    const failed =
+      results?.some((result) => result.status === 'Error') ?? false;
     if (error !== undefined || failed) {
       // O erro original segue sem embrulho, para a mensagem da migração aparecer.
-      throw error instanceof Error ? error : new Error('falha ao migrar', { cause: error });
+      throw error instanceof Error
+        ? error
+        : new Error('falha ao migrar', { cause: error });
     }
   }
 }
 
-const SEED_PRODUCTS: [sku: string, name: string, priceCents: number, onHand: number][] = [
+const SEED_PRODUCTS: [
+  sku: string,
+  name: string,
+  priceCents: number,
+  onHand: number,
+][] = [
   ['CAPA-IP15-PRETA', 'Capa iPhone 15 preta', 7990, 40],
   ['CAPA-IP15-AZUL', 'Capa iPhone 15 azul', 7990, 25],
   ['CAPA-S24-TRANSP', 'Capa Galaxy S24 transparente', 5990, 60],

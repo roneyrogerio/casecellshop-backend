@@ -10,12 +10,18 @@ export interface HealthRoutes {
   handlers: RequestHandler[];
 }
 
-export function createHealthRoutes(health: HealthRepository, logger: Logger): HealthRoutes {
+export function createHealthRoutes(
+  health: HealthRepository,
+  logger: Logger,
+): HealthRoutes {
   const getHealth: RequestHandler = async (_req, res) => {
     try {
       await health.ping();
     } catch (error) {
-      logger.warn({ event: 'health_failed', err: error }, 'o banco não respondeu ao healthcheck');
+      logger.warn(
+        { event: 'health_failed', err: error },
+        'o banco não respondeu ao healthcheck',
+      );
       throw databaseUnavailableProblem();
     }
     const body: HealthStatus = { status: 'ok' };

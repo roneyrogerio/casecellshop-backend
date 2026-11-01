@@ -6,7 +6,10 @@ import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATION_FOLDERS } from '../../../src/db/migrate.ts';
-import { type MigrationContainer, startMigrationContainer } from '../../helpers/migration-database.ts';
+import {
+  type MigrationContainer,
+  startMigrationContainer,
+} from '../../helpers/migration-database.ts';
 
 // A migração que tira da outbox as colunas da fila na tabela (design.md, "Dados"; AD-021): antes de tirá-las,
 // ela marca `published_at = now()` nas linhas com `status <> 'pending'`, para o relay não publicar no SQS
@@ -25,21 +28,49 @@ afterAll(async () => {
 
 // A última migração da loja antes da que tira as colunas da fila.
 const BEFORE_DROP = '20260103000000_add_outbox_relay_columns';
-const DROPPED_COLUMNS = ['status', 'attempts', 'lease_until', 'claim_token', 'next_attempt_at', 'reconciled_at'];
-const KEPT_COLUMNS = ['order_id', 'published_at', 'first_sent_at', 'last_call_at', 'call_token', 'dead_at', 'traceparent', 'correlation_id', 'created_at'];
+const DROPPED_COLUMNS = [
+  'status',
+  'attempts',
+  'lease_until',
+  'claim_token',
+  'next_attempt_at',
+  'reconciled_at',
+];
+const KEPT_COLUMNS = [
+  'order_id',
+  'published_at',
+  'first_sent_at',
+  'last_call_at',
+  'call_token',
+  'dead_at',
+  'traceparent',
+  'correlation_id',
+  'created_at',
+];
 
 function storeMigrator(pool: pg.Pool): Migrator {
-  const folder = MIGRATION_FOLDERS.find((candidate) => candidate.schema === 'public');
-  if (!folder) throw new Error('a pasta de migrações da loja não está na lista');
+  const folder = MIGRATION_FOLDERS.find(
+    (candidate) => candidate.schema === 'public',
+  );
+  if (!folder)
+    throw new Error('a pasta de migrações da loja não está na lista');
   const db = new Kysely<object>({ dialect: new PostgresDialect({ pool }) });
   return new Migrator({
     db,
-    provider: new FileMigrationProvider({ fs, path, migrationFolder: folder.dir }),
+    provider: new FileMigrationProvider({
+      fs,
+      path,
+      migrationFolder: folder.dir,
+    }),
     migrationTableSchema: folder.schema,
   });
 }
 
-async function seedRow(pool: pg.Pool, status: string, traceparent: string | null): Promise<string> {
+async function seedRow(
+  pool: pg.Pool,
+  status: string,
+  traceparent: string | null,
+): Promise<string> {
   const orderId = randomUUID();
   await pool.query('insert into orders (id) values ($1)', [orderId]);
   await pool.query(
@@ -63,31 +94,46 @@ describe('ORD-22 a migração que tira as colunas da fila na tabela não deixa o
     const migrator = storeMigrator(pool);
     const before = await migrator.migrateTo(BEFORE_DROP);
     expect(before.error).toBeUndefined();
-    const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+    const traceparent =
+      '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
     const rows = {
       pending: await seedRow(pool, 'pending', traceparent),
       done: await seedRow(pool, 'done', traceparent),
       dead: await seedRow(pool, 'dead', traceparent),
       cancelled: await seedRow(pool, 'cancelled', null),
     };
-    expect(await columnsOfOutbox(pool)).toEqual(expect.arrayContaining(DROPPED_COLUMNS));
+    expect(await columnsOfOutbox(pool)).toEqual(
+      expect.arrayContaining(DROPPED_COLUMNS),
+    );
 
     const latest = await migrator.migrateToLatest();
 
     expect(latest.error).toBeUndefined();
-    expect(latest.results?.every((result) => result.status === 'Success')).toBe(true);
-    const published = await pool.query<{ order_id: string; published: boolean }>(
+    expect(latest.results?.every((result) => result.status === 'Success')).toBe(
+      true,
+    );
+    const published = await pool.query<{
+      order_id: string;
+      published: boolean;
+    }>(
       'select order_id, published_at is not null as published from outbox where order_id = any($1::uuid[])',
       [Object.values(rows)],
     );
-    const byOrder = new Map(published.rows.map((row) => [row.order_id, row.published]));
+    const byOrder = new Map(
+      published.rows.map((row) => [row.order_id, row.published]),
+    );
     // As encerradas, mortas e canceladas já não são mensagens a publicar; a pendente continua para o relay.
     expect(byOrder.get(rows.pending)).toBe(false);
     expect(byOrder.get(rows.done)).toBe(true);
     expect(byOrder.get(rows.dead)).toBe(true);
     expect(byOrder.get(rows.cancelled)).toBe(true);
     // O estado por pedido que o SQS não guarda segue na linha.
-    const kept = await pool.query<{ first_sent_at: Date | null; last_call_at: Date | null; traceparent: string | null; correlation_id: string }>(
+    const kept = await pool.query<{
+      first_sent_at: Date | null;
+      last_call_at: Date | null;
+      traceparent: string | null;
+      correlation_id: string;
+    }>(
       'select first_sent_at, last_call_at, traceparent, correlation_id from outbox where order_id = $1',
       [rows.dead],
     );
@@ -104,10 +150,13 @@ describe('ORD-22 a migração que tira as colunas da fila na tabela não deixa o
 
     expect(latest.error).toBeUndefined();
     const columns = await columnsOfOutbox(pool);
-    for (const dropped of DROPPED_COLUMNS) expect(columns, `a coluna ${dropped} sai`).not.toContain(dropped);
+    for (const dropped of DROPPED_COLUMNS)
+      expect(columns, `a coluna ${dropped} sai`).not.toContain(dropped);
     expect(columns).toEqual(expect.arrayContaining(KEPT_COLUMNS));
     // O índice parcial do relay (as não publicadas) continua; o da fila na tabela sai junto com as colunas.
-    const indexes = await pool.query<{ indexname: string }>("select indexname from pg_indexes where schemaname = 'public' and tablename = 'outbox'");
+    const indexes = await pool.query<{ indexname: string }>(
+      "select indexname from pg_indexes where schemaname = 'public' and tablename = 'outbox'",
+    );
     const names = indexes.rows.map((row) => row.indexname);
     expect(names).toContain('outbox_unpublished_idx');
     expect(names).not.toContain('outbox_status_next_attempt_idx');

@@ -1,16 +1,35 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findKyselyViolations, readGeneratedColumns, type SourceFile } from './check-kysely-usage.ts';
+import {
+  findKyselyViolations,
+  readGeneratedColumns,
+  type SourceFile,
+} from './check-kysely-usage.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const script = path.join(root, 'scripts', 'check-kysely-usage.ts');
 
 // Um punhado de colunas basta para as regras; a lista real vem do arquivo gerado (testada mais abaixo).
-const COLUMNS: ReadonlySet<string> = new Set(['on_hand', 'reserved', 'sku', 'reference', 'status']);
+const COLUMNS: ReadonlySet<string> = new Set([
+  'on_hand',
+  'reserved',
+  'sku',
+  'reference',
+  'status',
+]);
 
 const APP_FILE = 'src/checkout/reserve.ts';
 const DB_FILE = 'src/db/database.ts';
@@ -21,13 +40,34 @@ function violationsIn(content: string, filePath = APP_FILE): string[] {
 
 describe('AI-19 set, values e doUpdateSet com callback reprovam; a forma de objeto passa', () => {
   it.each([
-    ['set com arrow e parênteses', "db.updateTable('inventory').set((eb) => ({ reserved: eb('reserved', '+', 1) })).execute();"],
-    ['set com arrow sem parênteses', "db.updateTable('inventory').set(eb => ({ reserved: eb('reserved', '+', 1) })).execute();"],
-    ['set com arrow sem argumento', "db.updateTable('inventory').set(() => ({ reserved: 1 })).execute();"],
-    ['set com function', "db.updateTable('inventory').set(function (eb) { return { reserved: 1 }; }).execute();"],
-    ['set com a callback na linha seguinte', "db.updateTable('inventory').set(\n  (eb) => ({ reserved: 1 }),\n).execute();"],
-    ['values com arrow sem argumento', "db.insertInto('products').values(() => ({ sku: 'a' })).execute();"],
-    ['values com arrow e parâmetro', "db.insertInto('products').values((eb) => ({ sku: 'a' })).execute();"],
+    [
+      'set com arrow e parênteses',
+      "db.updateTable('inventory').set((eb) => ({ reserved: eb('reserved', '+', 1) })).execute();",
+    ],
+    [
+      'set com arrow sem parênteses',
+      "db.updateTable('inventory').set(eb => ({ reserved: eb('reserved', '+', 1) })).execute();",
+    ],
+    [
+      'set com arrow sem argumento',
+      "db.updateTable('inventory').set(() => ({ reserved: 1 })).execute();",
+    ],
+    [
+      'set com function',
+      "db.updateTable('inventory').set(function (eb) { return { reserved: 1 }; }).execute();",
+    ],
+    [
+      'set com a callback na linha seguinte',
+      "db.updateTable('inventory').set(\n  (eb) => ({ reserved: 1 }),\n).execute();",
+    ],
+    [
+      'values com arrow sem argumento',
+      "db.insertInto('products').values(() => ({ sku: 'a' })).execute();",
+    ],
+    [
+      'values com arrow e parâmetro',
+      "db.insertInto('products').values((eb) => ({ sku: 'a' })).execute();",
+    ],
     [
       'doUpdateSet com callback',
       "db.insertInto('inventory').values({ sku: 'a' }).onConflict((oc) => oc.column('sku').doUpdateSet((eb) => ({ reserved: eb.ref('excluded.reserved') }))).execute();",
@@ -37,26 +77,48 @@ describe('AI-19 set, values e doUpdateSet com callback reprovam; a forma de obje
   });
 
   it.each([
-    ['set com objeto', "db.updateTable('inventory').set({ reserved: 1 }).execute();"],
+    [
+      'set com objeto',
+      "db.updateTable('inventory').set({ reserved: 1 }).execute();",
+    ],
     [
       'set com objeto e callback por coluna',
       "db.updateTable('inventory').set({ reserved: (eb) => eb('reserved', '+', q) }).execute();",
     ],
-    ['set com uma variável', "db.updateTable('inventory').set(patch).execute();"],
-    ['values com objeto', "db.insertInto('products').values({ sku: 'a' }).execute();"],
-    ['values com lista de objetos', "db.insertInto('products').values([{ sku: 'a' }, { sku: 'b' }]).execute();"],
+    [
+      'set com uma variável',
+      "db.updateTable('inventory').set(patch).execute();",
+    ],
+    [
+      'values com objeto',
+      "db.insertInto('products').values({ sku: 'a' }).execute();",
+    ],
+    [
+      'values com lista de objetos',
+      "db.insertInto('products').values([{ sku: 'a' }, { sku: 'b' }]).execute();",
+    ],
     [
       'doUpdateSet com objeto, dentro de uma callback do onConflict',
       "db.insertInto('inventory').values({ sku: 'a' }).onConflict((oc) => oc.column('sku').doUpdateSet({ reserved: (eb) => eb.ref('excluded.reserved') })).execute();",
     ],
-    ['uma callback em outro método com nome parecido (reset, offset)', 'reset(() => 1); offset((x) => x);'],
-    ['Object.values e values() de um Map, que não são do Kysely', 'Object.values(obj).map((v) => v); map.values();'],
+    [
+      'uma callback em outro método com nome parecido (reset, offset)',
+      'reset(() => 1); offset((x) => x);',
+    ],
+    [
+      'Object.values e values() de um Map, que não são do Kysely',
+      'Object.values(obj).map((v) => v); map.values();',
+    ],
   ])('AI-19 passa %s', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
   });
 
   it('AI-19 a forma proibida citada em comentário não conta', () => {
-    expect(violationsIn("// não use set((eb) => ({ reserved: 1 })) nem sql.raw('x')\nconst a = 1;")).toEqual([]);
+    expect(
+      violationsIn(
+        "// não use set((eb) => ({ reserved: 1 })) nem sql.raw('x')\nconst a = 1;",
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -67,8 +129,14 @@ describe('AI-19 sql com texto fixo que cita uma coluna reprova', () => {
     ['uma coluna entre aspas', 'const q = sql`"on_hand"`;'],
     ['uma coluna qualificada pela tabela', 'const q = sql`inventory.on_hand`;'],
     ['uma coluna numa função', "const q = sql`coalesce(reference, '')`;"],
-    ['uma coluna ao lado de um valor interpolado', 'const q = sql`${value} + on_hand`;'],
-    ['uma coluna numa segunda linha do fragmento', 'const q = sql`now()\n  and status`;'],
+    [
+      'uma coluna ao lado de um valor interpolado',
+      'const q = sql`${value} + on_hand`;',
+    ],
+    [
+      'uma coluna numa segunda linha do fragmento',
+      'const q = sql`now()\n  and status`;',
+    ],
   ])('AI-19 reprova %s', (_label, source) => {
     expect(violationsIn(source).length).toBeGreaterThan(0);
   });
@@ -79,17 +147,35 @@ describe('AI-19 sql com texto fixo que cita uma coluna reprova', () => {
 
   it.each([
     ['now()', 'const q = sql`now()`;'],
-    ['make_interval com valor interpolado', 'const q = sql`make_interval(secs => ${seconds})`;'],
+    [
+      'make_interval com valor interpolado',
+      'const q = sql`make_interval(secs => ${seconds})`;',
+    ],
     ['literal com o tipo genérico', 'const q = sql<number>`1`;'],
     ['count(*)', 'const q = sql`count(*)`;'],
-    ['função somada a um valor interpolado', 'const q = sql`now() + ${interval}`;'],
-    ['um valor interpolado que se chama como a coluna', 'const reserved = 3;\nconst q = sql`now() + ${reserved}`;'],
-    ['um nome que só contém a coluna (overreserved)', 'const q = sql`overreserved()`;'],
-    ['a coluna num texto comum', "const label = 'reserved'; const t = `on_hand ${label}`;"],
+    [
+      'função somada a um valor interpolado',
+      'const q = sql`now() + ${interval}`;',
+    ],
+    [
+      'um valor interpolado que se chama como a coluna',
+      'const reserved = 3;\nconst q = sql`now() + ${reserved}`;',
+    ],
+    [
+      'um nome que só contém a coluna (overreserved)',
+      'const q = sql`overreserved()`;',
+    ],
+    [
+      'a coluna num texto comum',
+      "const label = 'reserved'; const t = `on_hand ${label}`;",
+    ],
     ['outra tag de template', 'const q = html`on_hand`;'],
     ['eb.ref com a coluna', "const e = eb.ref('reserved');"],
     ['eb com a coluna', "const e = eb('reserved', '+', 1);"],
-    ['where com a coluna', "db.selectFrom('inventory').where('sku', '=', sku).execute();"],
+    [
+      'where com a coluna',
+      "db.selectFrom('inventory').where('sku', '=', sku).execute();",
+    ],
   ])('AI-19 passa %s', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
   });
@@ -103,8 +189,14 @@ describe('AI-19 sql que é um comando inteiro reprova', () => {
     ['INSERT', 'const q = sql`INSERT INTO t VALUES (1)`;'],
     ['UPDATE com espaço antes', 'const q = sql`   UPDATE t SET a = 1`;'],
     ['DELETE', 'const q = sql`DELETE FROM t`;'],
-    ['WITH com quebra de linha antes', 'const q = sql`\n  WITH a AS (SELECT 1) SELECT * FROM a`;'],
-    ['with em minúsculas', 'const q = sql`with a as (select 1) select * from a`;'],
+    [
+      'WITH com quebra de linha antes',
+      'const q = sql`\n  WITH a AS (SELECT 1) SELECT * FROM a`;',
+    ],
+    [
+      'with em minúsculas',
+      'const q = sql`with a as (select 1) select * from a`;',
+    ],
     ['SELECT com o tipo genérico', 'const q = sql<number>`SELECT ${x}`;'],
   ])('AI-19 reprova %s', (_label, source) => {
     expect(violationsIn(source).length).toBeGreaterThan(0);
@@ -116,7 +208,10 @@ describe('AI-19 sql que é um comando inteiro reprova', () => {
     ['withdraw(), que só começa como with', 'const q = sql`withdraw()`;'],
     ['deleted(), que só começa como delete', 'const q = sql`deleted()`;'],
     ['updated_now()', 'const q = sql`updated_now()`;'],
-    ['SELECT num texto comum', "const text = 'SELECT 1'; const t = `SELECT 1`;"],
+    [
+      'SELECT num texto comum',
+      "const text = 'SELECT 1'; const t = `SELECT 1`;",
+    ],
   ])('AI-19 passa %s', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
   });
@@ -130,26 +225,46 @@ describe('AI-19 as formas que montam SQL fora do builder reprovam em qualquer ar
     ['sql.id', "const q = sql.id('inventory');"],
     ['sql.table', "const q = sql.table('inventory');"],
     ['db.dynamic', 'const ref = db.dynamic.ref(column);'],
-    ['.dynamic de outro receptor', 'const ref = this.connection.dynamic.ref(column);'],
+    [
+      '.dynamic de outro receptor',
+      'const ref = this.connection.dynamic.ref(column);',
+    ],
     ['CompiledQuery.raw', "const compiled = CompiledQuery.raw('select 1');"],
     ['executeQuery', 'await db.executeQuery(compiled);'],
     ['executeQuery sem receptor', 'await executeQuery(compiled);'],
     ['getExecutor', 'const executor = db.getExecutor();'],
   ];
 
-  it.each(FORBIDDEN.flatMap(([label, source]) => [APP_FILE, DB_FILE].map((file): [string, string, string] => [label, file, source])))(
-    'AI-19 reprova %s em %s',
-    (_label, file, source) => {
-      expect(violationsIn(source, file)).toHaveLength(1);
-    },
-  );
+  it.each(
+    FORBIDDEN.flatMap(([label, source]) =>
+      [APP_FILE, DB_FILE].map((file): [string, string, string] => [
+        label,
+        file,
+        source,
+      ]),
+    ),
+  )('AI-19 reprova %s em %s', (_label, file, source) => {
+    expect(violationsIn(source, file)).toHaveLength(1);
+  });
 
   it.each([
-    ['execute() do builder', "await db.selectFrom('inventory').selectAll().execute();"],
-    ['executeTakeFirst() do builder', "await db.selectFrom('inventory').selectAll().executeTakeFirst();"],
+    [
+      'execute() do builder',
+      "await db.selectFrom('inventory').selectAll().execute();",
+    ],
+    [
+      'executeTakeFirst() do builder',
+      "await db.selectFrom('inventory').selectAll().executeTakeFirst();",
+    ],
     ['sql com função e execute', 'await sql`now()`.execute(db);'],
-    ['um nome parecido com dynamic', 'const dynamicImport = await import(file);'],
-    ['a forma citada em comentário', "// sql.raw('x') e db.dynamic ficam proibidos\nconst a = 1;"],
+    [
+      'um nome parecido com dynamic',
+      'const dynamicImport = await import(file);',
+    ],
+    [
+      'a forma citada em comentário',
+      "// sql.raw('x') e db.dynamic ficam proibidos\nconst a = 1;",
+    ],
   ])('AI-19 passa %s', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
   });
@@ -158,15 +273,21 @@ describe('AI-19 as formas que montam SQL fora do builder reprovam em qualquer ar
 describe('AI-19 query do pg, transaction e startTransaction só passam dentro de src/db/', () => {
   const OUTSIDE_ONLY: [string, string][] = [
     ['.query( do pg', "await pool.query('select 1');"],
-    ['.transaction(', 'await db.transaction().execute(async (trx) => { await work(trx); });'],
+    [
+      '.transaction(',
+      'await db.transaction().execute(async (trx) => { await work(trx); });',
+    ],
     ['startTransaction(', 'const trx = await db.startTransaction().execute();'],
   ];
 
   it.each(
     OUTSIDE_ONLY.flatMap(([label, source]) =>
-      [APP_FILE, 'src/health/repository.ts', 'src/dbx/outro.ts', 'src/database/outro.ts'].map(
-        (file): [string, string, string] => [label, file, source],
-      ),
+      [
+        APP_FILE,
+        'src/health/repository.ts',
+        'src/dbx/outro.ts',
+        'src/database/outro.ts',
+      ].map((file): [string, string, string] => [label, file, source]),
     ),
   )('AI-19 reprova %s fora de src/db/ (%s)', (_label, file, source) => {
     expect(violationsIn(source, file)).toHaveLength(1);
@@ -174,11 +295,9 @@ describe('AI-19 query do pg, transaction e startTransaction só passam dentro de
 
   it.each(
     OUTSIDE_ONLY.flatMap(([label, source]) =>
-      [DB_FILE, 'src/db/transaction.ts', 'src/db/sub/pasta.ts'].map((file): [string, string, string] => [
-        label,
-        file,
-        source,
-      ]),
+      [DB_FILE, 'src/db/transaction.ts', 'src/db/sub/pasta.ts'].map(
+        (file): [string, string, string] => [label, file, source],
+      ),
     ),
   )('AI-19 passa %s dentro de src/db/ (%s)', (_label, file, source) => {
     expect(violationsIn(source, file)).toEqual([]);
@@ -186,15 +305,23 @@ describe('AI-19 query do pg, transaction e startTransaction só passam dentro de
 
   it.each([
     ['req.query como propriedade, sem chamada', 'const sku = req.query.sku;'],
-    ['execute() do builder', "await db.selectFrom('inventory').selectAll().execute();"],
-    ['um nome que só contém Transaction', 'await inTransaction(db, async (trx) => { await work(trx); });'],
+    [
+      'execute() do builder',
+      "await db.selectFrom('inventory').selectAll().execute();",
+    ],
+    [
+      'um nome que só contém Transaction',
+      'await inTransaction(db, async (trx) => { await work(trx); });',
+    ],
   ])('AI-19 passa %s fora de src/db/', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
   });
 
   it('AI-19 as formas dos fragmentos e dos executores continuam reprovando dentro de src/db/', () => {
     expect(violationsIn("const q = sql.raw('x');", DB_FILE)).toHaveLength(1);
-    expect(violationsIn('const q = sql`on_hand + 1`;', DB_FILE).length).toBeGreaterThan(0);
+    expect(
+      violationsIn('const q = sql`on_hand + 1`;', DB_FILE).length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -215,16 +342,29 @@ describe('AI-19 cada violação é uma frase com o caminho e a linha', () => {
       expect(typeof violation).toBe('string');
       expect(violation).toContain(APP_FILE);
     }
-    const afterPath = (violation: string): string => violation.slice(violation.indexOf(APP_FILE) + APP_FILE.length);
-    expect(violations.some((violation) => /^\D{0,14}3(?!\d)/.test(afterPath(violation)))).toBe(true);
-    expect(violations.some((violation) => /^\D{0,14}5(?!\d)/.test(afterPath(violation)))).toBe(true);
+    const afterPath = (violation: string): string =>
+      violation.slice(violation.indexOf(APP_FILE) + APP_FILE.length);
+    expect(
+      violations.some((violation) =>
+        /^\D{0,14}3(?!\d)/.test(afterPath(violation)),
+      ),
+    ).toBe(true);
+    expect(
+      violations.some((violation) =>
+        /^\D{0,14}5(?!\d)/.test(afterPath(violation)),
+      ),
+    ).toBe(true);
   });
 
   it('AI-19 uma violação que vem depois de um comentário de várias linhas cita a linha do arquivo', () => {
     const violations = violationsIn('/*\n * nota\n */\nconst q = sql.raw(x);');
 
     expect(violations).toHaveLength(1);
-    expect(violations[0]?.slice((violations[0]?.indexOf(APP_FILE) ?? 0) + APP_FILE.length)).toMatch(/^\D{0,14}4(?!\d)/);
+    expect(
+      violations[0]?.slice(
+        (violations[0]?.indexOf(APP_FILE) ?? 0) + APP_FILE.length,
+      ),
+    ).toMatch(/^\D{0,14}4(?!\d)/);
   });
 
   it('AI-19 vários arquivos: cada violação cita o próprio caminho', () => {
@@ -237,19 +377,34 @@ describe('AI-19 cada violação é uma frase com o caminho e a linha', () => {
     const violations = findKyselyViolations(files, COLUMNS);
 
     expect(violations).toHaveLength(2);
-    expect(violations.some((violation) => violation.includes('src/a.ts'))).toBe(true);
-    expect(violations.some((violation) => violation.includes('src/c/d.ts'))).toBe(true);
-    expect(violations.some((violation) => violation.includes('src/b.ts'))).toBe(false);
+    expect(violations.some((violation) => violation.includes('src/a.ts'))).toBe(
+      true,
+    );
+    expect(
+      violations.some((violation) => violation.includes('src/c/d.ts')),
+    ).toBe(true);
+    expect(violations.some((violation) => violation.includes('src/b.ts'))).toBe(
+      false,
+    );
   });
 
   it('AI-19 sem violação, a lista é vazia', () => {
     expect(findKyselyViolations([], COLUMNS)).toEqual([]);
-    expect(violationsIn("db.updateTable('inventory').set({ reserved: 1 }).execute();")).toEqual([]);
+    expect(
+      violationsIn(
+        "db.updateTable('inventory').set({ reserved: 1 }).execute();",
+      ),
+    ).toEqual([]);
   });
 
   // Os testes ficam fora da conferência: os controles negativos precisam das formas proibidas.
   it('AI-19 um arquivo *.test.ts com as formas proibidas não conta', () => {
-    expect(violationsIn("const q = sql.raw('on_hand');", 'src/checkout/reserve.test.ts')).toEqual([]);
+    expect(
+      violationsIn(
+        "const q = sql.raw('on_hand');",
+        'src/checkout/reserve.test.ts',
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -257,8 +412,14 @@ describe('AI-19 cada violação é uma frase com o caminho e a linha', () => {
 describe('AI-19 o sql com outro nome, atribuído a outra variável ou acessado por colchete reprova', () => {
   it.each([
     ['o import de sql com outro nome', "import { sql as s } from 'kysely';"],
-    ['o import de sql com outro nome entre outros nomes', "import { Kysely, sql as s, type Selectable } from 'kysely';"],
-    ['o import de sql com outro nome em várias linhas', "import {\n  Kysely,\n  sql as s,\n} from 'kysely';"],
+    [
+      'o import de sql com outro nome entre outros nomes',
+      "import { Kysely, sql as s, type Selectable } from 'kysely';",
+    ],
+    [
+      'o import de sql com outro nome em várias linhas',
+      "import {\n  Kysely,\n  sql as s,\n} from 'kysely';",
+    ],
     ['a atribuição de sql a outra variável', 'const s = sql;'],
     ['a atribuição de sql com let', 'let s = sql;'],
     ['a atribuição de sql sem espaço', 'const s=sql;'],
@@ -269,19 +430,44 @@ describe('AI-19 o sql com outro nome, atribuído a outra variável ou acessado p
   });
 
   it('AI-19 o sql renomeado no import reprova mesmo quando só é usado como tag, com a coluna escondida atrás do apelido', () => {
-    expect(violationsIn("import { sql as s } from 'kysely';\nconst q = s`on_hand - reserved`;").length).toBeGreaterThan(0);
+    expect(
+      violationsIn(
+        "import { sql as s } from 'kysely';\nconst q = s`on_hand - reserved`;",
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it.each([
     ['o import normal de sql', "import { sql } from 'kysely';"],
-    ['o import normal de sql entre outros nomes', "import { Kysely, sql, type Selectable } from 'kysely';"],
-    ['o import normal de sql em várias linhas', "import {\n  Kysely,\n  sql,\n} from 'kysely';"],
-    ['o apelido de outro nome do kysely', "import { Kysely as K, sql } from 'kysely';"],
-    ['o apelido de um nome parecido com sql', "import { sqlite as s } from 'kysely';"],
-    ['o sql com outro nome vindo de outro módulo', "import { sql as s } from './outro-modulo.ts';"],
-    ['o sql usado como tag, com função e literal', "import { sql } from 'kysely';\nconst q = sql`now()`;"],
+    [
+      'o import normal de sql entre outros nomes',
+      "import { Kysely, sql, type Selectable } from 'kysely';",
+    ],
+    [
+      'o import normal de sql em várias linhas',
+      "import {\n  Kysely,\n  sql,\n} from 'kysely';",
+    ],
+    [
+      'o apelido de outro nome do kysely',
+      "import { Kysely as K, sql } from 'kysely';",
+    ],
+    [
+      'o apelido de um nome parecido com sql',
+      "import { sqlite as s } from 'kysely';",
+    ],
+    [
+      'o sql com outro nome vindo de outro módulo',
+      "import { sql as s } from './outro-modulo.ts';",
+    ],
+    [
+      'o sql usado como tag, com função e literal',
+      "import { sql } from 'kysely';\nconst q = sql`now()`;",
+    ],
     ['o fragmento atribuído a uma variável', 'const s = sql`now()`;'],
-    ['o fragmento com o tipo genérico atribuído a uma variável', 'const s = sql<number>`1`;'],
+    [
+      'o fragmento com o tipo genérico atribuído a uma variável',
+      'const s = sql<number>`1`;',
+    ],
     ['o sql executado', 'await sql`now()`.execute(db);'],
     ['um nome que só começa com sql', 'const s = sqlText;'],
     ['um índice de um nome que só termina em sql', 'const first = mysql[0];'],
@@ -296,9 +482,18 @@ describe('AI-19 o sql com outro nome, atribuído a outra variável ou acessado p
 // abre uma string, um comentário ou um template e engole o código que vem depois.
 describe('AI-19 o regex literal não esconde o código que vem depois dele', () => {
   it.each([
-    ['uma aspa simples no regex, e uma coluna no fragmento', "v.replace(/'/g, ''); const q = sql`on_hand`;"],
-    ['barras escapadas no regex (parecem um comentário), e um sql.raw depois', '/^https?:\\/\\//.test(u); const r = sql.raw(u);'],
-    ['uma crase no regex, e uma coluna no fragmento da linha seguinte', 'const re = /`/;\nconst q = sql`on_hand`;'],
+    [
+      'uma aspa simples no regex, e uma coluna no fragmento',
+      "v.replace(/'/g, ''); const q = sql`on_hand`;",
+    ],
+    [
+      'barras escapadas no regex (parecem um comentário), e um sql.raw depois',
+      '/^https?:\\/\\//.test(u); const r = sql.raw(u);',
+    ],
+    [
+      'uma crase no regex, e uma coluna no fragmento da linha seguinte',
+      'const re = /`/;\nconst q = sql`on_hand`;',
+    ],
   ])('AI-19 reprova %s', (_label, source) => {
     expect(violationsIn(source).length).toBeGreaterThan(0);
   });
@@ -307,22 +502,50 @@ describe('AI-19 o regex literal não esconde o código que vem depois dele', () 
     const violations = violationsIn('const re = /`/;\nconst q = sql`on_hand`;');
 
     expect(violations).toHaveLength(1);
-    expect(violations[0]?.slice((violations[0]?.indexOf(APP_FILE) ?? 0) + APP_FILE.length)).toMatch(/^\D{0,14}2(?!\d)/);
+    expect(
+      violations[0]?.slice(
+        (violations[0]?.indexOf(APP_FILE) ?? 0) + APP_FILE.length,
+      ),
+    ).toMatch(/^\D{0,14}2(?!\d)/);
   });
 
   it.each([
-    ['uma divisão entre variáveis', 'const x = a / b / c; const q = sql.raw(y);'],
-    ['uma divisão depois de parênteses', 'const x = (a + b) / 2 / c; const q = sql.raw(y);'],
-    ['uma divisão depois de um índice', 'const x = items[0] / 2 / c; const q = sql.raw(y);'],
-    ['uma divisão depois de um número', 'const x = 10 / 2 / 5; const q = sql.raw(y);'],
-  ])('AI-19 continua lendo %s como divisão: o sql.raw depois dela reprova', (_label, source) => {
-    expect(violationsIn(source)).toHaveLength(1);
-  });
+    [
+      'uma divisão entre variáveis',
+      'const x = a / b / c; const q = sql.raw(y);',
+    ],
+    [
+      'uma divisão depois de parênteses',
+      'const x = (a + b) / 2 / c; const q = sql.raw(y);',
+    ],
+    [
+      'uma divisão depois de um índice',
+      'const x = items[0] / 2 / c; const q = sql.raw(y);',
+    ],
+    [
+      'uma divisão depois de um número',
+      'const x = 10 / 2 / 5; const q = sql.raw(y);',
+    ],
+  ])(
+    'AI-19 continua lendo %s como divisão: o sql.raw depois dela reprova',
+    (_label, source) => {
+      expect(violationsIn(source)).toHaveLength(1);
+    },
+  );
 
   it.each([
-    ['um regex com aspa simples, sem violação', "v.replace(/'/g, ''); const ok = 1;"],
-    ['um regex com barras escapadas, sem violação', '/^https?:\\/\\//.test(u); const ok = 1;'],
-    ['um regex com crase, sem violação', 'const re = /`/;\nconst ok = sql`now()`;'],
+    [
+      'um regex com aspa simples, sem violação',
+      "v.replace(/'/g, ''); const ok = 1;",
+    ],
+    [
+      'um regex com barras escapadas, sem violação',
+      '/^https?:\\/\\//.test(u); const ok = 1;',
+    ],
+    [
+      'um regex com crase, sem violação',
+      'const re = /`/;\nconst ok = sql`now()`;',
+    ],
     ['uma divisão, sem violação', 'const x = a / b / c; const q = sql`now()`;'],
   ])('AI-19 passa %s', (_label, source) => {
     expect(violationsIn(source)).toEqual([]);
@@ -381,7 +604,10 @@ describe('AI-19 set, values e doUpdateSet com um identificador declarado como fu
   });
 
   it.each([
-    ['set com um objeto guardado em const', "const patch = { reserved: 1 };\ndb.updateTable('inventory').set(patch).execute();"],
+    [
+      'set com um objeto guardado em const',
+      "const patch = { reserved: 1 };\ndb.updateTable('inventory').set(patch).execute();",
+    ],
     [
       'set com um objeto que tem uma callback por coluna',
       "const patch = { reserved: (eb) => eb('reserved', '+', q) };\ndb.updateTable('inventory').set(patch).execute();",
@@ -422,7 +648,8 @@ describe('AI-19 set, values e doUpdateSet com um identificador declarado como fu
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0))
+    rmSync(dir, { recursive: true, force: true });
 });
 
 function makeTempDir(): string {
@@ -472,7 +699,13 @@ export interface DB {
 
     const columns = readGeneratedColumns(dir);
 
-    expect([...columns].sort()).toEqual(['criado_em', 'nome_cliente', 'pedido_id', 'sku', 'total_cents']);
+    expect([...columns].sort()).toEqual([
+      'criado_em',
+      'nome_cliente',
+      'pedido_id',
+      'sku',
+      'total_cents',
+    ]);
     expect(columns.has('itens')).toBe(false);
     expect(columns.has('loja.pedidos')).toBe(false);
     expect(columns.has('x')).toBe(false);
@@ -481,7 +714,10 @@ export interface DB {
   it('AI-19 junta as colunas de todos os arquivos da pasta', () => {
     const dir = makeTempDir();
     writeFileSync(path.join(dir, 'um.ts'), GENERATED);
-    writeFileSync(path.join(dir, 'dois.ts'), 'export interface Marcas {\n  cor_externa: string;\n}\n\nexport interface DB {\n  marcas: Marcas;\n}\n');
+    writeFileSync(
+      path.join(dir, 'dois.ts'),
+      'export interface Marcas {\n  cor_externa: string;\n}\n\nexport interface DB {\n  marcas: Marcas;\n}\n',
+    );
 
     const columns = readGeneratedColumns(dir);
 
@@ -493,19 +729,36 @@ export interface DB {
   it('AI-19 em src/db/types/ há as colunas reais (on_hand, reserved, reference) e nenhum nome de tabela ou de tipo', () => {
     const columns = readGeneratedColumns(path.join(root, 'src', 'db', 'types'));
 
-    for (const column of ['on_hand', 'reserved', 'reference', 'sku', 'price_cents', 'call_token', 'total_cents']) {
+    for (const column of [
+      'on_hand',
+      'reserved',
+      'reference',
+      'sku',
+      'price_cents',
+      'call_token',
+      'total_cents',
+    ]) {
       expect(columns.has(column), column).toBe(true);
     }
-    for (const notColumn of ['DB', 'erp_sim.invoices', 'inventory', 'outbox', 'x']) {
+    for (const notColumn of [
+      'DB',
+      'erp_sim.invoices',
+      'inventory',
+      'outbox',
+      'x',
+    ]) {
       expect(columns.has(notColumn), notColumn).toBe(false);
     }
   });
 
   it('AI-19 com as colunas lidas dos arquivos, o fragmento que cita on_hand reprova e now() passa', () => {
     const columns = readGeneratedColumns(path.join(root, 'src', 'db', 'types'));
-    const check = (content: string): string[] => findKyselyViolations([{ path: APP_FILE, content }], columns);
+    const check = (content: string): string[] =>
+      findKyselyViolations([{ path: APP_FILE, content }], columns);
 
-    expect(check('const q = sql`on_hand - reserved`;').length).toBeGreaterThan(0);
+    expect(check('const q = sql`on_hand - reserved`;').length).toBeGreaterThan(
+      0,
+    );
     expect(check('const q = sql`now()`;')).toEqual([]);
   });
 });
@@ -513,16 +766,27 @@ export interface DB {
 describe('AI-19 o código atual de src/ não tem violação', () => {
   it('AI-19 findKyselyViolations sobre todos os .ts de src/ (fora os testes e src/db/types/), com as colunas reais, devolve zero', () => {
     const srcDir = path.join(root, 'src');
-    const files: SourceFile[] = readdirSync(srcDir, { recursive: true, encoding: 'utf8' })
+    const files: SourceFile[] = readdirSync(srcDir, {
+      recursive: true,
+      encoding: 'utf8',
+    })
       .map((relative) => relative.split(path.sep).join('/'))
-      .filter((relative) => relative.endsWith('.ts') && !relative.endsWith('.test.ts') && !relative.startsWith('db/types/'))
+      .filter(
+        (relative) =>
+          relative.endsWith('.ts') &&
+          !relative.endsWith('.test.ts') &&
+          !relative.startsWith('db/types/'),
+      )
       .map((relative) => ({
         path: `src/${relative}`,
         content: readFileSync(path.join(srcDir, relative), 'utf8'),
       }));
     expect(files.length).toBeGreaterThan(0);
 
-    const violations = findKyselyViolations(files, readGeneratedColumns(path.join(srcDir, 'db', 'types')));
+    const violations = findKyselyViolations(
+      files,
+      readGeneratedColumns(path.join(srcDir, 'db', 'types')),
+    );
 
     expect(violations).toEqual([]);
   });
@@ -535,10 +799,22 @@ describe('AI-19 o script como processo', () => {
     const dir = makeTempDir();
     mkdirSync(path.join(dir, 'scripts'), { recursive: true });
     cpSync(script, path.join(dir, 'scripts', 'check-kysely-usage.ts'));
-    cpSync(path.join(root, 'scripts', 'lib'), path.join(dir, 'scripts', 'lib'), { recursive: true });
+    cpSync(
+      path.join(root, 'scripts', 'lib'),
+      path.join(dir, 'scripts', 'lib'),
+      { recursive: true },
+    );
     cpSync(path.join(root, 'package.json'), path.join(dir, 'package.json'));
-    cpSync(path.join(root, 'src', 'db', 'types'), path.join(dir, 'src', 'db', 'types'), { recursive: true });
-    symlinkSync(path.join(root, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+    cpSync(
+      path.join(root, 'src', 'db', 'types'),
+      path.join(dir, 'src', 'db', 'types'),
+      { recursive: true },
+    );
+    symlinkSync(
+      path.join(root, 'node_modules'),
+      path.join(dir, 'node_modules'),
+      'dir',
+    );
     for (const [file, content] of Object.entries(sources)) {
       mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
       writeFileSync(path.join(dir, file), content);
@@ -546,18 +822,26 @@ describe('AI-19 o script como processo', () => {
     return dir;
   }
 
-  function run(cwd: string, file = path.join(cwd, 'scripts', 'check-kysely-usage.ts')): ReturnType<typeof spawnSync> {
+  function run(
+    cwd: string,
+    file = path.join(cwd, 'scripts', 'check-kysely-usage.ts'),
+  ): ReturnType<typeof spawnSync> {
     return spawnSync(process.execPath, [file], { cwd, encoding: 'utf8' });
   }
 
   it('AI-19 sobre o repositório sai com 0', () => {
     const result = run(root, script);
 
-    expect({ status: result.status, stderr: String(result.stderr) }).toEqual({ status: 0, stderr: '' });
+    expect({ status: result.status, stderr: String(result.stderr) }).toEqual({
+      status: 0,
+      stderr: '',
+    });
   });
 
   it('AI-19 numa árvore com uma forma proibida em src/ sai com código diferente de 0 e cita o arquivo na saída de erro', () => {
-    const dir = makeTree({ 'src/checkout/ruim.ts': "export const q = sql.raw('on_hand');\n" });
+    const dir = makeTree({
+      'src/checkout/ruim.ts': "export const q = sql.raw('on_hand');\n",
+    });
 
     const result = run(dir);
 
@@ -566,15 +850,22 @@ describe('AI-19 o script como processo', () => {
   });
 
   it('AI-19 a mesma árvore sem a forma proibida sai com 0', () => {
-    const dir = makeTree({ 'src/checkout/bom.ts': "export const q = sql`now()`;\n" });
+    const dir = makeTree({
+      'src/checkout/bom.ts': 'export const q = sql`now()`;\n',
+    });
 
     const result = run(dir);
 
-    expect({ status: result.status, stderr: String(result.stderr) }).toEqual({ status: 0, stderr: '' });
+    expect({ status: result.status, stderr: String(result.stderr) }).toEqual({
+      status: 0,
+      stderr: '',
+    });
   });
 
   it('AI-19 uma forma proibida num *.test.ts de src/ não reprova', () => {
-    const dir = makeTree({ 'src/checkout/ruim.test.ts': "export const q = sql.raw('on_hand');\n" });
+    const dir = makeTree({
+      'src/checkout/ruim.test.ts': "export const q = sql.raw('on_hand');\n",
+    });
 
     expect(run(dir).status).toBe(0);
   });

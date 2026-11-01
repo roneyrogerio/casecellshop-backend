@@ -40,7 +40,11 @@ export const PATIENT_LIMITS: PoolLimits = {
 // Pool da API como em produção (5 s de statement_timeout, 2 s de lock_timeout), exceto a espera
 // por conexão: com 50 requisições sobre 10 conexões, a espera de 1 s de produção mediria a
 // máquina de CI e não a atomicidade do checkout.
-export function createAppPool(uri: string, max: number = APP_POOL_SIZE, limits: PoolLimits = {}): pg.Pool {
+export function createAppPool(
+  uri: string,
+  max: number = APP_POOL_SIZE,
+  limits: PoolLimits = {},
+): pg.Pool {
   const pool = new pg.Pool({
     connectionString: uri,
     max,
@@ -74,7 +78,8 @@ export async function startCheckoutHarness(
   const sink = new Writable({
     write(chunk: Buffer, _encoding, callback) {
       for (const line of chunk.toString().split('\n')) {
-        if (line.trim() !== '') logLines.push(JSON.parse(line) as Record<string, unknown>);
+        if (line.trim() !== '')
+          logLines.push(JSON.parse(line) as Record<string, unknown>);
       }
       callback();
     },
@@ -85,7 +90,11 @@ export async function startCheckoutHarness(
       formatters: { level: (label) => ({ level: label }) },
       mixin() {
         const spanContext = trace.getActiveSpan()?.spanContext();
-        return { correlationId: logContext.getStore()?.correlationId, trace_id: spanContext?.traceId, span_id: spanContext?.spanId };
+        return {
+          correlationId: logContext.getStore()?.correlationId,
+          trace_id: spanContext?.traceId,
+          span_id: spanContext?.spanId,
+        };
       },
     },
     sink,
@@ -121,10 +130,24 @@ export interface SeededProduct {
 }
 
 // Cada teste cria os próprios produtos, com SKU único, direto nas tabelas.
-export async function seedProduct(pool: pg.Pool, options: { priceCents: number; onHand: number; reserved?: number; prefix?: string }): Promise<SeededProduct> {
+export async function seedProduct(
+  pool: pg.Pool,
+  options: {
+    priceCents: number;
+    onHand: number;
+    reserved?: number;
+    prefix?: string;
+  },
+): Promise<SeededProduct> {
   const sku = `${options.prefix ?? 'T'}-${randomUUID().slice(0, 12)}`;
-  await pool.query('insert into products (sku, name, price_cents) values ($1, $2, $3)', [sku, `Capinha ${sku}`, options.priceCents]);
-  await pool.query('insert into inventory (sku, on_hand, reserved) values ($1, $2, $3)', [sku, options.onHand, options.reserved ?? 0]);
+  await pool.query(
+    'insert into products (sku, name, price_cents) values ($1, $2, $3)',
+    [sku, `Capinha ${sku}`, options.priceCents],
+  );
+  await pool.query(
+    'insert into inventory (sku, on_hand, reserved) values ($1, $2, $3)',
+    [sku, options.onHand, options.reserved ?? 0],
+  );
   return { sku, priceCents: options.priceCents };
 }
 
@@ -134,39 +157,66 @@ export interface InventorySnapshot {
   soldTotal: number;
 }
 
-export async function readInventory(pool: pg.Pool, sku: string): Promise<InventorySnapshot> {
-  const result = await pool.query<{ on_hand: number; reserved: number; sold_total: number }>(
-    'select on_hand, reserved, sold_total from inventory where sku = $1',
-    [sku],
-  );
+export async function readInventory(
+  pool: pg.Pool,
+  sku: string,
+): Promise<InventorySnapshot> {
+  const result = await pool.query<{
+    on_hand: number;
+    reserved: number;
+    sold_total: number;
+  }>('select on_hand, reserved, sold_total from inventory where sku = $1', [
+    sku,
+  ]);
   const row = result.rows[0];
   if (!row) throw new Error(`estoque inexistente para ${sku}`);
-  return { onHand: row.on_hand, reserved: row.reserved, soldTotal: row.sold_total };
+  return {
+    onHand: row.on_hand,
+    reserved: row.reserved,
+    soldTotal: row.sold_total,
+  };
 }
 
 // A invariante do estoque (AD-002): nenhuma promessa acima do que há. Lista as violações, para o
 // teste do checkout exigir a lista vazia e o controle negativo exigir uma lista com itens.
 export function stockViolations(snapshot: InventorySnapshot): string[] {
   const violations: string[] = [];
-  if (snapshot.reserved < 0) violations.push(`reserved negativo (${snapshot.reserved})`);
+  if (snapshot.reserved < 0)
+    violations.push(`reserved negativo (${snapshot.reserved})`);
   if (snapshot.onHand - snapshot.reserved < 0) {
-    violations.push(`promessa acima do estoque: reserved ${snapshot.reserved} > on_hand ${snapshot.onHand}`);
+    violations.push(
+      `promessa acima do estoque: reserved ${snapshot.reserved} > on_hand ${snapshot.onHand}`,
+    );
   }
   return violations;
 }
 
-async function count(pool: pg.Pool, text: string, values: unknown[] = []): Promise<number> {
+async function count(
+  pool: pg.Pool,
+  text: string,
+  values: unknown[] = [],
+): Promise<number> {
   const result = await pool.query<{ n: number }>(text, values);
   return result.rows[0]?.n ?? 0;
 }
 
 // Pedidos distintos que têm o SKU.
-export function countOrdersWithSku(pool: pg.Pool, sku: string): Promise<number> {
-  return count(pool, 'select count(distinct order_id)::int as n from order_items where sku = $1', [sku]);
+export function countOrdersWithSku(
+  pool: pg.Pool,
+  sku: string,
+): Promise<number> {
+  return count(
+    pool,
+    'select count(distinct order_id)::int as n from order_items where sku = $1',
+    [sku],
+  );
 }
 
 // Mensagens da outbox dos pedidos que têm o SKU.
-export function countOutboxWithSku(pool: pg.Pool, sku: string): Promise<number> {
+export function countOutboxWithSku(
+  pool: pg.Pool,
+  sku: string,
+): Promise<number> {
   return count(
     pool,
     'select count(*)::int as n from outbox where order_id in (select order_id from order_items where sku = $1)',
@@ -175,7 +225,11 @@ export function countOutboxWithSku(pool: pg.Pool, sku: string): Promise<number> 
 }
 
 export function countKeyRows(pool: pg.Pool, key: string): Promise<number> {
-  return count(pool, 'select count(*)::int as n from idempotency_keys where key = $1', [key]);
+  return count(
+    pool,
+    'select count(*)::int as n from idempotency_keys where key = $1',
+    [key],
+  );
 }
 
 // Tudo o que um checkout deixa no banco, em contagens globais: o arquivo roda um teste por vez,
@@ -194,7 +248,10 @@ export async function footprint(pool: pg.Pool): Promise<Footprint> {
     orderItems: await count(pool, 'select count(*)::int as n from order_items'),
     outbox: await count(pool, 'select count(*)::int as n from outbox'),
     keys: await count(pool, 'select count(*)::int as n from idempotency_keys'),
-    reserved: await count(pool, 'select coalesce(sum(reserved), 0)::int as n from inventory'),
+    reserved: await count(
+      pool,
+      'select coalesce(sum(reserved), 0)::int as n from inventory',
+    ),
   };
 }
 
@@ -206,11 +263,17 @@ export interface CheckoutLine {
   expectedUnitPrice: number;
 }
 
-export function line(product: SeededProduct, quantity = 1, expectedUnitPrice: number = product.priceCents): CheckoutLine {
+export function line(
+  product: SeededProduct,
+  quantity = 1,
+  expectedUnitPrice: number = product.priceCents,
+): CheckoutLine {
   return { sku: product.sku, quantity, expectedUnitPrice };
 }
 
-export function checkoutBody(...lines: CheckoutLine[]): { items: CheckoutLine[] } {
+export function checkoutBody(...lines: CheckoutLine[]): {
+  items: CheckoutLine[];
+} {
   return { items: lines };
 }
 
@@ -230,19 +293,29 @@ export interface PostOptions {
 
 // Envia o POST /checkout e confere o status, o tipo de conteúdo, o corpo e os cabeçalhos da
 // resposta pelo schema da rota no contrato (FND-07), seja um 202 ou um erro.
-export async function postCheckout(target: CheckoutTarget, body: unknown, options: PostOptions = {}): Promise<request.Response> {
+export async function postCheckout(
+  target: CheckoutTarget,
+  body: unknown,
+  options: PostOptions = {},
+): Promise<request.Response> {
   const req = request(target).post('/checkout');
   const key = options.key === undefined ? newKey() : options.key;
   if (key !== null) req.set('Idempotency-Key', key);
-  if (options.requestId !== undefined) req.set('X-Request-Id', options.requestId);
-  if (options.traceparent !== undefined) req.set('traceparent', options.traceparent);
-  if (options.contentType !== undefined) req.set('Content-Type', options.contentType);
+  if (options.requestId !== undefined)
+    req.set('X-Request-Id', options.requestId);
+  if (options.traceparent !== undefined)
+    req.set('traceparent', options.traceparent);
+  if (options.contentType !== undefined)
+    req.set('Content-Type', options.contentType);
   const res = await req.send(body as string | object);
   expectMatchesContract(checkoutRoute, res);
   return res;
 }
 
-export function header(res: request.Response, name: string): string | undefined {
+export function header(
+  res: request.Response,
+  name: string,
+): string | undefined {
   const value: string | undefined = res.headers[name.toLowerCase()];
   return value;
 }

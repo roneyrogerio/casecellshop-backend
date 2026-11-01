@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -27,16 +33,25 @@ export function makeTempDir(prefix = 'sandbox-'): string {
 }
 
 export function cleanupTempDirs(): void {
-  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of created.splice(0))
+    rmSync(dir, { recursive: true, force: true });
 }
 
 export function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync('git', [...GIT_FLAGS, ...args], { cwd, encoding: 'utf8' });
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} falhou: ${result.stderr}`);
+  const result = spawnSync('git', [...GIT_FLAGS, ...args], {
+    cwd,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0)
+    throw new Error(`git ${args.join(' ')} falhou: ${result.stderr}`);
   return result.stdout;
 }
 
-export function writeFileIn(dir: string, relative: string, content: string): void {
+export function writeFileIn(
+  dir: string,
+  relative: string,
+  content: string,
+): void {
   const file = join(dir, relative);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, content);

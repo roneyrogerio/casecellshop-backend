@@ -4,10 +4,18 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDirs, git } from '../test/helpers/git-sandbox.ts';
-import { isolatedEnv, localConfig, makeRepo, makeScriptsSandbox, runScript } from '../test/helpers/identity-sandbox.ts';
+import {
+  isolatedEnv,
+  localConfig,
+  makeRepo,
+  makeScriptsSandbox,
+  runScript,
+} from '../test/helpers/identity-sandbox.ts';
 
-type Identity = { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
-type Parsed = { identity: Identity; tokenStore?: 'system' | 'file' } | { error: string };
+type Identity =
+  { mode: 'bot'; login: string; keychainService: string } | { mode: 'self' };
+type Parsed =
+  { identity: Identity; tokenStore?: 'system' | 'file' } | { error: string };
 
 const scriptPath = join(import.meta.dirname, 'setup-local.ts');
 
@@ -20,11 +28,18 @@ function runsOnlyWhenDirect(): boolean {
 type Resolved = Parsed | { ask: true };
 type Ask = (question: string) => Promise<string>;
 
-let parseSetupArgs: (argv: string[]) => Parsed = () => ({ error: 'módulo não carregado' });
-let resolveIdentity: (argv: string[], configured: Identity | undefined, interactive: boolean) => Resolved = () => ({
+let parseSetupArgs: (argv: string[]) => Parsed = () => ({
   error: 'módulo não carregado',
 });
-let promptIdentity: (ask: Ask) => Promise<Parsed> = () => Promise.resolve({ error: 'módulo não carregado' });
+let resolveIdentity: (
+  argv: string[],
+  configured: Identity | undefined,
+  interactive: boolean,
+) => Resolved = () => ({
+  error: 'módulo não carregado',
+});
+let promptIdentity: (ask: Ask) => Promise<Parsed> = () =>
+  Promise.resolve({ error: 'módulo não carregado' });
 let keychainHelp: (status: 'missing-tool' | 'no-service') => string = () => '';
 
 type BotIdentity = Extract<Identity, { mode: 'bot' }>;
@@ -103,31 +118,68 @@ describe('AI-14 setup:local só executa ao ser rodado diretamente', () => {
 
 describe('AI-14 parseSetupArgs, modo bot', () => {
   it('AI-14 --identity bot --login usa o item padrão do chaveiro', () => {
-    expect(parseSetupArgs(['--identity', 'bot', '--login', 'minha-conta'])).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' },
+    expect(
+      parseSetupArgs(['--identity', 'bot', '--login', 'minha-conta']),
+    ).toEqual({
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'casecellshop-minha-conta',
+      },
     });
   });
 
   it('AI-14 --keychain troca o item do chaveiro', () => {
-    expect(parseSetupArgs(['--identity', 'bot', '--login', 'minha-conta', '--keychain', 'item-x'])).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'item-x' },
+    expect(
+      parseSetupArgs([
+        '--identity',
+        'bot',
+        '--login',
+        'minha-conta',
+        '--keychain',
+        'item-x',
+      ]),
+    ).toEqual({
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'item-x',
+      },
     });
   });
 
   it('AI-14 a forma --login=conta também vale, em qualquer ordem', () => {
     expect(parseSetupArgs(['--login=minha-conta', '--identity=bot'])).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' },
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'casecellshop-minha-conta',
+      },
     });
-    expect(parseSetupArgs(['--identity', 'bot', '--login=minha-conta', '--keychain=item-x'])).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'item-x' },
+    expect(
+      parseSetupArgs([
+        '--identity',
+        'bot',
+        '--login=minha-conta',
+        '--keychain=item-x',
+      ]),
+    ).toEqual({
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'item-x',
+      },
     });
   });
 
-  it.each(['a', 'abc', 'a-b', 'a1-b2-c3', '1abc', 'a'.repeat(39)])('AI-14 login válido %j é aceito', (login) => {
-    const parsed = parseSetupArgs(['--identity', 'bot', '--login', login]);
+  it.each(['a', 'abc', 'a-b', 'a1-b2-c3', '1abc', 'a'.repeat(39)])(
+    'AI-14 login válido %j é aceito',
+    (login) => {
+      const parsed = parseSetupArgs(['--identity', 'bot', '--login', login]);
 
-    expect('identity' in parsed).toBe(true);
-  });
+      expect('identity' in parsed).toBe(true);
+    },
+  );
 
   it.each(['-x', 'x-', 'a--b', 'a b', 'a_b', 'a.b', 'a'.repeat(40), ''])(
     'AI-14 login inválido %j devolve erro com o uso',
@@ -144,7 +196,9 @@ describe('AI-14 parseSetupArgs, modo bot', () => {
 
 describe('AI-14 parseSetupArgs, modo self', () => {
   it('AI-14 --identity self devolve só o modo', () => {
-    expect(parseSetupArgs(['--identity', 'self'])).toEqual({ identity: { mode: 'self' } });
+    expect(parseSetupArgs(['--identity', 'self'])).toEqual({
+      identity: { mode: 'self' },
+    });
   });
 
   it('AI-14 self com --login devolve erro', () => {
@@ -171,12 +225,20 @@ describe('AI-14 parseSetupArgs, argumentos inválidos', () => {
   });
 });
 
-const CONFIGURED_BOT: Identity = { mode: 'bot', login: 'conta-salva', keychainService: 'item-salvo' };
+const CONFIGURED_BOT: Identity = {
+  mode: 'bot',
+  login: 'conta-salva',
+  keychainService: 'item-salvo',
+};
 
 describe('AI-14 resolveIdentity, sem argumentos reaproveita a identidade configurada', () => {
   it('AI-14 sem argumentos e com identidade configurada devolve a configurada, mesmo sem terminal', () => {
-    expect(resolveIdentity([], CONFIGURED_BOT, false)).toEqual({ identity: CONFIGURED_BOT });
-    expect(resolveIdentity([], { mode: 'self' }, true)).toEqual({ identity: { mode: 'self' } });
+    expect(resolveIdentity([], CONFIGURED_BOT, false)).toEqual({
+      identity: CONFIGURED_BOT,
+    });
+    expect(resolveIdentity([], { mode: 'self' }, true)).toEqual({
+      identity: { mode: 'self' },
+    });
   });
 
   it('AI-14 sem argumentos, sem identidade e com terminal interativo pede para perguntar', () => {
@@ -196,11 +258,19 @@ describe('AI-14 resolveIdentity, sem argumentos reaproveita a identidade configu
   it('AI-14 com argumentos vale o resultado do parseSetupArgs e a identidade configurada é ignorada', () => {
     const argv = ['--identity', 'bot', '--login', 'minha-conta'];
 
-    expect(resolveIdentity(argv, CONFIGURED_BOT, true)).toEqual(parseSetupArgs(argv));
+    expect(resolveIdentity(argv, CONFIGURED_BOT, true)).toEqual(
+      parseSetupArgs(argv),
+    );
     expect(resolveIdentity(argv, CONFIGURED_BOT, true)).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' },
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'casecellshop-minha-conta',
+      },
     });
-    expect(resolveIdentity(['--identity', 'self'], CONFIGURED_BOT, false)).toEqual({ identity: { mode: 'self' } });
+    expect(
+      resolveIdentity(['--identity', 'self'], CONFIGURED_BOT, false),
+    ).toEqual({ identity: { mode: 'self' } });
   });
 
   it('AI-14 com argumento inválido devolve o erro do parseSetupArgs, mesmo com identidade configurada', () => {
@@ -220,23 +290,31 @@ function fakeAsk(answers: string[]): { ask: Ask; questions: string[] } {
   const ask: Ask = (question) => {
     questions.push(question);
     const answer = answers[questions.length - 1];
-    if (answer === undefined) return Promise.reject(new Error(`pergunta inesperada: ${question}`));
+    if (answer === undefined)
+      return Promise.reject(new Error(`pergunta inesperada: ${question}`));
     return Promise.resolve(answer);
   };
   return { ask, questions };
 }
 
 describe('AI-14 promptIdentity, o modo', () => {
-  it.each(['', '1', 'bot', ' BOT ', 'Bot'])('AI-14 a resposta %j ao modo escolhe o modo bot', async (mode) => {
-    const { ask, questions } = fakeAsk([mode, 'minha-conta', '']);
+  it.each(['', '1', 'bot', ' BOT ', 'Bot'])(
+    'AI-14 a resposta %j ao modo escolhe o modo bot',
+    async (mode) => {
+      const { ask, questions } = fakeAsk([mode, 'minha-conta', '']);
 
-    const result = await promptIdentity(ask);
+      const result = await promptIdentity(ask);
 
-    expect(result).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' },
-    });
-    expect(questions).toHaveLength(3);
-  });
+      expect(result).toEqual({
+        identity: {
+          mode: 'bot',
+          login: 'minha-conta',
+          keychainService: 'casecellshop-minha-conta',
+        },
+      });
+      expect(questions).toHaveLength(3);
+    },
+  );
 
   it.each(['2', 'self', ' SELF ', 'Self'])(
     'AI-14 a resposta %j ao modo escolhe o modo self, sem mais perguntas',
@@ -250,13 +328,16 @@ describe('AI-14 promptIdentity, o modo', () => {
     },
   );
 
-  it.each(['3', 'admin', 'bots'])('AI-14 a resposta %j ao modo devolve erro', async (mode) => {
-    const { ask } = fakeAsk([mode, 'minha-conta', '']);
+  it.each(['3', 'admin', 'bots'])(
+    'AI-14 a resposta %j ao modo devolve erro',
+    async (mode) => {
+      const { ask } = fakeAsk([mode, 'minha-conta', '']);
 
-    const result = await promptIdentity(ask);
+      const result = await promptIdentity(ask);
 
-    expect('error' in result).toBe(true);
-  });
+      expect('error' in result).toBe(true);
+    },
+  );
 });
 
 describe('AI-14 promptIdentity, o login e o item do chaveiro', () => {
@@ -303,7 +384,11 @@ describe('AI-14 promptIdentity, o login e o item do chaveiro', () => {
     const { ask } = fakeAsk(['bot', 'minha-conta', '']);
 
     expect(await promptIdentity(ask)).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' },
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'casecellshop-minha-conta',
+      },
     });
   });
 
@@ -311,7 +396,11 @@ describe('AI-14 promptIdentity, o login e o item do chaveiro', () => {
     const { ask } = fakeAsk(['bot', 'minha-conta', 'item-x']);
 
     expect(await promptIdentity(ask)).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'item-x' },
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'item-x',
+      },
     });
   });
 });
@@ -335,7 +424,9 @@ describe('AI-14 o CLI do setup:local', () => {
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], { env: isolatedEnv() });
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
+      env: isolatedEnv(),
+    });
 
     expect(result.status).toBe(0);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
@@ -358,28 +449,38 @@ describe('AI-14 o CLI do setup:local', () => {
 
 // Na sessão do Claude Code na nuvem a identidade é a conta do ambiente: o setup não se aplica e não grava nada.
 describe('AI-14 o CLI do setup:local na nuvem (CLAUDE_CODE_REMOTE=true)', () => {
-  const cloudEnv = (): Record<string, string> => isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' });
+  const cloudEnv = (): Record<string, string> =>
+    isolatedEnv({ CLAUDE_CODE_REMOTE: 'true' });
 
   function savedKeys(dir: string): string {
-    const result = spawnSync('git', ['config', '--local', '--get-regexp', '^casecellshop\\.'], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: isolatedEnv(),
-    });
+    const result = spawnSync(
+      'git',
+      ['config', '--local', '--get-regexp', '^casecellshop\\.'],
+      {
+        cwd: dir,
+        encoding: 'utf8',
+        env: isolatedEnv(),
+      },
+    );
     return result.status === 0 ? result.stdout.trim() : '';
   }
 
   it.each([
     ['sem argumentos', []],
     ['com --identity self', ['--identity', 'self']],
-    ['com --identity bot --login', ['--identity', 'bot', '--login', 'minha-conta']],
+    [
+      'com --identity bot --login',
+      ['--identity', 'bot', '--login', 'minha-conta'],
+    ],
   ] as [string, string[]][])(
     'AI-14 na nuvem, %s, diz que a identidade vem da conta do ambiente, sai com 0 e não grava nenhuma chave casecellshop.*',
     (_label, args) => {
       expect(runsOnlyWhenDirect()).toBe(true);
       const dir = makeScriptsSandbox();
 
-      const result = runScript(dir, 'setup-local.ts', args, { env: cloudEnv() });
+      const result = runScript(dir, 'setup-local.ts', args, {
+        env: cloudEnv(),
+      });
 
       const output = `${result.stdout}${result.stderr}`;
       expect(result.status).toBe(0);
@@ -397,7 +498,9 @@ describe('AI-14 o CLI do setup:local na nuvem (CLAUDE_CODE_REMOTE=true)', () => 
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], { env: isolatedEnv() });
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
+      env: isolatedEnv(),
+    });
 
     expect(result.status).toBe(0);
     expect(savedKeys(dir)).toContain('casecellshop.identity self');
@@ -429,8 +532,14 @@ describe('AI-14 parseSetupArgs, --token-store', () => {
   });
 
   it('AI-14 a forma --token-store=file também vale, em qualquer ordem', () => {
-    expect(parseSetupArgs(['--token-store=file', ...BOT_ARGS, '--keychain=item-x'])).toEqual({
-      identity: { mode: 'bot', login: 'minha-conta', keychainService: 'item-x' },
+    expect(
+      parseSetupArgs(['--token-store=file', ...BOT_ARGS, '--keychain=item-x']),
+    ).toEqual({
+      identity: {
+        mode: 'bot',
+        login: 'minha-conta',
+        keychainService: 'item-x',
+      },
       tokenStore: 'file',
     });
   });
@@ -463,15 +572,25 @@ describe('AI-14 parseSetupArgs, --token-store', () => {
   it('AI-14 resolveIdentity repassa o --token-store do parseSetupArgs', () => {
     const argv = [...BOT_ARGS, '--token-store', 'file'];
 
-    expect(resolveIdentity(argv, undefined, false)).toEqual({ identity: BOT_IDENTITY, tokenStore: 'file' });
-    expect(resolveIdentity(argv, undefined, false)).toEqual(parseSetupArgs(argv));
+    expect(resolveIdentity(argv, undefined, false)).toEqual({
+      identity: BOT_IDENTITY,
+      tokenStore: 'file',
+    });
+    expect(resolveIdentity(argv, undefined, false)).toEqual(
+      parseSetupArgs(argv),
+    );
   });
 
   it('AI-14 o CLI com --identity self e --token-store file mostra o uso, sai com código diferente de 0 e não grava nada', () => {
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self', '--token-store', 'file']);
+    const result = runScript(dir, 'setup-local.ts', [
+      '--identity',
+      'self',
+      '--token-store',
+      'file',
+    ]);
 
     expect(result.status).not.toBe(0);
     expect(result.status).not.toBeNull();
@@ -506,7 +625,11 @@ describe('AI-14 keychainHelp', () => {
 
 // O setup do modo bot, com todas as dependências injetadas: nada aqui toca o chaveiro, a rede ou o terminal.
 // Os quatro casos da conferência do token (AI-14): válido da conta, ausente ou recusado, de outra conta, sem conferência.
-const BOT_SETUP: BotIdentity = { mode: 'bot', login: 'minha-conta', keychainService: 'casecellshop-minha-conta' };
+const BOT_SETUP: BotIdentity = {
+  mode: 'bot',
+  login: 'minha-conta',
+  keychainService: 'casecellshop-minha-conta',
+};
 const VALID_OWN: TokenCheck = { result: 'valid', login: 'minha-conta' };
 const VALID_OTHER: TokenCheck = { result: 'valid', login: 'outra-conta' };
 const MISSING: TokenCheck = { result: 'missing' };
@@ -542,18 +665,24 @@ function botSetup(
   let replaced = false;
   const checkToken = vi.fn<SetupBotDeps['checkToken']>(() => {
     const next = queue.shift();
-    return next ? Promise.resolve(next) : Promise.reject(new Error('conferência inesperada'));
+    return next
+      ? Promise.resolve(next)
+      : Promise.reject(new Error('conferência inesperada'));
   });
   const storeToken = vi.fn<SetupBotDeps['storeToken']>((mode) => {
     order.push(`storeToken:${mode}`);
     replaced = options.storeResult ?? true;
     return Promise.resolve(options.storeResult ?? true);
   });
-  const confirm = vi.fn<SetupBotDeps['confirm']>(() => Promise.resolve(options.confirmResult ?? false));
+  const confirm = vi.fn<SetupBotDeps['confirm']>(() =>
+    Promise.resolve(options.confirmResult ?? false),
+  );
   const installHelper = vi.fn<SetupBotDeps['installHelper']>(() => {
     order.push('installHelper');
   });
-  const keychainStatus = vi.fn<SetupBotDeps['keychainStatus']>(() => options.keychain ?? 'ok');
+  const keychainStatus = vi.fn<SetupBotDeps['keychainStatus']>(
+    () => options.keychain ?? 'ok',
+  );
   const deps: SetupBotDeps = {
     readToken: () => (replaced ? 'token-novo' : options.stored),
     checkToken,
@@ -564,7 +693,16 @@ function botSetup(
     installHelper,
     log: (message) => logs.push(message),
   };
-  return { deps, checkToken, storeToken, confirm, installHelper, keychainStatus, order, output: () => logs.join('\n') };
+  return {
+    deps,
+    checkToken,
+    storeToken,
+    confirm,
+    installHelper,
+    keychainStatus,
+    order,
+    output: () => logs.join('\n'),
+  };
 }
 
 describe('AI-14 setupBot, token válido da conta configurada', () => {
@@ -589,7 +727,10 @@ describe('AI-14 setupBot, token ausente ou recusado', () => {
     'AI-14 token %s: atualiza no lugar (update), reconfere com o token novo e só então instala o helper',
     async (_label, first, stored) => {
       // Com exactOptionalPropertyTypes, ausente é a chave faltando, e não `stored: undefined`.
-      const run = botSetup([first, VALID_OWN], stored === undefined ? {} : { stored });
+      const run = botSetup(
+        [first, VALID_OWN],
+        stored === undefined ? {} : { stored },
+      );
 
       const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
 
@@ -652,7 +793,11 @@ describe('AI-14 setupBot, token ausente ou recusado', () => {
 
 describe('AI-14 setupBot, token de outra conta', () => {
   it('AI-14 token de outra conta com terminal: pergunta citando as duas contas e, se a resposta é não, sai sem trocar nada', async () => {
-    const run = botSetup([VALID_OTHER], { stored: 'token-de-outra', interactive: true, confirmResult: false });
+    const run = botSetup([VALID_OTHER], {
+      stored: 'token-de-outra',
+      interactive: true,
+      confirmResult: false,
+    });
 
     const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
 
@@ -683,11 +828,22 @@ describe('AI-14 setupBot, token de outra conta', () => {
   });
 
   it('AI-14 token de outra conta, confirmado: se o storeToken falha ou a reconferência não é da conta, devolve false sem instalar o helper', async () => {
-    const storeFails = botSetup([VALID_OTHER], { interactive: true, confirmResult: true, storeResult: false });
-    const stillOther = botSetup([VALID_OTHER, VALID_OTHER], { interactive: true, confirmResult: true });
+    const storeFails = botSetup([VALID_OTHER], {
+      interactive: true,
+      confirmResult: true,
+      storeResult: false,
+    });
+    const stillOther = botSetup([VALID_OTHER, VALID_OTHER], {
+      interactive: true,
+      confirmResult: true,
+    });
 
-    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', storeFails.deps)).toBe(false);
-    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', stillOther.deps)).toBe(false);
+    expect(
+      await setupBot('/nao/usado', BOT_SETUP, 'system', storeFails.deps),
+    ).toBe(false);
+    expect(
+      await setupBot('/nao/usado', BOT_SETUP, 'system', stillOther.deps),
+    ).toBe(false);
 
     expect(storeFails.storeToken).toHaveBeenCalledWith('replace');
     expect(storeFails.installHelper).not.toHaveBeenCalled();
@@ -695,7 +851,11 @@ describe('AI-14 setupBot, token de outra conta', () => {
   });
 
   it('AI-14 token de outra conta sem terminal: devolve false sem perguntar nem trocar, e a mensagem sugere --keychain', async () => {
-    const run = botSetup([VALID_OTHER], { stored: 'token-de-outra', interactive: false, confirmResult: true });
+    const run = botSetup([VALID_OTHER], {
+      stored: 'token-de-outra',
+      interactive: false,
+      confirmResult: true,
+    });
 
     const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
 
@@ -711,7 +871,11 @@ describe('AI-14 setupBot, sem conferência possível', () => {
   it.each([true, false])(
     'AI-14 sem rede ou com erro da API (interactive=%s): não mexe no chaveiro, não instala o helper e diz que não deu para conferir',
     async (interactive) => {
-      const run = botSetup([UNREACHABLE], { stored: 'token-talvez-bom', interactive, confirmResult: true });
+      const run = botSetup([UNREACHABLE], {
+        stored: 'token-talvez-bom',
+        interactive,
+        confirmResult: true,
+      });
 
       const ok = await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps);
 
@@ -759,7 +923,9 @@ describe('AI-14 setupBot, chaveiro do sistema', () => {
   it('AI-14 armazenamento do sistema com o chaveiro ok e token ausente chega ao storeToken (controle)', async () => {
     const run = botSetup([MISSING, VALID_OWN], { keychain: 'ok' });
 
-    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps)).toBe(true);
+    expect(await setupBot('/nao/usado', BOT_SETUP, 'system', run.deps)).toBe(
+      true,
+    );
     expect(run.storeToken).toHaveBeenCalledWith('update');
   });
 });
@@ -767,17 +933,35 @@ describe('AI-14 setupBot, chaveiro do sistema', () => {
 // O setup não pode deixar o clone apontando para um item do chaveiro que o setupBot recusou (A11):
 // a identidade e o armazenamento só valem se o setup do bot deu certo, senão volta o que havia, inclusive o que faltava.
 describe('AI-14 configureIdentity, a configuração só fica se o setup do bot deu certo', () => {
-  const botOf = (login: string, keychainService: string): Identity => ({ mode: 'bot', login, keychainService });
-  const setupBotResult = (result: boolean) => ({ setupBot: () => Promise.resolve(result) });
-  const keys = ['identity', 'botLogin', 'keychainService', 'tokenStore'] as const;
+  const botOf = (login: string, keychainService: string): Identity => ({
+    mode: 'bot',
+    login,
+    keychainService,
+  });
+  const setupBotResult = (result: boolean) => ({
+    setupBot: () => Promise.resolve(result),
+  });
+  const keys = [
+    'identity',
+    'botLogin',
+    'keychainService',
+    'tokenStore',
+  ] as const;
   const saved = (dir: string): Record<string, string | undefined> =>
-    Object.fromEntries(keys.map((key) => [key, localConfig(dir, `casecellshop.${key}`)]));
+    Object.fromEntries(
+      keys.map((key) => [key, localConfig(dir, `casecellshop.${key}`)]),
+    );
 
   it('AI-14 setupBot que devolve false mantém o modo self que já estava no clone e devolve false', async () => {
     const dir = makeRepo();
     git(dir, 'config', '--local', 'casecellshop.identity', 'self');
 
-    const ok = await configureIdentity(dir, botOf('outra-conta', 'item-da-outra'), 'system', setupBotResult(false));
+    const ok = await configureIdentity(
+      dir,
+      botOf('outra-conta', 'item-da-outra'),
+      'system',
+      setupBotResult(false),
+    );
 
     expect(ok).toBe(false);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('self');
@@ -791,7 +975,12 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
     git(dir, 'config', '--local', 'casecellshop.botLogin', 'a');
     git(dir, 'config', '--local', 'casecellshop.keychainService', 'item-a');
 
-    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'system', setupBotResult(false));
+    const ok = await configureIdentity(
+      dir,
+      botOf('b', 'item-b'),
+      'system',
+      setupBotResult(false),
+    );
 
     expect(ok).toBe(false);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('bot');
@@ -805,7 +994,12 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
     git(dir, 'config', '--local', 'casecellshop.botLogin', 'a');
     git(dir, 'config', '--local', 'casecellshop.keychainService', 'item-a');
 
-    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'system', setupBotResult(true));
+    const ok = await configureIdentity(
+      dir,
+      botOf('b', 'item-b'),
+      'system',
+      setupBotResult(true),
+    );
 
     expect(ok).toBe(true);
     expect(localConfig(dir, 'casecellshop.identity')).toBe('bot');
@@ -815,7 +1009,11 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
 
   // O setupBot rejeita quando a pessoa cancela com Ctrl+C no prompt ou o arquivo do token não grava (A11).
   // A função pode rejeitar ou devolver false; nos dois casos o clone volta ao que era.
-  const failed = async (dir: string, identity: Identity, store: 'system' | 'file'): Promise<void> => {
+  const failed = async (
+    dir: string,
+    identity: Identity,
+    store: 'system' | 'file',
+  ): Promise<void> => {
     const outcome = await configureIdentity(dir, identity, store, {
       setupBot: () => Promise.reject(new Error('x')),
     }).then(
@@ -831,7 +1029,12 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
 
     await failed(dir, botOf('outra-conta', 'item-da-outra'), 'system');
 
-    expect(saved(dir)).toEqual({ identity: 'self', botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+    expect(saved(dir)).toEqual({
+      identity: 'self',
+      botLogin: undefined,
+      keychainService: undefined,
+      tokenStore: undefined,
+    });
   });
 
   it('AI-14 setupBot que rejeita mantém o bot a e o item-a anteriores', async () => {
@@ -842,7 +1045,12 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
 
     await failed(dir, botOf('b', 'item-b'), 'file');
 
-    expect(saved(dir)).toEqual({ identity: 'bot', botLogin: 'a', keychainService: 'item-a', tokenStore: undefined });
+    expect(saved(dir)).toEqual({
+      identity: 'bot',
+      botLogin: 'a',
+      keychainService: 'item-a',
+      tokenStore: undefined,
+    });
   });
 
   it('AI-14 setupBot que rejeita, sem configuração antes, não deixa nenhuma chave casecellshop.*', async () => {
@@ -850,34 +1058,69 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
 
     await failed(dir, botOf('b', 'item-b'), 'system');
 
-    expect(saved(dir)).toEqual({ identity: undefined, botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+    expect(saved(dir)).toEqual({
+      identity: undefined,
+      botLogin: undefined,
+      keychainService: undefined,
+      tokenStore: undefined,
+    });
   });
 
   it('AI-14 sem configuração antes e com setupBot false não sobra nenhuma chave casecellshop.*', async () => {
     const dir = makeRepo();
 
-    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(false));
+    const ok = await configureIdentity(
+      dir,
+      botOf('b', 'item-b'),
+      'file',
+      setupBotResult(false),
+    );
 
     expect(ok).toBe(false);
-    expect(saved(dir)).toEqual({ identity: undefined, botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+    expect(saved(dir)).toEqual({
+      identity: undefined,
+      botLogin: undefined,
+      keychainService: undefined,
+      tokenStore: undefined,
+    });
   });
 
   it('AI-14 o armazenamento do token também volta ao que era quando o setupBot devolve false', async () => {
     const dir = makeRepo();
     git(dir, 'config', '--local', 'casecellshop.identity', 'self');
 
-    await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(false));
+    await configureIdentity(
+      dir,
+      botOf('b', 'item-b'),
+      'file',
+      setupBotResult(false),
+    );
 
-    expect(saved(dir)).toEqual({ identity: 'self', botLogin: undefined, keychainService: undefined, tokenStore: undefined });
+    expect(saved(dir)).toEqual({
+      identity: 'self',
+      botLogin: undefined,
+      keychainService: undefined,
+      tokenStore: undefined,
+    });
   });
 
   it('AI-14 setupBot true com armazenamento em arquivo grava o tokenStore file', async () => {
     const dir = makeRepo();
 
-    const ok = await configureIdentity(dir, botOf('b', 'item-b'), 'file', setupBotResult(true));
+    const ok = await configureIdentity(
+      dir,
+      botOf('b', 'item-b'),
+      'file',
+      setupBotResult(true),
+    );
 
     expect(ok).toBe(true);
-    expect(saved(dir)).toEqual({ identity: 'bot', botLogin: 'b', keychainService: 'item-b', tokenStore: 'file' });
+    expect(saved(dir)).toEqual({
+      identity: 'bot',
+      botLogin: 'b',
+      keychainService: 'item-b',
+      tokenStore: 'file',
+    });
   });
 
   // O setupBot lê o token pela configuração do clone (readToken): quando ele roda, a identidade nova já precisa estar gravada.
@@ -893,7 +1136,12 @@ describe('AI-14 configureIdentity, a configuração só fica se o setup do bot d
       },
     });
 
-    expect(during).toEqual({ identity: 'bot', botLogin: 'b', keychainService: 'item-b', tokenStore: 'file' });
+    expect(during).toEqual({
+      identity: 'bot',
+      botLogin: 'b',
+      keychainService: 'item-b',
+      tokenStore: 'file',
+    });
   });
 });
 
@@ -903,12 +1151,25 @@ describe('AI-14 o CLI do setup:local no modo self com o helper do projeto instal
     expect(runsOnlyWhenDirect()).toBe(true);
     const dir = makeScriptsSandbox();
     git(dir, 'config', '--local', '--add', 'credential.helper', '');
-    git(dir, 'config', '--local', '--add', 'credential.helper', `!node "${join(dir, 'scripts', 'git-credential-bot.ts')}"`);
+    git(
+      dir,
+      'config',
+      '--local',
+      '--add',
+      'credential.helper',
+      `!node "${join(dir, 'scripts', 'git-credential-bot.ts')}"`,
+    );
     const helpers = () =>
-      spawnSync('git', ['config', '--local', '--get-all', 'credential.helper'], { cwd: dir, encoding: 'utf8', env: isolatedEnv() });
+      spawnSync(
+        'git',
+        ['config', '--local', '--get-all', 'credential.helper'],
+        { cwd: dir, encoding: 'utf8', env: isolatedEnv() },
+      );
     expect(helpers().stdout).toContain('git-credential-bot');
 
-    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], { env: isolatedEnv() });
+    const result = runScript(dir, 'setup-local.ts', ['--identity', 'self'], {
+      env: isolatedEnv(),
+    });
 
     expect(result.status).toBe(0);
     expect(helpers().stdout.trim()).toBe('');

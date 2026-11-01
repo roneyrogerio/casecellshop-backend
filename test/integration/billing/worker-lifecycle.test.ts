@@ -1,4 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { settle } from '../../helpers/async.ts';
 import {
   buildWorker,
@@ -49,7 +57,9 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     await vi.waitFor(
       async () => {
         world.clock.advance(500);
-        expect((await readOrder(world.pool, order.orderId)).status).toBe('invoiced');
+        expect((await readOrder(world.pool, order.orderId)).status).toBe(
+          'invoiced',
+        );
       },
       { timeout: 20_000, interval: 20 },
     );
@@ -63,16 +73,25 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     const worker = buildWorker(world, { config: LOOP_CONFIG });
     const stuck = await submitOrder(suite, world);
     // A chamada desta mensagem fica presa no portão do transporte, sem resposta, até o teste cortá-la.
-    const held = world.transport.stall({ op: 'createOrder', reference: stuck.orderId }, { callErp: false });
+    const held = world.transport.stall(
+      { op: 'createOrder', reference: stuck.orderId },
+      { callErp: false },
+    );
     await worker.start();
-    await within(world.transport.waitForSends(1, 'createOrder'), 'a tentativa chamar o ERP');
+    await within(
+      world.transport.waitForSends(1, 'createOrder'),
+      'a tentativa chamar o ERP',
+    );
 
     const sequence: string[] = [];
     const stopping = worker.stop().then(() => sequence.push('stop'));
     const restarting = worker.start().then(() => sequence.push('start'));
     const fresh = await submitOrder(suite, world);
     await settle();
-    expect(sequence, 'o start() não resolve enquanto o stop() espera a tentativa em voo').toEqual([]);
+    expect(
+      sequence,
+      'o start() não resolve enquanto o stop() espera a tentativa em voo',
+    ).toEqual([]);
 
     // Cortar a chamada presa no portão do transporte solta o stop(); então o start() volta a receber. O relógio
     // manual não avança em nenhum ponto até aqui: a mensagem nova pode ser recebida e chamar o ERP a qualquer
@@ -81,7 +100,9 @@ describe('A14 o worker volta a receber depois do stop()', () => {
     held.fail();
     await vi.waitFor(
       async () => {
-        expect((await readOrder(world.pool, fresh.orderId)).status).toBe('invoiced');
+        expect((await readOrder(world.pool, fresh.orderId)).status).toBe(
+          'invoiced',
+        );
       },
       { timeout: 20_000, interval: 20 },
     );
@@ -117,12 +138,20 @@ function holdReceives(world: QueueWorld): Gate {
 }
 
 // Depois do último stop(): nenhum `receive` novo. Solta o que estiver preso e confere que o laço não pede outro.
-async function expectNoReceiveAfterStop(world: QueueWorld, gate: Gate): Promise<void> {
+async function expectNoReceiveAfterStop(
+  world: QueueWorld,
+  gate: Gate,
+): Promise<void> {
   const count = world.queue.receives.length;
   gate.releaseAll();
-  await vi.waitFor(() => expect(world.queue.completedReceives).toBeGreaterThanOrEqual(count));
+  await vi.waitFor(() =>
+    expect(world.queue.completedReceives).toBeGreaterThanOrEqual(count),
+  );
   await settle(30);
-  expect(world.queue.receives, 'um laço que sobrou depois do último stop() pediria outro receive').toHaveLength(count);
+  expect(
+    world.queue.receives,
+    'um laço que sobrou depois do último stop() pediria outro receive',
+  ).toHaveLength(count);
 }
 
 describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve por último deixa o worker parado', () => {
@@ -133,7 +162,10 @@ describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve p
 
     const firstStart = worker.start();
     firstStart.catch(() => undefined);
-    await within(gate.waitForParked(1), 'o laço do start() pedir o primeiro receive');
+    await within(
+      gate.waitForParked(1),
+      'o laço do start() pedir o primeiro receive',
+    );
     const firstStop = stopAdvancing(worker, world);
     gate.releaseAll();
     await firstStop;
@@ -141,8 +173,14 @@ describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve p
 
     const secondStart = worker.start();
     secondStart.catch(() => undefined);
-    await within(gate.waitForParked(2), 'o start() depois do stop() voltar a pedir receive');
-    expect(world.queue.receives, 'o start() depois do stop() voltou a receber').toHaveLength(2);
+    await within(
+      gate.waitForParked(2),
+      'o start() depois do stop() voltar a pedir receive',
+    );
+    expect(
+      world.queue.receives,
+      'o start() depois do stop() voltou a receber',
+    ).toHaveLength(2);
     const secondStop = stopAdvancing(worker, world);
     gate.releaseAll();
     await secondStop;
@@ -157,9 +195,16 @@ describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve p
     const gate = holdReceives(world);
     const started = worker.start();
     started.catch(() => undefined);
-    await within(gate.waitForParked(1), 'o laço do start() pedir o primeiro receive');
+    await within(
+      gate.waitForParked(1),
+      'o laço do start() pedir o primeiro receive',
+    );
 
-    const finished =Promise.all([worker.stop(), worker.start(), worker.stop()]).then(() => true);
+    const finished = Promise.all([
+      worker.stop(),
+      worker.start(),
+      worker.stop(),
+    ]).then(() => true);
     let done = false;
     void finished.then(() => {
       done = true;
@@ -182,13 +227,18 @@ describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve p
     const gate = holdReceives(world);
     const first = worker.start();
     first.catch(() => undefined);
-    await within(gate.waitForParked(1), 'o laço do start() pedir o primeiro receive');
+    await within(
+      gate.waitForParked(1),
+      'o laço do start() pedir o primeiro receive',
+    );
 
-    const second =worker.start();
+    const second = worker.start();
     second.catch(() => undefined);
     await settle(30);
 
-    expect(world.queue.receives, 'um laço só: um receive em voo').toHaveLength(1);
+    expect(world.queue.receives, 'um laço só: um receive em voo').toHaveLength(
+      1,
+    );
     const stopping = stopAdvancing(worker, world);
     gate.releaseAll();
     await stopping;

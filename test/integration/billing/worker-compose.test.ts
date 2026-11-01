@@ -3,10 +3,18 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { DockerComposeEnvironment, type StartedDockerComposeEnvironment } from 'testcontainers';
+import {
+  DockerComposeEnvironment,
+  type StartedDockerComposeEnvironment,
+} from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CheckoutAccepted, OrderStatus } from '../../../src/contract/index.ts';
-import { expectMatchesContract, findRoute, observeFetchResponse, type ObservedResponse } from '../../helpers/contract.ts';
+import {
+  expectMatchesContract,
+  findRoute,
+  observeFetchResponse,
+  type ObservedResponse,
+} from '../../helpers/contract.ts';
 import { parseExposition, valueOf } from '../../helpers/metrics.ts';
 import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
@@ -45,17 +53,35 @@ async function freePort(): Promise<number> {
 }
 
 async function composeCli(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync('docker', ['compose', '-p', projectName, '-f', 'compose.yaml', ...args], {
-    cwd: root,
-    env: { ...process.env, API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) },
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  const { stdout, stderr } = await execFileAsync(
+    'docker',
+    ['compose', '-p', projectName, '-f', 'compose.yaml', ...args],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        API_PORT: String(apiPort),
+        JAEGER_UI_PORT: String(jaegerUiPort),
+      },
+      maxBuffer: 32 * 1024 * 1024,
+    },
+  );
   return `${stdout}${stderr}`;
 }
 
 async function collectServiceLogs(): Promise<string> {
   try {
-    return await composeCli(['logs', '--no-color', '--timestamps', '--tail', '200', 'migrate', 'postgres', 'api', 'worker']);
+    return await composeCli([
+      'logs',
+      '--no-color',
+      '--timestamps',
+      '--tail',
+      '200',
+      'migrate',
+      'postgres',
+      'api',
+      'worker',
+    ]);
   } catch (error) {
     return `não foi possível ler os logs dos serviços: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -66,7 +92,20 @@ async function collectServiceLogs(): Promise<string> {
 async function psql(sql: string): Promise<string> {
   const result = await environment
     .getContainer('postgres-1')
-    .exec(['psql', '-U', DB_USER, '-d', DB_NAME, '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', sql]);
+    .exec([
+      'psql',
+      '-U',
+      DB_USER,
+      '-d',
+      DB_NAME,
+      '-X',
+      '-A',
+      '-t',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-c',
+      sql,
+    ]);
   expect(result.exitCode, `psql falhou: ${result.output}`).toBe(0);
   return result.stdout.trim();
 }
@@ -78,22 +117,34 @@ beforeAll(async () => {
   try {
     environment = await new DockerComposeEnvironment(root, 'compose.yaml')
       .withProjectName(projectName)
-      .withEnvironment({ API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) })
+      .withEnvironment({
+        API_PORT: String(apiPort),
+        JAEGER_UI_PORT: String(jaegerUiPort),
+      })
       .withBuild()
       .withStartupTimeout(240_000)
       .up();
   } catch (error) {
     const logs = await collectServiceLogs();
-    await composeCli(['down', '--volumes', '--timeout', '5']).catch(() => undefined);
+    await composeCli(['down', '--volumes', '--timeout', '5']).catch(
+      () => undefined,
+    );
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${reason}\n\n--- logs dos serviços (migrate, postgres, api, worker; últimas 200 linhas) ---\n${logs}`, { cause: error });
+    throw new Error(
+      `${reason}\n\n--- logs dos serviços (migrate, postgres, api, worker; últimas 200 linhas) ---\n${logs}`,
+      { cause: error },
+    );
   }
   for (const [sku, name, price] of [
     [SKU, 'Capa Moto G84 antichoque', PRICE_CENTS],
     [METRICS_SKU, 'Cabo USB-C de 1 m', METRICS_PRICE_CENTS],
   ] as const) {
-    await psql(`insert into products (sku, name, price_cents) values ('${sku}', '${name}', ${price}) on conflict (sku) do nothing`);
-    await psql(`insert into inventory (sku, on_hand, reserved) values ('${sku}', ${STORE_ON_HAND}, 0) on conflict (sku) do nothing`);
+    await psql(
+      `insert into products (sku, name, price_cents) values ('${sku}', '${name}', ${price}) on conflict (sku) do nothing`,
+    );
+    await psql(
+      `insert into inventory (sku, on_hand, reserved) values ('${sku}', ${STORE_ON_HAND}, 0) on conflict (sku) do nothing`,
+    );
   }
 }, 480_000);
 
@@ -102,15 +153,26 @@ afterAll(async () => {
 }, 120_000);
 
 async function getJson(path: string): Promise<ObservedResponse> {
-  return observeFetchResponse(await fetch(`http://127.0.0.1:${apiPort}${path}`));
+  return observeFetchResponse(
+    await fetch(`http://127.0.0.1:${apiPort}${path}`),
+  );
 }
 
 // POST /checkout pela porta publicada, com a resposta validada pelo schema do contrato.
-async function placeOrder(sku: string, quantity: number, priceCents: number): Promise<string> {
+async function placeOrder(
+  sku: string,
+  quantity: number,
+  priceCents: number,
+): Promise<string> {
   const response = await fetch(`http://127.0.0.1:${apiPort}/checkout`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'idempotency-key': `compose-${randomUUID()}` },
-    body: JSON.stringify({ items: [{ sku, quantity, expectedUnitPrice: priceCents }] }),
+    headers: {
+      'content-type': 'application/json',
+      'idempotency-key': `compose-${randomUUID()}`,
+    },
+    body: JSON.stringify({
+      items: [{ sku, quantity, expectedUnitPrice: priceCents }],
+    }),
   });
   const accepted = await observeFetchResponse(response);
   expect(accepted.status).toBe(202);
@@ -128,7 +190,10 @@ async function awaitInvoiced(orderId: string): Promise<void> {
       const observed = await getJson(`/orders/${orderId}/status`);
       expect(observed.status).toBe(200);
       expectMatchesContract(statusRoute, observed);
-      expect(OrderStatus.parse(observed.body)).toEqual({ orderId, status: 'invoiced' });
+      expect(OrderStatus.parse(observed.body)).toEqual({
+        orderId,
+        status: 'invoiced',
+      });
     },
     { timeout: 90_000, interval: 500 },
   );
@@ -140,7 +205,9 @@ async function awaitInvoiced(orderId: string): Promise<void> {
 async function queueCounts(queueName: string): Promise<QueueCounts> {
   const url = `http://elasticmq:9324/000000000000/${queueName}?Action=GetQueueAttributes&AttributeName.1=All`;
   const script = `fetch('${url}').then((r) => r.text()).then((t) => process.stdout.write(t))`;
-  const result = await environment.getContainer('worker-1').exec(['node', '-e', script]);
+  const result = await environment
+    .getContainer('worker-1')
+    .exec(['node', '-e', script]);
   expect(result.exitCode, result.output).toBe(0);
   return parseQueueCountsXml(result.stdout);
 }
@@ -151,16 +218,32 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
 
     await awaitInvoiced(orderId);
 
-    expect(await psql(`select count(*) from erp_sim.invoices where reference = '${orderId}'`)).toBe('1');
-    expect(await psql(`select on_hand || ',' || reserved || ',' || sold_total from inventory where sku = '${SKU}'`)).toBe(
-      `${STORE_ON_HAND - QUANTITY},0,${QUANTITY}`,
-    );
-    expect(await psql(`select published_at is not null from outbox where order_id = '${orderId}'`)).toBe('t');
+    expect(
+      await psql(
+        `select count(*) from erp_sim.invoices where reference = '${orderId}'`,
+      ),
+    ).toBe('1');
+    expect(
+      await psql(
+        `select on_hand || ',' || reserved || ',' || sold_total from inventory where sku = '${SKU}'`,
+      ),
+    ).toBe(`${STORE_ON_HAND - QUANTITY},0,${QUANTITY}`);
+    expect(
+      await psql(
+        `select published_at is not null from outbox where order_id = '${orderId}'`,
+      ),
+    ).toBe('t');
     // O desfecho vai ao banco antes de a mensagem ser apagada: a fila esvazia logo depois, visíveis e em voo.
     await vi.waitFor(
       async () => {
-        expect(await queueCounts('billing')).toEqual({ visible: 0, notVisible: 0 });
-        expect(await queueCounts('billing-dlq')).toEqual({ visible: 0, notVisible: 0 });
+        expect(await queueCounts('billing')).toEqual({
+          visible: 0,
+          notVisible: 0,
+        });
+        expect(await queueCounts('billing-dlq')).toEqual({
+          visible: 0,
+          notVisible: 0,
+        });
       },
       { timeout: 30_000, interval: 500 },
     );
@@ -169,14 +252,28 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
   it('OBS-02 o /metrics do processo do worker no compose expõe o desfecho invoiced e a chamada ao ERP depois do faturamento', async () => {
     await awaitInvoiced(await placeOrder(METRICS_SKU, 1, METRICS_PRICE_CENTS));
     // O worker não publica porta: a leitura sai de dentro do contêiner dele, na porta de métricas.
-    const script = "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => process.stdout.write(t))";
-    const result = await environment.getContainer('worker-1').exec(['node', '-e', script]);
+    const script =
+      "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => process.stdout.write(t))";
+    const result = await environment
+      .getContainer('worker-1')
+      .exec(['node', '-e', script]);
     expect(result.exitCode, result.output).toBe(0);
 
     const families = parseExposition(result.stdout);
     expect(families.get('outbox_attempt_outcome_total')?.type).toBe('counter');
-    expect(valueOf(families, 'outbox_attempt_outcome_total', { outcome: 'invoiced' })).toBeGreaterThanOrEqual(1);
-    expect(valueOf(families, 'erp_request_total', { operation: 'create_order', outcome: 'ok' })).toBeGreaterThanOrEqual(1);
-    expect(families.get('order_accept_to_invoice_seconds')?.type).toBe('histogram');
+    expect(
+      valueOf(families, 'outbox_attempt_outcome_total', {
+        outcome: 'invoiced',
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      valueOf(families, 'erp_request_total', {
+        operation: 'create_order',
+        outcome: 'ok',
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(families.get('order_accept_to_invoice_seconds')?.type).toBe(
+      'histogram',
+    );
   }, 60_000);
 });

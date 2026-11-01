@@ -13,7 +13,10 @@ export interface CapturedLogs {
 }
 
 // O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo `destination`.
-export function captureLogs(serviceName = 'casecellshop-worker', level = 'info'): CapturedLogs {
+export function captureLogs(
+  serviceName = 'casecellshop-worker',
+  level = 'info',
+): CapturedLogs {
   const lines: LogLine[] = [];
   const destination = {
     write(chunk: string): void {
@@ -26,7 +29,12 @@ export function captureLogs(serviceName = 'casecellshop-worker', level = 'info')
   return {
     logger,
     lines,
-    eventsOf: (event, orderId) => lines.filter((line) => line['event'] === event && (orderId === undefined || line['orderId'] === orderId)),
+    eventsOf: (event, orderId) =>
+      lines.filter(
+        (line) =>
+          line['event'] === event &&
+          (orderId === undefined || line['orderId'] === orderId),
+      ),
     ofOrder: (orderId) => lines.filter((line) => line['orderId'] === orderId),
   };
 }

@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 
 // Limites do FND-06 para cada regra de .claude/rules/.
 const MAX_RULE_LINES = 200;
@@ -24,9 +27,13 @@ function ruleProblems(raw: string, requiredPaths: string[]): string[] {
   }
   const paths = (data as { paths?: unknown } | null)?.paths;
   if (!Array.isArray(paths)) problems.push('sem paths:');
-  else for (const required of requiredPaths) if (!paths.includes(required)) problems.push(`paths: sem ${required}`);
-  if (lines.length > MAX_RULE_LINES) problems.push(`mais de ${MAX_RULE_LINES} linhas`);
-  if (raw.length > MAX_RULE_CHARS) problems.push(`mais de ${MAX_RULE_CHARS} caracteres`);
+  else
+    for (const required of requiredPaths)
+      if (!paths.includes(required)) problems.push(`paths: sem ${required}`);
+  if (lines.length > MAX_RULE_LINES)
+    problems.push(`mais de ${MAX_RULE_LINES} linhas`);
+  if (raw.length > MAX_RULE_CHARS)
+    problems.push(`mais de ${MAX_RULE_CHARS} caracteres`);
   return problems;
 }
 
@@ -52,7 +59,9 @@ describe('AI-32 as regras por tipo de arquivo carregam só quando um arquivo des
 
   // Referência do formato: a regra de testes já existente declara paths e cabe nos limites.
   it('AI-32 a regra tests.md, que já existe, passa na mesma conferência', () => {
-    expect(ruleProblems(realRule('tests.md') ?? '', ['**/*.test.ts', 'test/**'])).toEqual([]);
+    expect(
+      ruleProblems(realRule('tests.md') ?? '', ['**/*.test.ts', 'test/**']),
+    ).toEqual([]);
   });
 });
 
@@ -65,8 +74,12 @@ describe('AI-32 controle negativo: a conferência reprova a regra quebrada', () 
 
   it('AI-32 reprova a regra sem frontmatter, sem paths ou sem o padrão exigido', () => {
     expect(ruleProblems('# Regra\n', ['src/**'])).toEqual(['sem frontmatter']);
-    expect(ruleProblems('---\ndescription: x\n---\n', ['src/**'])).toEqual(['sem paths:']);
-    expect(ruleProblems(valid, ['src/**', '**/*.md'])).toEqual(['paths: sem **/*.md']);
+    expect(ruleProblems('---\ndescription: x\n---\n', ['src/**'])).toEqual([
+      'sem paths:',
+    ]);
+    expect(ruleProblems(valid, ['src/**', '**/*.md'])).toEqual([
+      'paths: sem **/*.md',
+    ]);
   });
 
   it('AI-32 reprova a regra com 201 linhas e a com mais de 40.000 caracteres', () => {
@@ -74,6 +87,8 @@ describe('AI-32 controle negativo: a conferência reprova a regra quebrada', () 
     expect(ruleProblems(long, ['src/**'])).toContain('mais de 200 linhas');
 
     const wide = `${valid}${'a'.repeat(MAX_RULE_CHARS)}\n`;
-    expect(ruleProblems(wide, ['src/**'])).toContain('mais de 40000 caracteres');
+    expect(ruleProblems(wide, ['src/**'])).toContain(
+      'mais de 40000 caracteres',
+    );
   });
 });

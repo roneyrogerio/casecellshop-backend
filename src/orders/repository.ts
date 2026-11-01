@@ -9,13 +9,19 @@ export interface OrdersRepository {
 }
 
 // O span do repositório é CLIENT e filho do span da requisição (FND-05).
-export function createOrdersRepository(pool: Pool, telemetry: Telemetry): OrdersRepository {
+export function createOrdersRepository(
+  pool: Pool,
+  telemetry: Telemetry,
+): OrdersRepository {
   const db = createDb(pool);
   return {
     findStatus(orderId) {
       return telemetry.withSpan(
         'orders.findStatus',
-        { kind: SpanKind.CLIENT, attributes: { 'db.system.name': 'postgresql' } },
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { 'db.system.name': 'postgresql' },
+        },
         async () => {
           const row = await db
             .selectFrom('orders')
@@ -25,9 +31,17 @@ export function createOrdersRepository(pool: Pool, telemetry: Telemetry): Orders
           if (!row) return null;
           // O motivo só existe no failed; o CHECK do banco garante um dos três valores.
           if (row.status === 'failed') {
-            return { orderId: row.id, status: 'failed', reason: row.failure_reason as 'erp_rejected' | 'erp_out_of_stock' | 'cancelled' };
+            return {
+              orderId: row.id,
+              status: 'failed',
+              reason: row.failure_reason as
+                'erp_rejected' | 'erp_out_of_stock' | 'cancelled',
+            };
           }
-          return { orderId: row.id, status: row.status as 'pending' | 'invoiced' };
+          return {
+            orderId: row.id,
+            status: row.status as 'pending' | 'invoiced',
+          };
         },
       );
     },

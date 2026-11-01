@@ -27,17 +27,40 @@ const SIM_MODES = {
   slow: { mode: 'slow', delayMs: 3_000 },
   unavailable: { mode: 'unavailable' },
 } as const;
-const simMode = envChoice('ERP_SIM_MODE', ['normal', 'slow', 'unavailable'], 'normal');
+const simMode = envChoice(
+  'ERP_SIM_MODE',
+  ['normal', 'slow', 'unavailable'],
+  'normal',
+);
 const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
 sim.script.setDefault(SIM_MODES[simMode]);
-const erp = createErpClient({ transport: sim.transport, clock: systemClock, timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs, telemetry });
+const erp = createErpClient({
+  transport: sim.transport,
+  clock: systemClock,
+  timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs,
+  telemetry,
+});
 
 const sqsClient = createSqsClientFromEnv();
 const billingQueue = createQueue(sqsClient, requireEnv('BILLING_QUEUE_URL'));
 // Um limite só para todas as chamadas ao ERP do processo (design.md, "Worker: envio").
 const semaphore = createSemaphore(DEFAULT_WORKER_CONFIG.erpConcurrency);
-const worker = createWorker({ pool, queue: billingQueue, erp, semaphore, logger, telemetry, clock: systemClock });
-const relay = createRelay({ pool, queue: billingQueue, logger, telemetry, clock: systemClock });
+const worker = createWorker({
+  pool,
+  queue: billingQueue,
+  erp,
+  semaphore,
+  logger,
+  telemetry,
+  clock: systemClock,
+});
+const relay = createRelay({
+  pool,
+  queue: billingQueue,
+  logger,
+  telemetry,
+  clock: systemClock,
+});
 // A reconciliação divide o semáforo do worker: o limite de chamadas ao ERP vale para o processo todo.
 const reconciler = createReconciler({
   pool,
@@ -64,7 +87,10 @@ await worker.start();
 await relay.start();
 await reconciler.start();
 metricsServer.listen(metricsPort, () => {
-  logger.info({ event: 'worker_metrics_started', port: metricsPort }, 'métricas do worker ouvindo');
+  logger.info(
+    { event: 'worker_metrics_started', port: metricsPort },
+    'métricas do worker ouvindo',
+  );
 });
 
 installGracefulShutdown({

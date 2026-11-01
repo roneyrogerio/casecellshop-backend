@@ -20,7 +20,9 @@ let tools: readonly string[];
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
-  const mod = (await import(pathToFileURL(join(root, 'scripts', 'github-mcp-headers.ts')).href)) as {
+  const mod = (await import(
+    pathToFileURL(join(root, 'scripts', 'github-mcp-headers.ts')).href
+  )) as {
     GITHUB_TOOLS: readonly string[];
   };
   tools = mod.GITHUB_TOOLS;
@@ -31,19 +33,30 @@ function loadConfig(): McpConfig {
 }
 
 // Devolve os problemas do servidor github do .mcp.json (AI-08); lista vazia é conformidade.
-function problems(config: McpConfig, expectedTools: readonly string[]): string[] {
+function problems(
+  config: McpConfig,
+  expectedTools: readonly string[],
+): string[] {
   const server = config.mcpServers?.github;
   if (!server) return ['servidor github ausente'];
   const found: string[] = [];
   const headers = server.headers ?? {};
   if (server.type !== 'http') found.push('type deve ser http');
-  if (server.url !== 'https://api.githubcopilot.com/mcp/') found.push('url fora do MCP oficial do GitHub');
-  if (headers['X-MCP-Tools'] !== expectedTools.join(',')) found.push('X-MCP-Tools fora da lista fechada');
-  if (headers['X-MCP-Lockdown'] !== 'true') found.push('X-MCP-Lockdown deve ser true');
-  if (Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')) {
+  if (server.url !== 'https://api.githubcopilot.com/mcp/')
+    found.push('url fora do MCP oficial do GitHub');
+  if (headers['X-MCP-Tools'] !== expectedTools.join(','))
+    found.push('X-MCP-Tools fora da lista fechada');
+  if (headers['X-MCP-Lockdown'] !== 'true')
+    found.push('X-MCP-Lockdown deve ser true');
+  if (
+    Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')
+  ) {
     found.push('Authorization não pode ficar no arquivo');
   }
-  if (typeof server.headersHelper !== 'string' || !server.headersHelper.includes('scripts/github-mcp-headers.ts')) {
+  if (
+    typeof server.headersHelper !== 'string' ||
+    !server.headersHelper.includes('scripts/github-mcp-headers.ts')
+  ) {
     found.push('headersHelper deve chamar scripts/github-mcp-headers.ts');
   }
   return found;
@@ -71,7 +84,9 @@ describe('AI-08 .mcp.json versionado declara o servidor github', () => {
   it('AI-08 nenhum Authorization nos headers: o token nunca fica no arquivo', () => {
     const headers = loadConfig().mcpServers?.github?.headers ?? {};
 
-    expect(Object.keys(headers).map((name) => name.toLowerCase())).not.toContain('authorization');
+    expect(
+      Object.keys(headers).map((name) => name.toLowerCase()),
+    ).not.toContain('authorization');
   });
 
   it('AI-08 o headersHelper aponta para scripts/github-mcp-headers.ts', () => {
@@ -89,7 +104,10 @@ describe('AI-08 .mcp.json versionado declara o servidor github', () => {
       mcpServers: {
         github: {
           ...server,
-          headers: { ...server.headers, 'X-MCP-Tools': [...tools, 'merge_pull_request'].join(',') },
+          headers: {
+            ...server.headers,
+            'X-MCP-Tools': [...tools, 'merge_pull_request'].join(','),
+          },
         },
       },
     };

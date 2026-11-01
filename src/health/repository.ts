@@ -9,13 +9,19 @@ export interface HealthRepository {
 }
 
 // O span do repositório é CLIENT e filho do span da requisição (FND-05).
-export function createHealthRepository(pool: Pool, telemetry: Telemetry): HealthRepository {
+export function createHealthRepository(
+  pool: Pool,
+  telemetry: Telemetry,
+): HealthRepository {
   const db = createDb(pool);
   return {
     async ping() {
       await telemetry.withSpan(
         'health.ping',
-        { kind: SpanKind.CLIENT, attributes: { 'db.system.name': 'postgresql' } },
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { 'db.system.name': 'postgresql' },
+        },
         async () => {
           await db.selectNoFrom(sql<number>`1`.as('ok')).execute();
         },

@@ -46,7 +46,10 @@ export interface Queue {
   send(messages: OutgoingMessage[]): Promise<{ failedIds: string[] }>;
   receive(options: ReceiveOptions): Promise<ReceivedMessage[]>;
   delete(receiptHandle: string): Promise<HandleResult>;
-  changeVisibility(receiptHandle: string, seconds: number): Promise<HandleResult>;
+  changeVisibility(
+    receiptHandle: string,
+    seconds: number,
+  ): Promise<HandleResult>;
   approximateCount(): Promise<number>;
 }
 
@@ -61,75 +64,156 @@ export function createSqsClient(settings: SqsSettings): SQSClient {
     // Uma tentativa só: quem chama (relay, worker) decide se repete.
     maxAttempts: 1,
     // Sem throwOnRequestTimeout o handler só avisa no log e não aborta: o relay ficaria com a transação aberta.
-    requestHandler: { requestTimeout: REQUEST_TIMEOUT_MS, connectionTimeout: REQUEST_TIMEOUT_MS, throwOnRequestTimeout: true },
+    requestHandler: {
+      requestTimeout: REQUEST_TIMEOUT_MS,
+      connectionTimeout: REQUEST_TIMEOUT_MS,
+      throwOnRequestTimeout: true,
+    },
     ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
   });
 }
 
 // Só o handle antigo vira `stale`; qualquer outro erro chega a quem chama.
-async function settleHandle(action: () => Promise<unknown>): Promise<HandleResult> {
+async function settleHandle(
+  action: () => Promise<unknown>,
+): Promise<HandleResult> {
   try {
     await action();
     return 'ok';
   } catch (error) {
-    if ((error as { name?: unknown } | null)?.name === 'ReceiptHandleIsInvalid') return 'stale';
+    if ((error as { name?: unknown } | null)?.name === 'ReceiptHandleIsInvalid')
+      return 'stale';
     throw error;
   }
 }
 
+async function sendMessages(
+  client: SQSClient,
+  queueUrl: string,
+  messages: OutgoingMessage[],
+): Promise<{ failedIds: string[] }> {
+  if (messages.length === 0) return { failedIds: [] };
+  const response = await client.send(
+    new SendMessageBatchCommand({
+      QueueUrl: queueUrl,
+      Entries: messages.map((message) => ({
+        Id: message.id,
+        MessageBody: message.body,
+        ...(message.traceparent === null
+          ? {}
+          : {
+              MessageAttributes: {
+                [TRACEPARENT_ATTRIBUTE]: {
+                  DataType: 'String',
+                  StringValue: message.traceparent,
+                },
+              },
+            }),
+      })),
+    }),
+  );
+  return {
+    failedIds: (response.Failed ?? []).map((entry) => entry.Id ?? ''),
+  };
+}
+
+async function receiveMessages(
+  client: SQSClient,
+  queueUrl: string,
+  options: ReceiveOptions,
+): Promise<ReceivedMessage[]> {
+  const response = await client.send(
+    new ReceiveMessageCommand({
+      QueueUrl: queueUrl,
+      MaxNumberOfMessages: options.max,
+      WaitTimeSeconds: options.waitSeconds,
+      MessageSystemAttributeNames: ['ApproximateReceiveCount'],
+      MessageAttributeNames: [TRACEPARENT_ATTRIBUTE],
+      ...(options.visibilitySeconds === undefined
+        ? {}
+        : { VisibilityTimeout: options.visibilitySeconds }),
+    }),
+    // O long polling dura até waitSeconds; o timeout comum de 5 s o cortaria. Este prazo só vale para o receive.
+    {
+      requestTimeout: (options.waitSeconds + RECEIVE_MARGIN_SECONDS) * 1000,
+    },
+  );
+  return (response.Messages ?? []).map((message) => ({
+    body: message.Body ?? '',
+    receiptHandle: message.ReceiptHandle ?? '',
+    receiveCount: Number(message.Attributes?.['ApproximateReceiveCount'] ?? 1),
+    traceparent:
+      message.MessageAttributes?.[TRACEPARENT_ATTRIBUTE]?.StringValue ?? null,
+  }));
+}
+
+function deleteMessage(
+  client: SQSClient,
+  queueUrl: string,
+  receiptHandle: string,
+): Promise<HandleResult> {
+  return settleHandle(() =>
+    client.send(
+      new DeleteMessageCommand({
+        QueueUrl: queueUrl,
+        ReceiptHandle: receiptHandle,
+      }),
+    ),
+  );
+}
+
+function changeMessageVisibility(
+  client: SQSClient,
+  queueUrl: string,
+  receiptHandle: string,
+  seconds: number,
+): Promise<HandleResult> {
+  return settleHandle(() =>
+    client.send(
+      new ChangeMessageVisibilityCommand({
+        QueueUrl: queueUrl,
+        ReceiptHandle: receiptHandle,
+        VisibilityTimeout: seconds,
+      }),
+    ),
+  );
+}
+
+async function countMessages(
+  client: SQSClient,
+  queueUrl: string,
+): Promise<number> {
+  const response = await client.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: queueUrl,
+      AttributeNames: ['ApproximateNumberOfMessages'],
+    }),
+  );
+  return Number(response.Attributes?.['ApproximateNumberOfMessages'] ?? 0);
+}
+
 export function createQueue(client: SQSClient, queueUrl: string): Queue {
   return {
-    async send(messages) {
-      if (messages.length === 0) return { failedIds: [] };
-      const response = await client.send(
-        new SendMessageBatchCommand({
-          QueueUrl: queueUrl,
-          Entries: messages.map((message) => ({
-            Id: message.id,
-            MessageBody: message.body,
-            ...(message.traceparent === null
-              ? {}
-              : { MessageAttributes: { [TRACEPARENT_ATTRIBUTE]: { DataType: 'String', StringValue: message.traceparent } } }),
-          })),
-        }),
-      );
-      return { failedIds: (response.Failed ?? []).map((entry) => entry.Id ?? '') };
-    },
-    async receive(options) {
-      const response = await client.send(
-        new ReceiveMessageCommand({
-          QueueUrl: queueUrl,
-          MaxNumberOfMessages: options.max,
-          WaitTimeSeconds: options.waitSeconds,
-          MessageSystemAttributeNames: ['ApproximateReceiveCount'],
-          MessageAttributeNames: [TRACEPARENT_ATTRIBUTE],
-          ...(options.visibilitySeconds === undefined ? {} : { VisibilityTimeout: options.visibilitySeconds }),
-        }),
-        // O long polling dura até waitSeconds; o timeout comum de 5 s o cortaria. Este prazo só vale para o receive.
-        { requestTimeout: (options.waitSeconds + RECEIVE_MARGIN_SECONDS) * 1000 },
-      );
-      return (response.Messages ?? []).map((message) => ({
-        body: message.Body ?? '',
-        receiptHandle: message.ReceiptHandle ?? '',
-        receiveCount: Number(message.Attributes?.['ApproximateReceiveCount'] ?? 1),
-        traceparent: message.MessageAttributes?.[TRACEPARENT_ATTRIBUTE]?.StringValue ?? null,
-      }));
-    },
-    delete: (receiptHandle) => settleHandle(() => client.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: receiptHandle }))),
+    send: (messages) => sendMessages(client, queueUrl, messages),
+    receive: (options) => receiveMessages(client, queueUrl, options),
+    delete: (receiptHandle) => deleteMessage(client, queueUrl, receiptHandle),
     changeVisibility: (receiptHandle, seconds) =>
-      settleHandle(() =>
-        client.send(new ChangeMessageVisibilityCommand({ QueueUrl: queueUrl, ReceiptHandle: receiptHandle, VisibilityTimeout: seconds })),
-      ),
-    async approximateCount() {
-      const response = await client.send(new GetQueueAttributesCommand({ QueueUrl: queueUrl, AttributeNames: ['ApproximateNumberOfMessages'] }));
-      return Number(response.Attributes?.['ApproximateNumberOfMessages'] ?? 0);
-    },
+      changeMessageVisibility(client, queueUrl, receiptHandle, seconds),
+    approximateCount: () => countMessages(client, queueUrl),
   };
 }
 
 // StartMessageMoveTask da DLQ para a fila de origem dela (sem destino, o SQS usa a origem).
-export async function startRedrive(client: SQSClient, dlqUrl: string): Promise<void> {
-  const attributes = await client.send(new GetQueueAttributesCommand({ QueueUrl: dlqUrl, AttributeNames: ['QueueArn'] }));
+export async function startRedrive(
+  client: SQSClient,
+  dlqUrl: string,
+): Promise<void> {
+  const attributes = await client.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: dlqUrl,
+      AttributeNames: ['QueueArn'],
+    }),
+  );
   const arn = attributes.Attributes?.['QueueArn'];
   if (arn === undefined) throw new Error('o SQS não devolveu o ARN da DLQ');
   await client.send(new StartMessageMoveTaskCommand({ SourceArn: arn }));

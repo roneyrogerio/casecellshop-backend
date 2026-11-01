@@ -1,7 +1,15 @@
 import type { Transaction } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createErpDb, type ErpSimDb, runInTransaction, TransactionAbortedError } from '../../../src/db/database.ts';
-import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  createErpDb,
+  type ErpSimDb,
+  runInTransaction,
+  TransactionAbortedError,
+} from '../../../src/db/database.ts';
+import {
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 
 let database: TestDatabase;
 
@@ -15,7 +23,10 @@ afterAll(async () => {
 
 // A tabela erp_sim.invoices tem `dedup_key` único, o que dá a violação de unicidade do cenário
 // (a `reference` deixou de ser única para o modo sem a H1b).
-async function insertInvoice(trx: Transaction<ErpSimDb>, reference: string): Promise<void> {
+async function insertInvoice(
+  trx: Transaction<ErpSimDb>,
+  reference: string,
+): Promise<void> {
   await trx
     .insertInto('erp_sim.invoices')
     .values({ reference, dedup_key: reference, items: '[]', total_cents: 0 })
@@ -24,7 +35,10 @@ async function insertInvoice(trx: Transaction<ErpSimDb>, reference: string): Pro
 
 // O código do defeito: a segunda gravação viola a unicidade, o erro é capturado e a função
 // segue até o fim sem nenhuma consulta depois dele. A transação já está abortada (25P02).
-async function insertDuplicateAndSwallow(trx: Transaction<ErpSimDb>, reference: string): Promise<string> {
+async function insertDuplicateAndSwallow(
+  trx: Transaction<ErpSimDb>,
+  reference: string,
+): Promise<string> {
   await insertInvoice(trx, reference);
   try {
     await insertInvoice(trx, reference);
@@ -67,7 +81,9 @@ describe('FND-10 a guarda da transação contra o PostgreSQL real', () => {
     const db = createErpDb(database.erpPool);
 
     await expect(
-      runInTransaction(db, (trx) => insertDuplicateAndSwallow(trx, 'fnd10-capturado')),
+      runInTransaction(db, (trx) =>
+        insertDuplicateAndSwallow(trx, 'fnd10-capturado'),
+      ),
     ).rejects.toBeInstanceOf(TransactionAbortedError);
 
     expect(await countInvoices('fnd10-capturado')).toBe(0);
@@ -79,7 +95,9 @@ describe('FND-10 a guarda da transação contra o PostgreSQL real', () => {
     const db = createErpDb(database.erpPool);
 
     await expect(
-      runInTransaction(db, (trx) => insertDuplicateAndSwallow(trx, 'fnd10-reuso')),
+      runInTransaction(db, (trx) =>
+        insertDuplicateAndSwallow(trx, 'fnd10-reuso'),
+      ),
     ).rejects.toBeInstanceOf(TransactionAbortedError);
     const value = await runInTransaction(db, async (trx) => {
       await insertInvoice(trx, 'fnd10-reuso');
@@ -108,7 +126,9 @@ describe('FND-10 a guarda da transação contra o PostgreSQL real', () => {
   it('FND-10 controle negativo: o db.transaction().execute() do Kysely, sem a guarda, resolve sem erro e também não grava nada', async () => {
     const db = createErpDb(database.erpPool);
 
-    const value = await db.transaction().execute((trx) => insertDuplicateAndSwallow(trx, 'fnd10-sem-guarda'));
+    const value = await db
+      .transaction()
+      .execute((trx) => insertDuplicateAndSwallow(trx, 'fnd10-sem-guarda'));
 
     // O PostgreSQL trocou o COMMIT por um ROLLBACK sem erro: é o defeito que a guarda evita.
     expect(value).toBe('terminou');

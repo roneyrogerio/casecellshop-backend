@@ -9,8 +9,18 @@
 // primeiro bloqueio. O teto é um contador por agente: na quarta parada vermelha
 // ele deixa terminar e a falha vira exceção para a sessão principal decidir.
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { changesDuring, compareSnapshots, snapshotFile, takeSnapshot } from './git-snapshot.mjs';
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import {
+  changesDuring,
+  compareSnapshots,
+  snapshotFile,
+  takeSnapshot,
+} from './git-snapshot.mjs';
 import { allows, rootFor } from './path-guard.mjs';
 import { saveReview, takeHandback } from './records.mjs';
 import { tmpdir } from 'node:os';
@@ -78,14 +88,20 @@ async function decideChecked(input, deps) {
 
   // O git status pega também o que foi escrito pelo Bash, que a guarda de
   // caminho não vê: um arquivo fora do papel devolve o agente.
-  const outside = deps.changedFiles().filter((file) => !allows(input.agent_type, file));
+  const outside = deps
+    .changedFiles()
+    .filter((file) => !allows(input.agent_type, file));
   if (outside.length > 0) {
-    failures.push({ name: 'arquivos fora do papel', output: outside.join('\n') });
+    failures.push({
+      name: 'arquivos fora do papel',
+      output: outside.join('\n'),
+    });
   }
   if (input.agent_type === 'implementer' && deps.scriptsChanged()) {
     failures.push({
       name: 'scripts do package.json',
-      output: 'O bloco "scripts" mudou: ele define o que o CI e este hook rodam, e é da sessão principal.',
+      output:
+        'O bloco "scripts" mudou: ele define o que o CI e este hook rodam, e é da sessão principal.',
     });
   }
   // Em sequência, e todas: a devolução cita cada checagem que falhou (AI-03). Rodar
@@ -101,7 +117,12 @@ async function decideChecked(input, deps) {
     return { action: 'allow' };
   }
 
-  const details = failures.map(({ name, output }) => `### ${CHECKS[input.agent_type].includes(name) ? `npm run ${name}` : name}\n${output}`).join('\n\n');
+  const details = failures
+    .map(
+      ({ name, output }) =>
+        `### ${CHECKS[input.agent_type].includes(name) ? `npm run ${name}` : name}\n${output}`,
+    )
+    .join('\n\n');
   const count = deps.readCount(key);
   if (count >= MAX_BLOCKS) {
     return {
@@ -126,22 +147,35 @@ function counterFile(key) {
 // Caminhos relativos do git status, inclusive arquivos novos dentro de pastas
 // novas; fora de um repositório git, nenhum.
 function changedFiles(projectDir) {
-  const status = spawnSync('git', ['-C', projectDir, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' });
+  const status = spawnSync(
+    'git',
+    ['-C', projectDir, 'status', '--porcelain', '--untracked-files=all'],
+    { encoding: 'utf8' },
+  );
   if (status.status !== 0) return [];
   return status.stdout
     .split('\n')
     .filter(Boolean)
     .map((line) => line.slice(3))
-    .map((file) => (file.includes(' -> ') ? file.slice(file.indexOf(' -> ') + 4) : file))
+    .map((file) =>
+      file.includes(' -> ') ? file.slice(file.indexOf(' -> ') + 4) : file,
+    )
     .map((file) => file.replace(/^"|"$/g, ''));
 }
 
 async function scriptsChanged(projectDir) {
-  const head = spawnSync('git', ['-C', projectDir, 'show', 'HEAD:package.json'], { encoding: 'utf8' });
+  const head = spawnSync(
+    'git',
+    ['-C', projectDir, 'show', 'HEAD:package.json'],
+    { encoding: 'utf8' },
+  );
   if (head.status !== 0) return false;
   try {
     const { scriptsDiffer } = await import('../../scripts/check-scripts.ts');
-    return scriptsDiffer(head.stdout, readFileSync(join(projectDir, 'package.json'), 'utf8'));
+    return scriptsDiffer(
+      head.stdout,
+      readFileSync(join(projectDir, 'package.json'), 'utf8'),
+    );
   } catch {
     return false;
   }
@@ -149,7 +183,9 @@ async function scriptsChanged(projectDir) {
 
 function readSnapshot(input) {
   try {
-    return JSON.parse(readFileSync(snapshotFile(input.session_id, input.agent_id), 'utf8'));
+    return JSON.parse(
+      readFileSync(snapshotFile(input.session_id, input.agent_id), 'utf8'),
+    );
   } catch {
     return null;
   }
@@ -158,14 +194,19 @@ function readSnapshot(input) {
 // Sem retrato não há como provar que o git ficou igual: falha fechada, como
 // mudança.
 function gitChanges(before, after, agentRoot) {
-  if (!before) return ['retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual'];
-  if (after instanceof Error) return [`estado do git ilegível na parada (${after.message})`];
+  if (!before)
+    return [
+      'retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual',
+    ];
+  if (after instanceof Error)
+    return [`estado do git ilegível na parada (${after.message})`];
   return compareSnapshots(before, after, { agentRoot });
 }
 
 // Um retrato antigo, sem o status, não tem como separar o que já estava sujo.
 function mainChanges(before, after) {
-  if (!before || after instanceof Error || typeof before.status !== 'string') return [];
+  if (!before || after instanceof Error || typeof before.status !== 'string')
+    return [];
   return changesDuring(before.status, after.status);
 }
 
@@ -175,8 +216,15 @@ function runNpm(name, cwd) {
     let output = '';
     child.stdout.on('data', (chunk) => (output += chunk));
     child.stderr.on('data', (chunk) => (output += chunk));
-    child.on('error', (error) => resolvePromise({ ok: false, output: String(error) }));
-    child.on('close', (code) => resolvePromise({ ok: code === 0, output: output.slice(-MAX_OUTPUT_CHARS) }));
+    child.on('error', (error) =>
+      resolvePromise({ ok: false, output: String(error) }),
+    );
+    child.on('close', (code) =>
+      resolvePromise({
+        ok: code === 0,
+        output: output.slice(-MAX_OUTPUT_CHARS),
+      }),
+    );
   });
 }
 
@@ -184,7 +232,10 @@ function recordException(projectDir, message) {
   // Fora do git: a sessão principal lê este registro depois de cada delegação.
   const stateDir = join(projectDir, '.claude', 'state');
   mkdirSync(stateDir, { recursive: true });
-  appendFileSync(join(stateDir, 'stop-exceptions.log'), `${new Date().toISOString()} ${message}\n\n`);
+  appendFileSync(
+    join(stateDir, 'stop-exceptions.log'),
+    `${new Date().toISOString()} ${message}\n\n`,
+  );
   process.stdout.write(JSON.stringify({ systemMessage: message }));
 }
 
@@ -193,7 +244,11 @@ function recordException(projectDir, message) {
 // a mensagem final é só o encerramento e não substitui o relatório.
 function recordReview(projectDir, input) {
   if (takeHandback(projectDir, input.agent_id)) return;
-  if (typeof input.last_assistant_message !== 'string' || !input.last_assistant_message) return;
+  if (
+    typeof input.last_assistant_message !== 'string' ||
+    !input.last_assistant_message
+  )
+    return;
   saveReview(projectDir, input.agent_id, input.last_assistant_message);
 }
 
@@ -205,13 +260,15 @@ async function main() {
     process.stderr.write('subagent-stop: entrada do hook ilegível\n');
     process.exit(2);
   }
-  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+  const projectDir =
+    process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
   // AI-27: o agente isolado trabalha na worktree dele; a pasta principal só
   // entra na conferência do que mudou fora dela.
   const root = rootFor(input, projectDir);
   const isolated = root !== projectDir;
   if (input.agent_type === 'reviewer') recordReview(projectDir, input);
-  const changedScripts = input.agent_type === 'implementer' ? await scriptsChanged(root) : false;
+  const changedScripts =
+    input.agent_type === 'implementer' ? await scriptsChanged(root) : false;
   const before = readSnapshot(input);
   let after;
   try {
@@ -221,7 +278,8 @@ async function main() {
   }
 
   const decision = await decide(input, {
-    runCheck: (name, cwd) => runNpm(name, cwd ? rootFor({ cwd }, projectDir) : projectDir),
+    runCheck: (name, cwd) =>
+      runNpm(name, cwd ? rootFor({ cwd }, projectDir) : projectDir),
     readCount: (key) => {
       try {
         return Number(readFileSync(counterFile(key), 'utf8')) || 0;
@@ -234,17 +292,22 @@ async function main() {
     // principal não é dele. Sem worktree, ele responde só pelo que mudou na pasta
     // principal durante a execução, e não pelo que a sessão principal já tinha
     // deixado sem commit (AI-28). O reviewer não responde por arquivo nenhum.
-    changedFiles: () => (isolated ? changedFiles(root) : mainChanges(before, after)),
+    changedFiles: () =>
+      isolated ? changedFiles(root) : mainChanges(before, after),
     scriptsChanged: () => changedScripts,
     gitChanges: () => gitChanges(before, after, isolated ? root : undefined),
-    mainChanges: () => (isolated || input.agent_type === 'reviewer' ? mainChanges(before, after) : []),
+    mainChanges: () =>
+      isolated || input.agent_type === 'reviewer'
+        ? mainChanges(before, after)
+        : [],
   });
 
   if (decision.action === 'block') {
     process.stderr.write(decision.message);
     process.exit(2);
   }
-  if (decision.action === 'exception') recordException(projectDir, decision.message);
+  if (decision.action === 'exception')
+    recordException(projectDir, decision.message);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main();

@@ -25,7 +25,9 @@ const TCP_HOSTS = new Set(['localhost', '127.0.0.1']);
 // escuta no socket Unix. Sem `-h`, o pg_isready testa o socket e marca o banco saudável antes de a
 // porta TCP abrir. A lista vazia é o que o healthcheck deve devolver.
 export function pgIsReadyViolations(healthcheckCommand: string): string[] {
-  const tokens = healthcheckCommand.split(/\s+/).filter((token) => token !== '');
+  const tokens = healthcheckCommand
+    .split(/\s+/)
+    .filter((token) => token !== '');
   const start = tokens.findIndex((token) => token === 'pg_isready');
   if (start === -1) {
     return ['o healthcheck não chama o pg_isready'];
@@ -44,13 +46,17 @@ export function pgIsReadyViolations(healthcheckCommand: string): string[] {
   }
 
   if (host === undefined) {
-    return ['o pg_isready não passa -h: testa o socket Unix, e não a porta TCP'];
+    return [
+      'o pg_isready não passa -h: testa o socket Unix, e não a porta TCP',
+    ];
   }
   if (host.startsWith('/')) {
     return [`o pg_isready aponta -h para o socket Unix ${host}`];
   }
   if (!TCP_HOSTS.has(host)) {
-    return [`o pg_isready aponta -h para ${host}, e não para localhost ou 127.0.0.1`];
+    return [
+      `o pg_isready aponta -h para ${host}, e não para localhost ou 127.0.0.1`,
+    ];
   }
   return [];
 }
@@ -71,19 +77,33 @@ function commandOf(test: unknown): string {
 
 describe('FND-01 healthcheck do PostgreSQL no compose', () => {
   it('FND-01 o healthcheck do postgres no compose.yaml testa por TCP, com o pg_isready --host apontando para 127.0.0.1 ou localhost', () => {
-    const compose = parse(readFileSync(join(root, 'compose.yaml'), 'utf8')) as ComposeFile;
+    const compose = parse(
+      readFileSync(join(root, 'compose.yaml'), 'utf8'),
+    ) as ComposeFile;
     const test = compose.services?.['postgres']?.healthcheck?.test;
 
     expect(pgIsReadyViolations(commandOf(test))).toEqual([]);
   });
 
   it.each([
-    ['o healthcheck antigo, sem -h', 'pg_isready -U casecellshop -d casecellshop'],
-    ['-h apontando para o socket Unix', 'pg_isready -h /var/run/postgresql -U casecellshop -d casecellshop'],
-    ['--host apontando para o socket Unix', 'pg_isready --host=/var/run/postgresql -U casecellshop'],
-  ])('FND-01 controle negativo: %s reprova a conferência', (_label, command) => {
-    expect(pgIsReadyViolations(command)).not.toEqual([]);
-  });
+    [
+      'o healthcheck antigo, sem -h',
+      'pg_isready -U casecellshop -d casecellshop',
+    ],
+    [
+      '-h apontando para o socket Unix',
+      'pg_isready -h /var/run/postgresql -U casecellshop -d casecellshop',
+    ],
+    [
+      '--host apontando para o socket Unix',
+      'pg_isready --host=/var/run/postgresql -U casecellshop',
+    ],
+  ])(
+    'FND-01 controle negativo: %s reprova a conferência',
+    (_label, command) => {
+      expect(pgIsReadyViolations(command)).not.toEqual([]);
+    },
+  );
 
   it.each([
     ['-h localhost', 'pg_isready -h localhost -U casecellshop -d casecellshop'],
@@ -95,17 +115,23 @@ describe('FND-01 healthcheck do PostgreSQL no compose', () => {
 });
 
 // O `environment` do compose pode ser um mapa ou uma lista de `NOME=valor`.
-function environmentOf(service: ComposeService | undefined): Record<string, string> {
+function environmentOf(
+  service: ComposeService | undefined,
+): Record<string, string> {
   const raw = service?.environment;
   if (Array.isArray(raw)) {
     return Object.fromEntries(
       raw.map((entry) => {
         const separator = entry.indexOf('=');
-        return separator === -1 ? [entry, ''] : [entry.slice(0, separator), entry.slice(separator + 1)];
+        return separator === -1
+          ? [entry, '']
+          : [entry.slice(0, separator), entry.slice(separator + 1)];
       }),
     );
   }
-  return Object.fromEntries(Object.entries(raw ?? {}).map(([name, value]) => [name, String(value)]));
+  return Object.fromEntries(
+    Object.entries(raw ?? {}).map(([name, value]) => [name, String(value)]),
+  );
 }
 
 function dependsOn(service: ComposeService | undefined): string[] {
@@ -114,7 +140,9 @@ function dependsOn(service: ComposeService | undefined): string[] {
 }
 
 describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
-  const compose = parse(readFileSync(join(root, 'compose.yaml'), 'utf8')) as ComposeFile;
+  const compose = parse(
+    readFileSync(join(root, 'compose.yaml'), 'utf8'),
+  ) as ComposeFile;
   const elasticmq = compose.services?.['elasticmq'];
   const worker = compose.services?.['worker'];
 
@@ -123,11 +151,22 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
   });
 
   it('FND-01 as mensagens do elasticmq ficam num volume nomeado declarado no compose, para sobreviver ao reinício', () => {
-    const mounts = (elasticmq?.volumes ?? []).filter((volume): volume is string => typeof volume === 'string');
-    const named = mounts.map((mount) => mount.split(':')[0] ?? '').filter((source) => source !== '' && !source.startsWith('.') && !source.startsWith('/'));
+    const mounts = (elasticmq?.volumes ?? []).filter(
+      (volume): volume is string => typeof volume === 'string',
+    );
+    const named = mounts
+      .map((mount) => mount.split(':')[0] ?? '')
+      .filter(
+        (source) =>
+          source !== '' && !source.startsWith('.') && !source.startsWith('/'),
+      );
 
     expect(named.length).toBeGreaterThan(0);
-    for (const name of named) expect(Object.keys(compose.volumes ?? {}), `volume ${name} sem declaração`).toContain(name);
+    for (const name of named)
+      expect(
+        Object.keys(compose.volumes ?? {}),
+        `volume ${name} sem declaração`,
+      ).toContain(name);
   });
 
   it('FND-01 o elasticmq.conf do repositório define as duas filas e o compose o monta no elasticmq', () => {
@@ -137,8 +176,12 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
     expect(config).toContain('billing-dlq');
     expect(config).toMatch(/\bbilling\b/);
 
-    const mounts = (elasticmq?.volumes ?? []).filter((volume): volume is string => typeof volume === 'string');
-    expect(mounts.some((mount) => mount.startsWith('./elasticmq.conf:'))).toBe(true);
+    const mounts = (elasticmq?.volumes ?? []).filter(
+      (volume): volume is string => typeof volume === 'string',
+    );
+    expect(mounts.some((mount) => mount.startsWith('./elasticmq.conf:'))).toBe(
+      true,
+    );
   });
 
   it('FND-01 o worker depende do elasticmq', () => {
@@ -150,8 +193,16 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
 
     expect(environment['SQS_ENDPOINT']).toMatch(/^http:\/\/elasticmq:9324\/?$/);
     expect(environment['AWS_REGION']).toBeTruthy();
-    expect(new URL(environment['BILLING_QUEUE_URL'] ?? '').pathname.endsWith('/billing')).toBe(true);
-    expect(new URL(environment['BILLING_DLQ_URL'] ?? '').pathname.endsWith('/billing-dlq')).toBe(true);
+    expect(
+      new URL(environment['BILLING_QUEUE_URL'] ?? '').pathname.endsWith(
+        '/billing',
+      ),
+    ).toBe(true);
+    expect(
+      new URL(environment['BILLING_DLQ_URL'] ?? '').pathname.endsWith(
+        '/billing-dlq',
+      ),
+    ).toBe(true);
     // O SDK exige alguma credencial na cadeia padrão; o ElasticMQ a ignora.
     expect(environment['AWS_ACCESS_KEY_ID']).toBeTruthy();
     expect(environment['AWS_SECRET_ACCESS_KEY']).toBeTruthy();

@@ -1,7 +1,11 @@
 import express, { type Express } from 'express';
 import type { Pool } from 'pg';
 import type { Logger } from 'pino';
-import { checkoutRoute, healthRoute, orderStatusRoute } from './contract/index.ts';
+import {
+  checkoutRoute,
+  healthRoute,
+  orderStatusRoute,
+} from './contract/index.ts';
 import { createCheckoutRepository } from './checkout/repository.ts';
 import { createCheckoutRoutes } from './checkout/routes.ts';
 import { createHealthRepository } from './health/repository.ts';
@@ -24,18 +28,32 @@ function toExpressPath(path: string): string {
 }
 
 // Monta o app sem abrir porta: os testes usam o supertest direto nele.
-export function createApp({ pool, logger, telemetry }: AppDependencies): Express {
+export function createApp({
+  pool,
+  logger,
+  telemetry,
+}: AppDependencies): Express {
   const app = express();
   app.disable('x-powered-by');
   app.use(requestContext(telemetry, logger));
 
-  const health = createHealthRoutes(createHealthRepository(pool, telemetry), logger);
+  const health = createHealthRoutes(
+    createHealthRepository(pool, telemetry),
+    logger,
+  );
   app.get(toExpressPath(healthRoute.path), ...health.handlers);
 
-  const orders = createOrdersRoutes(createOrdersRepository(pool, telemetry), logger);
+  const orders = createOrdersRoutes(
+    createOrdersRepository(pool, telemetry),
+    logger,
+  );
   app.get(toExpressPath(orderStatusRoute.path), ...orders.handlers);
 
-  const checkout = createCheckoutRoutes(createCheckoutRepository(pool, telemetry, logger), telemetry, logger);
+  const checkout = createCheckoutRoutes(
+    createCheckoutRepository(pool, telemetry, logger),
+    telemetry,
+    logger,
+  );
   app.post(toExpressPath(checkoutRoute.path), ...checkout.handlers);
 
   // Fora do contrato: o /metrics é do Prometheus, não da API.

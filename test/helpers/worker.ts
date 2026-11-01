@@ -5,9 +5,20 @@ import { assert, expect, onTestFinished, vi } from 'vitest';
 import { CheckoutAccepted } from '../../src/contract/index.ts';
 import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
-import { createSimulatedErp, type SimulatedErp } from '../../src/erp/sim/index.ts';
-import type { ErpRequest, ErpResponse, ErpTransport } from '../../src/erp/transport.ts';
-import { createWorker, type Worker, type WorkerConfig } from '../../src/billing/worker.ts';
+import {
+  createSimulatedErp,
+  type SimulatedErp,
+} from '../../src/erp/sim/index.ts';
+import type {
+  ErpRequest,
+  ErpResponse,
+  ErpTransport,
+} from '../../src/erp/transport.ts';
+import {
+  createWorker,
+  type Worker,
+  type WorkerConfig,
+} from '../../src/billing/worker.ts';
 import type { Semaphore } from '../../src/shared/semaphore.ts';
 import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import {
@@ -75,7 +86,11 @@ export interface InstrumentedTransport extends ErpTransport {
   // um processo que morreu no meio da chamada.
   stall(match?: ErpMatch, options?: StallOptions): Stall;
   // Roda `hook` depois de o ERP simulado responder e antes de a resposta voltar ao worker.
-  afterErp(match: ErpMatch, hook: (request: ErpRequest) => Promise<void>, times?: number): void;
+  afterErp(
+    match: ErpMatch,
+    hook: (request: ErpRequest) => Promise<void>,
+    times?: number,
+  ): void;
 }
 
 interface Rule<T> {
@@ -91,11 +106,16 @@ function referenceOf(request: ErpRequest): string | undefined {
 }
 
 function matches(match: ErpMatch, request: ErpRequest): boolean {
-  return (match.op === undefined || match.op === request.op) && (match.reference === undefined || match.reference === referenceOf(request));
+  return (
+    (match.op === undefined || match.op === request.op) &&
+    (match.reference === undefined || match.reference === referenceOf(request))
+  );
 }
 
 function take<T>(rules: Rule<T>[], request: ErpRequest): T | undefined {
-  const rule = rules.find((candidate) => candidate.remaining > 0 && matches(candidate.match, request));
+  const rule = rules.find(
+    (candidate) => candidate.remaining > 0 && matches(candidate.match, request),
+  );
   if (!rule) return undefined;
   rule.remaining -= 1;
   return rule.payload;
@@ -103,16 +123,28 @@ function take<T>(rules: Rule<T>[], request: ErpRequest): T | undefined {
 
 // Embrulha o transporte do ERP simulado: registra as chamadas, mede as que estão em voo e deixa o teste
 // prender uma resposta (a morte do worker) ou atrasá-la até um ponto controlado.
-export function instrumentTransport(inner: ErpTransport): InstrumentedTransport {
+export function instrumentTransport(
+  inner: ErpTransport,
+): InstrumentedTransport {
   const sends: ErpRequest[] = [];
-  const waiters: { count: number; op: ErpRequest['op'] | undefined; resolve: () => void }[] = [];
-  const stalls: Rule<{ callErp: boolean; settle: () => void; rejecters: ((error: Error) => void)[] }>[] = [];
+  const waiters: {
+    count: number;
+    op: ErpRequest['op'] | undefined;
+    resolve: () => void;
+  }[] = [];
+  const stalls: Rule<{
+    callErp: boolean;
+    settle: () => void;
+    rejecters: ((error: Error) => void)[];
+  }>[] = [];
   const hooks: Rule<(request: ErpRequest) => Promise<void>>[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
 
   function countOf(op: ErpRequest['op'] | undefined): number {
-    return op === undefined ? sends.length : sends.filter((request) => request.op === op).length;
+    return op === undefined
+      ? sends.length
+      : sends.filter((request) => request.op === op).length;
   }
 
   function flushWaiters(): void {
@@ -122,7 +154,11 @@ export function instrumentTransport(inner: ErpTransport): InstrumentedTransport 
     }
   }
 
-  async function finish(call: Promise<ErpResponse>, request: ErpRequest, hook: ((request: ErpRequest) => Promise<void>) | undefined) {
+  async function finish(
+    call: Promise<ErpResponse>,
+    request: ErpRequest,
+    hook: ((request: ErpRequest) => Promise<void>) | undefined,
+  ) {
     try {
       let response: ErpResponse;
       try {
@@ -184,13 +220,16 @@ export function instrumentTransport(inner: ErpTransport): InstrumentedTransport 
       const stall = take(stalls, request);
       const hook = take(hooks, request);
       // A chamada ao simulado sai antes de acordar quem espera: os timers do roteiro já estão armados.
-      const call = stall?.callErp === false ? undefined : inner.send(request, signal);
+      const call =
+        stall?.callErp === false ? undefined : inner.send(request, signal);
       flushWaiters();
       if (stall) {
-        void (call?.then(
-          () => undefined,
-          () => undefined,
-        ) ?? Promise.resolve()).then(stall.settle);
+        void (
+          call?.then(
+            () => undefined,
+            () => undefined,
+          ) ?? Promise.resolve()
+        ).then(stall.settle);
         return new Promise<ErpResponse>((_resolve, reject) => {
           stall.rejecters.push(reject);
         });
@@ -247,12 +286,24 @@ export interface ErpWorld {
   erp: ErpClient;
 }
 
-export function createErpWorld(erpPool: pg.Pool, options: { withoutH1b?: boolean; telemetry?: Telemetry } = {}): ErpWorld {
+export function createErpWorld(
+  erpPool: pg.Pool,
+  options: { withoutH1b?: boolean; telemetry?: Telemetry } = {},
+): ErpWorld {
   const clock = createManualClock();
-  const sim = createSimulatedErp(options.withoutH1b === undefined ? { pool: erpPool, clock } : { pool: erpPool, clock, withoutH1b: options.withoutH1b });
+  const sim = createSimulatedErp(
+    options.withoutH1b === undefined
+      ? { pool: erpPool, clock }
+      : { pool: erpPool, clock, withoutH1b: options.withoutH1b },
+  );
   const transport = instrumentTransport(sim.transport);
   // Com a telemetria, a camada anticorrupção produz as métricas do ERP (OBS-02, M3); os spans da tentativa são do worker, não dela.
-  const erp = createErpClient({ transport, clock, timeoutMs: ERP_TIMEOUT_MS, ...(options.telemetry ? { telemetry: options.telemetry } : {}) });
+  const erp = createErpClient({
+    transport,
+    clock,
+    timeoutMs: ERP_TIMEOUT_MS,
+    ...(options.telemetry ? { telemetry: options.telemetry } : {}),
+  });
   return { clock, sim, transport, erp };
 }
 
@@ -274,10 +325,19 @@ const cleanupsOf = new WeakMap<WorkerSuite, (() => void)[]>();
 
 // PostgreSQL real, o app do checkout (pedidos nascem como em produção), o pool do worker e o ElasticMQ.
 export async function startWorkerSuite(): Promise<WorkerSuite> {
-  const [database, emq] = await Promise.all([startMigratedDatabase(), startElasticMq()]);
-  const checkout = await startCheckoutHarness(database, APP_POOL_SIZE, PATIENT_LIMITS);
+  const [database, emq] = await Promise.all([
+    startMigratedDatabase(),
+    startElasticMq(),
+  ]);
+  const checkout = await startCheckoutHarness(
+    database,
+    APP_POOL_SIZE,
+    PATIENT_LIMITS,
+  );
   const pool = createAppPool(database.uri, 10);
-  const telemetry = createTelemetry({ spanExporter: new InMemorySpanExporter() });
+  const telemetry = createTelemetry({
+    spanExporter: new InMemorySpanExporter(),
+  });
   const cleanups: (() => void)[] = [];
   const suite: WorkerSuite = {
     database,
@@ -322,14 +382,23 @@ export interface WorldOptions extends QueueOptions {
 
 // ERP simulado no relógio manual e filas novas no ElasticMQ, com a mesma redrive policy do
 // elasticmq.conf (o limite de recebimentos pode ser menor no teste).
-export async function createWorld(suite: WorkerSuite, options: WorldOptions = {}): Promise<QueueWorld> {
+export async function createWorld(
+  suite: WorkerSuite,
+  options: WorldOptions = {},
+): Promise<QueueWorld> {
   const erpWorld = createErpWorld(suite.database.erpPool, {
-    ...(options.withoutH1b === undefined ? {} : { withoutH1b: options.withoutH1b }),
+    ...(options.withoutH1b === undefined
+      ? {}
+      : { withoutH1b: options.withoutH1b }),
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
   });
   const queues = await openBillingQueues(suite.emq, {
-    ...(options.maxReceiveCount === undefined ? {} : { maxReceiveCount: options.maxReceiveCount }),
-    ...(options.visibilitySeconds === undefined ? {} : { visibilitySeconds: options.visibilitySeconds }),
+    ...(options.maxReceiveCount === undefined
+      ? {}
+      : { maxReceiveCount: options.maxReceiveCount }),
+    ...(options.visibilitySeconds === undefined
+      ? {}
+      : { visibilitySeconds: options.visibilitySeconds }),
   });
   cleanupsOf.get(suite)?.push(() => queues.close());
   return {
@@ -355,10 +424,15 @@ export interface BuildWorkerOptions {
 
 // Sem long polling por padrão: com a fila vazia o pollOnce responde na hora. Os testes do start()
 // pedem o de 1 s, o do design, para o laço não girar sem parar.
-export const TEST_WORKER_CONFIG: Partial<WorkerConfig> = { receiveWaitSeconds: 0 };
+export const TEST_WORKER_CONFIG: Partial<WorkerConfig> = {
+  receiveWaitSeconds: 0,
+};
 
 // Um worker novo, como um processo novo: semáforo próprio, mesmo ERP, mesmo relógio e a mesma fila.
-export function buildWorker(world: QueueWorld, options: BuildWorkerOptions = {}): Worker {
+export function buildWorker(
+  world: QueueWorld,
+  options: BuildWorkerOptions = {},
+): Worker {
   const worker = createWorker({
     pool: options.pool ?? world.pool,
     queue: world.queue,
@@ -378,7 +452,10 @@ export function buildWorker(world: QueueWorld, options: BuildWorkerOptions = {})
     async pollOnce() {
       const before = world.queue.receives.length;
       const received = await worker.pollOnce();
-      expect(world.queue.receives.length, 'a rodada pediu mensagens ao SQS').toBeGreaterThan(before);
+      expect(
+        world.queue.receives.length,
+        'a rodada pediu mensagens ao SQS',
+      ).toBeGreaterThan(before);
       return received;
     },
   };
@@ -399,7 +476,11 @@ export interface PollHandle {
 // teste pendurado até o timeout do vitest, em vez de uma falha de asserção que diz o que não aconteceu.
 export const WAIT_GUARD_MS = 20_000;
 
-export async function within<T>(wait: Promise<T>, what: string, ms: number = WAIT_GUARD_MS): Promise<T> {
+export async function within<T>(
+  wait: Promise<T>,
+  what: string,
+  ms: number = WAIT_GUARD_MS,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const guard = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -444,19 +525,28 @@ export function startPoll(worker: Worker): PollHandle {
     result,
     failed,
     until(wait) {
-      return within(Promise.race([wait, failed]), 'o estado que o teste espera do worker');
+      return within(
+        Promise.race([wait, failed]),
+        'o estado que o teste espera do worker',
+      );
     },
   };
 }
 
 // Espera um estado do banco (consulta em intervalo, sem sleep fixo) ou a queda da rodada.
-export function untilState(poll: PollHandle, check: () => Promise<void>): Promise<void> {
+export function untilState(
+  poll: PollHandle,
+  check: () => Promise<void>,
+): Promise<void> {
   return poll.until(vi.waitFor(check, { timeout: 20_000, interval: 25 }));
 }
 
 // O laço do start() só termina quando o stop() resolve; o teste avança o relógio manual enquanto espera,
 // para nenhum timer do processo (o timeout de uma chamada presa, um intervalo) segurar o encerramento.
-export async function stopAdvancing(worker: Worker, world: ErpWorld): Promise<void> {
+export async function stopAdvancing(
+  worker: Worker,
+  world: ErpWorld,
+): Promise<void> {
   let stopped = false;
   const stopping = worker.stop().then(() => {
     stopped = true;
@@ -464,7 +554,9 @@ export async function stopAdvancing(worker: Worker, world: ErpWorld): Promise<vo
   await vi.waitFor(
     () => {
       world.clock.advance(500);
-      expect(stopped, 'o stop() ainda espera o laço ou uma tentativa').toBe(true);
+      expect(stopped, 'o stop() ainda espera o laço ou uma tentativa').toBe(
+        true,
+      );
     },
     { timeout: 20_000, interval: 20 },
   );
@@ -487,17 +579,41 @@ export interface AcceptedOrder {
 // produção. O mesmo SKU entra no erp_sim com estoque (por padrão, de sobra).
 export async function acceptOrder(
   suite: WorkerSuite,
-  options: { quantity?: number; onHand?: number; erpOnHand?: number; priceCents?: number; requestId?: string } = {},
+  options: {
+    quantity?: number;
+    onHand?: number;
+    erpOnHand?: number;
+    priceCents?: number;
+    requestId?: string;
+  } = {},
 ): Promise<AcceptedOrder> {
   const quantity = options.quantity ?? 1;
   const onHand = options.onHand ?? 10;
   const priceCents = options.priceCents ?? 4990;
-  const product = await seedProduct(suite.database.pool, { priceCents, onHand });
-  await seedErpProduct(suite.database.pool, { sku: product.sku, priceCents, onHand: options.erpOnHand ?? onHand + 100 });
-  const res = await postCheckout(suite.checkout.server, checkoutBody(line(product, quantity)), options.requestId === undefined ? {} : { requestId: options.requestId });
+  const product = await seedProduct(suite.database.pool, {
+    priceCents,
+    onHand,
+  });
+  await seedErpProduct(suite.database.pool, {
+    sku: product.sku,
+    priceCents,
+    onHand: options.erpOnHand ?? onHand + 100,
+  });
+  const res = await postCheckout(
+    suite.checkout.server,
+    checkoutBody(line(product, quantity)),
+    options.requestId === undefined ? {} : { requestId: options.requestId },
+  );
   expect(res.status).toBe(202);
   const { orderId } = CheckoutAccepted.parse(res.body);
-  return { orderId, requestId: String(res.headers['x-request-id']), sku: product.sku, quantity, priceCents, onHand };
+  return {
+    orderId,
+    requestId: String(res.headers['x-request-id']),
+    sku: product.sku,
+    quantity,
+    priceCents,
+    onHand,
+  };
 }
 
 // O que a outbox guarda depois do SQS (AD-021, AD-024): a marca de publicação e o estado por pedido
@@ -512,7 +628,10 @@ export interface OutboxRow {
   sinceLastCallMs: number | null;
 }
 
-export async function readOutbox(pool: pg.Pool, orderId: string): Promise<OutboxRow> {
+export async function readOutbox(
+  pool: pg.Pool,
+  orderId: string,
+): Promise<OutboxRow> {
   const result = await pool.query<{
     published_at: Date | null;
     first_sent_at: Date | null;
@@ -544,14 +663,24 @@ export interface OrderRow {
   outcomeAt: Date | null;
 }
 
-export async function readOrder(pool: pg.Pool, orderId: string): Promise<OrderRow> {
-  const result = await pool.query<{ status: string; failure_reason: string | null; outcome_at: Date | null }>(
-    'select status, failure_reason, outcome_at from orders where id = $1',
-    [orderId],
-  );
+export async function readOrder(
+  pool: pg.Pool,
+  orderId: string,
+): Promise<OrderRow> {
+  const result = await pool.query<{
+    status: string;
+    failure_reason: string | null;
+    outcome_at: Date | null;
+  }>('select status, failure_reason, outcome_at from orders where id = $1', [
+    orderId,
+  ]);
   const row = result.rows[0];
   if (!row) throw new Error(`pedido inexistente: ${orderId}`);
-  return { status: row.status, failureReason: row.failure_reason, outcomeAt: row.outcome_at };
+  return {
+    status: row.status,
+    failureReason: row.failure_reason,
+    outcomeAt: row.outcome_at,
+  };
 }
 
 // ---------------------------------------------------------------- mensagens na fila
@@ -559,19 +688,35 @@ export async function readOrder(pool: pg.Pool, orderId: string): Promise<OrderRo
 // A mensagem que o relay publicaria: corpo { orderId, correlationId } e o traceparent gravados na
 // linha da outbox pelo checkout. Vai direto para a fila do teste (o relay tem os testes dele), e a
 // linha fica marcada como publicada, como depois do relay. `times` > 1 é a entrega repetida.
-export async function enqueue(world: QueueWorld, order: AcceptedOrder, options: { times?: number } = {}): Promise<void> {
-  const result = await world.pool.query<{ traceparent: string | null; correlation_id: string }>(
-    'select traceparent, correlation_id from outbox where order_id = $1',
-    [order.orderId],
-  );
+export async function enqueue(
+  world: QueueWorld,
+  order: AcceptedOrder,
+  options: { times?: number } = {},
+): Promise<void> {
+  const result = await world.pool.query<{
+    traceparent: string | null;
+    correlation_id: string;
+  }>('select traceparent, correlation_id from outbox where order_id = $1', [
+    order.orderId,
+  ]);
   const row = result.rows[0];
   if (!row) throw new Error(`outbox inexistente para ${order.orderId}`);
-  const body = JSON.stringify({ orderId: order.orderId, correlationId: row.correlation_id });
+  const body = JSON.stringify({
+    orderId: order.orderId,
+    correlationId: row.correlation_id,
+  });
   const times = options.times ?? 1;
-  const batch = Array.from({ length: times }, (_unused, index) => ({ id: `m${index}`, body, traceparent: row.traceparent }));
+  const batch = Array.from({ length: times }, (_unused, index) => ({
+    id: `m${index}`,
+    body,
+    traceparent: row.traceparent,
+  }));
   const sent = await world.queues.queue.send(batch);
   expect(sent.failedIds).toEqual([]);
-  await world.pool.query('update outbox set published_at = coalesce(published_at, now()) where order_id = $1', [order.orderId]);
+  await world.pool.query(
+    'update outbox set published_at = coalesce(published_at, now()) where order_id = $1',
+    [order.orderId],
+  );
 }
 
 export interface SubmitOptions {
@@ -584,7 +729,11 @@ export interface SubmitOptions {
 }
 
 // Checkout de verdade e a mensagem na fila deste teste.
-export async function submitOrder(suite: WorkerSuite, world: QueueWorld, options: SubmitOptions = {}): Promise<AcceptedOrder> {
+export async function submitOrder(
+  suite: WorkerSuite,
+  world: QueueWorld,
+  options: SubmitOptions = {},
+): Promise<AcceptedOrder> {
   const { times, ...acceptance } = options;
   const order = await acceptOrder(suite, acceptance);
   await enqueue(world, order, times === undefined ? {} : { times });
@@ -592,41 +741,73 @@ export async function submitOrder(suite: WorkerSuite, world: QueueWorld, options
 }
 
 // Mensagem que o worker não pode entender: entra na fila como qualquer outra.
-export async function enqueueRaw(world: QueueWorld, body: string, traceparent?: string): Promise<void> {
+export async function enqueueRaw(
+  world: QueueWorld,
+  body: string,
+  traceparent?: string,
+): Promise<void> {
   await sendRaw(world.emq, world.queues.queueUrl, body, traceparent);
 }
 
 // Devolve a mensagem do pedido à fila na hora (`ChangeMessageVisibility` com 0), como a visibilidade
 // vencida, sem esperar o relógio do emulador. Vale para o último recebimento do pedido.
-export async function releaseMessage(world: QueueWorld, orderId: string): Promise<void> {
-  expect(await world.queues.queue.changeVisibility(world.queue.latestHandle(orderId), 0)).toBe('ok');
+export async function releaseMessage(
+  world: QueueWorld,
+  orderId: string,
+): Promise<void> {
+  expect(
+    await world.queues.queue.changeVisibility(
+      world.queue.latestHandle(orderId),
+      0,
+    ),
+  ).toBe('ok');
 }
 
 // O início da última chamada fica velho o bastante para o atraso mínimo (45 s) ter passado. Os prazos
 // gravados correm no relógio do banco, então o teste os semeia em vez de esperar.
-export async function ageLastCall(pool: pg.Pool, orderId: string, seconds = 46): Promise<void> {
-  await pool.query("update outbox set last_call_at = now() - make_interval(secs => $2) where order_id = $1 and last_call_at is not null", [
-    orderId,
-    seconds,
-  ]);
+export async function ageLastCall(
+  pool: pg.Pool,
+  orderId: string,
+  seconds = 46,
+): Promise<void> {
+  await pool.query(
+    'update outbox set last_call_at = now() - make_interval(secs => $2) where order_id = $1 and last_call_at is not null',
+    [orderId, seconds],
+  );
 }
 
 // A mensagem volta a ficar visível e o atraso mínimo está cumprido: a próxima tentativa pode chamar o ERP.
-export async function makeClaimable(world: QueueWorld, orderId: string): Promise<void> {
+export async function makeClaimable(
+  world: QueueWorld,
+  orderId: string,
+): Promise<void> {
   await ageLastCall(world.pool, orderId);
   await releaseMessage(world, orderId);
 }
 
 // Outro consumidor recebe a mensagem: o receipt handle do worker passa a ser antigo (`stale`).
-export async function stealMessage(world: QueueWorld, orderId: string): Promise<void> {
+export async function stealMessage(
+  world: QueueWorld,
+  orderId: string,
+): Promise<void> {
   await releaseMessage(world, orderId);
-  const taken = await world.queues.queue.receive({ max: 10, waitSeconds: 0, visibilitySeconds: 300 });
-  expect(taken.length, 'o outro consumidor recebeu a mensagem').toBeGreaterThanOrEqual(1);
+  const taken = await world.queues.queue.receive({
+    max: 10,
+    waitSeconds: 0,
+    visibilitySeconds: 300,
+  });
+  expect(
+    taken.length,
+    'o outro consumidor recebeu a mensagem',
+  ).toBeGreaterThanOrEqual(1);
 }
 
 // A mensagem já foi enviada antes (first_sent_at preenchido), há tempo suficiente para o atraso
 // mínimo: a próxima tentativa consulta o ERP pela referência antes de criar.
-export async function markSentBefore(pool: pg.Pool, orderId: string): Promise<void> {
+export async function markSentBefore(
+  pool: pg.Pool,
+  orderId: string,
+): Promise<void> {
   await pool.query(
     `update outbox
         set first_sent_at = now() - interval '5 minutes',
@@ -641,15 +822,23 @@ export interface QueueSnapshot {
   dlq: QueueCounts;
 }
 
-export async function snapshotQueues(world: QueueWorld): Promise<QueueSnapshot> {
-  return { queue: await countsOf(world.emq, world.queues.queueUrl), dlq: await countsOf(world.emq, world.queues.dlqUrl) };
+export async function snapshotQueues(
+  world: QueueWorld,
+): Promise<QueueSnapshot> {
+  return {
+    queue: await countsOf(world.emq, world.queues.queueUrl),
+    dlq: await countsOf(world.emq, world.queues.dlqUrl),
+  };
 }
 
 // A fila e a DLQ sem nenhuma mensagem, visível ou em voo: as visíveis sozinhas não veem a mensagem que um worker segura.
 export async function expectQueuesEmpty(world: QueueWorld): Promise<void> {
   await vi.waitFor(
     async () => {
-      expect(await snapshotQueues(world)).toEqual({ queue: { visible: 0, notVisible: 0 }, dlq: { visible: 0, notVisible: 0 } });
+      expect(await snapshotQueues(world)).toEqual({
+        queue: { visible: 0, notVisible: 0 },
+        dlq: { visible: 0, notVisible: 0 },
+      });
     },
     { timeout: 5_000, interval: 50 },
   );
@@ -659,21 +848,39 @@ export async function expectQueuesEmpty(world: QueueWorld): Promise<void> {
 export async function expectOneInFlight(world: QueueWorld): Promise<void> {
   await vi.waitFor(
     async () => {
-      expect(await snapshotQueues(world)).toEqual({ queue: { visible: 0, notVisible: 1 }, dlq: { visible: 0, notVisible: 0 } });
+      expect(await snapshotQueues(world)).toEqual({
+        queue: { visible: 0, notVisible: 1 },
+        dlq: { visible: 0, notVisible: 0 },
+      });
     },
     { timeout: 5_000, interval: 50 },
   );
 }
 
 // O SQS move a mensagem para a DLQ ao receber pela vez seguinte ao limite; a contagem chega pouco depois.
-export async function waitForDlq(world: QueueWorld, count: number): Promise<void> {
-  await vi.waitFor(async () => expect(await world.queues.dlq.approximateCount()).toBe(count), { timeout: 10_000, interval: 50 });
+export async function waitForDlq(
+  world: QueueWorld,
+  count: number,
+): Promise<void> {
+  await vi.waitFor(
+    async () => expect(await world.queues.dlq.approximateCount()).toBe(count),
+    { timeout: 10_000, interval: 50 },
+  );
 }
 
 // A espera do retry que o design define para o `ChangeMessageVisibility`: atraso mínimo mais full
 // jitter sobre um exponencial com teto, em segundos inteiros e arredondado para cima.
-export function retrySeconds(options: { minDelayMs: number; baseMs: number; capMs: number; random: number; attempt: number }): number {
-  const ceiling = Math.min(options.capMs, options.baseMs * 2 ** (options.attempt - 1));
+export function retrySeconds(options: {
+  minDelayMs: number;
+  baseMs: number;
+  capMs: number;
+  random: number;
+  attempt: number;
+}): number {
+  const ceiling = Math.min(
+    options.capMs,
+    options.baseMs * 2 ** (options.attempt - 1),
+  );
   return Math.ceil((options.minDelayMs + options.random * ceiling) / 1000);
 }
 
@@ -727,18 +934,26 @@ export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
   probe.pool = new Proxy(pool, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property);
-      if (property !== 'connect') return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      if (property !== 'connect')
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
       return async () => {
         const client = await target.connect();
         if (!patched.has(client)) {
           patched.add(client);
-          const raw = client as unknown as { query: (...args: unknown[]) => unknown };
+          const raw = client as unknown as {
+            query: (...args: unknown[]) => unknown;
+          };
           const previous = raw.query;
           const hadOwn = Object.hasOwn(raw, 'query');
           const original = previous.bind(client);
           const wrapper = async (...args: unknown[]) => {
             const first = args[0];
-            const text = typeof first === 'string' ? first : ((first as { text?: string } | undefined)?.text ?? '');
+            const text =
+              typeof first === 'string'
+                ? first
+                : ((first as { text?: string } | undefined)?.text ?? '');
             if (!state.released && probe.armed && rule.match.test(text)) {
               state.matched += 1;
               if (state.fired < (rule.times ?? Infinity)) {
@@ -778,22 +993,42 @@ export interface LedgerExpectation {
 
 // O desfecho feliz, visto de fora: pedido faturado, a reserva virando venda e a mensagem apagada, sem
 // nada em voo nem na DLQ. `queueEmpty: false` é para o teste com mais de um pedido na mesma fila.
-export async function expectInvoiced(world: QueueWorld, order: AcceptedOrder, options: { queueEmpty?: boolean } = {}): Promise<void> {
+export async function expectInvoiced(
+  world: QueueWorld,
+  order: AcceptedOrder,
+  options: { queueEmpty?: boolean } = {},
+): Promise<void> {
   const row = await readOrder(world.pool, order.orderId);
   expect(row.status).toBe('invoiced');
   expect(row.failureReason).toBeNull();
   expect(row.outcomeAt).not.toBeNull();
   const inventory = await readInventory(world.pool, order.sku);
-  expect(ledgerViolations(inventory, { onHand: order.onHand - order.quantity, reserved: 0, soldTotal: order.quantity })).toEqual([]);
+  expect(
+    ledgerViolations(inventory, {
+      onHand: order.onHand - order.quantity,
+      reserved: 0,
+      soldTotal: order.quantity,
+    }),
+  ).toEqual([]);
   if (options.queueEmpty ?? true) await expectQueuesEmpty(world);
 }
 
 // A invariante da baixa (ORD-17): lista o que difere do esperado, para o teste real exigir a lista
 // vazia e o controle negativo exigir uma lista com itens.
-export function ledgerViolations(actual: InventorySnapshot, expected: LedgerExpectation): string[] {
+export function ledgerViolations(
+  actual: InventorySnapshot,
+  expected: LedgerExpectation,
+): string[] {
   const violations: string[] = [];
-  if (actual.soldTotal !== expected.soldTotal) violations.push(`sold_total ${actual.soldTotal}, esperado ${expected.soldTotal}`);
-  if (actual.reserved !== expected.reserved) violations.push(`reserved ${actual.reserved}, esperado ${expected.reserved}`);
-  if (actual.onHand !== expected.onHand) violations.push(`on_hand ${actual.onHand}, esperado ${expected.onHand}`);
+  if (actual.soldTotal !== expected.soldTotal)
+    violations.push(
+      `sold_total ${actual.soldTotal}, esperado ${expected.soldTotal}`,
+    );
+  if (actual.reserved !== expected.reserved)
+    violations.push(
+      `reserved ${actual.reserved}, esperado ${expected.reserved}`,
+    );
+  if (actual.onHand !== expected.onHand)
+    violations.push(`on_hand ${actual.onHand}, esperado ${expected.onHand}`);
   return violations;
 }

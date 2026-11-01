@@ -41,6 +41,10 @@ const PROTECTED_NAMES = [
   /^redocly\.yaml$/,
   // O kysely-codegen lê esta configuração; ela mudaria os tipos gerados (FND-09).
   /^\.kysely-codegenrc(\..+)?$/,
+  // O Prettier acha a configuração subindo a partir do arquivo (AI-34).
+  /^\.prettierrc(\..+)?$/,
+  /^prettier\.config\./,
+  /^\.prettierignore$/,
   /^\.npmrc$/,
   /^\.nvmrc$/,
   /^\.gitignore$/,
@@ -51,7 +55,10 @@ const PROTECTED_NAMES = [
 
 function isProtected(rel) {
   const name = rel.slice(rel.lastIndexOf('/') + 1);
-  return PROTECTED_FROM_IMPLEMENTER.some((entry) => isUnder(rel, entry)) || PROTECTED_NAMES.some((re) => re.test(name));
+  return (
+    PROTECTED_FROM_IMPLEMENTER.some((entry) => isUnder(rel, entry)) ||
+    PROTECTED_NAMES.some((re) => re.test(name))
+  );
 }
 
 // Testes unitários ficam ao lado do arquivo testado (CONVENTIONS.md, "Testes"),
@@ -63,7 +70,8 @@ export function isTestFile(rel) {
 const RULES = {
   'test-writer': {
     allows: (rel) => isTestFile(rel),
-    reason: 'O test-writer só edita testes: arquivos *.test.ts e test/ (AGENTS.md, "Guardrails").',
+    reason:
+      'O test-writer só edita testes: arquivos *.test.ts e test/ (AGENTS.md, "Guardrails").',
   },
   implementer: {
     allows: (rel) => !isTestFile(rel) && !isProtected(rel),
@@ -125,12 +133,16 @@ function relativeTo(root, target) {
 export function decide(input, root, projectDir = root) {
   const rule = RULES[input.agent_type];
   const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
-  if (!root || !target) return rule ? `${rule.reason} Caminho não informado.` : null;
+  if (!root || !target)
+    return rule ? `${rule.reason} Caminho não informado.` : null;
 
   const rel = relativeTo(root, target);
-  const fromProject = projectDir ? relativeTo(projectDir, path.resolve(root, target)) : rel;
+  const fromProject = projectDir
+    ? relativeTo(projectDir, path.resolve(root, target))
+    : rel;
   if (hookOwned(rel)) return `${HOOK_OWNED_REASON} Caminho: ${rel}`;
-  if (hookOwned(fromProject)) return `${HOOK_OWNED_REASON} Caminho: ${fromProject}`;
+  if (hookOwned(fromProject))
+    return `${HOOK_OWNED_REASON} Caminho: ${fromProject}`;
   if (!rule) return null;
   if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
     return `${rule.reason} O caminho está fora do repositório.`;

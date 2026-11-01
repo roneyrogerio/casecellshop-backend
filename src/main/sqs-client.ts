@@ -6,5 +6,8 @@ import { optionalEnv, requireEnv } from '../shared/config.ts';
 // recebe os valores prontos. O endpoint vem vazio na AWS real; no compose, é o do ElasticMQ.
 export function createSqsClientFromEnv(): SQSClient {
   const endpoint = optionalEnv('SQS_ENDPOINT');
-  return createSqsClient({ region: requireEnv('AWS_REGION'), ...(endpoint ? { endpoint } : {}) });
+  return createSqsClient({
+    region: requireEnv('AWS_REGION'),
+    ...(endpoint ? { endpoint } : {}),
+  });
 }

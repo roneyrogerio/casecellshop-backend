@@ -1,9 +1,18 @@
 import type { Socket } from 'node:net';
-import { Kysely, PostgresDialect, type PostgresPool, type QueryExecutorProvider, sql } from 'kysely';
+import {
+  Kysely,
+  PostgresDialect,
+  type PostgresPool,
+  type QueryExecutorProvider,
+  sql,
+} from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createErpDb, type ErpSimDb } from '../../../src/db/database.ts';
-import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 
 let database: TestDatabase;
 
@@ -27,7 +36,10 @@ class RollbackFailingClient extends pg.Client {
       configurable: true,
       value: (...args: unknown[]) => {
         const first = args[0];
-        const text = typeof first === 'string' ? first : (first as { text?: unknown } | null)?.text;
+        const text =
+          typeof first === 'string'
+            ? first
+            : (first as { text?: unknown } | null)?.text;
         if (typeof text === 'string' && /^\s*rollback\s*;?\s*$/i.test(text)) {
           return Promise.reject(new Error('ROLLBACK recusado pelo teste'));
         }
@@ -62,7 +74,9 @@ function createNaivePoolAdapter(pool: pg.Pool): PostgresPool {
 }
 
 async function backendPid(executor: QueryExecutorProvider): Promise<number> {
-  const result = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(executor);
+  const result = await sql<{
+    pid: number;
+  }>`select pg_backend_pid() as pid`.execute(executor);
   return result.rows[0]?.pid ?? -1;
 }
 
@@ -94,14 +108,17 @@ async function destroySocketDuringQuery(
       (error: unknown) => error,
     );
     // Espera a consulta estar rodando no servidor antes de destruir o socket.
-    await vi.waitFor(async () => {
-      const active = await database.pool.query<{ total: number }>(
-        `SELECT count(*)::int AS total FROM pg_stat_activity
+    await vi.waitFor(
+      async () => {
+        const active = await database.pool.query<{ total: number }>(
+          `SELECT count(*)::int AS total FROM pg_stat_activity
          WHERE state = 'active' AND pid <> pg_backend_pid() AND query LIKE $1`,
-        [`%pg_sleep(${seconds})%`],
-      );
-      expect(active.rows[0]?.total).toBe(1);
-    }, { timeout: 10_000 });
+          [`%pg_sleep(${seconds})%`],
+        );
+        expect(active.rows[0]?.total).toBe(1);
+      },
+      { timeout: 10_000 },
+    );
     const client = clients[0] as unknown as { connection: { stream: Socket } };
     client.connection.stream.destroy(new Error('socket destruído pelo teste'));
 
@@ -121,7 +138,9 @@ async function destroySocketDuringQuery(
 
 describe('FND-10 o adaptador do pool: ouvinte de error em toda conexão retirada', () => {
   it('FND-10 destruir o socket no meio de uma consulta fora de transação não derruba o processo', async () => {
-    const result = await destroySocketDuringQuery(30, (db) => sql`select pg_sleep(30)`.execute(db));
+    const result = await destroySocketDuringQuery(30, (db) =>
+      sql`select pg_sleep(30)`.execute(db),
+    );
 
     expect(result.outcome).toBeInstanceOf(Error);
     expect(result.uncaught).toEqual([]);
@@ -162,9 +181,12 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
 
       expect(pidAfter).not.toBe(pidInTransaction);
       // Descartar é fechar a conexão: o servidor não guarda mais a transação aberta.
-      await vi.waitFor(async () => {
-        expect(await backendExists(pidInTransaction)).toBe(false);
-      }, { timeout: 10_000 });
+      await vi.waitFor(
+        async () => {
+          expect(await backendExists(pidInTransaction)).toBe(false);
+        },
+        { timeout: 10_000 },
+      );
     } finally {
       await pool.end();
     }
@@ -172,7 +194,9 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
 
   it('FND-10 controle negativo: com um adaptador ingênuo, o mesmo cenário devolve ao pool a mesma conexão (o mesmo pg_backend_pid())', async () => {
     const pool = createTestPool({ max: 1, Client: RollbackFailingClient });
-    const db = new Kysely<ErpSimDb>({ dialect: new PostgresDialect({ pool: createNaivePoolAdapter(pool) }) });
+    const db = new Kysely<ErpSimDb>({
+      dialect: new PostgresDialect({ pool: createNaivePoolAdapter(pool) }),
+    });
     try {
       const pidInTransaction = await failTransaction(db);
       const pidAfter = await backendPid(db);

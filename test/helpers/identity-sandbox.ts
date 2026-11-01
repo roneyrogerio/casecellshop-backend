@@ -17,16 +17,32 @@ function fakeKeychainDir(): string {
   return dir;
 }
 
-export function isolatedEnv(extra: Record<string, string> = {}): Record<string, string> {
+export function isolatedEnv(
+  extra: Record<string, string> = {},
+): Record<string, string> {
   const dir = makeTempDir('git-global-');
   const globalFile = join(dir, 'gitconfig');
   writeFileSync(globalFile, '');
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !key.startsWith('GIT_CONFIG_') && key !== 'CLAUDE_CODE_REMOTE') env[key] = value;
+    if (
+      value !== undefined &&
+      !key.startsWith('GIT_CONFIG_') &&
+      key !== 'CLAUDE_CODE_REMOTE'
+    )
+      env[key] = value;
   }
-  const path = [fakeKeychainDir(), env.PATH ?? ''].filter((part) => part !== '').join(delimiter);
-  return { ...env, GIT_CONFIG_GLOBAL: globalFile, GIT_CONFIG_NOSYSTEM: '1', HOME: dir, PATH: path, ...extra };
+  const path = [fakeKeychainDir(), env.PATH ?? '']
+    .filter((part) => part !== '')
+    .join(delimiter);
+  return {
+    ...env,
+    GIT_CONFIG_GLOBAL: globalFile,
+    GIT_CONFIG_NOSYSTEM: '1',
+    HOME: dir,
+    PATH: path,
+    ...extra,
+  };
 }
 
 export function makeRepo(prefix = 'identity-'): string {
@@ -46,7 +62,13 @@ export function localConfig(dir: string, key: string): string | undefined {
 
 // Credential helper falso, local, que responde sem rede: simula a credencial que já está guardada na máquina.
 export function setFakeCredential(dir: string, password: string): void {
-  git(dir, 'config', '--local', 'credential.helper', `!f() { echo username=u; echo password=${password}; }; f`);
+  git(
+    dir,
+    'config',
+    '--local',
+    'credential.helper',
+    `!f() { echo username=u; echo password=${password}; }; f`,
+  );
 }
 
 // Cópia dos scripts (sem os testes) em um repositório temporário: rodar o CLI de verdade sem tocar no clone real.
@@ -66,12 +88,20 @@ export function runScript(
   args: string[],
   options: { env?: Record<string, string>; input?: string } = {},
 ): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [join(dir, 'scripts', script), ...args], {
-    cwd: dir,
-    encoding: 'utf8',
-    env: options.env ?? isolatedEnv(),
-    input: options.input ?? '',
-    timeout: 20_000,
-  });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  const result = spawnSync(
+    process.execPath,
+    [join(dir, 'scripts', script), ...args],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+      env: options.env ?? isolatedEnv(),
+      input: options.input ?? '',
+      timeout: 20_000,
+    },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }

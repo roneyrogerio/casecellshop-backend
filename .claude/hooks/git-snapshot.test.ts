@@ -25,7 +25,11 @@ interface Snapshot {
 interface SnapshotModule {
   takeSnapshot(projectDir: string): Snapshot;
   changesDuring(beforeStatus: string, afterStatus: string): string[];
-  compareSnapshots(before: Snapshot, after: Snapshot, options?: { agentRoot?: string }): string[];
+  compareSnapshots(
+    before: Snapshot,
+    after: Snapshot,
+    options?: { agentRoot?: string },
+  ): string[];
   snapshotFile(sessionId: string, agentId: string): string;
 }
 
@@ -33,7 +37,9 @@ let mod: SnapshotModule;
 
 // Import dinâmico: o módulo é .mjs sem tipos, e assim o teste falha com "módulo inexistente" enquanto ele não existe.
 beforeAll(async () => {
-  mod = (await import(pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href)) as SnapshotModule;
+  mod = (await import(
+    pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href
+  )) as SnapshotModule;
 });
 
 afterEach(cleanupTempDirs);
@@ -48,7 +54,9 @@ describe('AI-12 takeSnapshot lê o estado do git', () => {
   it('AI-12 o head é o git rev-parse HEAD', () => {
     const dir = repo();
 
-    expect(mod.takeSnapshot(dir).head.trim()).toBe(git(dir, 'rev-parse', 'HEAD').trim());
+    expect(mod.takeSnapshot(dir).head.trim()).toBe(
+      git(dir, 'rev-parse', 'HEAD').trim(),
+    );
   });
 
   it('AI-12 os refs trazem branches, tags, refs/remotes e o stash, com o hash de cada um', () => {
@@ -61,7 +69,13 @@ describe('AI-12 takeSnapshot lê o estado do git', () => {
     const { refs } = mod.takeSnapshot(dir);
     const head = git(dir, 'rev-parse', 'HEAD').trim();
 
-    for (const name of ['refs/heads/main', 'refs/heads/outra', 'refs/tags/v1', 'refs/remotes/origin/x', 'refs/stash']) {
+    for (const name of [
+      'refs/heads/main',
+      'refs/heads/outra',
+      'refs/tags/v1',
+      'refs/remotes/origin/x',
+      'refs/stash',
+    ]) {
       expect(refs, name).toContain(`${name} ${head}`);
     }
   });
@@ -81,7 +95,9 @@ describe('AI-12 takeSnapshot lê o estado do git', () => {
     const dir = repo();
     git(dir, 'config', 'alias.p', 'push');
 
-    expect(mod.takeSnapshot(dir).config).toBe(readFileSync(join(dir, '.git', 'config'), 'utf8'));
+    expect(mod.takeSnapshot(dir).config).toBe(
+      readFileSync(join(dir, '.git', 'config'), 'utf8'),
+    );
     expect(mod.takeSnapshot(dir).config).toContain('alias');
   });
 
@@ -111,24 +127,31 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
     const refsLines = changes.filter((line) => line.startsWith('refs'));
     expect(refsLines).toHaveLength(1);
     expect(refsLines[0]).toContain('refs/heads/main');
-    expect(changes.some((line) => line.startsWith('worktrees') || line.startsWith('config'))).toBe(false);
+    expect(
+      changes.some(
+        (line) => line.startsWith('worktrees') || line.startsWith('config'),
+      ),
+    ).toBe(false);
   });
 
   it.each([
     ['uma branch adicionada', ['branch', 'nova'], 'refs/heads/nova'],
     ['uma tag adicionada', ['tag', 'v9'], 'refs/tags/v9'],
     ['um stash adicionado', ['update-ref', 'refs/stash', 'HEAD'], 'refs/stash'],
-  ])('AI-12 %s aparece em refs, com o nome do ref na mensagem', (_label, args, name) => {
-    const dir = repo();
-    const before = mod.takeSnapshot(dir);
-    git(dir, ...args);
+  ])(
+    'AI-12 %s aparece em refs, com o nome do ref na mensagem',
+    (_label, args, name) => {
+      const dir = repo();
+      const before = mod.takeSnapshot(dir);
+      git(dir, ...args);
 
-    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+      const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
 
-    expect(changes).toHaveLength(1);
-    expect(changes[0]?.startsWith('refs')).toBe(true);
-    expect(changes[0]).toContain(name);
-  });
+      expect(changes).toHaveLength(1);
+      expect(changes[0]?.startsWith('refs')).toBe(true);
+      expect(changes[0]).toContain(name);
+    },
+  );
 
   it('AI-12 um ref removido aparece em refs, com o nome na mensagem', () => {
     const dir = repo();
@@ -172,11 +195,21 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
   it('AI-12 uma worktree nova aparece em worktrees', () => {
     const dir = repo();
     const before = mod.takeSnapshot(dir);
-    git(dir, 'worktree', 'add', '-q', join(makeTempDir('wt-'), 'extra'), '-b', 'wt2');
+    git(
+      dir,
+      'worktree',
+      'add',
+      '-q',
+      join(makeTempDir('wt-'), 'extra'),
+      '-b',
+      'wt2',
+    );
 
     const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
 
-    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(
+      1,
+    );
   });
 
   it('AI-12 uma mudança no .git/config aparece em config', () => {
@@ -217,7 +250,9 @@ describe('AI-33 o retrato não atribui ao agente o que outra sessão faz no mesm
     const before = mod.takeSnapshot(dir);
     commitEmpty(other, 'da outra sessão');
 
-    expect(git(dir, 'rev-parse', 'outra').trim()).not.toBe(git(dir, 'rev-parse', 'main').trim());
+    expect(git(dir, 'rev-parse', 'outra').trim()).not.toBe(
+      git(dir, 'rev-parse', 'main').trim(),
+    );
     expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
   });
 
@@ -318,7 +353,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
 
     expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
     expect(changes.join('\n')).toContain('refs/heads/alvo');
-    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(
+      1,
+    );
   });
 
   it('AI-33 a main solta (HEAD da pasta principal destacado), presa numa worktree nova e movida, aparece em refs', () => {
@@ -329,7 +366,11 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     git(dir, 'worktree', 'add', '-q', wt, 'main');
     commitEmpty(wt, 'move a main');
 
-    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot: join(makeTempDir('wt-'), 'outra') }).join('\n');
+    const text = mod
+      .compareSnapshots(before, mod.takeSnapshot(dir), {
+        agentRoot: join(makeTempDir('wt-'), 'outra'),
+      })
+      .join('\n');
 
     expect(text).toContain('refs/heads/main');
   });
@@ -337,13 +378,27 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
   it('AI-33 uma worktree nova sob .claude/worktrees/ da pasta do retrato, que não é o agentRoot, aparece em worktrees', () => {
     const dir = repo();
     const before = mod.takeSnapshot(dir);
-    git(dir, 'worktree', 'add', '-q', join(dir, '.claude', 'worktrees', 'x'), '-b', 'x');
+    git(
+      dir,
+      'worktree',
+      'add',
+      '-q',
+      join(dir, '.claude', 'worktrees', 'x'),
+      '-b',
+      'x',
+    );
 
     const semOpcao = mod.compareSnapshots(before, mod.takeSnapshot(dir));
-    const comOutraRaiz = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot: join(dir, '.claude', 'worktrees', 'y') });
+    const comOutraRaiz = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+      agentRoot: join(dir, '.claude', 'worktrees', 'y'),
+    });
 
-    expect(semOpcao.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
-    expect(comOutraRaiz.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(
+      semOpcao.filter((line) => line.startsWith('worktrees')),
+    ).toHaveLength(1);
+    expect(
+      comOutraRaiz.filter((line) => line.startsWith('worktrees')),
+    ).toHaveLength(1);
   });
 
   it('AI-33 uma branch worktree-agent-x criada na pasta principal aparece em refs', () => {
@@ -366,7 +421,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     const before = mod.takeSnapshot(dir);
     commitEmpty(agentRoot, 'do agente');
 
-    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+    expect(
+      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
+    ).toEqual([]);
   });
 
   it('AI-33 controle: com agentRoot, a worktree e a branch criadas durante a execução também não aparecem', () => {
@@ -376,7 +433,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente-novo');
     commitEmpty(agentRoot, 'do agente');
 
-    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+    expect(
+      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
+    ).toEqual([]);
   });
 
   it('AI-33 controle: o agentRoot só poupa o caminho exato; outra worktree nova junto com ele continua aparecendo', () => {
@@ -384,11 +443,23 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     const agentRoot = join(makeTempDir('wt-'), 'agente');
     git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
     const before = mod.takeSnapshot(dir);
-    git(dir, 'worktree', 'add', '-q', join(dir, '.claude', 'worktrees', 'intrusa'), '-b', 'intrusa');
+    git(
+      dir,
+      'worktree',
+      'add',
+      '-q',
+      join(dir, '.claude', 'worktrees', 'intrusa'),
+      '-b',
+      'intrusa',
+    );
 
-    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot });
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+      agentRoot,
+    });
 
-    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(
+      1,
+    );
     expect(changes.join('\n')).toContain('refs/heads/intrusa');
   });
 
@@ -403,7 +474,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     commitEmpty(other, 'da outra sessão');
     git(dir, 'update-ref', 'refs/remotes/origin/z', 'HEAD');
 
-    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+    expect(
+      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
+    ).toEqual([]);
   });
 
   // A2 da Revisão 2: só a branch presa à worktree do agente no retrato do início fica fora da comparação. Se o agente
@@ -417,7 +490,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     git(agentRoot, 'checkout', '-q', 'main');
     commitEmpty(agentRoot, 'move a main pela worktree do agente');
 
-    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot });
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+      agentRoot,
+    });
 
     expect(changes.join('\n')).toContain('refs/heads/main');
     expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
@@ -431,7 +506,9 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     const before = mod.takeSnapshot(dir);
     commitEmpty(agentRoot, 'commit na branch do agente');
 
-    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+    expect(
+      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
+    ).toEqual([]);
   });
 });
 
@@ -441,7 +518,11 @@ function sorted(paths: string[]): string[] {
 
 // O texto cru do `git status --porcelain=v1`: o contrato de entrada de changesDuring.
 describe('AI-28 changesDuring compara duas saídas do git status', () => {
-  const BEFORE = [' M src/antes.ts', '?? src/novo-antes.ts', 'D  src/some-antes.ts'].join('\n');
+  const BEFORE = [
+    ' M src/antes.ts',
+    '?? src/novo-antes.ts',
+    'D  src/some-antes.ts',
+  ].join('\n');
 
   it('AI-28 saídas iguais não atribuem nada', () => {
     expect(mod.changesDuring(BEFORE, BEFORE)).toEqual([]);
@@ -449,27 +530,40 @@ describe('AI-28 changesDuring compara duas saídas do git status', () => {
   });
 
   it('AI-28 uma linha que aparece é atribuída', () => {
-    expect(mod.changesDuring(BEFORE, `${BEFORE}\n M src/durante.ts\n?? src/criado.ts`).sort()).toEqual([
-      'src/criado.ts',
-      'src/durante.ts',
-    ]);
+    expect(
+      mod
+        .changesDuring(BEFORE, `${BEFORE}\n M src/durante.ts\n?? src/criado.ts`)
+        .sort(),
+    ).toEqual(['src/criado.ts', 'src/durante.ts']);
   });
 
   it('AI-28 uma linha que some é atribuída (o arquivo voltou ao estado do HEAD)', () => {
-    expect(mod.changesDuring(BEFORE, ' M src/antes.ts\n?? src/novo-antes.ts')).toEqual(['src/some-antes.ts']);
+    expect(
+      mod.changesDuring(BEFORE, ' M src/antes.ts\n?? src/novo-antes.ts'),
+    ).toEqual(['src/some-antes.ts']);
   });
 
   it('AI-28 uma linha que muda é atribuída (o arquivo foi para o índice, ou foi apagado)', () => {
-    expect(sorted(mod.changesDuring(BEFORE, 'M  src/antes.ts\n?? src/novo-antes.ts\nD  src/some-antes.ts'))).toEqual([
-      'src/antes.ts',
+    expect(
+      sorted(
+        mod.changesDuring(
+          BEFORE,
+          'M  src/antes.ts\n?? src/novo-antes.ts\nD  src/some-antes.ts',
+        ),
+      ),
+    ).toEqual(['src/antes.ts']);
+    expect(mod.changesDuring(' M src/a.ts', ' D src/a.ts')).toEqual([
+      'src/a.ts',
     ]);
-    expect(mod.changesDuring(' M src/a.ts', ' D src/a.ts')).toEqual(['src/a.ts']);
   });
 
   it('AI-28 a mesma linha com outro hash de conteúdo é atribuída', () => {
-    expect(mod.changesDuring(' M src/a.ts\thash1\n M src/b.ts\thash2', ' M src/a.ts\thash9\n M src/b.ts\thash2')).toEqual([
-      'src/a.ts',
-    ]);
+    expect(
+      mod.changesDuring(
+        ' M src/a.ts\thash1\n M src/b.ts\thash2',
+        ' M src/a.ts\thash9\n M src/b.ts\thash2',
+      ),
+    ).toEqual(['src/a.ts']);
   });
 
   // Controle negativo: sem o retrato do início (a comparação contra o HEAD, que é só o status da parada), a mudança
@@ -477,8 +571,13 @@ describe('AI-28 changesDuring compara duas saídas do git status', () => {
   it('AI-28 controle: contra o HEAD, sem o início, a mudança anterior é atribuída; com o início, não', () => {
     const duringOnly = ' M src/antes.ts\n M src/durante.ts';
 
-    expect(sorted(mod.changesDuring('', duringOnly))).toEqual(['src/antes.ts', 'src/durante.ts']);
-    expect(mod.changesDuring(' M src/antes.ts', duringOnly)).toEqual(['src/durante.ts']);
+    expect(sorted(mod.changesDuring('', duringOnly))).toEqual([
+      'src/antes.ts',
+      'src/durante.ts',
+    ]);
+    expect(mod.changesDuring(' M src/antes.ts', duringOnly)).toEqual([
+      'src/durante.ts',
+    ]);
   });
 });
 
@@ -497,7 +596,9 @@ describe('AI-28 changesDuring com o retrato do git de um repositório real', () 
   function changes(dir: string, act: () => void): string[] {
     const before = mod.takeSnapshot(dir);
     act();
-    return sorted(mod.changesDuring(before.status, mod.takeSnapshot(dir).status));
+    return sorted(
+      mod.changesDuring(before.status, mod.takeSnapshot(dir).status),
+    );
   }
 
   it('AI-28 sem nenhuma mudança entre o início e a parada, nada é atribuído', () => {
@@ -529,7 +630,9 @@ describe('AI-28 changesDuring com o retrato do git de um repositório real', () 
   it('AI-28 um arquivo rastreado apagado durante a execução é atribuído', () => {
     const dir = seeded();
 
-    expect(changes(dir, () => rmSync(join(dir, 'src/limpo.ts')))).toEqual(['src/limpo.ts']);
+    expect(changes(dir, () => rmSync(join(dir, 'src/limpo.ts')))).toEqual([
+      'src/limpo.ts',
+    ]);
   });
 
   it('AI-28 um arquivo já sujo no início e alterado de novo é atribuído, mesmo com a linha do status igual', () => {
@@ -553,8 +656,13 @@ describe('AI-28 changesDuring com o retrato do git de um repositório real', () 
     writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
     const after = mod.takeSnapshot(dir);
 
-    expect(sorted(mod.changesDuring('', after.status))).toEqual(['src/limpo.ts', 'src/sujo-antes.ts']);
-    expect(mod.changesDuring(before.status, after.status)).toEqual(['src/limpo.ts']);
+    expect(sorted(mod.changesDuring('', after.status))).toEqual([
+      'src/limpo.ts',
+      'src/sujo-antes.ts',
+    ]);
+    expect(mod.changesDuring(before.status, after.status)).toEqual([
+      'src/limpo.ts',
+    ]);
   });
 });
 
@@ -590,7 +698,9 @@ describe('AI-12 snapshotFile', () => {
     ]);
 
     expect(files.size).toBe(3);
-    expect(mod.snapshotFile('sess-1', 'ag-1')).toBe(mod.snapshotFile('sess-1', 'ag-1'));
+    expect(mod.snapshotFile('sess-1', 'ag-1')).toBe(
+      mod.snapshotFile('sess-1', 'ag-1'),
+    );
   });
 
   it('AI-12 um agent_id com barras não sai de os.tmpdir()', () => {

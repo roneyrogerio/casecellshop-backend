@@ -1,14 +1,10 @@
 {
   "compilerOptions": {
     "target": "esnext",
-    "lib": [
-      "esnext"
-    ],
+    "lib": ["esnext"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "noEmit": true,
     "strict": true,
     "erasableSyntaxOnly": true,

@@ -27,7 +27,12 @@ export interface RedriveResult {
 
 // Devolve as mensagens da DLQ à fila de origem e acompanha pela contagem da DLQ,
 // sem o ListMessageMoveTasks, que derruba o ElasticMQ nativo (R12).
-export async function redriveDlq({ client, dlqUrl, clock, timeoutMs = DEFAULT_REDRIVE_TIMEOUT_MS }: RedriveOptions): Promise<RedriveResult> {
+export async function redriveDlq({
+  client,
+  dlqUrl,
+  clock,
+  timeoutMs = DEFAULT_REDRIVE_TIMEOUT_MS,
+}: RedriveOptions): Promise<RedriveResult> {
   const dlq = createQueue(client, dlqUrl);
   const before = await dlq.approximateCount();
   await startRedrive(client, dlqUrl);
@@ -42,13 +47,25 @@ export async function redriveDlq({ client, dlqUrl, clock, timeoutMs = DEFAULT_RE
 
 // Cancela o pedido ainda pendente, depois de o operador confirmar no ERP que ele
 // não existe; devolve se o pedido mudou.
-export async function cancelOrder(pool: Pool, orderId: string): Promise<{ changed: boolean }> {
+export async function cancelOrder(
+  pool: Pool,
+  orderId: string,
+): Promise<{ changed: boolean }> {
   const db = createDb(pool);
   return runInTransaction(db, async (trx) => {
     // Ordem de lock: a linha da outbox, o pedido e o estoque. Marcar a linha como publicada faz o
     // relay parar de tentar uma linha que não passa no schema da mensagem (A12).
-    await trx.updateTable('outbox').set({ published_at: outbox.fn.coalesce('published_at', sql<Date>`now()`) }).where('order_id', '=', orderId).execute();
-    const result = await applyConclusion(trx, orderId, { kind: 'failed', reason: 'cancelled' });
+    await trx
+      .updateTable('outbox')
+      .set({
+        published_at: outbox.fn.coalesce('published_at', sql<Date>`now()`),
+      })
+      .where('order_id', '=', orderId)
+      .execute();
+    const result = await applyConclusion(trx, orderId, {
+      kind: 'failed',
+      reason: 'cancelled',
+    });
     return { changed: result.orderChanged };
   });
 }

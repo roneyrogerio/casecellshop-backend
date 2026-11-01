@@ -10,7 +10,11 @@ import {
 } from 'testcontainers';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { HealthStatus } from '../../../src/contract/index.ts';
-import { expectMatchesContract, findRoute, observeFetchResponse } from '../../helpers/contract.ts';
+import {
+  expectMatchesContract,
+  findRoute,
+  observeFetchResponse,
+} from '../../helpers/contract.ts';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
@@ -31,7 +35,9 @@ async function freePort(): Promise<number> {
   });
 }
 
-type ComposeContainer = ReturnType<StartedDockerComposeEnvironment['getContainer']>;
+type ComposeContainer = ReturnType<
+  StartedDockerComposeEnvironment['getContainer']
+>;
 
 async function inspect(container: ComposeContainer) {
   const client = await getContainerRuntimeClient();
@@ -45,10 +51,15 @@ async function inspectOneShot(service: string) {
   const found = await client.container.dockerode.listContainers({
     all: true,
     filters: {
-      label: [`com.docker.compose.project=${projectName}`, `com.docker.compose.service=${service}`],
+      label: [
+        `com.docker.compose.project=${projectName}`,
+        `com.docker.compose.service=${service}`,
+      ],
     },
   });
-  expect(found, `contêiner do serviço ${service} não encontrado`).toHaveLength(1);
+  expect(found, `contêiner do serviço ${service} não encontrado`).toHaveLength(
+    1,
+  );
   return client.container.getById(found[0]!.Id).inspect();
 }
 
@@ -56,11 +67,19 @@ const execFileAsync = promisify(execFile);
 
 // Mesmo projeto, arquivo e variáveis do up, para o CLI achar os contêineres do teste.
 async function composeCli(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync('docker', ['compose', '-p', projectName, '-f', 'compose.yaml', ...args], {
-    cwd: root,
-    env: { ...process.env, API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) },
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  const { stdout, stderr } = await execFileAsync(
+    'docker',
+    ['compose', '-p', projectName, '-f', 'compose.yaml', ...args],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        API_PORT: String(apiPort),
+        JAEGER_UI_PORT: String(jaegerUiPort),
+      },
+      maxBuffer: 32 * 1024 * 1024,
+    },
+  );
   return `${stdout}${stderr}`;
 }
 
@@ -72,7 +91,14 @@ async function readServiceLogs(): Promise<string> {
     .split('\n')
     .map((name) => name.trim())
     .filter((name) => /^[\w-]+$/.test(name) && name !== 'jaeger');
-  return composeCli(['logs', '--no-color', '--timestamps', '--tail', '200', ...services]);
+  return composeCli([
+    'logs',
+    '--no-color',
+    '--timestamps',
+    '--tail',
+    '200',
+    ...services,
+  ]);
 }
 
 async function collectServiceLogs(): Promise<string> {
@@ -97,7 +123,8 @@ function watchServiceLogs(): { latest(): string; stop(): Promise<void> } {
       } catch {
         // O projeto ainda não existe, ou já foi derrubado: fica o último instantâneo.
       }
-      if (running) await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      if (running)
+        await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
     }
   })();
   return {
@@ -118,7 +145,10 @@ beforeAll(async () => {
     // Nome de projeto próprio e portas livres (API e interface do Jaeger): não conflita com o compose de desenvolvimento.
     environment = await new DockerComposeEnvironment(root, 'compose.yaml')
       .withProjectName(projectName)
-      .withEnvironment({ API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) })
+      .withEnvironment({
+        API_PORT: String(apiPort),
+        JAEGER_UI_PORT: String(jaegerUiPort),
+      })
       .withBuild()
       .withStartupTimeout(240_000)
       .up();
@@ -131,10 +161,18 @@ beforeAll(async () => {
     // `logs` os lê; ou a espera falhou depois do `up`: o Testcontainers já fez o `down`, e vale o
     // último instantâneo do observador.
     const fresh = await readServiceLogs().catch(() => '');
-    const logs = fresh.trim() !== '' ? fresh : `(instantâneo anterior ao down do Testcontainers)\n${watcher.latest()}`;
-    await composeCli(['down', '--volumes', '--timeout', '5']).catch(() => undefined);
+    const logs =
+      fresh.trim() !== ''
+        ? fresh
+        : `(instantâneo anterior ao down do Testcontainers)\n${watcher.latest()}`;
+    await composeCli(['down', '--volumes', '--timeout', '5']).catch(
+      () => undefined,
+    );
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${reason}\n\n--- logs dos serviços (últimas 200 linhas de cada) ---\n${logs}`, { cause: error });
+    throw new Error(
+      `${reason}\n\n--- logs dos serviços (últimas 200 linhas de cada) ---\n${logs}`,
+      { cause: error },
+    );
   }
 }, 480_000);
 
@@ -142,7 +180,9 @@ beforeAll(async () => {
 // (o afterAll os derruba), então os logs são lidos na hora da falha.
 beforeEach(({ onTestFailed }) => {
   onTestFailed(async () => {
-    console.error(`--- logs dos serviços no momento da falha (últimas 200 linhas de cada) ---\n${await collectServiceLogs()}`);
+    console.error(
+      `--- logs dos serviços no momento da falha (últimas 200 linhas de cada) ---\n${await collectServiceLogs()}`,
+    );
   });
 });
 
@@ -153,7 +193,10 @@ afterAll(async () => {
 describe('FND-01 docker compose up sobe tudo', () => {
   it('FND-01 sobem os serviços postgres, migrate, api e worker', async () => {
     for (const name of ['postgres-1', 'api-1', 'worker-1']) {
-      expect(() => environment.getContainer(name), `serviço ausente: ${name}`).not.toThrow();
+      expect(
+        () => environment.getContainer(name),
+        `serviço ausente: ${name}`,
+      ).not.toThrow();
     }
     await inspectOneShot('migrate');
   });
@@ -164,7 +207,10 @@ describe('FND-01 docker compose up sobe tudo', () => {
     expect(migrate.ExitCode).toBe(0);
 
     for (const name of ['postgres-1', 'api-1', 'worker-1']) {
-      expect((await inspect(environment.getContainer(name))).State.Running, `${name} deveria estar rodando`).toBe(true);
+      expect(
+        (await inspect(environment.getContainer(name))).State.Running,
+        `${name} deveria estar rodando`,
+      ).toBe(true);
     }
   });
 
@@ -194,14 +240,39 @@ describe('FND-01 docker compose up sobe tudo', () => {
 // serviço `worker` (mesma rede, mesmas variáveis SQS_ENDPOINT, AWS_REGION, BILLING_QUEUE_URL e
 // BILLING_DLQ_URL), com o SDK da AWS que a imagem já traz. Assim o teste também prova a configuração
 // que o worker recebe. Só o stdout conta: o CLI escreve o progresso no stderr.
-async function runInWorkerImage(script: string, extraEnvironment: Record<string, string> = {}): Promise<unknown> {
-  const environmentFlags = Object.entries(extraEnvironment).flatMap(([name, value]) => ['-e', `${name}=${value}`]);
+async function runInWorkerImage(
+  script: string,
+  extraEnvironment: Record<string, string> = {},
+): Promise<unknown> {
+  const environmentFlags = Object.entries(extraEnvironment).flatMap(
+    ([name, value]) => ['-e', `${name}=${value}`],
+  );
   const { stdout } = await execFileAsync(
     'docker',
-    ['compose', '-p', projectName, '-f', 'compose.yaml', 'run', '--rm', '--no-deps', '-T', ...environmentFlags, 'worker', 'node', '--input-type=module', '-e', script],
+    [
+      'compose',
+      '-p',
+      projectName,
+      '-f',
+      'compose.yaml',
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      ...environmentFlags,
+      'worker',
+      'node',
+      '--input-type=module',
+      '-e',
+      script,
+    ],
     {
       cwd: root,
-      env: { ...process.env, API_PORT: String(apiPort), JAEGER_UI_PORT: String(jaegerUiPort) },
+      env: {
+        ...process.env,
+        API_PORT: String(apiPort),
+        JAEGER_UI_PORT: String(jaegerUiPort),
+      },
       maxBuffer: 32 * 1024 * 1024,
     },
   );
@@ -248,27 +319,46 @@ console.log(JSON.stringify({ found: false, lastError }));
 interface QueueInspection {
   queueUrl: string;
   dlqUrl: string;
-  billing: { VisibilityTimeout: string; RedrivePolicy: string; QueueArn: string };
+  billing: {
+    VisibilityTimeout: string;
+    RedrivePolicy: string;
+    QueueArn: string;
+  };
   dlq: { QueueArn: string };
 }
 
 describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
   it('FND-01 sobe o elasticmq e ele começa antes do worker', async () => {
-    expect(() => environment.getContainer('elasticmq-1'), 'serviço ausente: elasticmq-1').not.toThrow();
-    const elasticmq = (await inspect(environment.getContainer('elasticmq-1'))).State;
+    expect(
+      () => environment.getContainer('elasticmq-1'),
+      'serviço ausente: elasticmq-1',
+    ).not.toThrow();
+    const elasticmq = (await inspect(environment.getContainer('elasticmq-1')))
+      .State;
     const worker = (await inspect(environment.getContainer('worker-1'))).State;
 
     expect(elasticmq.Running).toBe(true);
-    expect(Date.parse(elasticmq.StartedAt)).toBeLessThanOrEqual(Date.parse(worker.StartedAt));
+    expect(Date.parse(elasticmq.StartedAt)).toBeLessThanOrEqual(
+      Date.parse(worker.StartedAt),
+    );
   });
 
   it('FND-01 as filas billing e billing-dlq já existem, a billing com visibilidade de 60 s e redrive para a DLQ com maxReceiveCount 12', async () => {
-    const inspection = (await runInWorkerImage(INSPECT_QUEUES)) as QueueInspection;
+    const inspection = (await runInWorkerImage(
+      INSPECT_QUEUES,
+    )) as QueueInspection;
 
-    expect(new URL(inspection.queueUrl).pathname.endsWith('/billing')).toBe(true);
-    expect(new URL(inspection.dlqUrl).pathname.endsWith('/billing-dlq')).toBe(true);
+    expect(new URL(inspection.queueUrl).pathname.endsWith('/billing')).toBe(
+      true,
+    );
+    expect(new URL(inspection.dlqUrl).pathname.endsWith('/billing-dlq')).toBe(
+      true,
+    );
     expect(Number(inspection.billing.VisibilityTimeout)).toBe(60);
-    const redrive = JSON.parse(inspection.billing.RedrivePolicy) as { deadLetterTargetArn: string; maxReceiveCount: number | string };
+    const redrive = JSON.parse(inspection.billing.RedrivePolicy) as {
+      deadLetterTargetArn: string;
+      maxReceiveCount: number | string;
+    };
     expect(redrive.deadLetterTargetArn).toBe(inspection.dlq.QueueArn);
     expect(Number(redrive.maxReceiveCount)).toBe(12);
   });
@@ -285,6 +375,8 @@ describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
 
     await composeCli(['restart', '--timeout', '10', 'elasticmq']);
 
-    expect(await runInWorkerImage(FIND_MESSAGE, { MESSAGE_BODY: body })).toEqual({ found: true });
+    expect(
+      await runInWorkerImage(FIND_MESSAGE, { MESSAGE_BODY: body }),
+    ).toEqual({ found: true });
   }, 180_000);
 });

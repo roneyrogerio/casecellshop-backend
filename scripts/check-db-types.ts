@@ -6,15 +6,27 @@
 // Todas as opções do gerador vão por flag, e o Cli recebe `config: {}`: com uma
 // configuração dada, ele nem procura `.kysely-codegenrc*` ou a chave do
 // package.json, que o implementer pode editar e mudariam os tipos em silêncio.
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Cli } from 'kysely-codegen';
 import pg from 'pg';
-import { MIGRATION_FOLDERS, migrate, type MigrationFolder } from '../src/db/migrate.ts';
+import {
+  MIGRATION_FOLDERS,
+  migrate,
+  type MigrationFolder,
+} from '../src/db/migrate.ts';
 
-const DEFAULT_OUT_DIR = fileURLToPath(new URL('../src/db/types', import.meta.url));
+const DEFAULT_OUT_DIR = fileURLToPath(
+  new URL('../src/db/types', import.meta.url),
+);
 
 // Um arquivo por schema; o nome do arquivo é o que o código importa.
 const SCHEMAS = [
@@ -31,7 +43,11 @@ export interface CheckDbTypesOptions {
   write?: boolean;
 }
 
-export function codegenArgs(databaseUrl: string, schema: string, outFile: string): string[] {
+export function codegenArgs(
+  databaseUrl: string,
+  schema: string,
+  outFile: string,
+): string[] {
   return [
     '--dialect=postgres',
     `--url=${databaseUrl}`,
@@ -81,7 +97,10 @@ export async function checkDbTypes({
   try {
     for (const { schema, file } of SCHEMAS) {
       const generated = path.join(workDir, file);
-      await new Cli().run({ argv: codegenArgs(databaseUrl, schema, generated), config: {} });
+      await new Cli().run({
+        argv: codegenArgs(databaseUrl, schema, generated),
+        config: {},
+      });
       const target = path.resolve(outDir, file);
       if (write) {
         copyFileSync(generated, target);
@@ -98,7 +117,9 @@ export async function checkDbTypes({
   const expected = new Set<string>(SCHEMAS.map(({ file }) => file));
   for (const name of readdirSync(outDir)) {
     if (!expected.has(name)) {
-      divergences.push(`${name} está na pasta dos tipos do banco, mas não sai do gerador; apague-o ou gere os tipos de novo`);
+      divergences.push(
+        `${name} está na pasta dos tipos do banco, mas não sai do gerador; apague-o ou gere os tipos de novo`,
+      );
     }
   }
   return divergences;
@@ -110,9 +131,17 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const write = process.argv.includes('--write');
   const container = await new PostgreSqlContainer('postgres:18.6').start();
   try {
-    const divergences = await checkDbTypes({ databaseUrl: container.getConnectionUri(), write });
+    const divergences = await checkDbTypes({
+      databaseUrl: container.getConnectionUri(),
+      write,
+    });
     for (const divergence of divergences) console.error(divergence);
-    if (divergences.length === 0) console.log(write ? 'Tipos do banco gerados.' : 'Tipos do banco em dia com as migrações.');
+    if (divergences.length === 0)
+      console.log(
+        write
+          ? 'Tipos do banco gerados.'
+          : 'Tipos do banco em dia com as migrações.',
+      );
     process.exitCode = divergences.length > 0 ? 1 : 0;
   } finally {
     await container.stop();

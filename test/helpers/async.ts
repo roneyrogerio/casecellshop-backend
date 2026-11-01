@@ -9,7 +9,10 @@ export async function settle(rounds = 5): Promise<void> {
 
 // Acompanha uma promessa sem esperá-la, para o teste afirmar que ela ainda
 // não terminou antes de o relógio chegar ao prazo.
-export function track<T>(promise: Promise<T>): { readonly settled: boolean; result: Promise<T> } {
+export function track<T>(promise: Promise<T>): {
+  readonly settled: boolean;
+  result: Promise<T>;
+} {
   const state = { settled: false };
   const result = promise.finally(() => {
     state.settled = true;

@@ -1,5 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
@@ -39,8 +46,12 @@ interface Workflow {
   jobs?: Record<string, Job>;
 }
 
-const realPkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Pkg;
-const realWorkflow = parse(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')) as Workflow;
+const realPkg = JSON.parse(
+  readFileSync(join(root, 'package.json'), 'utf8'),
+) as Pkg;
+const realWorkflow = parse(
+  readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8'),
+) as Workflow;
 
 function floorOf(pkg: Pkg): string {
   return (pkg.engines?.node ?? '').replace(/^>=\s*/, '');
@@ -52,15 +63,25 @@ function floorOf(pkg: Pkg): string {
 function devEnginesViolations(pkg: Pkg): string[] {
   const runtime = pkg.devEngines?.runtime;
   if (runtime === undefined) return ['devEngines.runtime ausente'];
-  if (Array.isArray(runtime) || typeof runtime !== 'object') return ['devEngines.runtime não é um objeto'];
+  if (Array.isArray(runtime) || typeof runtime !== 'object')
+    return ['devEngines.runtime não é um objeto'];
   const violations: string[] = [];
-  if (runtime.name !== 'node') violations.push(`devEngines.runtime.name é ${JSON.stringify(runtime.name)}, e não "node"`);
-  if (typeof pkg.engines?.node !== 'string' || runtime.version !== pkg.engines.node) {
+  if (runtime.name !== 'node')
+    violations.push(
+      `devEngines.runtime.name é ${JSON.stringify(runtime.name)}, e não "node"`,
+    );
+  if (
+    typeof pkg.engines?.node !== 'string' ||
+    runtime.version !== pkg.engines.node
+  ) {
     violations.push(
       `devEngines.runtime.version é ${JSON.stringify(runtime.version)}, e não o engines.node ${JSON.stringify(pkg.engines?.node)}`,
     );
   }
-  if (runtime.onFail !== 'error') violations.push(`devEngines.runtime.onFail é ${JSON.stringify(runtime.onFail)}, e não "error"`);
+  if (runtime.onFail !== 'error')
+    violations.push(
+      `devEngines.runtime.onFail é ${JSON.stringify(runtime.onFail)}, e não "error"`,
+    );
   return violations;
 }
 
@@ -105,27 +126,38 @@ function conditionHolds(expression: string | undefined, leg: string): boolean {
   if (expression === undefined) return true;
   const bare = expression.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1');
   const match = /^matrix\.node\s*(==|!=)\s*'([^']*)'$/.exec(bare);
-  if (match === null) throw new Error(`condição de step não suportada pelo teste: ${expression}`);
+  if (match === null)
+    throw new Error(`condição de step não suportada pelo teste: ${expression}`);
   return (match[1] === '==') === (leg === match[2]);
 }
 
 function evaluate(expression: string, leg: string): string {
   if (/^matrix\.node$/.test(expression)) return leg;
-  const ternary = /^matrix\.node\s*(==|!=)\s*'([^']*)'\s*&&\s*'([^']*)'\s*\|\|\s*'([^']*)'$/.exec(expression);
-  if (ternary === null) throw new Error(`expressão da matriz não suportada pelo teste: ${expression}`);
+  const ternary =
+    /^matrix\.node\s*(==|!=)\s*'([^']*)'\s*&&\s*'([^']*)'\s*\|\|\s*'([^']*)'$/.exec(
+      expression,
+    );
+  if (ternary === null)
+    throw new Error(
+      `expressão da matriz não suportada pelo teste: ${expression}`,
+    );
   const holds = (ternary[1] === '==') === (leg === ternary[2]);
   const whenTrue = ternary[3] ?? '';
   return holds && whenTrue !== '' ? whenTrue : (ternary[4] ?? '');
 }
 
 function interpolate(run: string, leg: string): string {
-  return run.replace(/\$\{\{\s*([\s\S]*?)\s*\}\}/g, (whole: string, expression: string) =>
-    expression.includes('matrix.') ? evaluate(expression, leg) : whole,
+  return run.replace(
+    /\$\{\{\s*([\s\S]*?)\s*\}\}/g,
+    (whole: string, expression: string) =>
+      expression.includes('matrix.') ? evaluate(expression, leg) : whole,
   );
 }
 
 function matrixJob(workflow: Workflow): Job | undefined {
-  return Object.values(workflow.jobs ?? {}).find((job) => job.strategy?.matrix?.node !== undefined);
+  return Object.values(workflow.jobs ?? {}).find(
+    (job) => job.strategy?.matrix?.node !== undefined,
+  );
 }
 
 const IS_TEST_RUN = /^\s*npm\s+(?:run\s+)?test(?:\s|$)/;
@@ -133,26 +165,36 @@ const IS_TEST_RUN = /^\s*npm\s+(?:run\s+)?test(?:\s|$)/;
 // O comando de teste que a perna roda de fato, depois de avaliar os `if` e as expressões da matriz.
 function effectiveTestCommands(workflow: Workflow, leg: string): string[] {
   return (matrixJob(workflow)?.steps ?? [])
-    .filter((step) => IS_TEST_RUN.test(step.run ?? '') && conditionHolds(step.if, leg))
+    .filter(
+      (step) =>
+        IS_TEST_RUN.test(step.run ?? '') && conditionHolds(step.if, leg),
+    )
     .map((step) => interpolate(step.run ?? '', leg).trim());
 }
 
 function tokens(command: string): string[] {
-  return command.split(/\s+/).map((token) => token.replace(/^(['"])(.*)\1$/, '$2'));
+  return command
+    .split(/\s+/)
+    .map((token) => token.replace(/^(['"])(.*)\1$/, '$2'));
 }
 
 function excludesOf(command: string): string[] {
   const all = tokens(command);
   const found: string[] = [];
   all.forEach((token, index) => {
-    if (token.startsWith('--exclude=')) found.push(token.slice('--exclude='.length));
+    if (token.startsWith('--exclude='))
+      found.push(token.slice('--exclude='.length));
     else if (token === '--exclude') found.push(all[index + 1] ?? '');
   });
   return found.map((path) => path.replace(/^\.\//, '')).sort();
 }
 
 // Os argumentos de relatório que o CI já usa no passo de teste (AI-18).
-const REPORTER_ARGS = ['--reporter=default', '--reporter=json', '--outputFile.json=$RUNNER_TEMP/vitest-report.json'];
+const REPORTER_ARGS = [
+  '--reporter=default',
+  '--reporter=json',
+  '--outputFile.json=$RUNNER_TEMP/vitest-report.json',
+];
 
 // Tira `--exclude=<arquivo>` e o par `--exclude <arquivo>`; o que sobra é o resto do comando.
 function withoutExcludes(all: string[]): string[] {
@@ -168,7 +210,8 @@ function withoutExcludes(all: string[]): string[] {
 // O comando tem de ser, token a token, `npm test --` mais os argumentos de relatório, em qualquer ordem.
 function closedArgsViolation(rest: string[]): string | null {
   const prefix = ['npm', 'test', '--'];
-  if (JSON.stringify(rest.slice(0, prefix.length)) !== JSON.stringify(prefix)) return 'não começa por `npm test --`';
+  if (JSON.stringify(rest.slice(0, prefix.length)) !== JSON.stringify(prefix))
+    return 'não começa por `npm test --`';
   const args = rest.slice(prefix.length);
   const expected = [...REPORTER_ARGS].sort();
   if (JSON.stringify([...args].sort()) !== JSON.stringify(expected)) {
@@ -177,22 +220,31 @@ function closedArgsViolation(rest: string[]): string | null {
   return null;
 }
 
-function ciViolations(workflow: Workflow, pkg: Pkg, composeTests: string[]): string[] {
+function ciViolations(
+  workflow: Workflow,
+  pkg: Pkg,
+  composeTests: string[],
+): string[] {
   const matrix = matrixJob(workflow)?.strategy?.matrix?.node ?? [];
   const floor = floorOf(pkg);
   const violations: string[] = [];
-  if (!matrix.includes('nvmrc')) violations.push('a matriz não tem a perna nvmrc');
-  if (floor === '' || !matrix.includes(floor)) violations.push(`a matriz não tem a perna do piso ${floor}`);
+  if (!matrix.includes('nvmrc'))
+    violations.push('a matriz não tem a perna nvmrc');
+  if (floor === '' || !matrix.includes(floor))
+    violations.push(`a matriz não tem a perna do piso ${floor}`);
 
   for (const leg of ['nvmrc', floor]) {
     const commands = effectiveTestCommands(workflow, leg);
     if (commands.length !== 1) {
-      violations.push(`perna ${leg}: ${commands.length} comandos de teste efetivos, esperado 1`);
+      violations.push(
+        `perna ${leg}: ${commands.length} comandos de teste efetivos, esperado 1`,
+      );
       continue;
     }
     const command = commands[0] ?? '';
     for (const arg of REPORTER_ARGS) {
-      if (!tokens(command).includes(arg)) violations.push(`perna ${leg}: falta o argumento ${arg}`);
+      if (!tokens(command).includes(arg))
+        violations.push(`perna ${leg}: falta o argumento ${arg}`);
     }
     // Lista fechada: depois de tirar os pares --exclude (que a perna do piso pode ter), sobra `npm test --` e os
     // argumentos de relatório, nada mais. Um `--project`, um filtro posicional ou um `-t` deixaria de rodar testes.
@@ -200,9 +252,14 @@ function ciViolations(workflow: Workflow, pkg: Pkg, composeTests: string[]): str
     if (closed !== null) violations.push(`perna ${leg}: ${closed}: ${command}`);
     const excludes = excludesOf(command);
     if (leg === 'nvmrc') {
-      if (command.includes('--exclude')) violations.push(`perna nvmrc: roda com --exclude: ${command}`);
-    } else if (JSON.stringify(excludes) !== JSON.stringify([...composeTests].sort())) {
-      violations.push(`perna ${leg}: exclui ${JSON.stringify(excludes)}, esperado ${JSON.stringify([...composeTests].sort()).toString()}`);
+      if (command.includes('--exclude'))
+        violations.push(`perna nvmrc: roda com --exclude: ${command}`);
+    } else if (
+      JSON.stringify(excludes) !== JSON.stringify([...composeTests].sort())
+    ) {
+      violations.push(
+        `perna ${leg}: exclui ${JSON.stringify(excludes)}, esperado ${JSON.stringify([...composeTests].sort()).toString()}`,
+      );
     }
   }
   return violations;
@@ -217,10 +274,13 @@ const BASE_COMPOSE = [COMPOSE_A, COMPOSE_B].sort();
 
 const BASE_PKG: Pkg = {
   engines: { node: '>=24.12.0' },
-  devEngines: { runtime: { name: 'node', version: '>=24.12.0', onFail: 'error' } },
+  devEngines: {
+    runtime: { name: 'node', version: '>=24.12.0', onFail: 'error' },
+  },
 };
 
-const REPORTER = '--reporter=default --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json';
+const REPORTER =
+  '--reporter=default --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json';
 
 // Forma 1: um passo, com o argumento condicionado pela matriz.
 const ONE_STEP = `
@@ -271,13 +331,32 @@ describe('FND-12 o package.json impõe o piso do Node pelo devEngines', () => {
 
   it('FND-12 controle negativo: outra faixa, onFail warn ou devEngines ausente reprovam; a base passa', () => {
     expect(devEnginesViolations(BASE_PKG)).toEqual([]);
-    expect(devEnginesViolations(pkgWith({ name: 'node', version: '>=24.0.0', onFail: 'error' }))).not.toEqual([]);
-    expect(devEnginesViolations(pkgWith({ name: 'node', version: '>=24.12.0', onFail: 'warn' }))).not.toEqual([]);
-    expect(devEnginesViolations(pkgWith({ name: 'node', version: '>=24.12.0' }))).not.toEqual([]);
-    expect(devEnginesViolations(pkgWith({ name: 'bun', version: '>=24.12.0', onFail: 'error' }))).not.toEqual([]);
+    expect(
+      devEnginesViolations(
+        pkgWith({ name: 'node', version: '>=24.0.0', onFail: 'error' }),
+      ),
+    ).not.toEqual([]);
+    expect(
+      devEnginesViolations(
+        pkgWith({ name: 'node', version: '>=24.12.0', onFail: 'warn' }),
+      ),
+    ).not.toEqual([]);
+    expect(
+      devEnginesViolations(pkgWith({ name: 'node', version: '>=24.12.0' })),
+    ).not.toEqual([]);
+    expect(
+      devEnginesViolations(
+        pkgWith({ name: 'bun', version: '>=24.12.0', onFail: 'error' }),
+      ),
+    ).not.toEqual([]);
     expect(devEnginesViolations(pkgWith(undefined))).not.toEqual([]);
     // A forma em lista não é a do critério: o runtime é um objeto.
-    const asList: Pkg = { ...BASE_PKG, devEngines: { runtime: [{ name: 'node', version: '>=24.12.0', onFail: 'error' }] } };
+    const asList: Pkg = {
+      ...BASE_PKG,
+      devEngines: {
+        runtime: [{ name: 'node', version: '>=24.12.0', onFail: 'error' }],
+      },
+    };
     expect(devEnginesViolations(asList)).not.toEqual([]);
   });
 
@@ -299,8 +378,16 @@ describe('FND-12 o package.json impõe o piso do Node pelo devEngines', () => {
         }),
       );
       // Sem as variáveis npm_* do processo que roda este teste, o npm filho lê só o package.json da pasta.
-      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_')));
-      const result = await execFileAsync('npm', ['run', 'probe'], { cwd: dir, env, timeout: 60_000 }).then(
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => !key.toLowerCase().startsWith('npm_'),
+        ),
+      );
+      const result = await execFileAsync('npm', ['run', 'probe'], {
+        cwd: dir,
+        env,
+        timeout: 60_000,
+      }).then(
         () => ({ code: 0, output: '' }),
         (error: { code?: number; stdout?: string; stderr?: string }) => ({
           code: typeof error.code === 'number' ? error.code : 1,
@@ -330,12 +417,30 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
         mkdirSync(join(dir, path, '..'), { recursive: true });
         writeFileSync(join(dir, path), content);
       };
-      write('test/integration/a/env.test.ts', "import { DockerComposeEnvironment } from 'testcontainers';\n");
-      write('test/integration/b/cli.test.ts', "await execFileAsync('docker', ['compose', 'up', '-d']);\n");
-      write('test/integration/c/comment.test.ts', '// sobe o `docker compose` e usa a DockerComposeEnvironment\nexport {};\n');
-      write('test/integration/d/plain.test.ts', "import { PostgreSqlContainer } from '@testcontainers/postgresql';\n");
-      write('test/repo/outside.test.ts', "import { DockerComposeEnvironment } from 'testcontainers';\n");
-      expect(composeTestsUnder(dir)).toEqual(['test/integration/a/env.test.ts', 'test/integration/b/cli.test.ts']);
+      write(
+        'test/integration/a/env.test.ts',
+        "import { DockerComposeEnvironment } from 'testcontainers';\n",
+      );
+      write(
+        'test/integration/b/cli.test.ts',
+        "await execFileAsync('docker', ['compose', 'up', '-d']);\n",
+      );
+      write(
+        'test/integration/c/comment.test.ts',
+        '// sobe o `docker compose` e usa a DockerComposeEnvironment\nexport {};\n',
+      );
+      write(
+        'test/integration/d/plain.test.ts',
+        "import { PostgreSqlContainer } from '@testcontainers/postgresql';\n",
+      );
+      write(
+        'test/repo/outside.test.ts',
+        "import { DockerComposeEnvironment } from 'testcontainers';\n",
+      );
+      expect(composeTestsUnder(dir)).toEqual([
+        'test/integration/a/env.test.ts',
+        'test/integration/b/cli.test.ts',
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -344,7 +449,9 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
 
 describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker compose', () => {
   it('FND-12 no ci.yml, a perna nvmrc roda a suíte inteira e a do piso exclui exatamente os testes de compose', () => {
-    expect(ciViolations(realWorkflow, realPkg, composeTestsUnder(root))).toEqual([]);
+    expect(
+      ciViolations(realWorkflow, realPkg, composeTestsUnder(root)),
+    ).toEqual([]);
   });
 
   it('FND-12 as duas formas aceitas (um passo com argumento da matriz, ou dois passos com if) passam na base', () => {
@@ -358,38 +465,95 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
 
   it('FND-12 controle negativo: a perna do piso que exclui outro arquivo, ou esquece um de compose, reprova', () => {
     for (const text of [ONE_STEP, TWO_STEPS]) {
-      const extra = variant(text, (t) => t.replace(`--exclude ${COMPOSE_B}'`, `--exclude ${COMPOSE_B} --exclude src/app.test.ts'`).replace(`--exclude=${COMPOSE_B} `, `--exclude=${COMPOSE_B} --exclude=src/app.test.ts `));
+      const extra = variant(text, (t) =>
+        t
+          .replace(
+            `--exclude ${COMPOSE_B}'`,
+            `--exclude ${COMPOSE_B} --exclude src/app.test.ts'`,
+          )
+          .replace(
+            `--exclude=${COMPOSE_B} `,
+            `--exclude=${COMPOSE_B} --exclude=src/app.test.ts `,
+          ),
+      );
       expect(ciViolations(extra, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
 
-      const missing = variant(text, (t) => t.replace(` --exclude ${COMPOSE_B}`, '').replace(` --exclude=${COMPOSE_B}`, ''));
+      const missing = variant(text, (t) =>
+        t
+          .replace(` --exclude ${COMPOSE_B}`, '')
+          .replace(` --exclude=${COMPOSE_B}`, ''),
+      );
       expect(ciViolations(missing, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
 
-      const noExclude = variant(text, (t) => t.replaceAll(` --exclude ${COMPOSE_A}`, '').replaceAll(` --exclude ${COMPOSE_B}`, '').replaceAll(` --exclude=${COMPOSE_A}`, '').replaceAll(` --exclude=${COMPOSE_B}`, ''));
+      const noExclude = variant(text, (t) =>
+        t
+          .replaceAll(` --exclude ${COMPOSE_A}`, '')
+          .replaceAll(` --exclude ${COMPOSE_B}`, '')
+          .replaceAll(` --exclude=${COMPOSE_A}`, '')
+          .replaceAll(` --exclude=${COMPOSE_B}`, ''),
+      );
       expect(ciViolations(noExclude, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
     }
     // Um teste de compose novo no repositório, que o ci.yml ainda não exclui.
-    expect(ciViolations(parse(ONE_STEP) as Workflow, BASE_PKG, [...BASE_COMPOSE, 'test/integration/new/new-compose.test.ts'])).not.toEqual([]);
+    expect(
+      ciViolations(parse(ONE_STEP) as Workflow, BASE_PKG, [
+        ...BASE_COMPOSE,
+        'test/integration/new/new-compose.test.ts',
+      ]),
+    ).not.toEqual([]);
   });
 
   it('FND-12 controle negativo: a perna nvmrc com qualquer --exclude reprova', () => {
-    const oneStep = variant(ONE_STEP, (t) => t.replace("matrix.node == '24.12.0' &&", "matrix.node != 'zzz' &&"));
+    const oneStep = variant(ONE_STEP, (t) =>
+      t.replace("matrix.node == '24.12.0' &&", "matrix.node != 'zzz' &&"),
+    );
     expect(ciViolations(oneStep, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
-    const twoSteps = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', `run: npm test -- --exclude ${COMPOSE_A} --reporter=default`));
+    const twoSteps = variant(TWO_STEPS, (t) =>
+      t.replace(
+        'run: npm test -- --reporter=default',
+        `run: npm test -- --exclude ${COMPOSE_A} --reporter=default`,
+      ),
+    );
     expect(ciViolations(twoSteps, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
   });
 
   it('FND-12 controle negativo: argumento a mais em qualquer perna (--project, filtro posicional, -t) para de rodar testes e reprova', () => {
-    const extras = ['--project unit', '--project=unit', 'src', '-t slow', '--testNamePattern slow', '--testNamePattern=slow'];
+    const extras = [
+      '--project unit',
+      '--project=unit',
+      'src',
+      '-t slow',
+      '--testNamePattern slow',
+      '--testNamePattern=slow',
+    ];
     const escaped: string[] = [];
     for (const extra of extras) {
       const cases: Record<string, Workflow> = {
-        'um passo, perna nvmrc': variant(ONE_STEP, (t) => t.replace("|| '' }}", `|| '${extra}' }}`)),
-        'um passo, perna do piso': variant(ONE_STEP, (t) => t.replace(`--exclude ${COMPOSE_B}'`, `--exclude ${COMPOSE_B} ${extra}'`)),
-        'dois passos, perna nvmrc': variant(TWO_STEPS, (t) => t.replace(`run: npm test -- ${REPORTER}`, `run: npm test -- ${extra} ${REPORTER}`)),
-        'dois passos, perna do piso': variant(TWO_STEPS, (t) => t.replace(`--exclude=${COMPOSE_B} ${REPORTER}`, `--exclude=${COMPOSE_B} ${extra} ${REPORTER}`)),
+        'um passo, perna nvmrc': variant(ONE_STEP, (t) =>
+          t.replace("|| '' }}", `|| '${extra}' }}`),
+        ),
+        'um passo, perna do piso': variant(ONE_STEP, (t) =>
+          t.replace(
+            `--exclude ${COMPOSE_B}'`,
+            `--exclude ${COMPOSE_B} ${extra}'`,
+          ),
+        ),
+        'dois passos, perna nvmrc': variant(TWO_STEPS, (t) =>
+          t.replace(
+            `run: npm test -- ${REPORTER}`,
+            `run: npm test -- ${extra} ${REPORTER}`,
+          ),
+        ),
+        'dois passos, perna do piso': variant(TWO_STEPS, (t) =>
+          t.replace(
+            `--exclude=${COMPOSE_B} ${REPORTER}`,
+            `--exclude=${COMPOSE_B} ${extra} ${REPORTER}`,
+          ),
+        ),
       };
       for (const [name, workflow] of Object.entries(cases)) {
-        if (ciViolations(workflow, BASE_PKG, BASE_COMPOSE).length === 0) escaped.push(`${name} com "${extra}"`);
+        if (ciViolations(workflow, BASE_PKG, BASE_COMPOSE).length === 0)
+          escaped.push(`${name} com "${extra}"`);
       }
     }
     // Junta todos os casos que passaram sem reprovar, para a mensagem de falha listar cada um.
@@ -397,16 +561,30 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
   });
 
   it('FND-12 controle negativo: o comando que não é exatamente `npm test --` seguido dos argumentos de relatório reprova', () => {
-    const asRun = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', 'run: npm run test -- --reporter=default'));
+    const asRun = variant(TWO_STEPS, (t) =>
+      t.replace(
+        'run: npm test -- --reporter=default',
+        'run: npm run test -- --reporter=default',
+      ),
+    );
     expect(ciViolations(asRun, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
-    const noSeparator = variant(TWO_STEPS, (t) => t.replace('run: npm test -- --reporter=default', 'run: npm test --reporter=default'));
+    const noSeparator = variant(TWO_STEPS, (t) =>
+      t.replace(
+        'run: npm test -- --reporter=default',
+        'run: npm test --reporter=default',
+      ),
+    );
     expect(ciViolations(noSeparator, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
   });
 
   it('FND-12 controle negativo: o passo de teste sem os argumentos de relatório, ou rodando duas vezes numa perna, reprova', () => {
-    const noReporter = variant(TWO_STEPS, (t) => t.replaceAll(` ${REPORTER}`, ''));
+    const noReporter = variant(TWO_STEPS, (t) =>
+      t.replaceAll(` ${REPORTER}`, ''),
+    );
     expect(ciViolations(noReporter, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
-    const twice = variant(TWO_STEPS, (t) => t.replace("if: matrix.node == 'nvmrc'", ''));
+    const twice = variant(TWO_STEPS, (t) =>
+      t.replace("if: matrix.node == 'nvmrc'", ''),
+    );
     expect(ciViolations(twice, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
   });
 });

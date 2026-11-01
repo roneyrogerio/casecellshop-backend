@@ -11,7 +11,11 @@ import { pathToFileURL } from 'node:url';
 import { markHandback, saveReview, securityReviewDir } from './records.mjs';
 
 function head(projectDir) {
-  const run = spawnSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', 'HEAD'], { encoding: 'utf8' });
+  const run = spawnSync(
+    'git',
+    ['-C', projectDir, 'rev-parse', '--verify', '--quiet', 'HEAD'],
+    { encoding: 'utf8' },
+  );
   return run.status === 0 ? run.stdout.trim() : null;
 }
 
@@ -27,10 +31,14 @@ function main() {
     process.exit(2);
   }
 
-  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+  const projectDir =
+    process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
   const args = input.tool_input ?? {};
 
-  if (input.tool_name === 'SubagentHandback' && input.agent_type === 'reviewer') {
+  if (
+    input.tool_name === 'SubagentHandback' &&
+    input.agent_type === 'reviewer'
+  ) {
     if (typeof args.message === 'string' && args.message) {
       saveReview(projectDir, input.agent_id, args.message);
       markHandback(projectDir, input.agent_id);
@@ -42,7 +50,10 @@ function main() {
     const sha = head(projectDir);
     if (sha) {
       mkdirSync(securityReviewDir(projectDir), { recursive: true });
-      writeFileSync(join(securityReviewDir(projectDir), sha), `${new Date().toISOString()}\n`);
+      writeFileSync(
+        join(securityReviewDir(projectDir), sha),
+        `${new Date().toISOString()}\n`,
+      );
     }
   }
 }

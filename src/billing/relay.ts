@@ -54,17 +54,32 @@ interface OutboxRow {
 // Linha inválida fica fora do lote: se derrubasse a rodada, travaria as demais, já que é das mais antigas.
 function toOutgoing(logger: Logger, rows: OutboxRow[]): OutgoingMessage[] {
   return rows.flatMap((row) => {
-    const parsed = BillingMessage.safeParse({ orderId: row.order_id, correlationId: row.correlation_id });
+    const parsed = BillingMessage.safeParse({
+      orderId: row.order_id,
+      correlationId: row.correlation_id,
+    });
     if (!parsed.success) {
-      logger.error({ event: 'outbox.invalid_row', orderId: row.order_id }, 'linha da outbox inválida, fora do lote');
+      logger.error(
+        { event: 'outbox.invalid_row', orderId: row.order_id },
+        'linha da outbox inválida, fora do lote',
+      );
       return [];
     }
-    return [{ id: row.order_id, body: JSON.stringify(parsed.data), traceparent: row.traceparent }];
+    return [
+      {
+        id: row.order_id,
+        body: JSON.stringify(parsed.data),
+        traceparent: row.traceparent,
+      },
+    ];
   });
 }
 
 // Devolve as linhas lidas e as publicadas: a diferença decide se o lote veio cheio.
-async function publishBatch({ queue, logger, telemetry, settings }: Context, trx: Transaction<StoreDb>): Promise<{ read: number; published: number }> {
+async function publishBatch(
+  { queue, logger, telemetry, settings }: Context,
+  trx: Transaction<StoreDb>,
+): Promise<{ read: number; published: number }> {
   // SKIP LOCKED: dois relés levam lotes diferentes, sem um esperar o outro.
   const rows = await trx
     .selectFrom('outbox')
@@ -81,7 +96,9 @@ async function publishBatch({ queue, logger, telemetry, settings }: Context, trx
   if (outgoing.length === 0) return { read: rows.length, published: 0 };
   const { failedIds } = await queue.send(outgoing);
   const failed = new Set(failedIds);
-  const accepted = outgoing.map((message) => message.id).filter((id) => !failed.has(id));
+  const accepted = outgoing
+    .map((message) => message.id)
+    .filter((id) => !failed.has(id));
   if (accepted.length === 0) return { read: rows.length, published: 0 };
 
   // Se este UPDATE falhar, a mensagem já está no SQS e a linha volta ao lote: entrega ao menos uma vez.
@@ -95,11 +112,25 @@ async function publishBatch({ queue, logger, telemetry, settings }: Context, trx
   return { read: rows.length, published: marked.length };
 }
 
-const round = (ctx: Context) => runInTransaction(ctx.db, (trx) => publishBatch(ctx, trx));
+const round = (ctx: Context) =>
+  runInTransaction(ctx.db, (trx) => publishBatch(ctx, trx));
 
-export function createRelay({ pool, queue, logger, telemetry, clock, config }: RelayDependencies): Relay {
+export function createRelay({
+  pool,
+  queue,
+  logger,
+  telemetry,
+  clock,
+  config,
+}: RelayDependencies): Relay {
   const settings: RelayConfig = { ...DEFAULT_RELAY_CONFIG, ...config };
-  const ctx: Context = { db: createDb(pool), queue, logger, telemetry, settings };
+  const ctx: Context = {
+    db: createDb(pool),
+    queue,
+    logger,
+    telemetry,
+    settings,
+  };
 
   const runner = createLoopRunner({
     async run(isRunning) {
@@ -108,7 +139,10 @@ export function createRelay({ pool, queue, logger, telemetry, clock, config }: R
         try {
           full = (await round(ctx)).published >= settings.batchSize;
         } catch (error) {
-          logger.error({ event: 'outbox.relay_error', err: error }, 'falha na rodada do relay');
+          logger.error(
+            { event: 'outbox.relay_error', err: error },
+            'falha na rodada do relay',
+          );
         }
         // Lote cheio: pode haver mais; senão (vazio, parcial ou erro) espera.
         if (!full && isRunning()) await clock.sleep(settings.idleIntervalMs);

@@ -1,10 +1,20 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 const APP_CHECK = '.claude/skills/app-check/SKILL.md';
 const MARCO = '.claude/skills/marco/SKILL.md';
 const SETTINGS = '.claude/settings.json';
@@ -19,18 +29,26 @@ const RECIPE_STEPS: [string, RegExp][] = [
   ['faz um checkout (/checkout)', /\/checkout/],
   ['acompanha o status até invoiced', /invoiced/],
   ['lê o /metrics do worker', /\/metrics/],
-  ['lê os logs do worker (docker compose logs)', new RegExp(`${COMPOSE} logs\\b`)],
+  [
+    'lê os logs do worker (docker compose logs)',
+    new RegExp(`${COMPOSE} logs\\b`),
+  ],
   ['derruba o compose (docker compose down)', new RegExp(`${COMPOSE} down\\b`)],
 ];
 
 // Trechos de código da skill: cada linha de um bloco cercado e cada trecho entre crases.
 function codeSegments(content: string): string[] {
   const segments: string[] = [];
-  const withoutFences = content.replace(/```[^\n]*\n([\s\S]*?)```/g, (_whole, block: string) => {
-    for (const line of block.split('\n')) if (line.trim() !== '') segments.push(line.trim());
-    return '';
-  });
-  for (const match of withoutFences.matchAll(/`([^`\n]+)`/g)) if (match[1]) segments.push(match[1].trim());
+  const withoutFences = content.replace(
+    /```[^\n]*\n([\s\S]*?)```/g,
+    (_whole, block: string) => {
+      for (const line of block.split('\n'))
+        if (line.trim() !== '') segments.push(line.trim());
+      return '';
+    },
+  );
+  for (const match of withoutFences.matchAll(/`([^`\n]+)`/g))
+    if (match[1]) segments.push(match[1].trim());
   return segments;
 }
 
@@ -38,7 +56,9 @@ function codeSegments(content: string): string[] {
 function commandsOf(segment: string): string[] {
   return segment
     .split(/\|\||&&|\||;/)
-    .map((part) => part.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, ''))
+    .map((part) =>
+      part.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, ''),
+    )
     .filter((part) => part !== '');
 }
 
@@ -54,12 +74,19 @@ function denyMatcher(rule: string): RegExp | undefined {
 }
 
 function bashDenyRules(settingsText: string): string[] {
-  const settings = JSON.parse(settingsText) as { permissions?: { deny?: string[] } };
-  return (settings.permissions?.deny ?? []).filter((rule) => rule.startsWith('Bash('));
+  const settings = JSON.parse(settingsText) as {
+    permissions?: { deny?: string[] };
+  };
+  return (settings.permissions?.deny ?? []).filter((rule) =>
+    rule.startsWith('Bash('),
+  );
 }
 
 function sectionOf(content: string, title: string): string {
-  const match = new RegExp(`^## ${title}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm').exec(content);
+  const match = new RegExp(
+    `^## ${title}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`,
+    'm',
+  ).exec(content);
   return match?.[1] ?? '';
 }
 
@@ -67,8 +94,10 @@ function sectionOf(content: string, title: string): string {
 function appCheckViolations(content: string, denyRules: string[]): string[] {
   const violations: string[] = [];
   const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(content);
-  if (!frontmatter) violations.push('a skill não começa com um bloco de frontmatter');
-  else if (!/^name:\s*app-check\s*$/m.test(frontmatter[1] ?? '')) violations.push('o frontmatter não tem name: app-check');
+  if (!frontmatter)
+    violations.push('a skill não começa com um bloco de frontmatter');
+  else if (!/^name:\s*app-check\s*$/m.test(frontmatter[1] ?? ''))
+    violations.push('o frontmatter não tem name: app-check');
   for (const [label, pattern] of RECIPE_STEPS) {
     if (!pattern.test(content)) violations.push(`a receita não ${label}`);
   }
@@ -78,22 +107,33 @@ function appCheckViolations(content: string, denyRules: string[]): string[] {
   for (const segment of segments) {
     for (const match of segment.matchAll(/docker compose(.*)/g)) {
       const rest = match[1] ?? '';
-      if (rest.trim() !== '' && !rest.startsWith(` ${PROJECT_FLAG}`)) violations.push(`docker compose sem ${PROJECT_FLAG}: ${segment}`);
+      if (rest.trim() !== '' && !rest.startsWith(` ${PROJECT_FLAG}`))
+        violations.push(`docker compose sem ${PROJECT_FLAG}: ${segment}`);
     }
   }
 
-  const matchers = denyRules.map((rule) => ({ rule, matcher: denyMatcher(rule) }));
+  const matchers = denyRules.map((rule) => ({
+    rule,
+    matcher: denyMatcher(rule),
+  }));
   for (const segment of segments) {
     for (const command of commandsOf(segment)) {
       for (const { rule, matcher } of matchers) {
-        if (matcher?.test(command)) violations.push(`o comando "${command}" casa com a negação ${rule}`);
+        if (matcher?.test(command))
+          violations.push(`o comando "${command}" casa com a negação ${rule}`);
       }
     }
   }
 
   const report = sectionOf(content, 'Report');
-  if (!report.includes('update_pull_request')) violations.push('a seção Report não manda a evidência para a descrição do PR (update_pull_request)');
-  if (report.includes('add_issue_comment')) violations.push('a seção Report manda a evidência para um comentário (add_issue_comment)');
+  if (!report.includes('update_pull_request'))
+    violations.push(
+      'a seção Report não manda a evidência para a descrição do PR (update_pull_request)',
+    );
+  if (report.includes('add_issue_comment'))
+    violations.push(
+      'a seção Report manda a evidência para um comentário (add_issue_comment)',
+    );
   return violations;
 }
 
@@ -141,37 +181,58 @@ describe('AI-22 a skill app-check roda o sistema pelo docker compose e colhe a e
     // O `dc` da receita é definido com o nome de projeto, e nenhum outro `docker compose` com subcomando o dispensa.
     expect(skill).toContain(`docker compose ${PROJECT_FLAG}`);
     const withoutProject = codeSegments(skill).filter((segment) =>
-      [...segment.matchAll(/docker compose(.*)/g)].some((match) => (match[1] ?? '').trim() !== '' && !(match[1] ?? '').startsWith(` ${PROJECT_FLAG}`)),
+      [...segment.matchAll(/docker compose(.*)/g)].some(
+        (match) =>
+          (match[1] ?? '').trim() !== '' &&
+          !(match[1] ?? '').startsWith(` ${PROJECT_FLAG}`),
+      ),
     );
     expect(withoutProject).toEqual([]);
   });
 
   it('AI-22 controle negativo: a conferência reprova uma cópia da skill sem o docker compose down', () => {
-    const copy = copyOf('sem-down', readSkill().replaceAll('dc down', 'dc stop'));
+    const copy = copyOf(
+      'sem-down',
+      readSkill().replaceAll('dc down', 'dc stop'),
+    );
 
-    expect(appCheckViolations(copy, denyRules())).toEqual(['a receita não derruba o compose (docker compose down)']);
+    expect(appCheckViolations(copy, denyRules())).toEqual([
+      'a receita não derruba o compose (docker compose down)',
+    ]);
   });
 
   it('AI-22 controle negativo: a conferência reprova uma cópia com outro name no frontmatter', () => {
     const copy = readSkill().replace(/^name:\s*app-check\s*$/m, 'name: verify');
 
-    expect(appCheckViolations(copy, denyRules())).toContain('o frontmatter não tem name: app-check');
+    expect(appCheckViolations(copy, denyRules())).toContain(
+      'o frontmatter não tem name: app-check',
+    );
   });
 
   it('AI-22 controle negativo: a conferência reprova uma cópia com um curl, que o settings.json nega', () => {
-    const copy = copyOf('com-curl', `${readSkill()}\n\`\`\`sh\ncurl -s http://127.0.0.1:3000/health\n\`\`\`\n`);
+    const copy = copyOf(
+      'com-curl',
+      `${readSkill()}\n\`\`\`sh\ncurl -s http://127.0.0.1:3000/health\n\`\`\`\n`,
+    );
 
     const violations = appCheckViolations(copy, denyRules());
 
-    expect(violations).toContain('o comando "curl -s http://127.0.0.1:3000/health" casa com a negação Bash(curl *)');
+    expect(violations).toContain(
+      'o comando "curl -s http://127.0.0.1:3000/health" casa com a negação Bash(curl *)',
+    );
   });
 
   it('AI-22 controle negativo: a conferência reprova uma cópia com um docker compose sem o -p', () => {
-    const copy = copyOf('sem-projeto', readSkill().replace('`dc down -v`', '`docker compose down -v`'));
+    const copy = copyOf(
+      'sem-projeto',
+      readSkill().replace('`dc down -v`', '`docker compose down -v`'),
+    );
 
     const violations = appCheckViolations(copy, denyRules());
 
-    expect(violations).toContain(`docker compose sem ${PROJECT_FLAG}: docker compose down -v`);
+    expect(violations).toContain(
+      `docker compose sem ${PROJECT_FLAG}: docker compose down -v`,
+    );
   });
 
   it('AI-22 a seção Report manda a evidência para a descrição do PR (update_pull_request), e add_issue_comment não aparece como destino', () => {
@@ -182,18 +243,36 @@ describe('AI-22 a skill app-check roda o sistema pelo docker compose e colhe a e
   });
 
   it('AI-22 controle negativo: a conferência reprova uma cópia que manda a evidência para um comentário', () => {
-    const copy = copyOf('com-comentario', readSkill().replace('mcp__github__update_pull_request', 'mcp__github__add_issue_comment'));
+    const copy = copyOf(
+      'com-comentario',
+      readSkill().replace(
+        'mcp__github__update_pull_request',
+        'mcp__github__add_issue_comment',
+      ),
+    );
 
     const violations = appCheckViolations(copy, denyRules());
 
-    expect(violations).toContain('a seção Report manda a evidência para um comentário (add_issue_comment)');
-    expect(violations).toContain('a seção Report não manda a evidência para a descrição do PR (update_pull_request)');
+    expect(violations).toContain(
+      'a seção Report manda a evidência para um comentário (add_issue_comment)',
+    );
+    expect(violations).toContain(
+      'a seção Report não manda a evidência para a descrição do PR (update_pull_request)',
+    );
   });
 
   it('AI-22 o passo "Ready and merge" da skill marco cita app-check', () => {
-    const step = sectionOf(readFileSync(path.join(root, MARCO), 'utf8').replace(/^## \d+\. /gm, '## '), 'Ready and merge');
+    const step = sectionOf(
+      readFileSync(path.join(root, MARCO), 'utf8').replace(
+        /^## \d+\. /gm,
+        '## ',
+      ),
+      'Ready and merge',
+    );
 
-    expect(step, 'a skill marco não tem o passo "Ready and merge"').not.toBe('');
+    expect(step, 'a skill marco não tem o passo "Ready and merge"').not.toBe(
+      '',
+    );
     expect(step).toContain('app-check');
   });
 });

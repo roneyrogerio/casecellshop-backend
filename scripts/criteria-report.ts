@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export interface VitestReport {
-  testResults: Array<{ assertionResults: Array<{ title: string; status: string }> }>;
+  testResults: Array<{
+    assertionResults: Array<{ title: string; status: string }>;
+  }>;
 }
 
 const ID = String.raw`[A-Z]+(?:-[A-Z]+)*-\d+`;
@@ -17,7 +19,9 @@ const TEST_ID = new RegExp(String.raw`^(${ID})(?= |$)`);
 
 // IDs dos critérios do spec.md, na ordem em que aparecem (itens `- **ID**`).
 export function criteriaIds(specText: string): string[] {
-  const ids = specText.split('\n').flatMap((line) => SPEC_ITEM.exec(line)?.[1] ?? []);
+  const ids = specText
+    .split('\n')
+    .flatMap((line) => SPEC_ITEM.exec(line)?.[1] ?? []);
   return [...new Set(ids)];
 }
 
@@ -32,7 +36,9 @@ export function testIdOf(title: string): string | null {
 export function buildReport(specText: string, report: VitestReport): string {
   const ids = criteriaIds(specText);
   const counts = new Map<string, { passed: number; failed: number }>();
-  for (const { title, status } of report.testResults.flatMap((file) => file.assertionResults)) {
+  for (const { title, status } of report.testResults.flatMap(
+    (file) => file.assertionResults,
+  )) {
     const id = testIdOf(title);
     if (!id) continue;
     const count = counts.get(id) ?? { passed: 0, failed: 0 };
@@ -43,7 +49,9 @@ export function buildReport(specText: string, report: VitestReport): string {
 
   const rows = ids.map((id) => {
     const count = counts.get(id);
-    return count ? `| ${id} | ${count.passed} | ${count.failed} |` : `| ${id} | sem teste | |`;
+    return count
+      ? `| ${id} | ${count.passed} | ${count.failed} |`
+      : `| ${id} | sem teste | |`;
   });
   const orphans = [...counts.keys()].filter((id) => !ids.includes(id)).sort();
 
@@ -62,10 +70,21 @@ export function buildReport(specText: string, report: VitestReport): string {
 }
 
 function main(): number {
-  const [reportPath, specPath = join(import.meta.dirname, '..', '.specs', 'features', 'casecellshop', 'spec.md')] =
-    process.argv.slice(2);
+  const [
+    reportPath,
+    specPath = join(
+      import.meta.dirname,
+      '..',
+      '.specs',
+      'features',
+      'casecellshop',
+      'spec.md',
+    ),
+  ] = process.argv.slice(2);
   if (!reportPath) {
-    console.error('uso: node scripts/criteria-report.ts <relatório.json do Vitest> [spec.md]');
+    console.error(
+      'uso: node scripts/criteria-report.ts <relatório.json do Vitest> [spec.md]',
+    );
     return 1;
   }
   let report: VitestReport;
@@ -74,15 +93,20 @@ function main(): number {
     report = JSON.parse(readFileSync(reportPath, 'utf8')) as VitestReport;
     specText = readFileSync(specPath, 'utf8');
   } catch (error) {
-    console.error(`criteria-report: não deu para ler o relatório ou o spec (${(error as Error).message}).`);
+    console.error(
+      `criteria-report: não deu para ler o relatório ou o spec (${(error as Error).message}).`,
+    );
     return 1;
   }
   if (!Array.isArray(report?.testResults)) {
-    console.error('criteria-report: o relatório não tem testResults; é o JSON do reporter json do Vitest?');
+    console.error(
+      'criteria-report: o relatório não tem testResults; é o JSON do reporter json do Vitest?',
+    );
     return 1;
   }
   process.stdout.write(buildReport(specText, report));
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) process.exitCode = main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href)
+  process.exitCode = main();

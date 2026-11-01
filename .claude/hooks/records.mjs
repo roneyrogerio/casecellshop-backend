@@ -30,7 +30,9 @@ export function saveReview(projectDir, agentId, text) {
 const HANDBACK_DIR = join(tmpdir(), 'casecellshop-handback');
 
 function handbackMark(projectDir, agentId) {
-  const key = createHash('sha256').update(`${projectDir}\0${String(agentId)}`).digest('hex');
+  const key = createHash('sha256')
+    .update(`${projectDir}\0${String(agentId)}`)
+    .digest('hex');
   return join(HANDBACK_DIR, key);
 }
 

@@ -1,24 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "typescript",
-    "oxc",
-    "unicorn",
-    "vitest",
-    "import",
-    "node"
-  ],
+  "plugins": ["typescript", "oxc", "unicorn", "vitest", "import", "node"],
   "categories": {
     "correctness": "error"
   },
   "options": {
     "typeAware": true
   },
-  "ignorePatterns": [
-    "node_modules/",
-    "coverage/",
-    "dist/"
-  ],
+  "ignorePatterns": ["node_modules/", "coverage/", "dist/"],
   "rules": {
     "typescript/await-thenable": "error",
     "typescript/no-array-delete": "error",
@@ -68,10 +57,7 @@
     "vitest/expect-expect": [
       "error",
       {
-        "assertFunctionNames": [
-          "expect",
-          "expect*"
-        ]
+        "assertFunctionNames": ["expect", "expect*"]
       }
     ],
     "vitest/valid-expect": [
@@ -94,11 +80,7 @@
   },
   "overrides": [
     {
-      "files": [
-        "**/*.js",
-        "**/*.mjs",
-        "**/*.cjs"
-      ],
+      "files": ["**/*.js", "**/*.mjs", "**/*.cjs"],
       "rules": {
         "typescript/await-thenable": "off",
         "typescript/no-array-delete": "off",
@@ -135,26 +117,20 @@
       }
     },
     {
-      "files": [
-        "**/migrations/**/*.ts"
-      ],
+      "files": ["**/migrations/**/*.ts"],
       "rules": {
         "typescript/no-explicit-any": "off"
       }
     },
     {
-      "files": [
-        "src/db/types/*.ts"
-      ],
+      "files": ["src/db/types/*.ts"],
       "rules": {
         "typescript/consistent-type-definitions": "off",
         "typescript/no-empty-object-type": "off"
       }
     },
     {
-      "files": [
-        "src/**/*.ts"
-      ],
+      "files": ["src/**/*.ts"],
       "rules": {
         "max-lines": [
           "error",
@@ -196,17 +172,13 @@
       }
     },
     {
-      "files": [
-        "src/shared/config.ts"
-      ],
+      "files": ["src/shared/config.ts"],
       "rules": {
         "node/no-process-env": "off"
       }
     },
     {
-      "files": [
-        "src/shared/**/*.ts"
-      ],
+      "files": ["src/shared/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -249,9 +221,7 @@
       }
     },
     {
-      "files": [
-        "src/checkout/**/*.ts"
-      ],
+      "files": ["src/checkout/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -271,9 +241,7 @@
       }
     },
     {
-      "files": [
-        "src/orders/**/*.ts"
-      ],
+      "files": ["src/orders/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -293,9 +261,7 @@
       }
     },
     {
-      "files": [
-        "src/health/**/*.ts"
-      ],
+      "files": ["src/health/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -315,9 +281,7 @@
       }
     },
     {
-      "files": [
-        "src/billing/**/*.ts"
-      ],
+      "files": ["src/billing/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -337,9 +301,7 @@
       }
     },
     {
-      "files": [
-        "src/catalog/**/*.ts"
-      ],
+      "files": ["src/catalog/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -359,18 +321,14 @@
       }
     },
     {
-      "files": [
-        "src/**/*.test.ts"
-      ],
+      "files": ["src/**/*.test.ts"],
       "rules": {
         "max-lines": "off",
         "max-lines-per-function": "off"
       }
     },
     {
-      "files": [
-        "src/app.ts"
-      ],
+      "files": ["src/app.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",

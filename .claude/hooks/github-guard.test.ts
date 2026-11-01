@@ -2,7 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, commitEmpty, git, initRepo, makeTempDir, writeFileIn } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  commitEmpty,
+  git,
+  initRepo,
+  makeTempDir,
+  writeFileIn,
+} from '../../test/helpers/git-sandbox.ts';
 
 afterEach(cleanupTempDirs);
 
@@ -61,7 +68,10 @@ interface FakeOptions {
 // `calls` mostra o que o hook consultou, para provar que um caso fora da regra nem olha o git.
 function makeDeps(options: FakeOptions = {}) {
   const calls = { git: 0, reviewed: [] as string[], bodies: 0 };
-  const state = options.git === undefined ? { head: HEAD_SHA, upstream: HEAD_SHA } : options.git;
+  const state =
+    options.git === undefined
+      ? { head: HEAD_SHA, upstream: HEAD_SHA }
+      : options.git;
   const registered = options.registered ?? [];
   const fake: Deps = {
     reviewBodies: () => {
@@ -81,7 +91,10 @@ function makeDeps(options: FakeOptions = {}) {
 }
 
 function undraft(toolInput: Record<string, unknown> = {}): GuardInput {
-  return { tool_name: 'mcp__github__update_pull_request', tool_input: { pullNumber: 3, ...toolInput } };
+  return {
+    tool_name: 'mcp__github__update_pull_request',
+    tool_input: { pullNumber: 3, ...toolInput },
+  };
 }
 
 function pr(toolInput: Record<string, unknown>): GuardInput {
@@ -114,14 +127,19 @@ describe('AI-08 github-guard: criação de PR', () => {
     expect(check(pr({ title: 't' }), deps()).allow).toBe(false);
   });
 
-  it.each(['true', 1, null])('AI-08 recusa draft que não é o booleano true (%j)', (draft) => {
-    expect(check(pr({ title: 't', draft }), deps()).allow).toBe(false);
-  });
+  it.each(['true', 1, null])(
+    'AI-08 recusa draft que não é o booleano true (%j)',
+    (draft) => {
+      expect(check(pr({ title: 't', draft }), deps()).allow).toBe(false);
+    },
+  );
 });
 
 describe('AI-08 github-guard: comentário de revisão', () => {
   it('AI-08 permite o comentário idêntico a um relatório salvo', () => {
-    expect(check(comment(REPORT), deps('## Revisão\n\noutro\n', REPORT)).allow).toBe(true);
+    expect(
+      check(comment(REPORT), deps('## Revisão\n\noutro\n', REPORT)).allow,
+    ).toBe(true);
   });
 
   it('AI-08 permite o relatório idêntico com espaços ou linhas em branco antes do título', () => {
@@ -151,16 +169,23 @@ describe('AI-08 github-guard: comentário de revisão', () => {
   });
 
   it('AI-08 comentário comum é recusado também quando há relatórios salvos', () => {
-    expect(check(comment('Corrigido no commit abc123.'), deps(REPORT)).allow).toBe(false);
+    expect(
+      check(comment('Corrigido no commit abc123.'), deps(REPORT)).allow,
+    ).toBe(false);
   });
 
   it('AI-08 comentário que só cita "## Revisão" no meio do texto é recusado', () => {
-    expect(check(comment('Veja a seção ## Revisão abaixo.'), deps(REPORT)).allow).toBe(false);
+    expect(
+      check(comment('Veja a seção ## Revisão abaixo.'), deps(REPORT)).allow,
+    ).toBe(false);
   });
 
-  it.each([undefined, null, '', '   \n', 42])('AI-08 comentário com corpo %j é recusado', (body) => {
-    expect(check(comment(body), deps(REPORT)).allow).toBe(false);
-  });
+  it.each([undefined, null, '', '   \n', 42])(
+    'AI-08 comentário com corpo %j é recusado',
+    (body) => {
+      expect(check(comment(body), deps(REPORT)).allow).toBe(false);
+    },
+  );
 
   // Revisão 1 do PR #6, achado A3: o hook salva o relatório sem `\n` final e o caminho até a ferramenta acrescenta um.
   // O AI-08 passou a ignorar o espaço e as quebras de linha também no fim; este caso era o inverso (recusava).
@@ -175,19 +200,29 @@ describe('AI-08 github-guard: comentário de revisão', () => {
     ['duas quebras de linha', '\n\n'],
     ['espaços', '   '],
     ['espaços e quebras de linha misturados', ' \n \n\t\n'],
-  ])('AI-08 relatório salvo sem quebra de linha final e corpo com %s no fim é aceito', (_label, tail) => {
-    expect(check(comment(`${SAVED}${tail}`), deps(SAVED)).allow).toBe(true);
-  });
+  ])(
+    'AI-08 relatório salvo sem quebra de linha final e corpo com %s no fim é aceito',
+    (_label, tail) => {
+      expect(check(comment(`${SAVED}${tail}`), deps(SAVED)).allow).toBe(true);
+    },
+  );
 
   it.each([
     ['sem nada no fim', ''],
     ['sem a quebra de linha final', '  '],
-  ])('AI-08 relatório salvo com quebra de linha final e corpo %s é aceito', (_label, tail) => {
-    expect(check(comment(`${SAVED}${tail}`), deps(`${SAVED}\n`)).allow).toBe(true);
-  });
+  ])(
+    'AI-08 relatório salvo com quebra de linha final e corpo %s é aceito',
+    (_label, tail) => {
+      expect(check(comment(`${SAVED}${tail}`), deps(`${SAVED}\n`)).allow).toBe(
+        true,
+      );
+    },
+  );
 
   it('AI-08 relatório salvo com quebras de linha no fim e corpo com número diferente delas é aceito', () => {
-    expect(check(comment(`${SAVED}\n`), deps(`${SAVED}\n\n\n`)).allow).toBe(true);
+    expect(check(comment(`${SAVED}\n`), deps(`${SAVED}\n\n\n`)).allow).toBe(
+      true,
+    );
   });
 
   it('AI-08 espaço no início e no fim juntos são ignorados', () => {
@@ -195,7 +230,12 @@ describe('AI-08 github-guard: comentário de revisão', () => {
   });
 
   it('AI-08 o espaço no fim ignorado também vale para o relatório salvo que não começa com "## Revisão"', () => {
-    expect(check(comment('Relatório sem o título padrão.\n\n'), deps('Relatório sem o título padrão.')).allow).toBe(true);
+    expect(
+      check(
+        comment('Relatório sem o título padrão.\n\n'),
+        deps('Relatório sem o título padrão.'),
+      ).allow,
+    ).toBe(true);
   });
 
   // Controles negativos: só o início e o fim são ignorados, nunca o meio do texto.
@@ -203,24 +243,38 @@ describe('AI-08 github-guard: comentário de revisão', () => {
     ['uma palavra trocada', SAVED.replace('certo', 'errado')],
     ['uma linha em branco a mais no meio', SAVED.replace('\n\n', '\n\n\n')],
     ['a linha em branco do meio a menos', SAVED.replace('\n\n', '\n')],
-    ['um espaço a mais no meio de uma linha', SAVED.replace('Tudo certo', 'Tudo  certo')],
-  ])('AI-08 corpo com %s em relação ao relatório salvo continua recusado, mesmo com quebra de linha no fim', (_label, altered) => {
-    expect(check(comment(`${altered}\n`), deps(SAVED)).allow).toBe(false);
-    expect(check(comment(altered), deps(SAVED)).allow).toBe(false);
-  });
+    [
+      'um espaço a mais no meio de uma linha',
+      SAVED.replace('Tudo certo', 'Tudo  certo'),
+    ],
+  ])(
+    'AI-08 corpo com %s em relação ao relatório salvo continua recusado, mesmo com quebra de linha no fim',
+    (_label, altered) => {
+      expect(check(comment(`${altered}\n`), deps(SAVED)).allow).toBe(false);
+      expect(check(comment(altered), deps(SAVED)).allow).toBe(false);
+    },
+  );
 
   it('AI-08 corpo com texto a mais depois do relatório continua recusado, mesmo com quebra de linha no fim', () => {
-    expect(check(comment(`${SAVED}\n\nAprovado!\n`), deps(SAVED)).allow).toBe(false);
+    expect(check(comment(`${SAVED}\n\nAprovado!\n`), deps(SAVED)).allow).toBe(
+      false,
+    );
   });
 
-  it.each(['\n', '\n\n', '   ', ' \n \t\n'])('AI-08 corpo só com espaço (%j) continua recusado', (body) => {
-    expect(check(comment(body), deps(SAVED, `${SAVED}\n`)).allow).toBe(false);
-  });
+  it.each(['\n', '\n\n', '   ', ' \n \t\n'])(
+    'AI-08 corpo só com espaço (%j) continua recusado',
+    (body) => {
+      expect(check(comment(body), deps(SAVED, `${SAVED}\n`)).allow).toBe(false);
+    },
+  );
 
   // Se o arquivo salvo fosse vazio, o corpo só com espaço o igualaria depois de aparado: a regra não pode aceitar isso.
-  it.each([[''], ['\n'], ['  \n']])('AI-08 corpo só com espaço continua recusado mesmo com um relatório salvo vazio (%j)', (saved) => {
-    expect(check(comment('\n'), deps(saved)).allow).toBe(false);
-  });
+  it.each([[''], ['\n'], ['  \n']])(
+    'AI-08 corpo só com espaço continua recusado mesmo com um relatório salvo vazio (%j)',
+    (saved) => {
+      expect(check(comment('\n'), deps(saved)).allow).toBe(false);
+    },
+  );
 
   it('AI-08 comentário que é só um trecho do relatório salvo é recusado', () => {
     expect(check(comment('## Revisão'), deps(REPORT)).allow).toBe(false);
@@ -228,13 +282,28 @@ describe('AI-08 github-guard: comentário de revisão', () => {
 
   // Controle negativo: a regra é a identidade com o arquivo, e não o título "## Revisão".
   it('AI-08 permite o comentário idêntico a um relatório salvo que não começa com "## Revisão"', () => {
-    expect(check(comment('Relatório sem o título padrão.\n'), deps('Relatório sem o título padrão.\n')).allow).toBe(true);
+    expect(
+      check(
+        comment('Relatório sem o título padrão.\n'),
+        deps('Relatório sem o título padrão.\n'),
+      ).allow,
+    ).toBe(true);
   });
 });
 
 describe('AI-08 github-guard: outras ferramentas', () => {
-  it.each(['mcp__github__get_me', 'mcp__github__pull_request_read', 'Bash', 'Read'])('AI-08 %s passa', (toolName) => {
-    expect(check({ tool_name: toolName, tool_input: { draft: false, body: REPORT } }, deps()).allow).toBe(true);
+  it.each([
+    'mcp__github__get_me',
+    'mcp__github__pull_request_read',
+    'Bash',
+    'Read',
+  ])('AI-08 %s passa', (toolName) => {
+    expect(
+      check(
+        { tool_name: toolName, tool_input: { draft: false, body: REPORT } },
+        deps(),
+      ).allow,
+    ).toBe(true);
   });
 });
 
@@ -251,14 +320,20 @@ describe('AI-16 github-guard: tirar o PR do rascunho', () => {
   it.each([
     ['sem upstream', null],
     ['com o upstream em outro commit', OTHER_SHA],
-  ])('AI-16 recusa draft false %s, e o motivo manda fazer push', (_label, upstream) => {
-    const { deps: fake } = makeDeps({ git: { head: HEAD_SHA, upstream }, registered: [HEAD_SHA, OTHER_SHA] });
+  ])(
+    'AI-16 recusa draft false %s, e o motivo manda fazer push',
+    (_label, upstream) => {
+      const { deps: fake } = makeDeps({
+        git: { head: HEAD_SHA, upstream },
+        registered: [HEAD_SHA, OTHER_SHA],
+      });
 
-    const verdict = check(undraft({ draft: false }), fake);
+      const verdict = check(undraft({ draft: false }), fake);
 
-    expect(verdict.allow).toBe(false);
-    expect(verdict.reason).toMatch(/push/i);
-  });
+      expect(verdict.allow).toBe(false);
+      expect(verdict.reason).toMatch(/push/i);
+    },
+  );
 
   it('AI-16 recusa draft false sem registro do HEAD, e o motivo cita /security-review e o SHA', () => {
     const { deps: fake } = makeDeps({ registered: [] });
@@ -318,7 +393,10 @@ describe('AI-16 github-guard: tirar o PR do rascunho', () => {
   });
 
   it('AI-16 draft "false" com o upstream em outro commit é recusado, e o motivo manda fazer push', () => {
-    const { deps: fake } = makeDeps({ git: { head: HEAD_SHA, upstream: OTHER_SHA }, registered: [HEAD_SHA] });
+    const { deps: fake } = makeDeps({
+      git: { head: HEAD_SHA, upstream: OTHER_SHA },
+      registered: [HEAD_SHA],
+    });
 
     const verdict = check(undraft({ draft: 'false' }), fake);
 
@@ -336,21 +414,27 @@ describe('AI-16 github-guard: tirar o PR do rascunho', () => {
   it.each([
     ['sem o campo draft', { title: 'novo título' }],
     ['com draft true', { draft: true }],
-  ])('AI-16 update_pull_request %s passa sem consultar o git nem o registro', (_label, toolInput) => {
-    const { deps: fake, calls } = makeDeps({ git: null });
+  ])(
+    'AI-16 update_pull_request %s passa sem consultar o git nem o registro',
+    (_label, toolInput) => {
+      const { deps: fake, calls } = makeDeps({ git: null });
 
-    const verdict = check(undraft(toolInput), fake);
+      const verdict = check(undraft(toolInput), fake);
 
-    expect(verdict.allow).toBe(true);
-    expect(calls.git).toBe(0);
-    expect(calls.reviewed).toEqual([]);
-  });
+      expect(verdict.allow).toBe(true);
+      expect(calls.git).toBe(0);
+      expect(calls.reviewed).toEqual([]);
+    },
+  );
 
   it('AI-16 o nome da ferramenta só precisa terminar em __update_pull_request', () => {
     const { deps: fake } = makeDeps({ registered: [] });
 
     const verdict = check(
-      { tool_name: 'mcp__outro_servidor__update_pull_request', tool_input: { draft: false } },
+      {
+        tool_name: 'mcp__outro_servidor__update_pull_request',
+        tool_input: { draft: false },
+      },
       fake,
     );
 
@@ -361,7 +445,10 @@ describe('AI-16 github-guard: tirar o PR do rascunho', () => {
     const { deps: fake, calls } = makeDeps({ git: null });
 
     const verdict = check(
-      { tool_name: 'mcp__github__update_pull_request_branch', tool_input: { draft: false } },
+      {
+        tool_name: 'mcp__github__update_pull_request_branch',
+        tool_input: { draft: false },
+      },
       fake,
     );
 
@@ -413,7 +500,10 @@ describe('AI-16 github-guard: comentário do relatório de segurança', () => {
   });
 
   it('AI-16 o comentário de segurança vale mesmo com o upstream atrás do HEAD (só o registro do HEAD conta)', () => {
-    const { deps: fake } = makeDeps({ git: { head: HEAD_SHA, upstream: null }, registered: [HEAD_SHA] });
+    const { deps: fake } = makeDeps({
+      git: { head: HEAD_SHA, upstream: null },
+      registered: [HEAD_SHA],
+    });
 
     expect(check(comment(SECURITY), fake).allow).toBe(true);
   });
@@ -421,17 +511,23 @@ describe('AI-16 github-guard: comentário do relatório de segurança', () => {
   // Controles negativos: o registro não abre a porta para qualquer comentário.
   it.each([
     ['comentário comum', 'Corrigido no commit abc123.'],
-    ['título só no meio do texto', 'Veja a seção ## Revisão de segurança abaixo.'],
+    [
+      'título só no meio do texto',
+      'Veja a seção ## Revisão de segurança abaixo.',
+    ],
     ['título sem acento', '## Revisao de seguranca\n\nok\n'],
     ['título de outro relatório', '## Revisão\n\nok\n'],
     ['corpo vazio', ''],
     ['corpo que não é texto', 42],
     ['corpo ausente', undefined],
-  ])('AI-16 com o HEAD registrado, o comentário %s continua recusado', (_label, body) => {
-    const { deps: fake } = makeDeps({ registered: [HEAD_SHA] });
+  ])(
+    'AI-16 com o HEAD registrado, o comentário %s continua recusado',
+    (_label, body) => {
+      const { deps: fake } = makeDeps({ registered: [HEAD_SHA] });
 
-    expect(check(comment(body), fake).allow).toBe(false);
-  });
+      expect(check(comment(body), fake).allow).toBe(false);
+    },
+  );
 
   it('AI-16 o comentário do relatório do reviewer idêntico ao arquivo salvo segue valendo sem registro de segurança', () => {
     const { deps: fake } = makeDeps({ registered: [] });
@@ -448,7 +544,10 @@ describe('AI-08 github-guard como processo', () => {
     const result = spawnSync(process.execPath, [hook], {
       input: raw,
       encoding: 'utf8',
-      env: { ...process.env, CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..') },
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..'),
+      },
     });
     return { code: result.status, stderr: result.stderr };
   }
@@ -456,7 +555,10 @@ describe('AI-08 github-guard como processo', () => {
   it.each([
     ['texto que não é JSON', 'isto não é json'],
     ['entrada vazia', ''],
-    ['JSON truncado', '{"tool_name": "mcp__github__add_issue_comment", "tool_input": {'],
+    [
+      'JSON truncado',
+      '{"tool_name": "mcp__github__add_issue_comment", "tool_input": {',
+    ],
   ])('AI-08 entrada ilegível recusa com código 2 (%s)', (_label, raw) => {
     const result = run(raw);
 
@@ -465,14 +567,23 @@ describe('AI-08 github-guard como processo', () => {
   });
 
   it('AI-08 controle: JSON legível de uma ferramenta sem relação sai com código 0', () => {
-    expect(run(JSON.stringify({ tool_name: 'mcp__github__get_me', tool_input: {} })).code).toBe(0);
+    expect(
+      run(JSON.stringify({ tool_name: 'mcp__github__get_me', tool_input: {} }))
+        .code,
+    ).toBe(0);
   });
 
   it('AI-08 controle: criar PR em rascunho sai com código 0 e fora de rascunho sai com 2', () => {
     const tool = 'mcp__github__create_pull_request';
 
-    expect(run(JSON.stringify({ tool_name: tool, tool_input: { draft: true } })).code).toBe(0);
-    expect(run(JSON.stringify({ tool_name: tool, tool_input: { draft: false } })).code).toBe(2);
+    expect(
+      run(JSON.stringify({ tool_name: tool, tool_input: { draft: true } }))
+        .code,
+    ).toBe(0);
+    expect(
+      run(JSON.stringify({ tool_name: tool, tool_input: { draft: false } }))
+        .code,
+    ).toBe(2);
   });
 });
 
@@ -505,7 +616,10 @@ describe('AI-16 github-guard como processo, com um repositório git de verdade',
     writeFileIn(project, `.claude/state/security-review/${sha}`, '');
   }
 
-  const READY = { tool_name: 'mcp__github__update_pull_request', tool_input: { pullNumber: 3, draft: false } };
+  const READY = {
+    tool_name: 'mcp__github__update_pull_request',
+    tool_input: { pullNumber: 3, draft: false },
+  };
 
   it('AI-16 tirar do rascunho com o HEAD publicado e registrado sai com código 0', () => {
     const { project, head } = setup();
@@ -553,14 +667,22 @@ describe('AI-16 github-guard como processo, com um repositório git de verdade',
   it('AI-16 controle: update_pull_request em rascunho sai com 0 mesmo fora de um repositório git', () => {
     const project = makeTempDir('ai16-sem-git-');
 
-    expect(runIn(project, { tool_name: READY.tool_name, tool_input: { pullNumber: 3, draft: true } }).code).toBe(0);
+    expect(
+      runIn(project, {
+        tool_name: READY.tool_name,
+        tool_input: { pullNumber: 3, draft: true },
+      }).code,
+    ).toBe(0);
   });
 
   it('AI-16 o comentário "## Revisão de segurança" sai com 0 só quando o HEAD tem registro', () => {
     const { project, head } = setup();
     const input = {
       tool_name: 'mcp__github__add_issue_comment',
-      tool_input: { issue_number: 3, body: '## Revisão de segurança\n\nsem achados\n' },
+      tool_input: {
+        issue_number: 3,
+        body: '## Revisão de segurança\n\nsem achados\n',
+      },
     };
 
     expect(runIn(project, input).code).toBe(2);

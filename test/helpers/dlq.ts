@@ -2,7 +2,11 @@ import type { SQSClient } from '@aws-sdk/client-sqs';
 import { pino, type Logger } from 'pino';
 import { expect, vi } from 'vitest';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
-import { createReconciler, type Reconciler, type ReconcilerConfig } from '../../src/billing/reconciliation.ts';
+import {
+  createReconciler,
+  type Reconciler,
+  type ReconcilerConfig,
+} from '../../src/billing/reconciliation.ts';
 import type { ReceivedMessage } from '../../src/queue/sqs.ts';
 import { createSemaphore, type Semaphore } from '../../src/shared/semaphore.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
@@ -15,7 +19,11 @@ import { waitForDlq, type QueueWorld } from './worker.ts';
 // Leva as `count` mensagens da fila de origem à DLQ pelo limite de recebimentos, sem worker: cada rodada
 // recebe todas e as devolve na hora; o recebimento seguinte ao limite faz o SQS movê-las. Nenhum pedido
 // é tocado, então o teste decide o que o banco e o ERP já sabem de cada um.
-export async function moveToDlq(world: QueueWorld, count: number, maxReceiveCount: number): Promise<void> {
+export async function moveToDlq(
+  world: QueueWorld,
+  count: number,
+  maxReceiveCount: number,
+): Promise<void> {
   const queue = world.queues.queue;
   for (let round = 1; round <= maxReceiveCount; round += 1) {
     const collected: ReceivedMessage[] = [];
@@ -25,7 +33,8 @@ export async function moveToDlq(world: QueueWorld, count: number, maxReceiveCoun
       collected.push(...batch);
     }
     expect(collected, `mensagens do recebimento ${round}`).toHaveLength(count);
-    for (const message of collected) expect(await queue.changeVisibility(message.receiptHandle, 0)).toBe('ok');
+    for (const message of collected)
+      expect(await queue.changeVisibility(message.receiptHandle, 0)).toBe('ok');
   }
   await vi.waitFor(
     async () => {
@@ -46,8 +55,14 @@ export async function dlqTotal(world: QueueWorld): Promise<number> {
 
 // Devolve à DLQ, na hora, a mensagem do pedido que a reconciliação recebeu e deixou escondida (5 min):
 // o equivalente de a visibilidade vencer, sem esperar.
-export async function releaseFromDlq(world: QueueWorld, dlq: ObservedQueue, orderId: string): Promise<void> {
-  expect(await world.queues.dlq.changeVisibility(dlq.latestHandle(orderId), 0)).toBe('ok');
+export async function releaseFromDlq(
+  world: QueueWorld,
+  dlq: ObservedQueue,
+  orderId: string,
+): Promise<void> {
+  expect(
+    await world.queues.dlq.changeVisibility(dlq.latestHandle(orderId), 0),
+  ).toBe('ok');
 }
 
 export interface CountingSemaphore extends Semaphore {
@@ -91,7 +106,10 @@ export interface ReconcilerRig {
 }
 
 // A reconciliação sobre a DLQ real e o ERP do mundo do teste, no relógio manual.
-export function buildReconciler(world: QueueWorld, options: ReconcilerOptions = {}): ReconcilerRig {
+export function buildReconciler(
+  world: QueueWorld,
+  options: ReconcilerOptions = {},
+): ReconcilerRig {
   const dlq = observeQueue(world.queues.dlq);
   const sleeps: number[] = [];
   const clock: ManualClock = {
@@ -126,7 +144,11 @@ export function buildReconciler(world: QueueWorld, options: ReconcilerOptions = 
 
 // Avança o relógio manual enquanto espera a promessa, para nenhuma espera do código (um intervalo, a
 // pausa entre duas contagens da DLQ) segurá-la; o prazo é em tempo real, e a falha é de asserção.
-export async function driveClock<T>(promise: Promise<T>, clock: ManualClock, stepMs = 1_000): Promise<T> {
+export async function driveClock<T>(
+  promise: Promise<T>,
+  clock: ManualClock,
+  stepMs = 1_000,
+): Promise<T> {
   let settled = false;
   const tracked = promise.then(
     (value) => {

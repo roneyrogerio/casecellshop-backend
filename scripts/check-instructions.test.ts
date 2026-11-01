@@ -134,7 +134,10 @@ describe('FND-06 limites do Claude Code no que carrega sempre', () => {
 
   it('FND-06 não acusa uma spec enorme em .specs/, que não tem mais teto de palavras', () => {
     writeValidTree();
-    write('.specs/project/STATE.md', `${'palavra '.repeat(10)}\n`.repeat(20_000));
+    write(
+      '.specs/project/STATE.md',
+      `${'palavra '.repeat(10)}\n`.repeat(20_000),
+    );
     write('.specs/features/casecellshop/spec.md', lines(20_000));
 
     expect(checkInstructions(tree)).toEqual([]);
@@ -165,7 +168,10 @@ describe('FND-06 limites do Claude Code no que carrega sempre', () => {
 
     expect(violations).toHaveLength(4);
     for (const name of ['AGENTS.md', 'CLAUDE.md', 'reviewer.md', 'marco']) {
-      expect(violations.some((violation) => violation.includes(name)), `sem violação citando ${name}`).toBe(true);
+      expect(
+        violations.some((violation) => violation.includes(name)),
+        `sem violação citando ${name}`,
+      ).toBe(true);
     }
   });
 

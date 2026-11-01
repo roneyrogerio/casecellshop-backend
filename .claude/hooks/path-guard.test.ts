@@ -4,9 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, git, initRepo, makeTempDir } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  git,
+  initRepo,
+  makeTempDir,
+} from '../../test/helpers/git-sandbox.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
 
 interface HookInput {
@@ -20,13 +28,20 @@ interface HookInput {
 // O motivo da recusa, ou null quando a edição passa.
 // O terceiro parâmetro é a pasta principal (CLAUDE_PROJECT_DIR): as pastas dos hooks são conferidas contra ela
 // mesmo quando a raiz das regras de papel é a worktree do agente (A1 da Revisão 1).
-let decide: (input: HookInput, projectRoot: string, projectDir?: string) => string | null;
+let decide: (
+  input: HookInput,
+  projectRoot: string,
+  projectDir?: string,
+) => string | null;
 // A raiz contra a qual o caminho é decidido (AI-26): a da worktree do agente, ou a do projeto.
 let rootFor: (input: { cwd?: string }, projectDir: string) => string;
 
 // Import dinâmico: o hook é .mjs sem tipos, e assim o teste falha com "módulo inexistente" enquanto ele não existe.
 beforeAll(async () => {
-  const module = (await import(pathToFileURL(hook).href)) as { decide: typeof decide; rootFor: typeof rootFor };
+  const module = (await import(pathToFileURL(hook).href)) as {
+    decide: typeof decide;
+    rootFor: typeof rootFor;
+  };
   decide = module.decide;
   rootFor = module.rootFor;
 });
@@ -63,7 +78,11 @@ interface HookResult {
 
 // Roda o hook como o Claude Code roda: JSON na entrada padrão e CLAUDE_PROJECT_DIR no ambiente.
 // Só os testes de fiação usam isto; sem `projectDir`, o ambiente não leva CLAUDE_PROJECT_DIR.
-function runHook(rawInput: string, projectDir: string | undefined = root, cwd?: string): HookResult {
+function runHook(
+  rawInput: string,
+  projectDir: string | undefined = root,
+  cwd?: string,
+): HookResult {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (projectDir === undefined) delete env.CLAUDE_PROJECT_DIR;
   else env.CLAUDE_PROJECT_DIR = projectDir;
@@ -77,7 +96,11 @@ function runHook(rawInput: string, projectDir: string | undefined = root, cwd?: 
 }
 
 interface Denial {
-  hookSpecificOutput: { hookEventName: string; permissionDecision: string; permissionDecisionReason: string };
+  hookSpecificOutput: {
+    hookEventName: string;
+    permissionDecision: string;
+    permissionDecisionReason: string;
+  };
 }
 
 function expectProcessDenied(result: HookResult): Denial {
@@ -121,7 +144,10 @@ function variants(relative: string): [string, string][] {
     ['com ..', `src/app/../../${relative}`],
     ['com .. no meio da raiz', `${root}/src/../${relative}`],
     ['em maiúsculas', relative.toUpperCase()],
-    ['com a pasta em outra caixa', [first.toUpperCase(), ...parts.slice(1)].join('/')],
+    [
+      'com a pasta em outra caixa',
+      [first.toUpperCase(), ...parts.slice(1)].join('/'),
+    ],
   ];
 }
 
@@ -135,7 +161,8 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     'scripts/check-spec-limits.test.ts',
     '.claude/hooks/x.test.ts',
   ])('FND-08 o test-writer pode editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectAllowed(edit('test-writer', variant));
+    for (const [, variant] of variants(path))
+      expectAllowed(edit('test-writer', variant));
   });
 
   it.each([
@@ -159,43 +186,66 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     'package.json',
     'compose.yaml',
     'scripts/generate-openapi.ts',
-  ])('FND-08 o test-writer não pode editar código que não é teste (%s)', (path) => {
-    for (const [, variant] of variants(path)) expectDenied(edit('test-writer', variant));
-  });
+  ])(
+    'FND-08 o test-writer não pode editar código que não é teste (%s)',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('test-writer', variant));
+    },
+  );
 
   it.each([
     ['com .. saindo de test/', 'test/../src/app.ts'],
-    ['com .. saindo de test/ por caminho absoluto', join(root, 'test/../src/app.ts')],
+    [
+      'com .. saindo de test/ por caminho absoluto',
+      join(root, 'test/../src/app.ts'),
+    ],
     ['em pasta com o prefixo test', 'testing/foo.ts'],
     ['em pasta com o prefixo test, absoluto', join(root, 'tests/foo.ts')],
     ['em src/ em outra caixa', 'SRC/app.ts'],
     ['arquivo cujo nome só contém test', 'src/test-utils.ts'],
     ['extensão parecida', 'src/x.test.tsx'],
-  ])('FND-08 o test-writer não pode editar fora de test/ nem de *.test.ts (%s)', (_label, path) => {
-    expectDenied(edit('test-writer', path));
-  });
+  ])(
+    'FND-08 o test-writer não pode editar fora de test/ nem de *.test.ts (%s)',
+    (_label, path) => {
+      expectDenied(edit('test-writer', path));
+    },
+  );
 
   it.each([
     ['absoluto fora do repositório', '/etc/hosts'],
     ['*.test.ts absoluto fora do repositório', '/etc/fora.test.ts'],
     ['relativo acima da raiz', '../fora/test/foo.test.ts'],
-    ['em pasta irmã com o mesmo prefixo da raiz', `${root}-outro/test/foo.test.ts`],
+    [
+      'em pasta irmã com o mesmo prefixo da raiz',
+      `${root}-outro/test/foo.test.ts`,
+    ],
     ['com .. acima da raiz', `${root}/test/../../fora/foo.test.ts`],
-  ])('FND-08 o test-writer não pode editar caminho fora do repositório (%s)', (_label, path) => {
-    expectDenied(edit('test-writer', path));
-  });
+  ])(
+    'FND-08 o test-writer não pode editar caminho fora do repositório (%s)',
+    (_label, path) => {
+      expectDenied(edit('test-writer', path));
+    },
+  );
 });
 
 describe('FND-08 guarda de caminho do implementer', () => {
-  it.each(IMPLEMENTER_PROTECTED)('FND-08 o implementer não pode editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
-  });
+  it.each(IMPLEMENTER_PROTECTED)(
+    'FND-08 o implementer não pode editar %s',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('implementer', variant));
+    },
+  );
 
   it.each([
     ['*.test.ts em src/ em outra caixa', 'Src/X.TEST.TS'],
     ['*.test.ts em src/ em outra caixa, absoluto', join(root, 'Src/X.TEST.TS')],
     ['*.test.ts em .claude/hooks/ em outra caixa', '.Claude/Hooks/X.Test.Ts'],
-    ['*.test.ts com .. saindo de uma pasta permitida', 'migrations/../src/x.test.ts'],
+    [
+      '*.test.ts com .. saindo de uma pasta permitida',
+      'migrations/../src/x.test.ts',
+    ],
   ])('FND-08 o implementer não pode editar *.test.ts (%s)', (_label, path) => {
     expectDenied(edit('implementer', path));
   });
@@ -209,18 +259,24 @@ describe('FND-08 guarda de caminho do implementer', () => {
     ['em pasta com o prefixo test', 'testing/foo.ts'],
     ['arquivo cujo nome só contém test', 'src/test-utils.ts'],
     ['com .. que sai de uma pasta protegida', 'test/../src/app.ts'],
-  ])('FND-08 o implementer pode editar fora dos testes e das pastas protegidas (%s)', (_label, path) => {
-    expectAllowed(edit('implementer', path));
-  });
+  ])(
+    'FND-08 o implementer pode editar fora dos testes e das pastas protegidas (%s)',
+    (_label, path) => {
+      expectAllowed(edit('implementer', path));
+    },
+  );
 
   it.each([
     ['absoluto fora do repositório', '/etc/hosts'],
     ['relativo acima da raiz', '../fora/src/app.ts'],
     ['em pasta irmã com o mesmo prefixo da raiz', `${root}-outro/src/app.ts`],
     ['com .. acima da raiz', `${root}/src/../../fora/app.ts`],
-  ])('FND-08 o implementer não pode editar caminho fora do repositório (%s)', (_label, path) => {
-    expectDenied(edit('implementer', path));
-  });
+  ])(
+    'FND-08 o implementer não pode editar caminho fora do repositório (%s)',
+    (_label, path) => {
+      expectDenied(edit('implementer', path));
+    },
+  );
 });
 
 // O que configura a verificação (AI-04): o implementer não pode afrouxar o próprio lint, CI ou testes.
@@ -232,28 +288,37 @@ const IMPLEMENTER_VERIFICATION_CONFIG = [
   '.oxlintrc.json',
   'commitlint.config.mjs',
   'redocly.yaml',
+  '.prettierrc.json',
+  '.prettierignore',
   '.npmrc',
   '.claude/settings.json',
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer o que configura a verificação', () => {
-  it.each(IMPLEMENTER_VERIFICATION_CONFIG)('AI-04 o implementer não pode editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
+  it.each(IMPLEMENTER_VERIFICATION_CONFIG)(
+    'AI-04 o implementer não pode editar %s',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('implementer', variant));
+    },
+  );
+
+  it.each([
+    'src/checkout/reserve.ts',
+    'migrations/store/001_x.ts',
+    'package.json',
+  ])('AI-04 o implementer continua podendo editar %s', (path) => {
+    for (const [, variant] of variants(path))
+      expectAllowed(edit('implementer', variant));
   });
 
-  it.each(['src/checkout/reserve.ts', 'migrations/store/001_x.ts', 'package.json'])(
-    'AI-04 o implementer continua podendo editar %s',
-    (path) => {
-      for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
-    },
-  );
-
-  it.each(['.github/workflows/ci.yml', 'scripts/check-migrations.ts', '.oxlintrc.json'])(
-    'AI-04 a sessão principal, sem agent_type, pode editar %s',
-    (path) => {
-      expectAllowed(edit(undefined, path));
-    },
-  );
+  it.each([
+    '.github/workflows/ci.yml',
+    'scripts/check-migrations.ts',
+    '.oxlintrc.json',
+  ])('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
+    expectAllowed(edit(undefined, path));
+  });
 });
 
 // Pelo nome do arquivo, em qualquer pasta (AI-04): o implementer não pode afrouxar a verificação
@@ -275,6 +340,13 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   '.kysely-codegenrc.js',
   'src/db/.kysely-codegenrc.json',
   'src/a/b/.kysely-codegenrc.outro',
+  'src/.prettierrc.json',
+  '.prettierrc',
+  '.prettierrc.yaml',
+  'src/a/.prettierrc.mjs',
+  'prettier.config.mjs',
+  'src/prettier.config.js',
+  'src/.prettierignore',
   '.npmrc',
   '.nvmrc',
   '.gitignore',
@@ -286,24 +358,31 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
-  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer não pode editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
-  });
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)(
+    'AI-04 o implementer não pode editar %s',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('implementer', variant));
+    },
+  );
 
-  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
-    expectDenied(
-      decide(
-        {
-          hook_event_name: 'PreToolUse',
-          tool_name: 'Write',
-          cwd: root,
-          agent_type: 'implementer',
-          tool_input: { file_path: join(root, path), content: 'x' },
-        },
-        root,
-      ),
-    );
-  });
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)(
+    'AI-04 o implementer também não pode escrever %s com Write',
+    (path) => {
+      expectDenied(
+        decide(
+          {
+            hook_event_name: 'PreToolUse',
+            tool_name: 'Write',
+            cwd: root,
+            agent_type: 'implementer',
+            tool_input: { file_path: join(root, path), content: 'x' },
+          },
+          root,
+        ),
+      );
+    },
+  );
 
   // Controle negativo: nomes que só lembram os protegidos, e o código de produção, continuam liberados.
   it.each([
@@ -322,13 +401,18 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
     'src/db/kysely-codegenrc.ts',
     'src/db/codegen.ts',
     'src/kysely-codegen/index.ts',
+    'src/shared/prettier-like.ts',
   ])('AI-04 o implementer continua podendo editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+    for (const [, variant] of variants(path))
+      expectAllowed(edit('implementer', variant));
   });
 
-  it.each(IMPLEMENTER_PROTECTED_BY_NAME)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
-    expectAllowed(edit(undefined, path));
-  });
+  it.each(IMPLEMENTER_PROTECTED_BY_NAME)(
+    'AI-04 a sessão principal, sem agent_type, pode editar %s',
+    (path) => {
+      expectAllowed(edit(undefined, path));
+    },
+  );
 });
 
 // Os hooks do git rodam nos commits e pushes da sessão principal, fora dos deny e do bash-guard (A13):
@@ -343,45 +427,63 @@ const IMPLEMENTER_PROTECTED_GIT_HOOKS = [
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer os hooks do git e a configuração do clone', () => {
-  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer não pode editar %s', (path) => {
-    for (const [, variant] of variants(path)) expectDenied(edit('implementer', variant));
-  });
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)(
+    'AI-04 o implementer não pode editar %s',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('implementer', variant));
+    },
+  );
 
-  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o implementer também não pode escrever %s com Write', (path) => {
-    expectDenied(
-      decide(
-        {
-          hook_event_name: 'PreToolUse',
-          tool_name: 'Write',
-          cwd: root,
-          agent_type: 'implementer',
-          tool_input: { file_path: join(root, path), content: 'exit 0' },
-        },
-        root,
-      ),
-    );
-  });
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)(
+    'AI-04 o implementer também não pode escrever %s com Write',
+    (path) => {
+      expectDenied(
+        decide(
+          {
+            hook_event_name: 'PreToolUse',
+            tool_name: 'Write',
+            cwd: root,
+            agent_type: 'implementer',
+            tool_input: { file_path: join(root, path), content: 'exit 0' },
+          },
+          root,
+        ),
+      );
+    },
+  );
 
-  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 o test-writer também não pode editar %s', (path) => {
-    expectDenied(edit('test-writer', path));
-  });
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)(
+    'AI-04 o test-writer também não pode editar %s',
+    (path) => {
+      expectDenied(edit('test-writer', path));
+    },
+  );
 
   // Controle negativo: nomes que só lembram as pastas protegidas seguem liberados.
   it.each(['src/githooks.ts', 'migrations/store/.gitkeep', 'src/git/x.ts'])(
     'AI-04 o implementer continua podendo editar %s',
     (path) => {
-      for (const [, variant] of variants(path)) expectAllowed(edit('implementer', variant));
+      for (const [, variant] of variants(path))
+        expectAllowed(edit('implementer', variant));
     },
   );
 
-  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)('AI-04 a sessão principal, sem agent_type, pode editar %s', (path) => {
-    expectAllowed(edit(undefined, path));
-  });
+  it.each(IMPLEMENTER_PROTECTED_GIT_HOOKS)(
+    'AI-04 a sessão principal, sem agent_type, pode editar %s',
+    (path) => {
+      expectAllowed(edit(undefined, path));
+    },
+  );
 });
 
 // O github-guard confia no que está em .claude/reviews/ e em .claude/state/ (AI-15, AI-16): nenhuma sessão os edita,
 // a principal inclusive. O NotebookEdit traz o caminho em notebook_path; Edit e Write, em file_path.
-function writeToolInput(toolName: string, agentType: string | undefined, filePath: string): HookInput {
+function writeToolInput(
+  toolName: string,
+  agentType: string | undefined,
+  filePath: string,
+): HookInput {
   const key = toolName === 'NotebookEdit' ? 'notebook_path' : 'file_path';
   return {
     hook_event_name: 'PreToolUse',
@@ -392,7 +494,11 @@ function writeToolInput(toolName: string, agentType: string | undefined, filePat
   };
 }
 
-function writeTool(toolName: string, agentType: string | undefined, filePath: string): string | null {
+function writeTool(
+  toolName: string,
+  agentType: string | undefined,
+  filePath: string,
+): string | null {
   return decide(writeToolInput(toolName, agentType, filePath), root);
 }
 
@@ -416,7 +522,10 @@ const WRITERS: [string, string | undefined][] = [
 function trustedVariants(relative: string): [string, string][] {
   return [
     ...variants(relative),
-    ['com .. passando por outra pasta', relative.replace('.claude/', '.claude/hooks/../')],
+    [
+      'com .. passando por outra pasta',
+      relative.replace('.claude/', '.claude/hooks/../'),
+    ],
     ['com .. saindo de src', `src/../${relative}`],
     ['com ./ no meio', relative.replace('.claude/', './.claude/./')],
   ];
@@ -424,26 +533,41 @@ function trustedVariants(relative: string): [string, string][] {
 
 describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .claude/state/', () => {
   // Um caso por caminho, sessão e ferramenta; cada `it` confere todas as grafias do caminho.
-  const denyCases: [string, string, string, string | undefined][] = TRUSTED_FOLDERS.flatMap((path) =>
-    WRITERS.flatMap(([session, agentType]) =>
-      EDIT_TOOLS.map((tool): [string, string, string, string | undefined] => [path, session, tool, agentType]),
-    ),
-  );
+  const denyCases: [string, string, string, string | undefined][] =
+    TRUSTED_FOLDERS.flatMap((path) =>
+      WRITERS.flatMap(([session, agentType]) =>
+        EDIT_TOOLS.map((tool): [string, string, string, string | undefined] => [
+          path,
+          session,
+          tool,
+          agentType,
+        ]),
+      ),
+    );
 
   it.each(denyCases)(
     'AI-15 ninguém edita %s: %s, por %s, escrito de qualquer jeito',
     (path, _session, tool, agentType) => {
-      for (const [, variant] of trustedVariants(path)) expectDenied(writeTool(tool, agentType, variant));
+      for (const [, variant] of trustedVariants(path))
+        expectDenied(writeTool(tool, agentType, variant));
     },
   );
 
   it('AI-15 a sessão principal não escreve .Claude/Reviews/x.md com Write', () => {
     expectDenied(writeTool('Write', undefined, '.Claude/Reviews/x.md'));
-    expectDenied(writeTool('Write', undefined, join(root, '.Claude/Reviews/x.md')));
+    expectDenied(
+      writeTool('Write', undefined, join(root, '.Claude/Reviews/x.md')),
+    );
   });
 
   it('AI-15 a sessão principal não edita .claude/state/ de um caminho absoluto com maiúsculas', () => {
-    expectDenied(writeTool('Edit', undefined, join(root, '.CLAUDE/STATE/security-review/ABC')));
+    expectDenied(
+      writeTool(
+        'Edit',
+        undefined,
+        join(root, '.CLAUDE/STATE/security-review/ABC'),
+      ),
+    );
   });
 
   // Controles negativos: a negação é só dessas duas pastas, e a sessão principal segue editando o resto de .claude/.
@@ -474,7 +598,9 @@ describe('AI-15 guarda de caminho nega a qualquer sessão .claude/reviews/ e .cl
   );
 
   it('AI-15 controle: o test-writer continua editando um teste comum dentro de .claude/hooks/', () => {
-    expectAllowed(writeTool('Edit', 'test-writer', '.claude/hooks/post-tool.test.ts'));
+    expectAllowed(
+      writeTool('Edit', 'test-writer', '.claude/hooks/post-tool.test.ts'),
+    );
   });
 });
 
@@ -498,7 +624,8 @@ describe('FND-08 o hook como processo', () => {
   const foreignDirs: string[] = [];
 
   afterAll(() => {
-    for (const dir of foreignDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const dir of foreignDirs.splice(0))
+      rmSync(dir, { recursive: true, force: true });
   });
 
   function foreignDir(): string {
@@ -508,14 +635,20 @@ describe('FND-08 o hook como processo', () => {
   }
 
   it('FND-08 a edição negada sai com código 0 e o JSON hookSpecificOutput com deny no stdout', () => {
-    const result = runHook(JSON.stringify(editInput('implementer', 'src/x.test.ts')));
+    const result = runHook(
+      JSON.stringify(editInput('implementer', 'src/x.test.ts')),
+    );
 
     const denial = expectProcessDenied(result);
-    expect(denial.hookSpecificOutput.permissionDecisionReason).toBe(edit('implementer', 'src/x.test.ts'));
+    expect(denial.hookSpecificOutput.permissionDecisionReason).toBe(
+      edit('implementer', 'src/x.test.ts'),
+    );
   });
 
   it('FND-08 a edição permitida sai com código 0 e o stdout vazio', () => {
-    expectProcessAllowed(runHook(JSON.stringify(editInput('implementer', 'src/app.ts'))));
+    expectProcessAllowed(
+      runHook(JSON.stringify(editInput('implementer', 'src/app.ts'))),
+    );
   });
 
   it.each([
@@ -534,21 +667,49 @@ describe('FND-08 o hook como processo', () => {
     const inside = join(root, 'test', 'helpers', 'clock.ts');
 
     // Com a raiz certa o caminho é de test/ e o test-writer pode; com o cwd como raiz, ele estaria fora do repositório.
-    expectProcessAllowed(runHook(JSON.stringify({ ...editInput('test-writer', inside), cwd: elsewhere })));
+    expectProcessAllowed(
+      runHook(
+        JSON.stringify({ ...editInput('test-writer', inside), cwd: elsewhere }),
+      ),
+    );
     // E o contrário: com outra raiz no ambiente, o mesmo caminho cai fora do repositório mesmo com o cwd certo.
-    expectProcessDenied(runHook(JSON.stringify({ ...editInput('test-writer', inside), cwd: root }), elsewhere));
+    expectProcessDenied(
+      runHook(
+        JSON.stringify({ ...editInput('test-writer', inside), cwd: root }),
+        elsewhere,
+      ),
+    );
   });
 
   it('FND-08 sem CLAUDE_PROJECT_DIR no ambiente a raiz é o cwd da entrada', () => {
     const inside = join(root, 'test', 'helpers', 'clock.ts');
 
-    expectProcessAllowed(runHook(JSON.stringify(editInput('test-writer', inside)), undefined));
-    expectProcessDenied(runHook(JSON.stringify(editInput('test-writer', join(root, 'src', 'app.ts'))), undefined));
+    expectProcessAllowed(
+      runHook(JSON.stringify(editInput('test-writer', inside)), undefined),
+    );
+    expectProcessDenied(
+      runHook(
+        JSON.stringify(editInput('test-writer', join(root, 'src', 'app.ts'))),
+        undefined,
+      ),
+    );
   });
 
   it('FND-08 o NotebookEdit traz o caminho em notebook_path e a guarda o confere como processo', () => {
-    expectProcessDenied(runHook(JSON.stringify(writeToolInput('NotebookEdit', 'implementer', 'src/x.test.ts'))));
-    expectProcessAllowed(runHook(JSON.stringify(writeToolInput('NotebookEdit', 'implementer', 'src/app.ts'))));
+    expectProcessDenied(
+      runHook(
+        JSON.stringify(
+          writeToolInput('NotebookEdit', 'implementer', 'src/x.test.ts'),
+        ),
+      ),
+    );
+    expectProcessAllowed(
+      runHook(
+        JSON.stringify(
+          writeToolInput('NotebookEdit', 'implementer', 'src/app.ts'),
+        ),
+      ),
+    );
   });
 
   // Diferencial: o processo e a função exportada dão o mesmo resultado, um caso negado e um permitido por papel.
@@ -556,16 +717,29 @@ describe('FND-08 o hook como processo', () => {
     ['a sessão principal', undefined, '.claude/reviews/x.md', 'src/app.ts'],
     ['o implementer', 'implementer', '.oxlintrc.json', 'src/app.ts'],
     ['o test-writer', 'test-writer', 'src/app.ts', 'src/x.test.ts'],
-    ['o reviewer', 'reviewer', '.claude/state/stop-exceptions.log', 'src/app.ts'],
-  ])('FND-08 o processo e decide() dão o mesmo resultado para %s', (_session, agentType, denied, allowed) => {
-    const viaProcess = runHook(JSON.stringify(editInput(agentType, denied)));
-    const reason = edit(agentType, denied);
-    expectDenied(reason);
-    expect(expectProcessDenied(viaProcess).hookSpecificOutput.permissionDecisionReason).toBe(reason);
+    [
+      'o reviewer',
+      'reviewer',
+      '.claude/state/stop-exceptions.log',
+      'src/app.ts',
+    ],
+  ])(
+    'FND-08 o processo e decide() dão o mesmo resultado para %s',
+    (_session, agentType, denied, allowed) => {
+      const viaProcess = runHook(JSON.stringify(editInput(agentType, denied)));
+      const reason = edit(agentType, denied);
+      expectDenied(reason);
+      expect(
+        expectProcessDenied(viaProcess).hookSpecificOutput
+          .permissionDecisionReason,
+      ).toBe(reason);
 
-    expectAllowed(edit(agentType, allowed));
-    expectProcessAllowed(runHook(JSON.stringify(editInput(agentType, allowed))));
-  });
+      expectAllowed(edit(agentType, allowed));
+      expectProcessAllowed(
+        runHook(JSON.stringify(editInput(agentType, allowed))),
+      );
+    },
+  );
 });
 
 // AI-26: o agente em worktree edita arquivos da worktree, que fica em outra pasta (ou em .claude/worktrees/ do
@@ -592,7 +766,11 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
 
   afterAll(cleanupTempDirs);
 
-  function worktreeEdit(agentType: string, worktree: string, filePath: string): HookInput {
+  function worktreeEdit(
+    agentType: string,
+    worktree: string,
+    filePath: string,
+  ): HookInput {
     return {
       hook_event_name: 'PreToolUse',
       tool_name: 'Edit',
@@ -605,10 +783,15 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
   it.each([
     ['dentro do projeto', () => inside],
     ['fora do projeto', () => outside],
-  ])('AI-26 o rootFor devolve a raiz da worktree do cwd (%s)', (_label, worktree) => {
-    expect(rootFor({ cwd: worktree() }, project)).toBe(worktree());
-    expect(rootFor({ cwd: join(worktree(), 'src') }, project)).toBe(worktree());
-  });
+  ])(
+    'AI-26 o rootFor devolve a raiz da worktree do cwd (%s)',
+    (_label, worktree) => {
+      expect(rootFor({ cwd: worktree() }, project)).toBe(worktree());
+      expect(rootFor({ cwd: join(worktree(), 'src') }, project)).toBe(
+        worktree(),
+      );
+    },
+  );
 
   it('AI-26 o rootFor devolve o projectDir sem cwd e com o cwd dentro da pasta principal', () => {
     expect(rootFor({}, project)).toBe(project);
@@ -625,30 +808,54 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
   it.each([
     ['dentro do projeto', () => inside],
     ['fora do projeto', () => outside],
-  ])('AI-26 o implementer edita o código da worktree (%s)', (_label, worktree) => {
-    const dir = worktree();
-    for (const filePath of [join(dir, 'src/x.ts'), 'src/x.ts', 'migrations/store/001_x.ts']) {
-      const input = worktreeEdit('implementer', dir, filePath);
-      expectAllowed(decide(input, rootFor(input, project)));
-    }
-  });
+  ])(
+    'AI-26 o implementer edita o código da worktree (%s)',
+    (_label, worktree) => {
+      const dir = worktree();
+      for (const filePath of [
+        join(dir, 'src/x.ts'),
+        'src/x.ts',
+        'migrations/store/001_x.ts',
+      ]) {
+        const input = worktreeEdit('implementer', dir, filePath);
+        expectAllowed(decide(input, rootFor(input, project)));
+      }
+    },
+  );
 
   it.each([
     ['dentro do projeto', () => inside],
     ['fora do projeto', () => outside],
-  ])('AI-26 o implementer não edita teste nem o que é protegido dentro da worktree (%s)', (_label, worktree) => {
-    const dir = worktree();
-    for (const relative of ['test/x.test.ts', 'src/x.test.ts', 'test/helpers/clock.ts', '.claude/hooks/x.mjs', 'AGENTS.md']) {
-      for (const filePath of [join(dir, relative), relative]) {
-        const input = worktreeEdit('implementer', dir, filePath);
-        expectDenied(decide(input, rootFor(input, project)));
+  ])(
+    'AI-26 o implementer não edita teste nem o que é protegido dentro da worktree (%s)',
+    (_label, worktree) => {
+      const dir = worktree();
+      for (const relative of [
+        'test/x.test.ts',
+        'src/x.test.ts',
+        'test/helpers/clock.ts',
+        '.claude/hooks/x.mjs',
+        'AGENTS.md',
+      ]) {
+        for (const filePath of [join(dir, relative), relative]) {
+          const input = worktreeEdit('implementer', dir, filePath);
+          expectDenied(decide(input, rootFor(input, project)));
+        }
       }
-    }
-  });
+    },
+  );
 
   it('AI-26 o test-writer edita teste e não edita código dentro da worktree', () => {
-    const allowed = worktreeEdit('test-writer', inside, join(inside, 'test/x.test.ts'));
-    const denied = worktreeEdit('test-writer', inside, join(inside, 'src/x.ts'));
+    const allowed = worktreeEdit(
+      'test-writer',
+      inside,
+      join(inside, 'test/x.test.ts'),
+    );
+    const denied = worktreeEdit(
+      'test-writer',
+      inside,
+      join(inside, 'src/x.ts'),
+    );
 
     expectAllowed(decide(allowed, rootFor(allowed, project)));
     expectDenied(decide(denied, rootFor(denied, project)));
@@ -658,16 +865,27 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
   it.each([
     ['dentro do projeto, o caminho cai em .claude/worktrees/', () => inside],
     ['fora do projeto, o caminho cai fora do repositório', () => outside],
-  ])('AI-26 controle: com a raiz da pasta principal o implementer perde o código da worktree (%s)', (_label, worktree) => {
-    const input = worktreeEdit('implementer', worktree(), join(worktree(), 'src/x.ts'));
+  ])(
+    'AI-26 controle: com a raiz da pasta principal o implementer perde o código da worktree (%s)',
+    (_label, worktree) => {
+      const input = worktreeEdit(
+        'implementer',
+        worktree(),
+        join(worktree(), 'src/x.ts'),
+      );
 
-    expectDenied(decide(input, project));
-    expectAllowed(decide(input, rootFor(input, project)));
-  });
+      expectDenied(decide(input, project));
+      expectAllowed(decide(input, rootFor(input, project)));
+    },
+  );
 
   it('AI-26 o hook como processo usa a raiz da worktree: código permitido, teste negado', () => {
     const code = worktreeEdit('implementer', inside, join(inside, 'src/x.ts'));
-    const test = worktreeEdit('implementer', inside, join(inside, 'test/x.test.ts'));
+    const test = worktreeEdit(
+      'implementer',
+      inside,
+      join(inside, 'test/x.test.ts'),
+    );
 
     expectProcessAllowed(runHook(JSON.stringify(code), project, inside));
     expectProcessDenied(runHook(JSON.stringify(test), project, inside));
@@ -689,7 +907,11 @@ describe('AI-15 as pastas dos hooks são conferidas contra a pasta principal mes
 
   afterAll(cleanupTempDirs);
 
-  function fromWorktree(agentType: string | undefined, filePath: string, toolName = 'Write'): HookInput {
+  function fromWorktree(
+    agentType: string | undefined,
+    filePath: string,
+    toolName = 'Write',
+  ): HookInput {
     return {
       hook_event_name: 'PreToolUse',
       tool_name: toolName,
@@ -707,7 +929,9 @@ describe('AI-15 as pastas dos hooks são conferidas contra a pasta principal mes
     'AI-15 a sessão principal com o cwd na worktree não escreve %s da pasta principal',
     (relative) => {
       for (const tool of ['Write', 'Edit']) {
-        const reason = decideInWorktree(fromWorktree(undefined, join(project, relative), tool));
+        const reason = decideInWorktree(
+          fromWorktree(undefined, join(project, relative), tool),
+        );
 
         expectDenied(reason);
         expect(reason).toContain('gravados só pelos hooks');
@@ -716,21 +940,44 @@ describe('AI-15 as pastas dos hooks são conferidas contra a pasta principal mes
   );
 
   it('AI-15 o hook como processo, com o cwd da entrada na worktree, nega Write em .claude/reviews/ da pasta principal', () => {
-    const input = fromWorktree(undefined, join(project, '.claude', 'reviews', 'x.md'));
+    const input = fromWorktree(
+      undefined,
+      join(project, '.claude', 'reviews', 'x.md'),
+    );
 
-    const denial = expectProcessDenied(runHook(JSON.stringify(input), project, worktree));
+    const denial = expectProcessDenied(
+      runHook(JSON.stringify(input), project, worktree),
+    );
 
-    expect(denial.hookSpecificOutput.permissionDecisionReason).toContain('gravados só pelos hooks');
+    expect(denial.hookSpecificOutput.permissionDecisionReason).toContain(
+      'gravados só pelos hooks',
+    );
   });
 
   // Controles negativos: o resto da worktree segue liberado, e o implementer segue com as regras do papel.
   it('AI-15 controle: a mesma sessão, na worktree, ainda escreve o código da worktree', () => {
-    expectAllowed(decideInWorktree(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))));
-    expectProcessAllowed(runHook(JSON.stringify(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))), project, worktree));
+    expectAllowed(
+      decideInWorktree(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))),
+    );
+    expectProcessAllowed(
+      runHook(
+        JSON.stringify(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))),
+        project,
+        worktree,
+      ),
+    );
   });
 
   it('AI-26 controle: o implementer na worktree escreve em src/ e não escreve teste', () => {
-    expectAllowed(decideInWorktree(fromWorktree('implementer', join(worktree, 'src', 'x.ts'))));
-    expectDenied(decideInWorktree(fromWorktree('implementer', join(worktree, 'src', 'x.test.ts'))));
+    expectAllowed(
+      decideInWorktree(
+        fromWorktree('implementer', join(worktree, 'src', 'x.ts')),
+      ),
+    );
+    expectDenied(
+      decideInWorktree(
+        fromWorktree('implementer', join(worktree, 'src', 'x.test.ts')),
+      ),
+    );
   });
 });

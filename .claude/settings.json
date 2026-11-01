@@ -3,14 +3,10 @@
   "model": "opus",
   "effortLevel": "high",
   "outputStyle": "Concise",
-  "enabledMcpjsonServers": [
-    "github"
-  ],
+  "enabledMcpjsonServers": ["github"],
   "worktree": {
     "baseRef": "head",
-    "symlinkDirectories": [
-      "node_modules"
-    ]
+    "symlinkDirectories": ["node_modules"]
   },
   "permissions": {
     "allow": [
@@ -104,6 +100,15 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/post-tool.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/format-edited.mjs\""
           }
         ]
       }
