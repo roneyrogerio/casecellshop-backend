@@ -109,19 +109,28 @@ const HOOK_OWNED_REASON =
 
 // A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
 // para deixar passar. O main só lê a entrada e escreve a resposta do hook.
-export function decide(input, root) {
-  const rule = RULES[input.agent_type];
-  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
-  if (!root || !target) return rule ? `${rule.reason} Caminho não informado.` : null;
-
-  // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
-  // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
-  const rel = path
+// Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
+// maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+function relativeTo(root, target) {
+  return path
     .relative(root, path.resolve(root, target))
     .split(path.sep)
     .join('/')
     .toLowerCase();
+}
+
+// root é a raiz das regras de papel (a worktree do agente isolado, AI-26);
+// projectDir é a pasta principal, onde ficam as pastas gravadas pelos hooks,
+// conferidas para qualquer sessão (AI-15).
+export function decide(input, root, projectDir = root) {
+  const rule = RULES[input.agent_type];
+  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+  if (!root || !target) return rule ? `${rule.reason} Caminho não informado.` : null;
+
+  const rel = relativeTo(root, target);
+  const fromProject = projectDir ? relativeTo(projectDir, path.resolve(root, target)) : rel;
   if (hookOwned(rel)) return `${HOOK_OWNED_REASON} Caminho: ${rel}`;
+  if (hookOwned(fromProject)) return `${HOOK_OWNED_REASON} Caminho: ${fromProject}`;
   if (!rule) return null;
   if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
     return `${rule.reason} O caminho está fora do repositório.`;
@@ -159,7 +168,8 @@ function main() {
     process.exit(2);
   }
 
-  const reason = decide(input, rootFor(input, process.env.CLAUDE_PROJECT_DIR ?? input.cwd));
+  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  const reason = decide(input, rootFor(input, projectDir), projectDir);
   if (reason) deny(reason);
 }
 

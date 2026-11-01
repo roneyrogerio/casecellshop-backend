@@ -19,7 +19,7 @@ export function takeSnapshot(projectDir) {
   // Fora de um repositório o retrato é vazio, e não um erro: não há estado do
   // git a proteger. Um .git que some no meio do agente aparece como mudança.
   const inside = spawnSync('git', ['-C', projectDir, 'rev-parse', '--git-dir'], { encoding: 'utf8' });
-  if (inside.status !== 0) return { head: '', refs: '', worktrees: '', config: '', status: '', foreignBranches: [] };
+  if (inside.status !== 0) return { head: '', refs: '', worktrees: '', config: '', status: '', foreignBranches: [], worktreeBranches: {} };
   const commonDir = resolve(projectDir, git(projectDir, 'rev-parse', '--git-common-dir').trim());
   return {
     head: git(projectDir, 'rev-parse', 'HEAD').trim(),
@@ -33,7 +33,19 @@ export function takeSnapshot(projectDir) {
     config: readFileSync(join(commonDir, 'config'), 'utf8'),
     status: statusWithHashes(projectDir),
     foreignBranches: foreignBranches(projectDir),
+    worktreeBranches: worktreeBranches(projectDir),
   };
+}
+
+// A branch em uso em cada worktree, pelo caminho: identifica a do agente isolado.
+function worktreeBranches(projectDir) {
+  const map = {};
+  let current = null;
+  for (const line of git(projectDir, 'worktree', 'list', '--porcelain').split('\n')) {
+    if (line.startsWith('worktree ')) current = resolve(line.slice('worktree '.length));
+    else if (line.startsWith('branch ') && current) map[current] = line.slice('branch '.length);
+  }
+  return map;
 }
 
 // AI-33: as branches em uso por outra worktree do repositório são de outra
@@ -69,14 +81,9 @@ function statusWithHashes(projectDir) {
   return lines.map((line, index) => `${line}\t${hashes.get(paths[index]) ?? '-'}`).join('\n');
 }
 
-// A worktree de um agente isolado e a branch dela são criadas e apagadas pelo
-// próprio Claude Code (AI-24), em volta da execução do agente.
-const MANAGED_BRANCH = 'refs/heads/worktree-agent-';
-const MANAGED_WORKTREES = '/.claude/worktrees/';
-
 function refMap(text) {
   const map = new Map();
-  for (const line of String(text ?? '').split('\n').filter((ref) => ref && !ref.startsWith(MANAGED_BRANCH))) {
+  for (const line of String(text ?? '').split('\n').filter(Boolean)) {
     const space = line.lastIndexOf(' ');
     map.set(line.slice(0, space), line.slice(space + 1));
   }
@@ -99,18 +106,25 @@ function describeRefs(before, after, ignored) {
   return parts;
 }
 
-export function compareSnapshots(before, after) {
+// agentRoot é a raiz da worktree do agente isolado (AI-24): a branch e a entrada
+// dela, criadas pelo Claude Code em volta da execução, não contam. Das branches
+// de outra worktree (AI-33), só contam como de outra sessão as que já estavam
+// presas a outra worktree no início; uma branch presa durante a execução é do
+// agente até prova em contrário.
+export function compareSnapshots(before, after, { agentRoot } = {}) {
   const changes = [];
   if (before.head !== after.head) changes.push(`HEAD passou de ${before.head} para ${after.head}`);
-  const ignored = new Set([...(before.foreignBranches ?? []), ...(after.foreignBranches ?? [])]);
+  const own = agentRoot ? resolve(agentRoot) : null;
+  const agentBranches = own ? [before.worktreeBranches?.[own], after.worktreeBranches?.[own]].filter(Boolean) : [];
+  const ignored = new Set([...(before.foreignBranches ?? []), ...agentBranches]);
   const refs = describeRefs(before.refs, after.refs, ignored);
   if (refs.length > 0) changes.push(`refs mudaram: ${refs.join('; ')}`);
-  const ownWorktrees = (list) =>
+  const listed = (list) =>
     String(list ?? '')
       .split('\n')
-      .filter((line) => !line.includes(MANAGED_WORKTREES))
+      .filter((line) => !own || line !== `worktree ${own}`)
       .join('\n');
-  if (ownWorktrees(before.worktrees) !== ownWorktrees(after.worktrees)) changes.push('worktrees mudaram: a lista do git worktree list é outra');
+  if (listed(before.worktrees) !== listed(after.worktrees)) changes.push('worktrees mudaram: a lista do git worktree list é outra');
   if (before.config !== after.config) changes.push('config mudou: o .git/config é outro (alias, remoto ou core.hooksPath)');
   return changes;
 }

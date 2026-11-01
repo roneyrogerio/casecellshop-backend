@@ -157,10 +157,10 @@ function readSnapshot(input) {
 
 // Sem retrato não há como provar que o git ficou igual: falha fechada, como
 // mudança.
-function gitChanges(before, after) {
+function gitChanges(before, after, agentRoot) {
   if (!before) return ['retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual'];
   if (after instanceof Error) return [`estado do git ilegível na parada (${after.message})`];
-  return compareSnapshots(before, after);
+  return compareSnapshots(before, after, { agentRoot });
 }
 
 // Um retrato antigo, sem o status, não tem como separar o que já estava sujo.
@@ -236,7 +236,7 @@ async function main() {
     // deixado sem commit (AI-28). O reviewer não responde por arquivo nenhum.
     changedFiles: () => (isolated ? changedFiles(root) : mainChanges(before, after)),
     scriptsChanged: () => changedScripts,
-    gitChanges: () => gitChanges(before, after),
+    gitChanges: () => gitChanges(before, after, isolated ? root : undefined),
     mainChanges: () => (isolated || input.agent_type === 'reviewer' ? mainChanges(before, after) : []),
   });
 
