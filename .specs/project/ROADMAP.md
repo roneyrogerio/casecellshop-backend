@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; o PR #20 (B1, formatador) está pronto para a aprovação; a seguir, o B2 (checagens de código, com as pendências do #20 na descrição dele), o B3, e os PRs C, D e E, depois o M4. O M3 terminou nos PRs #13 e #15
+**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; o B2 (checagens de código e as pendências do #20) está em andamento; a seguir, o B3, e os PRs C, D e E, depois o M4. O M3 terminou nos PRs #13 e #15
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -99,7 +99,7 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - PR #17: pastas e regras do código (AD-025, AD-026). Concluído.
 - PR #18: README para quem avalia e `CONTRIBUTING.md`. Concluído.
 - PR #19, guardas da fábrica (AD-027): `implementer` e `test-writer` em worktree própria; hook de parada que confere o que mudou durante o agente e falha fechado; guardas de ferramenta que bloqueiam quando quebram; guarda de escrita do `reviewer`; teste dos comandos das skills contra as permissões; regras por tipo de arquivo para os agentes; o retrato do git que não atribui ao agente o que outra sessão faz (`AI-24` a `AI-33`). Rodar as checagens do hook de parada em paralelo foi medido e descartado: o tempo dele cai com o PR C.
-- PR B, barreiras no CI, em três partes: B1, o formatador (`AI-34`); B2, as checagens de código; B3, os workflows e o processo. Conteúdo: Prettier, knip, jscpd sobre a base, ast-grep no lugar do verificador de Kysely por regex, actionlint, zizmor, CodeQL, Dependabot, `npm audit`, cobertura, CI em jobs e busca agendada de teste instável.
+- PR B, barreiras no CI, em três partes: B1, o formatador (`AI-34`); B2, as checagens de código; B3, os workflows e o processo. Conteúdo: Prettier, knip, jscpd sobre a base, a conferência do Kysely como regra de lint (no lugar do verificador por expressão regular), actionlint, zizmor, CodeQL, Dependabot, `npm audit`, cobertura, CI em jobs e busca agendada de teste instável.
 - PR C, testes: banco compartilhado por rodada com banco clonado por arquivo, helpers divididos e sem cópias, fast-check, Stryker no CI agendado, controles negativos que faltam, porta travada para todo timeout.
 - PR D, catálogo de eventos de log e de métricas, no padrão de nomes do OpenTelemetry, conferido com o `design.md`.
 - PR E, documentação e specs: uma decisão por arquivo (MADR), spec da fábrica separada, critérios com uma exigência por ID, glossário, seção "Escrita", markdownlint, lychee e verificador de caminhos citados.
