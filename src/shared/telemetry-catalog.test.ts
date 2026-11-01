@@ -212,6 +212,48 @@ describe('OBS-07 controles negativos: o nome da métrica', () => {
   it('OBS-07 controle negativo: o nome da convenção sem o prefixo vale só para a duração HTTP, e nenhum outro', () => {
     expectMetricRejected('http.server.request.count', VALID_COUNTER);
   });
+
+  // A unidade vai no campo `unit`, e não no nome: o nome é dividido em palavras por `.` e `_`, e uma palavra que
+  // é unidade reprova em qualquer posição; `total` reprova só como última palavra.
+  it.each([
+    ['uma unidade abreviada no fim (s)', 'casecellshop.x.duration_s'],
+    ['uma unidade no plural no meio do nome', 'casecellshop.x.wait_minutes'],
+    ['uma unidade no começo de um segmento', 'casecellshop.x.seconds.max'],
+    ['uma unidade binária (kib)', 'casecellshop.x.size_kib'],
+    ['total no fim', 'casecellshop.x.requests_total'],
+    [
+      'uma unidade no meio, seguida de outra palavra',
+      'casecellshop.x.bytes_sent',
+    ],
+    ['a unidade percent', 'casecellshop.x.cpu_percent'],
+    ['a unidade bits', 'casecellshop.x.rate_bits'],
+    ['a unidade ns', 'casecellshop.x.latency_ns.p99'],
+    ['a unidade day', 'casecellshop.x.age_day'],
+  ])(
+    'OBS-07 controle negativo: a métrica cujo nome tem %s é acusada, em qualquer posição',
+    (_defect, name) => {
+      expectMetricRejected(name, VALID_COUNTER);
+    },
+  );
+
+  it.each([
+    'casecellshop.outbox.published.messages',
+    'casecellshop.erp.client.active_operations',
+    'casecellshop.x.sessions',
+    'casecellshop.x.total_cost',
+    'casecellshop.x.hourly_rate',
+    'casecellshop.x.kbd_events',
+  ])(
+    'OBS-07 o nome %s, sem palavra de unidade e sem total no fim, não tem violação',
+    (name) => {
+      expect(
+        catalogViolations(
+          { ...BASE_METRICS, [name]: VALID_COUNTER },
+          BASE_EVENTS,
+        ),
+      ).toEqual([]);
+    },
+  );
 });
 
 describe('OBS-07 controles negativos: os atributos da métrica', () => {

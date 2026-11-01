@@ -194,7 +194,8 @@ function statusBecomesItsCode(make: Factory, executed: Map<string, number>) {
       status >= 500 ? String(status) : undefined,
     );
     expect(attributes['http.request.method']).toBe('GET');
-    expect(attributes['http.route']).toBe('unmatched');
+    // Sem rota casada, a convenção manda não gravar o http.route: nem `unmatched`, nem o caminho da URL.
+    expect(Object.keys(attributes)).not.toContain('http.route');
     expect(['http', 'https']).toContain(attributes['url.scheme']);
     // Os nomes antigos (rótulos próprios do Prometheus) não voltam.
     for (const old of ['route', 'method', 'status_class'])
@@ -247,6 +248,53 @@ const omitsErrorType: Factory = (target, log) =>
     log,
   );
 
+// A requisição que casou com uma rota do contrato leva o template no `res.locals`; a duração HTTP grava esse
+// template como `http.route`, e nunca o caminho concreto.
+const routeArb = fc.constantFrom(
+  '/products',
+  '/products/{sku}',
+  '/orders/{orderId}',
+  '/checkout',
+);
+
+function matchedRouteBecomesTheTemplate(make: Factory) {
+  const recorded: RecordedAttributes[] = [];
+  const target = recordingTelemetry(recorded);
+  return fc.property(
+    routeArb,
+    fc.integer({ min: 100, max: 599 }),
+    (route, status) => {
+      recorded.length = 0;
+      const exchange = exchangeWith('abc', status);
+      exchange.res.locals['route'] = route;
+      run(make, exchange, target);
+      exchange.res.emit('finish');
+
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.['http.route']).toBe(route);
+    },
+  );
+}
+
+// O valor inventado que a primeira versão gravava quando não havia rota (e que escondia a rota casada).
+const inventsRoute: Factory = (target, log) =>
+  requestContext(
+    interceptingTelemetry(target, (attributes, forward) => {
+      forward({ ...attributes, 'http.route': 'unmatched' });
+    }),
+    log,
+  );
+
+// A rota perdida: o template casado não chega à medição.
+const dropsMatchedRoute: Factory = (target, log) =>
+  requestContext(
+    interceptingTelemetry(target, (attributes, forward) => {
+      const { 'http.route': _route, ...rest } = attributes;
+      forward(rest);
+    }),
+    log,
+  );
+
 describe('FND-15 requestContext: X-Request-Id', () => {
   it('FND-15 qualquer X-Request-Id vira um correlationId válido pelo contrato, no locals, no cabeçalho da resposta e na requisição', () => {
     expectProperty(correlationIdIsValid(requestContext));
@@ -294,5 +342,23 @@ describe('FND-15 requestContext: código do status', () => {
 
   it('FND-15 controle negativo: a mesma propriedade reprova o middleware que deixa o 5xx sem error.type', () => {
     expectFalsified(statusBecomesItsCode(omitsErrorType, new Map()));
+  });
+
+  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que inventa o http.route unmatched quando não há rota', () => {
+    expectFalsified(statusBecomesItsCode(inventsRoute, new Map()));
+  });
+});
+
+describe('FND-15 requestContext: http.route', () => {
+  it('FND-15 a requisição que casou com uma rota grava o template dela em http.route', () => {
+    expectProperty(matchedRouteBecomesTheTemplate(requestContext));
+  });
+
+  it('FND-15 controle negativo: a propriedade da rota reprova o middleware que troca o template por unmatched', () => {
+    expectFalsified(matchedRouteBecomesTheTemplate(inventsRoute));
+  });
+
+  it('FND-15 controle negativo: a propriedade da rota reprova o middleware que perde o template', () => {
+    expectFalsified(matchedRouteBecomesTheTemplate(dropsMatchedRoute));
   });
 });
