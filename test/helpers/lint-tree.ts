@@ -16,6 +16,40 @@ export function newLintTree(prefix: string): string {
   return dir;
 }
 
+// Roda o tsc com o tsconfig.json do projeto (herdado por caminho absoluto) sobre um único `amostra.ts` numa árvore
+// nova. `include` é refeito, `typeRoots` aponta para o repositório (fora dele os tipos do Node não são achados) e o
+// `"type": "module"` vem de um package.json da árvore.
+export function typecheckSample(
+  prefix: string,
+  content: string,
+): { status: number | null; output: string } {
+  const tree = makeTempDir(prefix);
+  symlinkSync(
+    join(repoRoot, 'node_modules'),
+    join(tree, 'node_modules'),
+    'dir',
+  );
+  writeFileIn(tree, 'package.json', JSON.stringify({ type: 'module' }));
+  writeFileIn(
+    tree,
+    'tsconfig.json',
+    JSON.stringify({
+      extends: join(repoRoot, 'tsconfig.json'),
+      compilerOptions: {
+        typeRoots: [join(repoRoot, 'node_modules', '@types')],
+      },
+      include: ['amostra.ts'],
+    }),
+  );
+  writeFileIn(tree, 'amostra.ts', content);
+  const result = spawnSync(
+    join(repoRoot, 'node_modules', '.bin', 'tsc'),
+    ['--noEmit', '-p', join(tree, 'tsconfig.json')],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  return { status: result.status, output: result.stdout + result.stderr };
+}
+
 export const oxlintBin = join(repoRoot, 'node_modules', '.bin', 'oxlint');
 
 // Roda o oxlint com a configuração do projeto sobre um único arquivo `lib/x.ts` numa árvore nova (fora de `src/`, para

@@ -266,6 +266,57 @@ const aliasEscapes: [string, string][] = [
   ['o sql como valor padrão de desestruturação', 'const { s = sql } = k;'],
   ['o sql num operador lógico', 'const s = a || sql;'],
   ['o sql chamado como função, sem tag', "sql(['x']);"],
+  // A13 do #21: bind, call e apply devolvem ou executam o sql sem passar por um nome que a regra veja
+  ['o sql guardado por bind (sql.bind)', 'const b = sql.bind(null);'],
+  ['o sql chamado por call (sql.call)', "sql.call(null, ['x']);"],
+  ['o sql chamado por apply (sql.apply)', "sql.apply(null, [['x']]);"],
+  [
+    'o bind com encadeamento opcional (sql?.bind)',
+    'const b = sql?.bind(null);',
+  ],
+  ['o bind lido sem chamada (sql.bind)', 'const f = sql.bind;'],
+];
+
+// A14 do #21: o sql levado por um módulo nosso que o reexporta, pelo namespace do import dinâmico ou por um
+// reexport em bloco. Cada forma é inteira (sem o SQL_IMPORT na frente).
+const aliasThroughModules: [string, string][] = [
+  [
+    'o import de sql com outro nome de qualquer módulo (e não só de kysely)',
+    "import { sql as q } from './qualquer-modulo.ts';",
+  ],
+  [
+    'o import de sql com outro nome de um módulo do pacote',
+    "import { Kysely, sql as q } from '../db/kysely.ts';",
+  ],
+  ['o reexport em bloco do kysely (export * from)', "export * from 'kysely';"],
+  [
+    'o reexport direto de sql com outro nome, de qualquer módulo',
+    "export { sql as q } from './qualquer-modulo.ts';",
+  ],
+  [
+    'o sql lido do namespace do import dinâmico guardado (k.sql como tag)',
+    "const k = await import('kysely');\nconst q = k.sql`now()`;",
+  ],
+  [
+    'o sql lido do namespace do import dinâmico guardado (k.sql guardado)',
+    "const k = await import('kysely');\nconst s = k.sql;",
+  ],
+  [
+    'o sql lido do namespace do import dinâmico guardado (k.sql.raw)',
+    "const k = await import('kysely');\nk.sql.raw('x');",
+  ],
+  [
+    'o sql lido direto do import dinâmico ((await import(…)).sql como tag)',
+    "const q = (await import('kysely')).sql`now()`;",
+  ],
+  [
+    'o sql lido direto do import dinâmico ((await import(…)).sql guardado)',
+    "const s = (await import('kysely')).sql;",
+  ],
+  [
+    'o sql lido por colchete do namespace do import dinâmico',
+    "const k = await import('kysely');\nconst s = k['sql'];",
+  ],
 ];
 
 // O que a regra deixa passar: posição de tipo, nome local que não é o import, membro opcional não computado e
@@ -309,9 +360,39 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       'o apelido de um nome parecido com sql',
       "import { sqlite as s } from 'kysely';",
     ),
+    // A14 do #21 trocou o veredito de 'import { sql as s } from "./outro-modulo.ts"' (passava, agora reprova): ele
+    // está em aliasThroughModules, nos inválidos. Os controles abaixo continuam passando.
     ok(
-      'o sql com outro nome vindo de outro módulo',
-      "import { sql as s } from './outro-modulo.ts';",
+      'o import de sql com o mesmo nome vindo de outro módulo',
+      "import { sql } from './outro-modulo.ts';\nconst q = sql`now()`;",
+    ),
+    ok(
+      'o apelido de outro nome vindo de outro módulo',
+      "import { Kysely as K } from './outro-modulo.ts';",
+    ),
+    ok(
+      'o reexport em bloco de um módulo que não é o kysely',
+      "export * from './outro-modulo.ts';",
+    ),
+    ok(
+      'o reexport de outro nome do kysely',
+      "export { Kysely } from 'kysely';\nexport type { Selectable } from 'kysely';",
+    ),
+    ok(
+      'o import dinâmico do kysely lendo outro nome do namespace',
+      "const k = await import('kysely');\nexport const db = new k.Kysely({});",
+    ),
+    ok(
+      'o import dinâmico do kysely com o sql desestruturado com o mesmo nome',
+      "const { sql } = await import('kysely');\nconst q = sql`now()`;",
+    ),
+    ok(
+      'o sql lido do import dinâmico de outro módulo',
+      "const k = await import('./outro-modulo.ts');\nconst q = k.sql;",
+    ),
+    ok(
+      'o bind de outro objeto, com o sql como tag e como membro (A13)',
+      "import { sql } from 'kysely';\nconst f = handler.bind(this);\nconst q = sql`now()`;\nconst j = sql.join(xs);",
     ),
     ok(
       'o sql usado como tag, com função e literal',
@@ -448,6 +529,7 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       "export { sql } from 'kysely';",
     ),
     ...aliasEscapes.map(([label, code]) => bad(label, `${SQL_IMPORT}${code}`)),
+    ...aliasThroughModules.map(([label, code]) => bad(label, code)),
     ...regexAfterAlias.invalid,
   ],
 });

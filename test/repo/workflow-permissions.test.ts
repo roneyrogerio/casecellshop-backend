@@ -9,7 +9,8 @@ import {
 } from '../helpers/ci-workflow.ts';
 
 // AI-05 (permissões): todo workflow declara no topo só permissão de leitura, e a de escrita fica no job que precisa
-// dela (o analyze do codeql.yml, AI-44, o auto-merge do merge-on-approval.yml, AI-10, e o report do nightly.yml, AI-46).
+// dela (o analyze do codeql.yml, AI-44, e o report do nightly.yml, AI-46). O merge (AI-10) não escreve com o
+// GITHUB_TOKEN: os dois workflows dele ficam com permissions: {} e o merge-by-app.yml usa o token do App.
 
 describe('AI-05 a conferência das permissões do topo enxerga o que procura (controle negativo)', () => {
   const top = (permissions: string): string[] =>
@@ -50,11 +51,12 @@ describe('AI-05 a conferência das permissões do topo enxerga o que procura (co
 });
 
 describe('AI-05 todo workflow do repositório declara no topo só permissão de leitura', () => {
-  it('AI-05 a pasta tem o ci.yml, o codeql.yml, o merge-on-approval.yml e o nightly.yml', () => {
+  it('AI-05 a pasta tem o ci.yml, o codeql.yml, o merge-on-approval.yml, o merge-by-app.yml e o nightly.yml', () => {
     expect(workflowFileNames()).toEqual(
       expect.arrayContaining([
         'ci.yml',
         'codeql.yml',
+        'merge-by-app.yml',
         'merge-on-approval.yml',
         'nightly.yml',
       ]),
@@ -68,35 +70,23 @@ describe('AI-05 todo workflow do repositório declara no topo só permissão de 
     },
   );
 
-  it('AI-05 o job auto-merge do merge-on-approval.yml tem as permissões contents: write e pull-requests: write', () => {
-    const job = jobOf(
-      readWorkflowFile('merge-on-approval.yml') ?? {},
-      'auto-merge',
-    );
+  it.each(['merge-on-approval.yml', 'merge-by-app.yml'])(
+    'AI-05 todo job do %s fica com permissions: {}, porque o merge usa o token do App (AI-10)',
+    (name) => {
+      const jobs = Object.values(readWorkflowFile(name)?.jobs ?? {});
 
-    expect(job?.permissions).toEqual({
-      contents: 'write',
-      'pull-requests': 'write',
-    });
-  });
+      expect(jobs).not.toEqual([]);
+      expect(jobs.map((job) => job.permissions)).toEqual(jobs.map(() => ({})));
+    },
+  );
 
-  it('AI-05 só os jobs auto-merge, analyze e report escrevem; o ci.yml não escreve em nenhum job', () => {
+  it('AI-05 só os jobs analyze e report escrevem; os workflows do merge e o ci.yml não escrevem em nenhum job', () => {
     const writers = workflowFileNames().flatMap((name) =>
       Object.entries(readWorkflowFile(name)?.jobs ?? {})
         .filter(([, job]) => writeGrants(job.permissions).length > 0)
         .map(([id]) => `${name}:${id}`),
     );
 
-    expect(writers).toEqual(
-      expect.arrayContaining([
-        'codeql.yml:analyze',
-        'merge-on-approval.yml:auto-merge',
-        'nightly.yml:report',
-      ]),
-    );
-    expect(writers.filter((id) => id.startsWith('ci.yml:'))).toEqual([]);
-    expect(writers.filter((id) => id.startsWith('nightly.yml:'))).toEqual([
-      'nightly.yml:report',
-    ]);
+    expect(writers).toEqual(['codeql.yml:analyze', 'nightly.yml:report']);
   });
 });

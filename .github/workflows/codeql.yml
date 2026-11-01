@@ -9,8 +9,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # O merge pelo auto-merge não dispara o push na main (GITHUB_TOKEN); a semana
-  # cobre a main e as consultas novas do CodeQL.
+  # A semana pega as consultas novas do CodeQL, que chegam sem commit.
   schedule:
     - cron: '41 5 * * 1'
 
@@ -21,6 +20,7 @@ jobs:
   analyze:
     name: CodeQL
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write

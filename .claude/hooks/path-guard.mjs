@@ -3,7 +3,7 @@
 // O agent_type só vem nas chamadas de subagente (ou com --agent); a sessão
 // principal só encontra aqui a regra das pastas gravadas pelos hooks.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { realPath } from './git-snapshot.mjs';
@@ -135,16 +135,60 @@ export function hookOwned(rel) {
 const HOOK_OWNED_REASON =
   '.claude/reviews/ e .claude/state/ são gravados só pelos hooks (AI-15): o relatório do reviewer e os registros não se editam à mão.';
 
-// Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
-// maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+const caseInsensitive = new Map();
+
+// Se o sistema de arquivos da pasta não distingue caixa (o padrão do macOS): o
+// mesmo caminho com a caixa trocada existe e é a mesma pasta.
+function ignoresCase(dir) {
+  if (!caseInsensitive.has(dir)) {
+    const swapped = [...dir]
+      .map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))
+      .join('');
+    let same = false;
+    try {
+      same = swapped !== dir && statSync(swapped).ino === statSync(dir).ino;
+    } catch {
+      same = false;
+    }
+    caseInsensitive.set(dir, same);
+  }
+  return caseInsensitive.get(dir);
+}
+
 // Pelo caminho real dos dois lados (AI-26): a raiz e o alvo podem vir um pelo
-// link simbólico e o outro pela pasta de verdade, como o /private do macOS.
+// link simbólico e o outro pela pasta de verdade, como o /private do macOS. O
+// alvo vai sem o path.resolve, que resolveria o .. pelo texto antes do link
+// (A21 do #26). Num sistema de arquivos que não distingue caixa, "Test/x.ts" e
+// "test/x.ts" são o mesmo arquivo, e a raiz também (A20 do #26); o resultado
+// vem em minúsculas, que é como as regras comparam.
 function relativeTo(root, target) {
+  const realRoot = realPath(root);
+  const joined = path.isAbsolute(target)
+    ? target
+    : `${root}${path.sep}${target}`;
+  const realTarget = realPath(joined);
+  const fold = ignoresCase(realRoot)
+    ? (value) => value.toLowerCase()
+    : (value) => value;
   return path
-    .relative(realPath(root), realPath(path.resolve(root, target)))
+    .relative(fold(realRoot), fold(realTarget))
     .split(path.sep)
     .join('/')
     .toLowerCase();
+}
+
+// O caminho como foi pedido, sem seguir link: um link com nome protegido
+// (src/.oxlintrc.json apontando para src/x.json) não passa como o arquivo que
+// ele aponta (revisão de segurança do #26). Fora da raiz, não conta.
+function requestedRelative(root, target) {
+  const rel = path
+    .relative(path.resolve(root), path.resolve(root, target))
+    .split(path.sep)
+    .join('/')
+    .toLowerCase();
+  return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)
+    ? null
+    : rel;
 }
 
 // A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
@@ -169,7 +213,11 @@ export function decide(input, root, projectDir = root) {
   if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
     return `${rule.reason} O caminho está fora do repositório.`;
   }
-  return rule.allows(rel) ? null : `${rule.reason} Caminho: ${rel}`;
+  if (!rule.allows(rel)) return `${rule.reason} Caminho: ${rel}`;
+  const requested = requestedRelative(root, target);
+  return requested && !rule.allows(requested)
+    ? `${rule.reason} Caminho pedido: ${requested}`
+    : null;
 }
 
 // AI-26: a raiz contra a qual o caminho é decidido. Para um agente isolado, é a

@@ -1,41 +1,35 @@
 name: Merge na aprovação
 
-# AI-10: a aprovação do dono é a decisão; o merge é mecânico. Quando o dono aprova
-# um PR deste repositório, este workflow liga o auto-merge do GitHub, e o GitHub
-# só mescla quando o ruleset da main está satisfeito (aprovação do último push e
-# checks verdes). O merge nunca é ferramenta de agente: nenhum agente o chama, e
-# aqui ele só acontece por consequência da aprovação.
+# AI-10: a aprovação do dono é a decisão; o merge é mecânico. Este workflow só
+# confere que a revisão enviada é a aprovação do dono num PR deste repositório, e
+# o término dele dispara o merge-by-app.yml, que liga o auto-merge pelo GitHub App.
 #
-# Num pull_request_review, o GitHub roda a versão deste arquivo que está no PR.
-# Um PR que o alterasse rodaria a própria versão com escrita; a fronteira é o
-# ruleset (a main só muda com a aprovação do dono) e a leitura do diff de
-# .github/ no ponto fixo do dono. O implementer não edita .github/ (AI-04).
-# Um merge feito com o GITHUB_TOKEN não dispara o CI da main; por isso o
-# ruleset exige a branch atualizada com a main, e o CI do PR já testou o que entra.
+# Num pull_request_review, o GitHub roda a versão deste arquivo que está no PR. Por
+# isso ele não tem secret nem permissão: um PR que o alterasse não alcançaria nada.
+# A chave do App fica no ambiente merge, que só a main acessa, e o merge-by-app.yml
+# roda sempre a versão da main. Nenhum agente faz merge.
 on:
   pull_request_review:
     types: [submitted]
 
-# AI-05: nada no topo; a escrita fica só no job que liga o auto-merge.
 permissions: {}
 
 jobs:
-  auto-merge:
-    name: Liga o auto-merge
-    permissions:
-      contents: write
-      pull-requests: write
+  approval:
+    name: Confere a aprovação do dono
+    permissions: {}
     # Só a aprovação do dono, e só para PR de branch deste repositório (nunca de fork).
     if: >-
       github.event.review.state == 'approved' &&
       github.event.review.author_association == 'OWNER' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # Sem checkout: o workflow não executa nada do código do PR.
-      - name: Liga o auto-merge com merge commit
+      - name: Registra a aprovação
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$PR_NUMBER" --auto --merge
+        # Bloco literal: num escalar simples do YAML, o " #" começaria um comentário.
+        run: |
+          echo "Aprovação do dono no PR #$PR_NUMBER; o merge-by-app.yml liga o auto-merge."

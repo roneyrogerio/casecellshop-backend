@@ -18,6 +18,7 @@ import {
 import {
   changesDuring,
   compareSnapshots,
+  originsOf,
   snapshotFile,
   statusEntries,
   takeSnapshot,
@@ -156,7 +157,11 @@ function counterFile(key) {
 // O mesmo parser do retrato (A9 do #19), com os nomes sem aspas nem octal.
 function changedFiles(projectDir) {
   try {
-    return statusEntries(projectDir).map((entry) => entry.path);
+    // No rename ou na cópia, a origem também passa pela conferência do papel:
+    // mover um teste para src/ mexe em test/ (A22 do #26).
+    return statusEntries(projectDir).flatMap((entry) =>
+      entry.origin ? [entry.path, entry.origin] : [entry.path],
+    );
   } catch {
     return [];
   }
@@ -207,7 +212,10 @@ function gitChanges(before, after, agentRoot) {
 function mainChanges(before, after) {
   if (!before || after instanceof Error || typeof before.status !== 'string')
     return [];
-  return changesDuring(before.status, after.status);
+  const changed = changesDuring(before.status, after.status);
+  // No rename ou na cópia, a origem também passa pela conferência do papel
+  // (A22 do #26).
+  return [...changed, ...originsOf(after.status, changed)];
 }
 
 function runNpm(name, cwd) {

@@ -55,7 +55,14 @@ async function inspect(container: ComposeContainer) {
 
 // Espera, com prazo e intervalo curto, o serviço estar em execução. Confere o estado no Docker a cada
 // tentativa, sem pausa fixa: termina assim que o contêiner sobe e falha com o nome do serviço se o prazo acaba.
-async function waitUntilRunning(service: string, timeout = 60_000) {
+const WAIT_TIMEOUT_MS = 60_000;
+
+// O prazo do onTestFinished do restart cobre as duas esperas em sequência (elasticmq e worker), cada uma com o
+// prazo padrão, mais a folga de inspecionar e ligar o contêiner antes de cada espera. Igual à soma, ele cortaria a
+// restauração no pior caso e deixaria o ambiente parado para os testes seguintes do arquivo embaralhado.
+const RESTORE_TIMEOUT_MS = 2 * WAIT_TIMEOUT_MS + 30_000;
+
+async function waitUntilRunning(service: string, timeout = WAIT_TIMEOUT_MS) {
   await vi.waitFor(
     async () => {
       const { State } = await inspect(environment.getContainer(service));
@@ -404,7 +411,7 @@ describe('FND-01 ElasticMQ com a fila do faturamento (M3)', () => {
     onTestFinished(async () => {
       await ensureRunning('elasticmq-1');
       await ensureRunning('worker-1');
-    }, 120_000);
+    }, RESTORE_TIMEOUT_MS);
 
     // O worker do compose consome a billing: ele receberia esta mensagem (que não passa no schema do
     // faturamento), a deixaria sem resposta e ela ficaria invisível por 60 s, e a leitura abaixo não a

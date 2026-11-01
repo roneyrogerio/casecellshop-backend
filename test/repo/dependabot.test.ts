@@ -20,6 +20,7 @@ interface Update {
   groups?: Record<string, { patterns?: string[] }>;
   'versioning-strategy'?: string;
   'commit-message'?: { prefix?: string };
+  ignore?: { 'dependency-name'?: string; 'update-types'?: string[] }[];
 }
 
 interface Dependabot {
@@ -49,6 +50,14 @@ function updateViolations(update: Update): string[] {
     violations.push(`${id}: commit-message.prefix não é ${PREFIXES[id]}`);
   if (id === 'npm' && update['versioning-strategy'] !== 'increase')
     violations.push('npm: versioning-strategy não é increase');
+  // O @types/node segue o piso do engines (Node 24.12): uma versão maior deixaria o tsc aceitar API que não existe nele.
+  const holdsTypesNode = (update.ignore ?? []).some(
+    (rule) =>
+      rule['dependency-name'] === '@types/node' &&
+      rule['update-types']?.includes('version-update:semver-major'),
+  );
+  if (id === 'npm' && !holdsTypesNode)
+    violations.push('npm: sem o ignore das versões maiores do @types/node');
   return violations;
 }
 
@@ -82,6 +91,9 @@ updates:
       npm:
         patterns: ['*']
     versioning-strategy: increase
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: build(deps)
   - package-ecosystem: github-actions
@@ -154,6 +166,21 @@ describe('AI-45 a conferência do dependabot.yml enxerga o que procura (controle
     ['sem grupo que pega tudo', "patterns: ['*']", "patterns: ['@types/*']"],
     ['sem o ecossistema das actions', 'github-actions', 'pip'],
     ['sem a version 2', 'version: 2', 'version: 1'],
+    [
+      'sem o ignore do @types/node',
+      "    ignore:\n      - dependency-name: '@types/node'\n        update-types: ['version-update:semver-major']\n",
+      '',
+    ],
+    [
+      'o ignore de outro pacote que o @types/node',
+      "dependency-name: '@types/node'",
+      "dependency-name: 'typescript'",
+    ],
+    [
+      'o ignore do @types/node só das versões menores',
+      "['version-update:semver-major']",
+      "['version-update:semver-minor']",
+    ],
   ])('AI-45 %s reprova', (_label, from, to) => {
     expect(dependabotViolations(edited(from, to))).not.toEqual([]);
   });

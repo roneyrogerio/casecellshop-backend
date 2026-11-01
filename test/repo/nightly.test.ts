@@ -6,20 +6,23 @@ import {
   parseYaml,
   readCi,
   readRepoYaml,
+  same,
   stepsOfJob,
   stepsOfWorkflow,
   topPermissionViolations,
   unpinnedUses,
   workflowsDir,
   writeGrants,
+  zizmorStepViolations,
   type CiJob,
   type CiStep,
   type CiWorkflow,
 } from '../helpers/ci-workflow.ts';
 
 // AI-46: o nightly.yml roda todo dia num minuto fora da hora cheia e por workflow_dispatch. O `main-full` repete o CI
-// na main, o `flaky-hunt` roda a suíte embaralhada em três pernas e o `report` abre ou atualiza uma issue quando um
-// dos dois falha. AI-05: o topo só lê, e a escrita fica só no `report`. Cada conferência devolve as violações; a lista
+// na main, o `flaky-hunt` roda a suíte embaralhada em três pernas, o `workflows` roda o zizmor na main e o `report`,
+// depois dos três e em qualquer resultado, abre ou comenta a issue quando algum falha ou é cancelado e a fecha quando
+// todos passam. AI-05: o topo só lê, e a escrita fica só no `report`. Cada conferência devolve as violações; a lista
 // vazia é o que o arquivo deve ter, e os controles negativos montam um YAML de propósito errado.
 
 interface NightlyJob extends CiJob {
@@ -35,7 +38,9 @@ interface NightlyWorkflow extends CiWorkflow {
 }
 
 const SHA = 'c'.repeat(40);
-const JOB_IDS = ['flaky-hunt', 'main-full', 'report'];
+const JOB_IDS = ['flaky-hunt', 'main-full', 'report', 'workflows'];
+// O report espera todos os outros jobs, e roda em qualquer resultado deles.
+const REPORT_NEEDS = ['main-full', 'flaky-hunt', 'workflows'];
 const SEEDS = 3;
 
 // Cada conferência que o `main-full` herda do job `checks` do ci.yml (AI-42), menos as que só valem em pull_request.
@@ -87,7 +92,6 @@ const MAIN_FULL_CHECKS: Check[] = [
 const TEST_RUN = /^npm test(\s|$)/;
 const PR_ONLY_STEP = /check-migrations|check-scripts|commitlint/;
 const NOT_CANCELLED = /^(?:\$\{\{\s*)?!cancelled\(\)(?:\s*\}\})?$/;
-const FAILURE = /^(?:\$\{\{\s*)?failure\(\)(?:\s*\}\})?$/;
 const GITHUB_TOKEN =
   /^\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/;
 const DAILY_CRON = /^(\d{1,2}) (\d{1,2}) \* \* \*$/;
@@ -101,10 +105,6 @@ const THROUGH_PACKAGE_MANAGER = /\b(?:npm\s+(?:run|run-script|exec|x)|npx)\b/;
 function needsOf(job: CiJob | undefined): string[] {
   const needs = job?.needs ?? [];
   return typeof needs === 'string' ? [needs] : needs;
-}
-
-function same(value: unknown, expected: unknown): boolean {
-  return JSON.stringify(value) === JSON.stringify(expected);
 }
 
 // Valor de env ou with como texto; um objeto aninhado vira JSON e nunca casa com o esperado.
@@ -145,7 +145,7 @@ function permissionViolations(workflow: NightlyWorkflow): string[] {
   const violations = topPermissionViolations(workflow);
   if (!same(workflow.permissions, { contents: 'read' }))
     violations.push('o topo não é só contents: read');
-  for (const id of ['main-full', 'flaky-hunt'])
+  for (const id of ['main-full', 'flaky-hunt', 'workflows'])
     for (const grant of writeGrants(workflow.jobs?.[id]?.permissions))
       violations.push(`${id} roda código e tem ${grant}`);
   if (!same(workflow.jobs?.report?.permissions, { issues: 'write' }))
@@ -155,14 +155,37 @@ function permissionViolations(workflow: NightlyWorkflow): string[] {
 
 // --- report ----------------------------------------------------------------------------------------------------
 
+// Roda em qualquer resultado: com `failure()` ele não roda quando tudo passa e não fecha a issue; sem `always()`,
+// um job que depende de outro que falhou é pulado.
 function reportConditionViolations(job: NightlyJob): string[] {
   const condition = (job.if ?? '').trim();
-  if (FAILURE.test(condition)) return [];
-  const checksResults = ['main-full', 'flaky-hunt'].every((id) =>
-    condition.includes(`needs.${id}.result`),
-  );
-  if (/always\(\)/.test(condition) && checksResults) return [];
-  return [`if ${JSON.stringify(job.if)} não roda só quando algo falhou`];
+  if (
+    /\balways\(\)/.test(condition) &&
+    !/\b(?:failure|success)\(\)/.test(condition)
+  )
+    return [];
+  return [`if ${JSON.stringify(job.if)} não roda em qualquer resultado`];
+}
+
+// A decisão lê o resultado dos needs pelo env (nunca pela expressão no run), trata `failure` e `cancelled` como
+// falha (o tempo esgotado chega como `cancelled`), fecha a issue quando tudo passa, e procura só a issue aberta pela
+// conta do Actions.
+function reportDecisionViolations(step: CiStep): string[] {
+  const run = step.run ?? '';
+  const violations: string[] = [];
+  if (
+    !/gh issue list\b/.test(run) ||
+    !/--author[ =]app\/github-actions\b/.test(run)
+  )
+    violations.push('a busca da issue não filtra --author app/github-actions');
+  if (!/gh issue close\b/.test(run))
+    violations.push('não fecha a issue quando todos passam (gh issue close)');
+  for (const result of ['failure', 'cancelled'])
+    if (!new RegExp(`\\b${result}\\b`).test(run))
+      violations.push(`a decisão não trata o resultado ${result}`);
+  if (!Object.values(step.env ?? {}).some((v) => String(v).includes('needs')))
+    violations.push('os resultados dos needs não chegam pelo env');
+  return violations;
 }
 
 function reportEnvViolations(step: CiStep): string[] {
@@ -180,7 +203,7 @@ function reportViolations(workflow: NightlyWorkflow): string[] {
   const job = workflow.jobs?.report;
   if (job === undefined) return ['falta o job report'];
   const violations = reportConditionViolations(job);
-  for (const id of ['main-full', 'flaky-hunt'])
+  for (const id of REPORT_NEEDS)
     if (!needsOf(job).includes(id)) violations.push(`needs não tem ${id}`);
   const steps = job.steps ?? [];
   for (const step of steps)
@@ -196,22 +219,31 @@ function reportViolations(workflow: NightlyWorkflow): string[] {
   if (!/gh issue create\b/.test(run)) violations.push('não abre a issue');
   if (!/gh issue (?:comment|edit)\b/.test(run))
     violations.push('não atualiza a issue que já existe');
-  return [...violations, ...reportEnvViolations(gh)];
+  return [
+    ...violations,
+    ...reportDecisionViolations(gh),
+    ...reportEnvViolations(gh),
+  ];
 }
 
 // --- passos de abertura de main-full e flaky-hunt ----------------------------------------------------------------
 
+function checkoutViolations(step: CiStep | undefined, id: string): string[] {
+  const violations: string[] = [];
+  if (!(step?.uses ?? '').startsWith('actions/checkout@'))
+    violations.push(`${id}: o primeiro passo não é o checkout`);
+  if (step?.with?.ref !== 'main')
+    violations.push(`${id}: o checkout não pede a ref main`);
+  if (String(step?.with?.['persist-credentials']) !== 'false')
+    violations.push(`${id}: o checkout guarda a credencial`);
+  return violations;
+}
+
 function openingViolations(workflow: NightlyWorkflow, id: string): string[] {
   const [checkout, setup, install] = stepsOfJob(workflow, id);
-  const violations: string[] = [];
-  if (!(checkout?.uses ?? '').startsWith('actions/checkout@'))
-    violations.push(`${id}: o primeiro passo não é o checkout`);
-  if (checkout?.with?.ref !== 'main')
-    violations.push(`${id}: o checkout não pede a ref main`);
+  const violations = checkoutViolations(checkout, id);
   if (String(checkout?.with?.['fetch-depth']) !== '0')
     violations.push(`${id}: o checkout não baixa o histórico`);
-  if (String(checkout?.with?.['persist-credentials']) !== 'false')
-    violations.push(`${id}: o checkout guarda a credencial`);
   if (!(setup?.uses ?? '').startsWith('actions/setup-node@'))
     violations.push(`${id}: o segundo passo não é o setup-node`);
   if (setup?.with?.['node-version-file'] !== '.nvmrc')
@@ -243,6 +275,28 @@ function mainFullViolations(workflow: NightlyWorkflow): string[] {
     violations.push('o npm test não mede a cobertura (--coverage)');
   if (steps.some((step) => PR_ONLY_STEP.test(step.run ?? '')))
     violations.push('roda uma conferência que só vale em pull_request');
+  return violations;
+}
+
+// --- workflows (zizmor na main) ----------------------------------------------------------------------------------
+
+// A mesma zizmor-action do ci.yml, no mesmo SHA: uma action fixada pode ganhar um alerta sem commit nosso, e é o
+// agendado que o pega. Checkout da main, sem guardar a credencial; o token de leitura vem da regra do zizmorStepViolations.
+function zizmorJobViolations(
+  workflow: NightlyWorkflow,
+  ciZizmorUses: string | undefined,
+): string[] {
+  const steps = workflow.jobs?.workflows?.steps;
+  if (steps === undefined) return ['falta o job workflows'];
+  const zizmor = steps.find((step) =>
+    (step.uses ?? '').startsWith('zizmorcore/zizmor-action@'),
+  );
+  const violations = [
+    ...checkoutViolations(steps[0], 'workflows'),
+    ...zizmorStepViolations(steps),
+  ];
+  if (ciZizmorUses === undefined || zizmor?.uses !== ciZizmorUses)
+    violations.push(`a zizmor-action não é a do ci.yml (${ciZizmorUses})`);
   return violations;
 }
 
@@ -366,14 +420,24 @@ function workflowViolations(workflow: NightlyWorkflow): string[] {
   return violations;
 }
 
+const GOOD_ZIZMOR_USES = `zizmorcore/zizmor-action@${SHA}`;
+
 const ALL_CHECKS = (workflow: NightlyWorkflow): string[] => [
   ...triggerViolations(workflow),
   ...permissionViolations(workflow),
   ...reportViolations(workflow),
   ...mainFullViolations(workflow),
   ...flakyHuntViolations(workflow),
+  ...zizmorJobViolations(workflow, GOOD_ZIZMOR_USES),
   ...workflowViolations(workflow),
 ];
+
+// A zizmor-action do job `workflows` do ci.yml, de onde o nightly.yml tira o SHA.
+function ciZizmorUses(): string | undefined {
+  return stepsOfJob(readCi(), 'workflows').find((step) =>
+    (step.uses ?? '').startsWith('zizmorcore/zizmor-action@'),
+  )?.uses;
+}
 
 // --- linha de base em memória ----------------------------------------------------------------------------------
 
@@ -427,25 +491,44 @@ ${CHECKOUT}      - name: Testes embaralhados
         run: |
           echo "Semente: $SHUFFLE_SEED"
           npm test -- --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SHUFFLE_SEED" --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shuffle.json"
-${UPLOAD}  report:
-    name: Abrir ou atualizar a issue
-    needs: [main-full, flaky-hunt]
-    if: \${{ failure() }}
+${UPLOAD}  workflows:
+    name: Zizmor na main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@${SHA} # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@${SHA} # v0.8.0
+        with:
+          version: 1.31.1
+          advanced-security: false
+          token: \${{ github.token }}
+  report:
+    name: Abrir, comentar ou fechar a issue
+    needs: [main-full, flaky-hunt, workflows]
+    if: \${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       issues: write
     steps:
-      - name: Abre ou atualiza a issue
+      - name: Abre, comenta ou fecha a issue
         env:
           GH_TOKEN: \${{ github.token }}
           GH_REPO: \${{ github.repository }}
           RUN_URL: \${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+          RESULTS: \${{ toJSON(needs) }}
         run: |
-          number=$(gh issue list --state open --label nightly --json number --jq '.[0].number')
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --body "Falhou de novo: $RUN_URL"
-          else
-            gh issue create --title "Falha na execução agendada" --label nightly --body "Falhou: $RUN_URL"
+          title="Execução agendada falhou"
+          number=$(gh issue list --state open --author app/github-actions --search "$title in:title" --json number --jq '.[0].number // empty')
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body "Falhou de novo: $RUN_URL"
+            else
+              gh issue create --title "$title" --body "Falhou: $RUN_URL"
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" --comment "Passou: $RUN_URL"
           fi
 `;
 
@@ -453,10 +536,17 @@ function edited(from: string, to: string): NightlyWorkflow {
   return parseYaml<NightlyWorkflow>(mutated(GOOD, from, to));
 }
 
-// O main-full vem antes do flaky-hunt e os dois abrem com o mesmo texto; a edição da segunda ocorrência atinge o flaky-hunt.
-function editedLast(from: string, to: string): NightlyWorkflow {
-  const at = GOOD.lastIndexOf(from);
-  expect(at, `a linha de base não contém: ${from}`).toBeGreaterThan(-1);
+// Os três primeiros jobs (main-full, flaky-hunt e workflows) abrem com o mesmo checkout; a edição da ocorrência de
+// índice 1 atinge o flaky-hunt, e a de índice 2, o workflows.
+function editedNth(from: string, to: string, nth: number): NightlyWorkflow {
+  let at = -1;
+  for (let seen = 0; seen <= nth; seen += 1) {
+    at = GOOD.indexOf(from, at + 1);
+    expect(
+      at,
+      `a linha de base não tem a ocorrência ${nth} de: ${from}`,
+    ).toBeGreaterThan(-1);
+  }
   return parseYaml<NightlyWorkflow>(
     GOOD.slice(0, at) + to + GOOD.slice(at + from.length),
   );
@@ -488,6 +578,7 @@ const TRIGGER_CASES: Case[] = [
 
 const MAIN_FULL_NAME = '    name: CI completo na main\n';
 const FLAKY_NAME = '    name: Testes embaralhados (${{ matrix.seed }})\n';
+const WORKFLOWS_NAME = '    name: Zizmor na main\n';
 const REPORT_PERMISSIONS = '    permissions:\n      issues: write\n';
 
 const PERMISSION_CASES: Case[] = [
@@ -523,6 +614,16 @@ const PERMISSION_CASES: Case[] = [
     `${FLAKY_NAME}    permissions:\n      actions: write\n`,
   ],
   [
+    'com o workflows escrevendo issues',
+    WORKFLOWS_NAME,
+    `${WORKFLOWS_NAME}    permissions:\n      issues: write\n`,
+  ],
+  [
+    'com o workflows escrevendo security-events',
+    WORKFLOWS_NAME,
+    `${WORKFLOWS_NAME}    permissions:\n      security-events: write\n`,
+  ],
+  [
     'com o report escrevendo contents',
     '      issues: write\n',
     '      issues: write\n      contents: write\n',
@@ -540,7 +641,9 @@ const PERMISSION_CASES: Case[] = [
   ['com o report sem permissions', REPORT_PERMISSIONS, ''],
 ];
 
-const REPORT_STEP = '      - name: Abre ou atualiza a issue\n';
+const REPORT_STEP = '      - name: Abre, comenta ou fecha a issue\n';
+const NEEDS = '    needs: [main-full, flaky-hunt, workflows]\n';
+const ALWAYS = '    if: ${{ always() }}\n';
 
 const REPORT_CASES: Case[] = [
   [
@@ -559,23 +662,43 @@ const REPORT_CASES: Case[] = [
     REPORT_STEP,
     `      - run: node scripts/criteria-report.ts\n${REPORT_STEP}`,
   ],
+  ['sem o main-full em needs', NEEDS, '    needs: [flaky-hunt, workflows]\n'],
+  ['sem o flaky-hunt em needs', NEEDS, '    needs: [main-full, workflows]\n'],
   [
-    'sem o main-full em needs',
+    'sem o workflows (zizmor) em needs',
+    NEEDS,
     '    needs: [main-full, flaky-hunt]\n',
-    '    needs: [flaky-hunt]\n',
+  ],
+  ['que só roda em failure()', ALWAYS, '    if: ${{ failure() }}\n'],
+  [
+    'que roda em qualquer resultado mas só com failure()',
+    '${{ always() }}',
+    '${{ always() && failure() }}',
+  ],
+  ['sem if', ALWAYS, ''],
+  ['sem filtrar a issue pelo autor', ' --author app/github-actions', ''],
+  [
+    'que filtra a issue por outro autor',
+    '--author app/github-actions',
+    '--author roneyrogerio',
   ],
   [
-    'sem o flaky-hunt em needs',
-    '    needs: [main-full, flaky-hunt]\n',
-    '    needs: [main-full]\n',
+    'que não fecha a issue quando tudo passa',
+    'gh issue close',
+    'gh issue view',
   ],
-  ['sem if', '    if: ${{ failure() }}\n', ''],
-  ['com if always() sozinho', '${{ failure() }}', '${{ always() }}'],
+  ['que não trata o cancelled como falha', '(failure|cancelled)', '(failure)'],
+  ['que não trata o failure como falha', '(failure|cancelled)', '(cancelled)'],
+  [
+    'sem os resultados dos needs no env',
+    '          RESULTS: ${{ toJSON(needs) }}\n',
+    '',
+  ],
   ['sem o GH_TOKEN', '          GH_TOKEN: ${{ github.token }}\n', ''],
   [
     'com o GH_TOKEN fixo',
-    '${{ github.token }}',
-    'ghp_0123456789abcdef0123456789abcdef0123',
+    'GH_TOKEN: ${{ github.token }}',
+    'GH_TOKEN: ghp_0123456789abcdef0123456789abcdef0123',
   ],
   ['sem o GH_REPO', '          GH_REPO: ${{ github.repository }}\n', ''],
   [
@@ -653,6 +776,39 @@ const FLAKY_CASES: Case[] = [
 const FLAKY_CHECKOUT_CASES: Case[] = [
   ['com a ref diferente de main', 'ref: main', 'ref: develop'],
   ['sem o histórico', 'fetch-depth: 0', 'fetch-depth: 1'],
+  [
+    'com a credencial guardada',
+    'persist-credentials: false',
+    'persist-credentials: true',
+  ],
+];
+
+const ZIZMOR_CASES: Case[] = [
+  [
+    'com a action em outro SHA que o do ci.yml',
+    `zizmor-action@${SHA}`,
+    `zizmor-action@${'d'.repeat(40)}`,
+  ],
+  ['com a action por tag', `zizmor-action@${SHA}`, 'zizmor-action@v0.8.0'],
+  [
+    'com o advanced-security ligado',
+    'advanced-security: false',
+    'advanced-security: true',
+  ],
+  ['sem o advanced-security', '          advanced-security: false\n', ''],
+  [
+    'com o token fixo',
+    'token: ${{ github.token }}',
+    'token: ghp_0123456789abcdef0123456789abcdef0123',
+  ],
+  ['sem o token', '          token: ${{ github.token }}\n', ''],
+  ['com a version latest', 'version: 1.31.1', 'version: latest'],
+  ['sem o job', '  workflows:\n', '  outro:\n'],
+];
+
+// O checkout do job workflows é o terceiro do arquivo.
+const ZIZMOR_CHECKOUT_CASES: Case[] = [
+  ['com a ref diferente de main', 'ref: main', 'ref: develop'],
   [
     'com a credencial guardada',
     'persist-credentials: false',
@@ -751,10 +907,39 @@ describe('AI-46 as conferências do nightly.yml enxergam o que procuram (control
     'AI-46 o checkout do flaky-hunt %s reprova',
     (_label, from, to) => {
       expect(
-        flakyHuntViolations(editedLast(`          ${from}`, `          ${to}`)),
+        flakyHuntViolations(
+          editedNth(`          ${from}`, `          ${to}`, 1),
+        ),
       ).not.toEqual([]);
     },
   );
+
+  it.each(ZIZMOR_CASES)(
+    'AI-46 o job workflows (zizmor) %s reprova',
+    (_label, from, to) => {
+      expect(
+        zizmorJobViolations(edited(from, to), GOOD_ZIZMOR_USES),
+      ).not.toEqual([]);
+    },
+  );
+
+  it.each(ZIZMOR_CHECKOUT_CASES)(
+    'AI-46 o checkout do job workflows (zizmor) %s reprova',
+    (_label, from, to) => {
+      expect(
+        zizmorJobViolations(
+          editedNth(`          ${from}`, `          ${to}`, 2),
+          GOOD_ZIZMOR_USES,
+        ),
+      ).not.toEqual([]);
+    },
+  );
+
+  it('AI-46 o job workflows sem a zizmor-action do ci.yml para comparar reprova', () => {
+    expect(
+      zizmorJobViolations(parseYaml<NightlyWorkflow>(GOOD), undefined),
+    ).not.toEqual([]);
+  });
 
   it.each(MAIN_FULL_CASES)(
     'AI-46 o main-full %s reprova',
@@ -825,8 +1010,12 @@ describe('AI-46 o nightly.yml do repositório', () => {
     expect(writers).toEqual(['report']);
   });
 
-  it('AI-46 o report abre ou atualiza a issue sem checkout, sem instalar nada e com o token pelo env', () => {
+  it('AI-46 o report roda em qualquer resultado depois dos três jobs, abre ou comenta a issue na falha e a fecha quando tudo passa, sem checkout nem instalação', () => {
     expect(reportViolations(workflow())).toEqual([]);
+  });
+
+  it('AI-46 o job workflows roda o zizmor na main pela mesma zizmor-action do ci.yml, com advanced-security false e o token do job', () => {
+    expect(zizmorJobViolations(workflow(), ciZizmorUses())).toEqual([]);
   });
 
   it('AI-46 o main-full roda na main o CI do PR, a cobertura e os tipos do banco', () => {

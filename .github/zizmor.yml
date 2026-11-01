@@ -1,0 +1,8 @@
+# AI-10: o merge-by-app.yml roda em workflow_run, que o zizmor marca como gatilho
+# perigoso porque ele costuma rodar código do PR com segredos. Esse arquivo não faz
+# checkout nem usa artefato do PR: só lê o número e a aprovação pela API e liga o
+# auto-merge. A dispensa vale só para ele.
+rules:
+  dangerous-triggers:
+    ignore:
+      - merge-by-app.yml

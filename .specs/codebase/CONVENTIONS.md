@@ -10,7 +10,7 @@ Valem para todo o repositório, desde o primeiro commit.
   - O tipo no início separa feature, correção, teste e documentação no histórico.
 - **Pull requests:** um por marco (ou dois, se o plano passar do corte de tamanho), aberto em rascunho pela identidade configurada no clone (`AI-14`; a conta de máquina, no modo `bot`), com o plano aprovado como checklist e o título no formato do commit (AD-013).
   - O único comentário é o relatório do `reviewer`, um por rodada, idêntico ao que ele escreveu.
-  - O mantenedor aprova no GitHub, e o ruleset exige essa aprovação sobre o último push; a aprovação liga o auto-merge, e o merge é por merge commit, sem squash, para o histórico mostrar o teste antes do código.
+  - O mantenedor aprova no GitHub, e o ruleset exige essa aprovação sobre o último push; a aprovação liga o auto-merge pelo GitHub App do repositório (AI-10), e o merge é por merge commit, sem squash, para o histórico mostrar o teste antes do código.
   - Sem issues: o trabalho parte do marco no `ROADMAP.md` e dos critérios no `spec.md`.
   - Título, descrição e comentários ficam em português, com identificadores, caminhos, comandos e IDs como estão.
   - O passo a passo de cada marco está na skill `/marco`.

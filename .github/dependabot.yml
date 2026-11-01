@@ -11,6 +11,11 @@ updates:
       default-days: 7
     # Mantém a versão exata do package.json (save-exact).
     versioning-strategy: increase
+    # Os tipos do Node seguem o piso do engines (24.12): os de uma versão maior
+    # deixariam o tsc aceitar API que não existe no piso.
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: build(deps)
     groups:

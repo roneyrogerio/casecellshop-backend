@@ -22,6 +22,9 @@ jobs:
   checks:
     name: Checagens
     runs-on: ubuntu-latest
+    # AI-05: um passo travado não segura o runner pelas 6 horas do padrão; cada
+    # prazo fica algumas vezes acima do tempo que o job leva hoje.
+    timeout-minutes: 15
     env:
       REDOCLY_TELEMETRY: 'off'
     steps:
@@ -102,6 +105,7 @@ jobs:
   test:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -152,18 +156,19 @@ jobs:
   workflows:
     name: Workflows
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Versão fixa, e o tarball só é extraído depois de bater com o checksums da
-      # mesma release; o script oficial de instalação vem da branch e não confere nada.
+      # Versão fixa, e o tarball só é extraído depois de bater com o sha256 fixo
+      # aqui: uma release trocada traria um arquivo de checksums trocado junto. O
+      # script oficial de instalação vem da branch e não confere nada.
       - name: actionlint
         run: |
           curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          curl -sSfLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt
-          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint_1.7.12_linux_amd64.tar.gz" | sha256sum --check
           tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
           ./actionlint
 
@@ -184,6 +189,7 @@ jobs:
     needs: [checks, test, workflows]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - env:
           RESULTS: ${{ toJSON(needs) }}
