@@ -1,6 +1,6 @@
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Span, Tracer } from '@opentelemetry/api';
+import { SpanStatusCode, type Span, type Tracer } from '@opentelemetry/api';
 import {
   InMemorySpanExporter,
   type ReadableSpan,
@@ -8,7 +8,7 @@ import {
 import express, { type RequestHandler, type Response } from 'express';
 import type { Logger } from 'pino';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { captureLogs } from '../../test/helpers/logs.ts';
+import { captureLogs, type LogLine } from '../../test/helpers/logs.ts';
 import {
   interceptingTelemetry,
   overriding,
@@ -83,10 +83,12 @@ async function exchangeOf(recorded: RecordedAttributes[]): Promise<Exchange> {
 
 // O cliente envia a requisição, espera o servidor recebê-la e fecha a conexão sem receber resposta; o servidor
 // emite o `close` da resposta quando percebe, e é nele que o teste espera. O handler pode antes enviar os
-// cabeçalhos (`status`), o que conta como resposta enviada.
+// cabeçalhos (`status`), o que conta como resposta enviada. Com `flush` falso, o handler só escolhe o status
+// (`res.status(...)`) e não envia nada: o `res.statusCode` muda, mas nenhuma resposta saiu.
 async function abortedExchange(
   make: Factory,
   status?: number,
+  flush = true,
 ): Promise<Exchange> {
   const recorded: RecordedAttributes[] = [];
   let onReached!: (res: Response) => void;
@@ -98,7 +100,7 @@ async function abortedExchange(
       res.locals['route'] = '/hang';
       if (status !== undefined) {
         res.status(status);
-        res.flushHeaders();
+        if (flush) res.flushHeaders();
       }
       onReached(res);
     },
@@ -209,6 +211,71 @@ function withDefaultStatus(target: Telemetry): Telemetry {
 const recordsDefaultStatus: Factory = (target, log) =>
   requestContext(withDefaultStatus(target), log);
 
+// Versão quebrada do middleware para o 5xx (A12): calcula o `error.type` e o status `ERROR` do span pelo
+// `res.statusCode`, e não pela resposta enviada. Cada marca liga e desliga à parte, para o controle provar as duas.
+function withServerErrorMarks(
+  target: Telemetry,
+  marks: { errorType: boolean; spanError: boolean },
+): Telemetry {
+  const startSpan: Tracer['startSpan'] = (name, options, context) =>
+    overriding(target.tracer.startSpan(name, options, context), {
+      end: (real: Span) => (time?: Parameters<Span['end']>[0]) => {
+        if (marks.errorType) real.setAttribute(ERROR_ATTRIBUTE, '500');
+        if (marks.spanError) real.setStatus({ code: SpanStatusCode.ERROR });
+        real.end(time);
+      },
+    });
+  const tracer = overriding(target.tracer, { startSpan: () => startSpan });
+  return {
+    ...interceptingTelemetry(target, (attributes, forward) => {
+      forward(
+        marks.errorType
+          ? { ...attributes, [ERROR_ATTRIBUTE]: '500' }
+          : attributes,
+      );
+    }),
+    tracer,
+  };
+}
+
+function marksServerError(marks: {
+  errorType: boolean;
+  spanError: boolean;
+}): Factory {
+  return (target, log) =>
+    requestContext(withServerErrorMarks(target, marks), log);
+}
+
+// O span de uma requisição sem resposta enviada não é marcado como erro: o status fica `UNSET`.
+function expectSpanNotMarkedAsError(exchange: Exchange): void {
+  expect(exchange.span.status.code).not.toBe(SpanStatusCode.ERROR);
+}
+
+const LOG_EVENT = 'casecellshop.http.request.completed';
+
+// O middleware real escrevendo no destino em memória da conferência, e não no logger mudo do arquivo.
+function loggingTo(sink: ReturnType<typeof captureLogs>): Factory {
+  return (target) => requestContext(target, sink.logger);
+}
+
+// O log da requisição é lido da saída do pino, num destino em memória só da conferência.
+function completedLogOf(sink: ReturnType<typeof captureLogs>): LogLine {
+  const lines = sink.eventsOf(LOG_EVENT);
+  expect(lines, `uma linha ${LOG_EVENT} por requisição`).toHaveLength(1);
+  return lines[0] ?? {};
+}
+
+// A requisição sem resposta enviada sai no log sem o campo `status`, em `info`, com o resto que o log sempre leva.
+function expectCompletedWithoutStatus(line: LogLine): void {
+  expect(line).not.toHaveProperty('status');
+  expect(line['level']).toBe('info');
+  expect(line['event']).toBe(LOG_EVENT);
+  expect(line['route']).toBe('/hang');
+  expect(line['method']).toBe('GET');
+  expect(typeof line['duration_ms']).toBe('number');
+  expect(typeof line['correlationId']).toBe('string');
+}
+
 describe('OBS-07 span HTTP: o status só entra quando uma resposta foi enviada', () => {
   it('OBS-07 a requisição que o cliente aborta antes da resposta não grava http.response.status_code nem error.type, no span nem na métrica', async () => {
     expectNoResponseFields(await abortedExchange(requestContext));
@@ -231,6 +298,121 @@ describe('OBS-07 span HTTP: o status só entra quando uma resposta foi enviada',
     const exchange = await answeredExchange(requestContext, 'GET', '/ok', 201);
     expect(exchange.span.attributes[STATUS_ATTRIBUTE]).toBe(201);
     expect(exchange.metric[STATUS_ATTRIBUTE]).toBe(201);
+  });
+
+  // A12: o handler escolheu o 500 com `res.status(500)` e o cliente desconectou antes de qualquer envio. O
+  // `res.statusCode` é 500, mas nenhuma resposta saiu, então nem o `error.type` nem o status `ERROR` do span valem.
+  it('OBS-07 a requisição abortada em que o handler faz res.status(500) sem enviar não grava error.type nem http.response.status_code, no span nem na métrica', async () => {
+    const exchange = await abortedExchange(requestContext, 500, false);
+    expectNoResponseFields(exchange);
+  });
+
+  it('OBS-07 a requisição abortada em que o handler faz res.status(500) sem enviar não marca o span como ERROR', async () => {
+    const exchange = await abortedExchange(requestContext, 500, false);
+    expectSpanNotMarkedAsError(exchange);
+  });
+
+  it('OBS-07 controle negativo: a conferência reprova o middleware que grava o error.type pelo res.statusCode na requisição abortada', async () => {
+    const exchange = await abortedExchange(
+      marksServerError({ errorType: true, spanError: false }),
+      500,
+      false,
+    );
+    expect(() => expectNoResponseFields(exchange)).toThrow(/error\.type/);
+  });
+
+  it('OBS-07 controle negativo: a conferência reprova o middleware que marca o span como ERROR pelo res.statusCode na requisição abortada', async () => {
+    const exchange = await abortedExchange(
+      marksServerError({ errorType: false, spanError: true }),
+      500,
+      false,
+    );
+    expect(() => expectSpanNotMarkedAsError(exchange)).toThrow(/not.*2/);
+  });
+
+  it('OBS-07 a requisição abortada depois de os cabeçalhos do 500 saírem grava o error.type 500 e marca o span como ERROR', async () => {
+    const exchange = await abortedExchange(requestContext, 500, true);
+    expect(exchange.span.attributes[STATUS_ATTRIBUTE]).toBe(500);
+    expect(exchange.span.attributes[ERROR_ATTRIBUTE]).toBe('500');
+    expect(exchange.metric[ERROR_ATTRIBUTE]).toBe('500');
+    expect(exchange.span.status.code).toBe(SpanStatusCode.ERROR);
+  });
+});
+
+// A13: o log da requisição segue a regra do span e da métrica, e o `status` só entra com resposta enviada.
+describe('OBS-07 log da requisição: o status só entra quando uma resposta foi enviada', () => {
+  it('OBS-07 o log casecellshop.http.request.completed da requisição abortada antes da resposta sai sem status, em info', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await abortedExchange(loggingTo(sink));
+
+    expectCompletedWithoutStatus(completedLogOf(sink));
+  });
+
+  it('OBS-07 o log da requisição abortada em que o handler faz res.status(500) sem enviar sai sem status e em info, não em error', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await abortedExchange(loggingTo(sink), 500, false);
+
+    expectCompletedWithoutStatus(completedLogOf(sink));
+  });
+
+  it('OBS-07 controle negativo: a conferência reprova o log que traz o 200 padrão numa requisição sem resposta', () => {
+    const line: LogLine = {
+      event: LOG_EVENT,
+      level: 'info',
+      route: '/hang',
+      method: 'GET',
+      status: 200,
+      duration_ms: 3,
+      correlationId: 'req-1',
+    };
+    expect(() => expectCompletedWithoutStatus(line)).toThrow(/status/);
+  });
+
+  it('OBS-07 o log da requisição abortada depois de os cabeçalhos saírem traz o status enviado', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await abortedExchange(loggingTo(sink), 202);
+
+    expect(completedLogOf(sink)).toMatchObject({ level: 'info', status: 202 });
+  });
+
+  it('OBS-07 o log da requisição respondida segue com o status, em info', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await answeredExchange(loggingTo(sink), 'GET', '/ok', 201);
+
+    expect(completedLogOf(sink)).toMatchObject({
+      level: 'info',
+      event: LOG_EVENT,
+      status: 201,
+      route: '/ok',
+      method: 'GET',
+    });
+  });
+
+  it('OBS-07 o log da requisição respondida com 5xx sai em error, com o status', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await answeredExchange(loggingTo(sink), 'GET', '/falha', 503);
+
+    expect(completedLogOf(sink)).toMatchObject({
+      level: 'error',
+      event: LOG_EVENT,
+      status: 503,
+    });
+  });
+
+  it('OBS-07 o log da requisição abortada depois de os cabeçalhos do 500 saírem sai em error, com o status', async () => {
+    const sink = captureLogs('casecellshop-api', 'info');
+
+    await abortedExchange(loggingTo(sink), 500);
+
+    expect(completedLogOf(sink)).toMatchObject({
+      level: 'error',
+      status: 500,
+    });
   });
 });
 

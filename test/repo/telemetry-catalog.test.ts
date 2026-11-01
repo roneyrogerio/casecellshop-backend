@@ -25,18 +25,23 @@ interface FolderNames {
 }
 
 // Um export é um catálogo quando é um objeto não vazio e todo valor dele tem o campo que marca a forma:
-// `instrument` na métrica, `level` no evento. O nome do export não importa.
-function isCatalogOf(value: unknown, marker: string): value is object {
+// `instrument` (texto) na métrica, `levels` (lista) no evento. O nome do export não importa.
+function isCatalogOf(
+  value: unknown,
+  marker: string,
+  kind: 'string' | 'array',
+): value is object {
   if (typeof value !== 'object' || value === null) return false;
   const entries = Object.values(value);
   return (
     entries.length > 0 &&
-    entries.every(
-      (entry) =>
-        typeof entry === 'object' &&
-        entry !== null &&
-        typeof (entry as Record<string, unknown>)[marker] === 'string',
-    )
+    entries.every((entry) => {
+      if (typeof entry !== 'object' || entry === null) return false;
+      const field = (entry as Record<string, unknown>)[marker];
+      return kind === 'array'
+        ? Array.isArray(field)
+        : typeof field === 'string';
+    })
   );
 }
 
@@ -56,9 +61,10 @@ async function namesByFolder(): Promise<FolderNames[]> {
     >;
     const names: FolderNames = { folder, metrics: [], events: [] };
     for (const value of Object.values(exported)) {
-      if (isCatalogOf(value, 'instrument'))
+      if (isCatalogOf(value, 'instrument', 'string'))
         names.metrics.push(...Object.keys(value));
-      if (isCatalogOf(value, 'level')) names.events.push(...Object.keys(value));
+      if (isCatalogOf(value, 'levels', 'array'))
+        names.events.push(...Object.keys(value));
     }
     found.push(names);
   }

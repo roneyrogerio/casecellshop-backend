@@ -360,7 +360,7 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     expect(erpRequests(families, 'create_order', 'permanent')).toBe(2);
   });
 
-  it('OBS-02 a mensagem que o SQS move para a DLQ pelo limite de recebimentos não soma dead nem loga outbox.dead no worker: isso é da reconciliação', async () => {
+  it('OBS-02 a mensagem que o SQS move para a DLQ pelo limite de recebimentos não soma dead nem loga casecellshop.outbox.dead no worker: isso é da reconciliação', async () => {
     const rig = await createRig({ maxReceiveCount: 1 });
     const logs = captureLogs();
     const order = await rig.submit();
@@ -379,7 +379,7 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     const families = await rig.scrape();
     expect(attemptOutcome(families, 'retry')).toBe(1);
     expect(attemptOutcome(families, 'dead') ?? 0).toBe(0);
-    expect(logs.eventsOf('outbox.dead')).toEqual([]);
+    expect(logs.eventsOf('casecellshop.outbox.dead')).toEqual([]);
   });
 
   it('OBS-02 uma mensagem de pedido que já não está pending soma 1 em closed, sem chamar o ERP', async () => {
@@ -528,7 +528,7 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
     expect(attemptOutcome(families, 'closed') ?? 0).toBe(0);
     expect(orphanConclusions(families)).toBe(1);
     expect(
-      logs.eventsOf('outbox.conclusion_no_row', order.orderId),
+      logs.eventsOf('casecellshop.outbox.conclusion.orphaned', order.orderId),
     ).toHaveLength(1);
     expect(rig.world.transport.sends).toHaveLength(0);
   });
@@ -555,9 +555,11 @@ describe('OBS-02 os valores sobem nos cenários certos', () => {
       rig.world.queue.changesOf(order.orderId).map((call) => call.result),
     ).toEqual(['stale']);
     // O retry só é logado quando a visibilidade de fato mudou.
-    expect(logs.eventsOf('outbox.retry', order.orderId)).toEqual([]);
     expect(
-      logs.eventsOf('outbox.conclusion_no_row', order.orderId),
+      logs.eventsOf('casecellshop.outbox.retry.scheduled', order.orderId),
+    ).toEqual([]);
+    expect(
+      logs.eventsOf('casecellshop.outbox.conclusion.orphaned', order.orderId),
     ).toHaveLength(1);
   });
 });

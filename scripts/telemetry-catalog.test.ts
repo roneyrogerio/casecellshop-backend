@@ -57,7 +57,9 @@ describe('OBS-07 repeatedNames: nomes repetidos entre as declarações', () => {
     const metrics = {
       'casecellshop.checkout.accepted': { instrument: 'counter' },
     };
-    const events = { 'casecellshop.checkout.accepted': { level: 'info' } };
+    const events = {
+      'casecellshop.checkout.accepted': { levels: ['info'] },
+    };
 
     expect(repeatedNames([metrics, events])).toEqual([
       'casecellshop.checkout.accepted',

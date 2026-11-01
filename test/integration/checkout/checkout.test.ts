@@ -663,7 +663,7 @@ describe('CHK-12 o trace chega à linha da outbox', () => {
 });
 
 describe('OBS-01 orderId e causa nos logs do checkout', () => {
-  it('OBS-01 o checkout.accepted (info) e o http_request do 202 trazem o orderId, na aceitação e na repetição', async () => {
+  it('OBS-01 o casecellshop.checkout.accepted (info) e o casecellshop.http.request.completed do 202 trazem o orderId, na aceitação e na repetição', async () => {
     const item = await product();
     const key = newKey();
     const firstId = `obs01-a-${randomUUID()}`;
@@ -686,21 +686,24 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
       () => {
         const accepted = harness.logLines.find(
           (entry) =>
-            entry['event'] === 'checkout.accepted' &&
+            entry['event'] === 'casecellshop.checkout.accepted' &&
             entry['correlationId'] === firstId,
         );
-        expect(accepted, 'checkout.accepted ausente').toBeDefined();
+        expect(
+          accepted,
+          'casecellshop.checkout.accepted ausente',
+        ).toBeDefined();
         expect(accepted?.['level']).toBe('info');
         expect(accepted?.['orderId']).toBe(orderId);
         for (const correlationId of [firstId, replayId]) {
           const http = harness.logLines.find(
             (entry) =>
-              entry['event'] === 'http_request' &&
+              entry['event'] === 'casecellshop.http.request.completed' &&
               entry['correlationId'] === correlationId,
           );
           expect(
             http,
-            `http_request de ${correlationId} ausente`,
+            `casecellshop.http.request.completed de ${correlationId} ausente`,
           ).toBeDefined();
           expect(http?.['status']).toBe(202);
           expect(http?.['route']).toBe('/checkout');
@@ -711,7 +714,7 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     );
   });
 
-  it('OBS-01 o checkout.rejected (warn) traz a causa da recusa por falta de estoque', async () => {
+  it('OBS-01 o casecellshop.checkout.rejected (warn) traz a causa da recusa por falta de estoque, em snake_case, no campo reason', async () => {
     const empty = await product(1000, 0);
     const correlationId = `obs01-oos-${randomUUID()}`;
 
@@ -724,20 +727,22 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
       () => {
         const rejected = harness.logLines.find(
           (entry) =>
-            entry['event'] === 'checkout.rejected' &&
+            entry['event'] === 'casecellshop.checkout.rejected' &&
             entry['correlationId'] === correlationId,
         );
-        expect(rejected, 'checkout.rejected ausente').toBeDefined();
+        expect(
+          rejected,
+          'casecellshop.checkout.rejected ausente',
+        ).toBeDefined();
         expect(rejected?.['level']).toBe('warn');
-        // O nome do campo da causa é do implementer; o valor é a causa do type do problema.
-        const { msg: _msg, time: _time, ...fields } = rejected ?? {};
-        expect(JSON.stringify(fields)).toMatch(/out[-_]of[-_]stock/);
+        // O reason é o tipo do problem com `_` no lugar de `-` (OBS-07, AD-029).
+        expect(rejected?.['reason']).toBe('out_of_stock');
       },
       { timeout: WAIT_GUARD_MS },
     );
   });
 
-  it('OBS-01 o preço alterado deixa um log de nível warn (checkout.price_changed ou checkout.rejected) com a causa', async () => {
+  it('OBS-01 o preço alterado deixa um log de nível warn (casecellshop.checkout.price_changed ou casecellshop.checkout.rejected) com a causa em snake_case no reason', async () => {
     const item = await product(1000, 5);
     const correlationId = `obs01-price-${randomUUID()}`;
 
@@ -753,11 +758,19 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
         const entry = harness.logLines.find(
           (candidate) =>
             candidate['correlationId'] === correlationId &&
-            (candidate['event'] === 'checkout.price_changed' ||
-              candidate['event'] === 'checkout.rejected'),
+            (candidate['event'] === 'casecellshop.checkout.price_changed' ||
+              candidate['event'] === 'casecellshop.checkout.rejected'),
         );
         expect(entry, 'log de preço alterado ausente').toBeDefined();
         expect(entry?.['level']).toBe('warn');
+        expect(entry?.['reason']).toBe('price_changed');
+        // O evento próprio do preço alterado também leva o reason em snake_case, e a contagem dos itens.
+        const priceChanged = harness.logLines.find(
+          (candidate) =>
+            candidate['correlationId'] === correlationId &&
+            candidate['event'] === 'casecellshop.checkout.price_changed',
+        );
+        expect(priceChanged?.['reason']).toBe('price_changed');
       },
       { timeout: WAIT_GUARD_MS },
     );

@@ -82,6 +82,13 @@ afterEach(async () => {
   for (const telemetry of telemetries.splice(0)) await telemetry.shutdown();
 });
 
+// Os eventos de log do catálogo (OBS-07) que os testes abaixo conferem.
+const INVOICED = 'casecellshop.order.invoiced';
+const CLOSED = 'casecellshop.outbox.closed';
+const DEAD = 'casecellshop.outbox.dead';
+const COMPLETED = 'casecellshop.outbox.reconciliation.completed';
+const FAILED = 'casecellshop.outbox.reconciliation.failed';
+
 interface Rig extends ReconcilerRig {
   world: QueueWorld;
   telemetry: Telemetry;
@@ -165,6 +172,18 @@ async function seedDead(
     rig.maxReceiveCount,
   );
   return orders;
+}
+
+// Um pedido na DLQ que já tem desfecho (faturado fora do fluxo): a reconciliação só o encerra.
+async function seedInvoicedOutOfFlow() {
+  const rig = await createRig();
+  const [order] = await seedDead(rig, [{}]);
+  if (!order) throw new Error('pedido não semeado');
+  await suite.pool.query(
+    "update orders set status = 'invoiced', outcome_at = now() where id = $1",
+    [order.orderId],
+  );
+  return { rig, world: rig.world, order };
 }
 
 function invoices(orderId: string): Promise<number> {
@@ -310,7 +329,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     expect(callAfter.callToken).toBe(callBefore.callToken);
   });
 
-  it('ORD-14 o faturamento pela reconciliação toma a permissão de chamada sem zerar o dead_at, usa uma permissão do semáforo, loga order.invoiced e soma invoiced e o aceite ao faturamento', async () => {
+  it('ORD-14 o faturamento pela reconciliação toma a permissão de chamada sem zerar o dead_at, usa uma permissão do semáforo, loga casecellshop.order.invoiced e soma invoiced e o aceite ao faturamento', async () => {
     const semaphore = countingSemaphore(30);
     const rig = await createRig({ semaphore });
     const { world } = rig;
@@ -342,7 +361,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
       outbox.deadAt,
       'a permissão da reconciliação não zera o dead_at',
     ).not.toBeNull();
-    const invoiced = rig.logs.eventsOf('order.invoiced', order.orderId);
+    const invoiced = rig.logs.eventsOf(INVOICED, order.orderId);
     expect(invoiced).toHaveLength(1);
     expect(invoiced[0]?.['level']).toBe('info');
     expect(await outcomeCount(rig, 'invoiced')).toBe(1);
@@ -353,15 +372,8 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     await expectInvoiced(world, order, { queueEmpty: false });
   });
 
-  it('ORD-14 a mensagem de um pedido que já não está pending é apagada da DLQ com outbox.closed, sem consultar o ERP', async () => {
-    const rig = await createRig();
-    const { world } = rig;
-    const [order] = await seedDead(rig, [{}]);
-    if (!order) throw new Error('pedido não semeado');
-    await suite.pool.query(
-      "update orders set status = 'invoiced', outcome_at = now() where id = $1",
-      [order.orderId],
-    );
+  it('ORD-14 a mensagem de um pedido que já não está pending é apagada da DLQ com casecellshop.outbox.closed, sem consultar o ERP', async () => {
+    const { rig, world, order } = await seedInvoicedOutOfFlow();
     const sendsBefore = world.transport.sends.length;
 
     const result = await rig.reconciler.reconcileOnce();
@@ -372,7 +384,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
       ['ok'],
     );
     expect(await dlqTotal(world)).toBe(0);
-    const closed = rig.logs.eventsOf('outbox.closed', order.orderId);
+    const closed = rig.logs.eventsOf(CLOSED, order.orderId);
     expect(closed).toHaveLength(1);
     expect(closed[0]?.['level']).toBe('info');
     expect(await outcomeCount(rig, 'closed')).toBe(1);
@@ -443,12 +455,17 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
   });
 });
 
+// Uma rodada a cada 1 s, com um pedido na DLQ que o ERP já faturou.
+async function seedLoopWithInvoicedInErp() {
+  const rig = await createRig({ config: { intervalMs: 1_000 } });
+  const [order] = await seedDead(rig, [{ erpHas: true }]);
+  if (!order) throw new Error('pedido não semeado');
+  return { rig, world: rig.world, order };
+}
+
 describe('ORD-14 o laço da reconciliação', () => {
-  it('ORD-14 start() reconcilia a cada intervalMs no relógio injetável e loga outbox.reconciled com seen, invoiced e closed; stop() termina o laço', async () => {
-    const rig = await createRig({ config: { intervalMs: 1_000 } });
-    const { world } = rig;
-    const [order] = await seedDead(rig, [{ erpHas: true }]);
-    if (!order) throw new Error('pedido não semeado');
+  it('ORD-14 start() reconcilia a cada intervalMs no relógio injetável e loga casecellshop.outbox.reconciliation.completed com seen, invoiced e closed; stop() termina o laço', async () => {
+    const { rig, world, order } = await seedLoopWithInvoicedInErp();
 
     void rig.reconciler.start();
     try {
@@ -457,7 +474,7 @@ describe('ORD-14 o laço da reconciliação', () => {
           'invoiced',
         );
         const summaries = rig.logs
-          .eventsOf('outbox.reconciled')
+          .eventsOf(COMPLETED)
           .filter((line) => line['invoiced'] === 1);
         expect(summaries).toHaveLength(1);
         expect(summaries[0]).toMatchObject({
@@ -492,11 +509,8 @@ describe('ORD-14 o laço da reconciliação', () => {
     expect(rig.sleeps).toContain(300_000);
   });
 
-  it('ORD-14 uma rodada que falha loga outbox.reconcile_error (warn) e o laço continua: a rodada seguinte fatura o pedido', async () => {
-    const rig = await createRig({ config: { intervalMs: 1_000 } });
-    const { world } = rig;
-    const [order] = await seedDead(rig, [{ erpHas: true }]);
-    if (!order) throw new Error('pedido não semeado');
+  it('ORD-14 uma rodada que falha loga casecellshop.outbox.reconciliation.failed (warn) e o laço continua: a rodada seguinte fatura o pedido', async () => {
+    const { rig, world, order } = await seedLoopWithInvoicedInErp();
     const injection = rig.dlq.inject('receive');
 
     void rig.reconciler.start();
@@ -507,7 +521,7 @@ describe('ORD-14 o laço da reconciliação', () => {
     }
 
     expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
-    const errors = rig.logs.eventsOf('outbox.reconcile_error');
+    const errors = rig.logs.eventsOf(FAILED);
     expect(errors).toHaveLength(1);
     expect(errors[0]?.['level']).toBe('warn');
     expect(await invoices(order.orderId)).toBe(1);
@@ -663,8 +677,8 @@ describe('ORD-14 o stop() no meio de uma rodada', () => {
   });
 });
 
-describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
-  it('OBS-01 outbox.dead sai em error, com orderId, correlationId e os campos obrigatórios, dentro do span outbox.settle; o dead_at fica gravado', async () => {
+describe('OBS-01 casecellshop.outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
+  it('OBS-01 casecellshop.outbox.dead sai em error, com orderId, correlationId e os campos obrigatórios, dentro do span outbox.settle; o dead_at fica gravado', async () => {
     const rig = await createRig({ shared: true });
     const [order] = await seedDead(rig, [{}]);
     if (!order) throw new Error('pedido não semeado');
@@ -673,7 +687,7 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     await rig.reconciler.reconcileOnce();
     await rig.telemetry.forceFlush();
 
-    const dead = rig.logs.eventsOf('outbox.dead', order.orderId);
+    const dead = rig.logs.eventsOf(DEAD, order.orderId);
     expect(dead).toHaveLength(1);
     const line = dead[0] ?? {};
     for (const field of [
@@ -709,7 +723,7 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     );
   });
 
-  it('OBS-01 a mensagem que aparece outra vez na DLQ, sem o worker tomar a permissão, não loga outbox.dead de novo; a nova chegada depois de um redrive e de nova tentativa loga', async () => {
+  it('OBS-01 a mensagem que aparece outra vez na DLQ, sem o worker tomar a permissão, não loga casecellshop.outbox.dead de novo; a nova chegada depois de um redrive e de nova tentativa loga', async () => {
     const rig = await createRig();
     const { world } = rig;
     const [order] = await seedDead(rig, [{}]);
@@ -722,19 +736,19 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     const again = await rig.reconciler.reconcileOnce();
 
     expect(again.seen, 'a mesma mensagem foi vista na segunda rodada').toBe(1);
-    expect(rig.logs.eventsOf('outbox.dead', id)).toHaveLength(1);
+    expect(rig.logs.eventsOf(DEAD, id)).toHaveLength(1);
 
     await redriveAndDieAgain(rig, id);
 
     await rig.reconciler.reconcileOnce();
 
-    expect(rig.logs.eventsOf('outbox.dead', id)).toHaveLength(2);
+    expect(rig.logs.eventsOf(DEAD, id)).toHaveLength(2);
     expect((await readOutbox(suite.pool, id)).deadAt).not.toBeNull();
   });
 });
 
-describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
-  it('OBS-01 a falha numa mensagem loga outbox.reconcile_error (warn) com os campos obrigatórios, o orderId e o correlationId da mensagem, e a rodada segue com as outras', async () => {
+describe('OBS-01 casecellshop.outbox.reconciliation.failed de uma mensagem da rodada', () => {
+  it('OBS-01 a falha numa mensagem loga casecellshop.outbox.reconciliation.failed (warn) com os campos obrigatórios, o orderId e o correlationId da mensagem, e a rodada segue com as outras', async () => {
     const rig = await createRig();
     const { world } = rig;
     const orders = await seedDead(rig, [{}, {}]);
@@ -769,7 +783,7 @@ describe('OBS-01 outbox.reconcile_error de uma mensagem da rodada', () => {
     );
     expect(await dlqTotal(world)).toBe(1);
 
-    const errors = rig.logs.eventsOf('outbox.reconcile_error');
+    const errors = rig.logs.eventsOf(FAILED);
     expect(errors).toHaveLength(1);
     const line = errors[0] ?? {};
     expect(line['level']).toBe('warn');
@@ -829,14 +843,7 @@ describe('OBS-02 dead em casecellshop.outbox.attempts', () => {
   });
 
   it('OBS-02 closed da reconciliação só soma quando o DeleteMessage da DLQ sai ok', async () => {
-    const rig = await createRig();
-    const { world } = rig;
-    const [order] = await seedDead(rig, [{}]);
-    if (!order) throw new Error('pedido não semeado');
-    await suite.pool.query(
-      "update orders set status = 'invoiced', outcome_at = now() where id = $1",
-      [order.orderId],
-    );
+    const { rig, world } = await seedInvoicedOutOfFlow();
     const injection = rig.dlq.inject('delete');
 
     // O SQS falha ao apagar: a mensagem fica, e a rodada não conta o encerramento que não aconteceu. O spec não

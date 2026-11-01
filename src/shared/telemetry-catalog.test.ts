@@ -84,7 +84,7 @@ const VALID_HTTP: MetricSpec = {
 };
 
 const VALID_EVENT: EventSpec = {
-  level: 'info',
+  levels: ['info'],
   description: 'Checkout aceito.',
   fields: ['orderId'],
 };
@@ -100,8 +100,14 @@ const BASE_EVENTS: Events = {
   'casecellshop.checkout.accepted': VALID_EVENT,
   'casecellshop.checkout.db.unavailable': {
     ...VALID_EVENT,
-    level: 'warn',
+    levels: ['warn'],
     fields: ['err', 'step'],
+  },
+  // Um evento que sai em dois níveis (o fim da requisição HTTP): níveis distintos não são violação.
+  'casecellshop.http.request.completed': {
+    ...VALID_EVENT,
+    levels: ['info', 'error'],
+    fields: ['status'],
   },
 };
 
@@ -411,4 +417,18 @@ describe('OBS-07 controles negativos: o nome do evento de log', () => {
       description: '',
     });
   });
+
+  it.each([
+    ['o mesmo nível duas vezes', ['info', 'info']],
+    ['um nível repetido entre dois distintos', ['info', 'error', 'info']],
+    ['três vezes o mesmo nível', ['warn', 'warn', 'warn']],
+  ] as const)(
+    'OBS-07 controle negativo: o evento com %s em levels é acusado, e a mensagem cita o evento',
+    (_defect, levels) => {
+      expectEventRejected('casecellshop.checkout.rejected', {
+        ...VALID_EVENT,
+        levels,
+      });
+    },
+  );
 });
