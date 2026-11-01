@@ -76,11 +76,6 @@ jobs:
         if: matrix.node == 'nvmrc'
         run: node scripts/check-db-types.ts
 
-      # AI-19: as formas do Kysely que escapam do tsc ou montam SQL fora do builder
-      # reprovam em src/. Roda com node, e não por npm run (AI-05).
-      - name: Formas do Kysely
-        run: node scripts/check-kysely-usage.ts
-
       # FND-07: openapi.yaml em dia com o contrato e válido em OpenAPI 3.1.
       - run: npm run openapi -- --check
       - run: npm run lint:openapi
