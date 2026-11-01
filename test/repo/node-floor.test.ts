@@ -202,6 +202,16 @@ const REPORTER_ARGS = [
   '--outputFile.json="$RUNNER_TEMP/vitest-report.json"',
 ];
 
+// AI-37: a cobertura de src/ é medida uma vez só, na perna nvmrc. AI-49: o `json-summary` é o que o
+// check-baselines lê, gravado em `$RUNNER_TEMP/coverage` (fora da árvore do repositório, entre aspas pelo SC2086); o
+// `text` mantém o resumo no log, já que passar um reporter na linha de comando troca os padrões do Vitest.
+const COVERAGE_ARGS = [
+  '--coverage',
+  '--coverage.reporter=text',
+  '--coverage.reporter=json-summary',
+  '--coverage.reportsDirectory="$RUNNER_TEMP/coverage"',
+];
+
 // Tira `--exclude=<arquivo>` e o par `--exclude <arquivo>`; o que sobra é o resto do comando.
 function withoutExcludes(all: string[]): string[] {
   const kept: string[] = [];
@@ -214,14 +224,14 @@ function withoutExcludes(all: string[]): string[] {
 }
 
 // O comando tem de ser, token a token, `npm test --` mais os argumentos de relatório, em qualquer ordem.
-// AI-37: só a perna nvmrc acrescenta `--coverage`; a do piso não mede cobertura.
+// AI-37 e AI-49: só a perna nvmrc acrescenta os argumentos de cobertura; a do piso não mede cobertura.
 function closedArgsViolation(rest: string[], leg: string): string | null {
   const prefix = ['npm', 'test', '--'];
   if (JSON.stringify(rest.slice(0, prefix.length)) !== JSON.stringify(prefix))
     return 'não começa por `npm test --`';
   const args = rest.slice(prefix.length);
   const allowed =
-    leg === 'nvmrc' ? [...REPORTER_ARGS, '--coverage'] : REPORTER_ARGS;
+    leg === 'nvmrc' ? [...REPORTER_ARGS, ...COVERAGE_ARGS] : REPORTER_ARGS;
   const expected = [...allowed].sort();
   if (JSON.stringify([...args].sort()) !== JSON.stringify(expected)) {
     return `argumentos ${JSON.stringify(args)} fora da lista fechada ${JSON.stringify(expected)}`;
@@ -291,6 +301,8 @@ const BASE_PKG: Pkg = {
 const REPORTER =
   '--reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json"';
 
+const COVERAGE = COVERAGE_ARGS.join(' ');
+
 // Forma 1: um passo, com o argumento condicionado pela matriz.
 const ONE_STEP = `
 jobs:
@@ -302,7 +314,7 @@ jobs:
       - run: npm ci
       - run: >-
           npm test -- \${{ matrix.node == '24.12.0' && '--exclude ${COMPOSE_A} --exclude ${COMPOSE_B}' || '' }}
-          ${REPORTER} \${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
+          ${REPORTER} \${{ matrix.node == 'nvmrc' && '${COVERAGE}' || '' }}
 `;
 
 // Forma 2: dois passos, cada um com o seu `if`.
@@ -315,13 +327,55 @@ jobs:
     steps:
       - run: npm ci
       - if: matrix.node == 'nvmrc'
-        run: npm test -- ${REPORTER} --coverage
+        run: npm test -- ${REPORTER} ${COVERAGE}
       - if: \${{ matrix.node != 'nvmrc' }}
         run: npm test -- --exclude=${COMPOSE_A} --exclude=${COMPOSE_B} ${REPORTER}
 `;
 
 function variant(yamlText: string, edit: (text: string) => string): Workflow {
   return parse(edit(yamlText)) as Workflow;
+}
+
+// Acrescenta `extra` a cada perna, nas duas formas, e devolve os casos que NÃO reprovaram (o esperado é nenhum).
+// `only` escolhe os casos pelo nome.
+function escapedWith(
+  extras: string[],
+  only: (caseName: string) => boolean,
+): string[] {
+  const escaped: string[] = [];
+  for (const extra of extras) {
+    const cases: Record<string, Workflow> = {
+      'um passo, perna nvmrc': variant(ONE_STEP, (t) =>
+        t.replace(`'${COVERAGE}'`, `'${COVERAGE} ${extra}'`),
+      ),
+      'um passo, perna do piso': variant(ONE_STEP, (t) =>
+        t.replace(
+          `--exclude ${COMPOSE_B}'`,
+          `--exclude ${COMPOSE_B} ${extra}'`,
+        ),
+      ),
+      'dois passos, perna nvmrc': variant(TWO_STEPS, (t) =>
+        t.replace(
+          `run: npm test -- ${REPORTER}`,
+          `run: npm test -- ${extra} ${REPORTER}`,
+        ),
+      ),
+      'dois passos, perna do piso': variant(TWO_STEPS, (t) =>
+        t.replace(
+          `--exclude=${COMPOSE_B} ${REPORTER}`,
+          `--exclude=${COMPOSE_B} ${extra} ${REPORTER}`,
+        ),
+      ),
+    };
+    for (const [name, workflow] of Object.entries(cases)) {
+      if (
+        only(name) &&
+        ciViolations(workflow, BASE_PKG, BASE_COMPOSE).length === 0
+      )
+        escaped.push(`${name} com "${extra}"`);
+    }
+  }
+  return escaped;
 }
 
 function pkgWith(runtime: Record<string, unknown> | undefined): Pkg {
@@ -561,37 +615,56 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
       '--testNamePattern slow',
       '--testNamePattern=slow',
     ];
+    // Junta todos os casos que passaram sem reprovar, para a mensagem de falha listar cada um.
+    expect(escapedWith(extras, () => true)).toEqual([]);
+  });
+
+  it('FND-12 controle negativo: a perna do piso com qualquer argumento de cobertura reprova', () => {
+    expect(
+      escapedWith([...COVERAGE_ARGS, '--coverage.enabled=true'], (name) =>
+        name.includes('piso'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('FND-12 controle negativo: a perna nvmrc com argumento de cobertura a mais, a menos ou trocado reprova', () => {
+    const extras = [
+      '--coverage.thresholds.lines=0',
+      '--coverage.enabled=false',
+      '--coverage.reporter=lcov',
+    ];
     const escaped: string[] = [];
-    for (const extra of extras) {
-      const cases: Record<string, Workflow> = {
-        'um passo, perna nvmrc': variant(ONE_STEP, (t) =>
-          t.replace("|| '' }}", `|| '${extra}' }}`),
-        ),
-        'um passo, perna do piso': variant(ONE_STEP, (t) =>
-          t.replace(
-            `--exclude ${COMPOSE_B}'`,
-            `--exclude ${COMPOSE_B} ${extra}'`,
-          ),
-        ),
-        'dois passos, perna nvmrc': variant(TWO_STEPS, (t) =>
-          t.replace(
-            `run: npm test -- ${REPORTER}`,
-            `run: npm test -- ${extra} ${REPORTER}`,
-          ),
-        ),
-        'dois passos, perna do piso': variant(TWO_STEPS, (t) =>
-          t.replace(
-            `--exclude=${COMPOSE_B} ${REPORTER}`,
-            `--exclude=${COMPOSE_B} ${extra} ${REPORTER}`,
-          ),
-        ),
-      };
-      for (const [name, workflow] of Object.entries(cases)) {
-        if (ciViolations(workflow, BASE_PKG, BASE_COMPOSE).length === 0)
-          escaped.push(`${name} com "${extra}"`);
+    const variants: Record<string, (t: string) => string> = {};
+    for (const extra of extras)
+      variants[`a mais ${extra}`] = (t) =>
+        t.replaceAll(COVERAGE, `${COVERAGE} ${extra}`);
+    for (const arg of COVERAGE_ARGS)
+      variants[`a menos ${arg}`] = (t) =>
+        t.replaceAll(
+          COVERAGE,
+          COVERAGE_ARGS.filter((other) => other !== arg).join(' '),
+        );
+    variants['sem aspas no diretório'] = (t) =>
+      t.replaceAll(
+        '--coverage.reportsDirectory="$RUNNER_TEMP/coverage"',
+        '--coverage.reportsDirectory=$RUNNER_TEMP/coverage',
+      );
+    variants['diretório dentro do repositório'] = (t) =>
+      t.replaceAll(
+        '--coverage.reportsDirectory="$RUNNER_TEMP/coverage"',
+        '--coverage.reportsDirectory=coverage',
+      );
+    for (const [name, edit] of Object.entries(variants)) {
+      for (const [form, base] of [
+        ['um passo', ONE_STEP],
+        ['dois passos', TWO_STEPS],
+      ] as const) {
+        if (
+          ciViolations(variant(base, edit), BASE_PKG, BASE_COMPOSE).length === 0
+        )
+          escaped.push(`${form}, ${name}`);
       }
     }
-    // Junta todos os casos que passaram sem reprovar, para a mensagem de falha listar cada um.
     expect(escaped).toEqual([]);
   });
 

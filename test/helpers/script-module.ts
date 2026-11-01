@@ -42,6 +42,8 @@ export function sandboxWithScript(file: string): string {
   // resolve. O link para o node_modules do repositório faz o script resolver os pacotes como no repositório, sem
   // instalar nada na pasta temporária.
   symlinkSync(join(repoRoot, 'node_modules'), join(dir, 'node_modules'), 'dir');
+  // O link é do ambiente, não do repositório de teste: um `git add -A` na pasta não pode versioná-lo.
+  writeFileIn(dir, '.gitignore', 'node_modules\n');
   return dir;
 }
 
