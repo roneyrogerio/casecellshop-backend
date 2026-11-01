@@ -157,7 +157,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
   - **Achados `baixa` do #12 que não tocam o SQS** (levados do PR 2 do M3): A6, o `reachesTs` de `test/repo/strict-checks.test.ts` não vê `*.[jt]s` nem `*.?s`; A7, o controle negativo do `CHK-02` roda fora da rota; A11, `spawnSync` sem `timeout` nos testes de `test/repo/`; e os pontos sem asserção: o `415` sem `Content-Type` e o `unavailable` no counter do checkout.
 - **Achados `baixa` do #19 (guardas da fábrica), para o PR B3 do F2:** A3, um commit do agente isolado na própria worktree escapa do retrato e da conferência do papel (gravar no início o `HEAD` da worktree e comparar contra ele); A4, o `rootFor` compara caminhos sem `realpath`; A5, nome não ASCII no status (usar `--porcelain=v1 -z` e conferir o código de saída do `hash-object`); A8, a skill não diz o que fazer quando o `isolation` não vale e o agente edita a pasta principal; A9, o parser do `git status` repetido no retrato e no hook de parada; A10, o caminho para adicionar uma dependência quando o `implementer` não pode rodar `npm install` na worktree.
 - **Achados `baixa` do #21 (checagens de código):**
-  - para o PR C: A5, a linha de base do jscpd congelou três repetições criadas no próprio #21, entre `test/repo/duplication.test.ts` e `test/repo/unused-code.test.ts` (tirar as repetições e regenerar a base);
+  - para o PR C: A5, a linha de base do jscpd congelou três repetições criadas no próprio #21, duas entre `test/repo/duplication.test.ts` e `test/repo/unused-code.test.ts` e uma dentro de `duplication.test.ts` (tirar as repetições e regenerar a base);
   - para o PR B3, guardas da verificação:
     - A6, um `package.json` aninhado com a chave `prettier` configura o Prettier da pasta dele (negar `package.json` fora da raiz);
     - A7, o oxlint lê o `.eslintignore` por padrão, e a guarda não nega esse nome (confirmar com teste, negar o nome e passar `--ignore-path`);
@@ -166,6 +166,9 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
     - A10, nada confere que o piso de cobertura só sobe e que a base do jscpd só encolhe (passo do CI contra a `origin/main`);
     - A11, falta o teste do `executeQuery` desestruturado (`const { executeQuery } = db`) pelo oxlint do projeto;
     - A12, o `scriptsDiffer` de `scripts/check-scripts.ts` ficou sem uso fora dos testes.
+    - A13, a `no-sql-alias` aceita qualquer membro do `sql`, então `sql.bind`, `sql.call` e `sql.apply` o guardam com outro nome (reprovar esses três ou aceitar só os membros do Kysely);
+    - A14, a `no-sql-alias` só reconhece o `sql` importado de `'kysely'`: passam `export * from 'kysely'`, o `sql` renomeado vindo de um módulo que o reexporta e o namespace de `import('kysely')`;
+    - da Revisão 2, a confirmar com o oxlint do projeto: se o `no-restricted-properties` pega `sql?.raw(1)`, e se o typecheck recusa `export = sql` e `import s = sql`.
 - **Ambiente da sessão remota do Claude Code (PR de ambiente):** a VM traz o Node até a 22, e o projeto pede a 26; um script de preparo do ambiente (configurado em claude.ai/code pelo mantenedor) instala o Node 26, e um hook de início roda o `npm ci` só na nuvem (`CLAUDE_CODE_REMOTE`), como na documentação dos ambientes de nuvem. O GitHub MCP também não está disponível lá (AD-013). Até lá, o trabalho com agentes é local, no terminal ou no VS Code, onde os hooks valem igual.
 - **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
