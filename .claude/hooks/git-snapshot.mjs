@@ -19,7 +19,7 @@ export function takeSnapshot(projectDir) {
   // Fora de um repositório o retrato é vazio, e não um erro: não há estado do
   // git a proteger. Um .git que some no meio do agente aparece como mudança.
   const inside = spawnSync('git', ['-C', projectDir, 'rev-parse', '--git-dir'], { encoding: 'utf8' });
-  if (inside.status !== 0) return { head: '', refs: '', worktrees: '', config: '', status: '' };
+  if (inside.status !== 0) return { head: '', refs: '', worktrees: '', config: '', status: '', foreignBranches: [] };
   const commonDir = resolve(projectDir, git(projectDir, 'rev-parse', '--git-common-dir').trim());
   return {
     head: git(projectDir, 'rev-parse', 'HEAD').trim(),
@@ -32,7 +32,21 @@ export function takeSnapshot(projectDir) {
       .join('\n'),
     config: readFileSync(join(commonDir, 'config'), 'utf8'),
     status: statusWithHashes(projectDir),
+    foreignBranches: foreignBranches(projectDir),
   };
+}
+
+// AI-33: as branches em uso por outra worktree do repositório são de outra
+// sessão (ou de outro agente isolado), não do agente desta parada.
+function foreignBranches(projectDir) {
+  const own = resolve(git(projectDir, 'rev-parse', '--show-toplevel').trim());
+  const branches = [];
+  let current = null;
+  for (const line of git(projectDir, 'worktree', 'list', '--porcelain').split('\n')) {
+    if (line.startsWith('worktree ')) current = resolve(line.slice('worktree '.length));
+    else if (line.startsWith('branch ') && current !== own) branches.push(line.slice('branch '.length));
+  }
+  return branches;
 }
 
 // Caminho de uma linha do git status (porcelain v1): no rename, o destino; sem
@@ -69,9 +83,13 @@ function refMap(text) {
   return map;
 }
 
-function describeRefs(before, after) {
-  const old = refMap(before);
-  const now = refMap(after);
+// Os refs remotos mudam no fetch ou no push de qualquer sessão (AI-33).
+const REMOTE_REFS = 'refs/remotes/';
+
+function describeRefs(before, after, ignored) {
+  const keep = (map) => new Map([...map].filter(([name]) => !name.startsWith(REMOTE_REFS) && !ignored.has(name)));
+  const old = keep(refMap(before));
+  const now = keep(refMap(after));
   const parts = [];
   for (const [name, hash] of now) {
     if (!old.has(name)) parts.push(`${name} criado em ${hash.slice(0, 12)}`);
@@ -84,7 +102,8 @@ function describeRefs(before, after) {
 export function compareSnapshots(before, after) {
   const changes = [];
   if (before.head !== after.head) changes.push(`HEAD passou de ${before.head} para ${after.head}`);
-  const refs = describeRefs(before.refs, after.refs);
+  const ignored = new Set([...(before.foreignBranches ?? []), ...(after.foreignBranches ?? [])]);
+  const refs = describeRefs(before.refs, after.refs, ignored);
   if (refs.length > 0) changes.push(`refs mudaram: ${refs.join('; ')}`);
   const ownWorktrees = (list) =>
     String(list ?? '')
