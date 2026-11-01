@@ -22,29 +22,22 @@ export const ProblemType = z
 export const Problem = z
   .strictObject({
     type: ProblemType,
-    title: z
-      .string()
-      .meta({
-        description: 'Resumo curto da causa, igual para toda ocorrência dela.',
-      }),
+    title: z.string().meta({
+      description: 'Resumo curto da causa, igual para toda ocorrência dela.',
+    }),
     status: z.int().min(400).max(599),
-    detail: z
-      .string()
-      .optional()
-      .meta({
-        description: 'Explicação desta ocorrência, sem detalhe interno.',
-      }),
+    detail: z.string().optional().meta({
+      description: 'Explicação desta ocorrência, sem detalhe interno.',
+    }),
     instance: z.string().optional(),
     correlationId: CorrelationId,
     errors: z
       .array(
         z.strictObject({
-          path: z
-            .string()
-            .meta({
-              description:
-                'Onde está o problema, como query.page ou body.items.0.sku.',
-            }),
+          path: z.string().meta({
+            description:
+              'Onde está o problema, como query.page ou body.items.0.sku.',
+          }),
           message: z.string(),
         }),
       )
