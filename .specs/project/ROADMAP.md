@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; #21 (B2, checagens de código) entrou; #22 (B3, workflows do CI e cadeia de suprimentos) e #25 (teste do compose independente da ordem) entraram; #26 (B4a, guardas do repositório e das dependências) e #28 (preparo da sessão na nuvem) entraram; #27 (B4b, workflows, lint do Kysely e guardas) e #30 (processo, os `baixa` do #27) entraram; o PR C (#29, testes) está pronto para a aprovação; a seguir, os PRs D e E, depois o M4. O M3 terminou nos PRs #13 e #15
+**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; #21 (B2, checagens de código) entrou; #22 (B3, workflows do CI e cadeia de suprimentos) e #25 (teste do compose independente da ordem) entraram; #26 (B4a, guardas do repositório e das dependências) e #28 (preparo da sessão na nuvem) entraram; #27 (B4b, workflows, lint do Kysely e guardas) e #30 (processo, os `baixa` do #27) entraram; o PR C (#29, testes) entrou; o PR D (catálogo de telemetria) está em andamento; a seguir, o PR E e o M4. O M3 terminou nos PRs #13 e #15
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
