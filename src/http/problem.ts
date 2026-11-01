@@ -54,7 +54,6 @@ export const notFoundHandler: RequestHandler = (_req, _res, next) => {
 
 export function createErrorHandler(logger: Logger): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   return (error: unknown, _req, res, _next) => {
     const correlationId = res.locals['correlationId'] as string;
     const init: ProblemInit =

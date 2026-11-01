@@ -19,6 +19,7 @@ import {
   changesDuring,
   compareSnapshots,
   snapshotFile,
+  statusEntries,
   takeSnapshot,
 } from './git-snapshot.mjs';
 import { allows, rootFor } from './path-guard.mjs';
@@ -152,21 +153,13 @@ function counterFile(key) {
 
 // Caminhos relativos do git status, inclusive arquivos novos dentro de pastas
 // novas; fora de um repositório git, nenhum.
+// O mesmo parser do retrato (A9 do #19), com os nomes sem aspas nem octal.
 function changedFiles(projectDir) {
-  const status = spawnSync(
-    'git',
-    ['-C', projectDir, 'status', '--porcelain', '--untracked-files=all'],
-    { encoding: 'utf8' },
-  );
-  if (status.status !== 0) return [];
-  return status.stdout
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => line.slice(3))
-    .map((file) =>
-      file.includes(' -> ') ? file.slice(file.indexOf(' -> ') + 4) : file,
-    )
-    .map((file) => file.replace(/^"|"$/g, ''));
+  try {
+    return statusEntries(projectDir).map((entry) => entry.path);
+  } catch {
+    return [];
+  }
 }
 
 async function scriptsChanged(projectDir) {

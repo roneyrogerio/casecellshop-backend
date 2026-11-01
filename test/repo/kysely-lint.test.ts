@@ -1,12 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  cleanupTempDirs,
-  makeTempDir,
-  writeFileIn,
-} from '../helpers/git-sandbox.ts';
+import { cleanupTempDirs, writeFileIn } from '../helpers/git-sandbox.ts';
+import { newLintTree, oxlintBin } from '../helpers/lint-tree.ts';
 
 // AI-19: a conferência do Kysely é parte do `npm run lint`. Aqui o oxlint roda com o .oxlintrc.json do projeto
 // sobre uma árvore temporária que tem uma pasta src/, com cwd nela. Os `files` dos overrides (src/**) casam pelo
@@ -27,15 +23,9 @@ const KYSELY_RULE = /kysely|no-restricted-properties/;
 afterAll(cleanupTempDirs);
 
 const root = join(import.meta.dirname, '..', '..');
-const oxlintBin = join(root, 'node_modules', '.bin', 'oxlint');
 
 function newTree(): string {
-  const dir = makeTempDir('ai19-lint-');
-  // O import de 'kysely' das amostras e as regras com tipos resolvem a partir da pasta da amostra.
-  symlinkSync(join(root, 'node_modules'), join(dir, 'node_modules'), 'dir');
-  symlinkSync(join(root, 'scripts'), join(dir, 'scripts'), 'dir');
-  symlinkSync(join(root, '.oxlintrc.json'), join(dir, '.oxlintrc.json'));
-  return dir;
+  return newLintTree('ai19-lint-');
 }
 
 function lintJson(cwd: string, paths: string[]): Diagnostic[] {

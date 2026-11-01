@@ -175,7 +175,6 @@ function createOnError(
   logger: Logger,
 ): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   return (error: unknown, _req, res, next) => {
     const problem =
       error instanceof ProblemError ? error : parserProblem(error);

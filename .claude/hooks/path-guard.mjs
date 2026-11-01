@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { realPath } from './git-snapshot.mjs';
 
 // O implementer não toca no que decide se o trabalho dele está certo (AI-04): os
 // testes, a spec, o contrato e tudo que configura a verificação ou instrui os
@@ -45,6 +46,9 @@ const PROTECTED_NAMES = [
   /^\.prettierrc(\..+)?$/,
   /^prettier\.config\./,
   /^\.prettierignore$/,
+  // O oxlint lê o .eslintignore por padrão; o lint usa o .gitignore (AI-48), e
+  // este nome fica negado para não voltar a ter efeito.
+  /^\.eslintignore$/,
   // Código sem uso e código repetido (AI-35, AI-36): a configuração e a linha de
   // base decidem o que cada checagem enxerga.
   /^\.?knip(\.config)?\.(jsonc?|[cm]?[jt]s)$/,
@@ -62,6 +66,9 @@ const PROTECTED_NAMES = [
 
 function isProtectedName(rel) {
   const name = rel.slice(rel.lastIndexOf('/') + 1);
+  // O Prettier lê a chave prettier de um package.json aninhado (AI-04); o da
+  // raiz segue liberado, conferido pelo hook de parada e pelo CI (AI-05).
+  if (name === 'package.json' && rel.includes('/')) return true;
   return PROTECTED_NAMES.some((re) => re.test(name));
 }
 
@@ -130,9 +137,11 @@ const HOOK_OWNED_REASON =
 
 // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
 // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+// Pelo caminho real dos dois lados (AI-26): a raiz e o alvo podem vir um pelo
+// link simbólico e o outro pela pasta de verdade, como o /private do macOS.
 function relativeTo(root, target) {
   return path
-    .relative(root, path.resolve(root, target))
+    .relative(realPath(root), realPath(path.resolve(root, target)))
     .split(path.sep)
     .join('/')
     .toLowerCase();
@@ -169,10 +178,12 @@ export function decide(input, root, projectDir = root) {
 export function rootFor(input, projectDir) {
   if (!input?.cwd || !projectDir) return projectDir;
   const top = gitOut(input.cwd, 'rev-parse', '--show-toplevel');
-  if (!top || path.resolve(top) === path.resolve(projectDir)) return projectDir;
+  // Pelo caminho real: o /private do macOS ou um link simbólico no projectDir
+  // não podem fazer a mesma pasta parecer outra (A4 do #19).
+  if (!top || realPath(top) === realPath(projectDir)) return projectDir;
   const common = (dir) => {
     const value = gitOut(dir, 'rev-parse', '--git-common-dir');
-    return value ? path.resolve(dir, value) : null;
+    return value ? realPath(path.resolve(dir, value)) : null;
   };
   const own = common(input.cwd);
   return own && own === common(projectDir) ? top : projectDir;

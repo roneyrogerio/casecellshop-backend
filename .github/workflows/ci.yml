@@ -37,6 +37,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # AI-05: todo pacote do lockfile vem do registro oficial, com sha512. Pelo
+      # node, e não por npm run: o package.json é do próprio PR.
+      - run: node scripts/check-lockfile.ts
       # AI-42: a assinatura do registro e a atestação de cada pacote que o npm ci
       # baixou; pega um pacote adulterado, que o npm audit não vê.
       - run: npm audit signatures
@@ -77,6 +80,14 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: node scripts/check-scripts.ts
+
+      # AI-49: o piso de cobertura só sobe e a linha de base do jscpd só perde
+      # repetições, contra a base do PR.
+      - name: Piso de cobertura e linha de base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-baselines.ts
 
       # CONVENTIONS.md, "Commits": o cabeçalho de cada commit do PR, como no guia de
       # CI do commitlint. Os commits do Dependabot ficam de fora (AI-45).

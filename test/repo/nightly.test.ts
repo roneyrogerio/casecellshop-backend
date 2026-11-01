@@ -42,6 +42,11 @@ const SEEDS = 3;
 type Check = readonly [label: string, pattern: RegExp, run: string];
 
 const MAIN_FULL_CHECKS: Check[] = [
+  [
+    'check-lockfile',
+    /^node scripts\/check-lockfile\.ts$/,
+    'node scripts/check-lockfile.ts',
+  ],
   ['npm audit signatures', /^npm audit signatures$/, 'npm audit signatures'],
   ['lint', /^npm run lint$/, 'npm run lint'],
   [

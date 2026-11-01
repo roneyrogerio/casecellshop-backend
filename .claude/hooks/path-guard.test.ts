@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -219,6 +219,8 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     'test/vitest.config.ts',
     'test/knip.json',
     'test/.editorconfig',
+    'test/.eslintignore',
+    'test/package.json',
     'src/vitest.config.ts',
   ])(
     'FND-08 o test-writer não pode editar a configuração da verificação %s',
@@ -393,6 +395,12 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   'src/.editorconfig',
   'src/package.yaml',
   'src/knip.json',
+  // O oxlint lê o .eslintignore por padrão (AI-48) e o Prettier lê a chave `prettier` de um package.json aninhado.
+  '.eslintignore',
+  'src/.eslintignore',
+  'src/package.json',
+  'src/x/package.json',
+  'migrations/package.json',
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
@@ -928,6 +936,297 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
 
     expectProcessAllowed(runHook(JSON.stringify(code), project, inside));
     expectProcessDenied(runHook(JSON.stringify(test), project, inside));
+  });
+});
+
+// A4 da Revisão do #19 (AI-26): os caminhos são comparados depois do `realpath`. Com o projectDir passado por um link
+// simbólico (como o `/tmp` do macOS, que aponta para `/private/tmp`) e o cwd da entrada pelo caminho real, a comparação
+// sem `realpath` não reconhece a worktree e devolve a pasta principal.
+describe('AI-26 o rootFor compara os caminhos depois do realpath', () => {
+  let project: string;
+  let link: string;
+  let worktree: string;
+  let unrelated: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-real-');
+    initRepo(project);
+    worktree = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt-realpath');
+    link = join(makeTempDir('ai26-link-'), 'projeto');
+    symlinkSync(project, link);
+    unrelated = makeTempDir('ai26-unrelated-');
+    initRepo(unrelated);
+  });
+
+  afterAll(cleanupTempDirs);
+
+  it('AI-26 o projectDir por link simbólico e o cwd pelo caminho real dão a raiz da worktree', () => {
+    expect(realpathSync(link)).toBe(project);
+    expect(rootFor({ cwd: worktree }, link)).toBe(worktree);
+    expect(rootFor({ cwd: join(worktree, 'src') }, link)).toBe(worktree);
+  });
+
+  it('AI-26 o projectDir real e o cwd pelo link simbólico dão a mesma worktree', () => {
+    const viaLink = join(link, '.claude', 'worktrees', 'agent-1');
+
+    expect(realpathSync(rootFor({ cwd: viaLink }, project))).toBe(worktree);
+    expect(realpathSync(rootFor({ cwd: viaLink }, link))).toBe(worktree);
+  });
+
+  it('AI-26 a decisão com o projectDir por link simbólico libera o código da worktree e nega o teste', () => {
+    const code: HookInput = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      cwd: worktree,
+      agent_type: 'implementer',
+      tool_input: { file_path: join(worktree, 'src/x.ts') },
+    };
+    const test: HookInput = {
+      ...code,
+      tool_input: { file_path: join(worktree, 'test/x.test.ts') },
+    };
+
+    expectAllowed(decide(code, rootFor(code, link), link));
+    expectDenied(decide(test, rootFor(test, link), link));
+  });
+
+  // Controle negativo: um cwd de outro repositório continua devolvendo o projectDir, do jeito que foi passado.
+  it('AI-26 controle: o cwd de outro repositório devolve o projectDir, mesmo por link simbólico', () => {
+    expect(rootFor({ cwd: unrelated }, link)).toBe(link);
+    expect(rootFor({ cwd: unrelated }, project)).toBe(project);
+    expect(rootFor({}, link)).toBe(link);
+  });
+
+  // A18 da Revisão 4 (AI-28): sem worktree, o retorno é o projectDir exatamente como foi passado, e não a forma real.
+  // O agente sem worktree na pasta principal não pode passar a contar como isolado por uma diferença de grafia.
+  it('AI-26 controle: o cwd na pasta principal, pelo caminho real, devolve o projectDir passado por link simbólico, sem resolvê-lo', () => {
+    expect(rootFor({ cwd: join(project, 'src') }, link)).toBe(link);
+    expect(rootFor({ cwd: project }, link)).toBe(link);
+  });
+
+  it('AI-26 controle: o cwd igual ao projectDir, pelo link simbólico, devolve o projectDir e não a forma real', () => {
+    const viaLink = rootFor({ cwd: link }, link);
+
+    expect(viaLink).toBe(link);
+    expect(viaLink).not.toBe(project);
+    expect(rootFor({ cwd: join(link, 'src') }, link)).toBe(link);
+  });
+});
+
+// A15 da Revisão 4 (AI-26, AI-15): a decisão compara o `file_path` e as raízes depois do `realpath`. Um caminho pelo link
+// simbólico (ou pelo `/private` do macOS) e o mesmo caminho pela forma real não podem dar decisões diferentes, em
+// nenhuma das quatro combinações de raiz e alvo.
+describe('AI-26 a decisão compara o file_path e as raízes depois do realpath', () => {
+  let project: string;
+  let link: string;
+  let foreign: string;
+  let foreignLink: string;
+  let worktree: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-dec-');
+    initRepo(project);
+    worktree = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt-decide');
+    link = join(makeTempDir('ai26-dec-link-'), 'projeto');
+    symlinkSync(project, link);
+    foreign = makeTempDir('ai26-dec-fora-');
+    foreignLink = join(makeTempDir('ai26-dec-fora-link-'), 'fora');
+    symlinkSync(foreign, foreignLink);
+  });
+
+  afterAll(cleanupTempDirs);
+
+  type Form = 'real' | 'link';
+  const FORMS: Form[] = ['real', 'link'];
+  // As quatro combinações: a forma da raiz e a forma do alvo.
+  const COMBINATIONS = FORMS.flatMap((rootForm) =>
+    FORMS.map((targetForm): [Form, Form] => [rootForm, targetForm]),
+  );
+
+  function projectIn(form: Form): string {
+    return form === 'real' ? project : link;
+  }
+
+  function worktreeIn(form: Form): string {
+    return join(projectIn(form), '.claude', 'worktrees', 'agent-1');
+  }
+
+  function projectInput(
+    agentType: string | undefined,
+    filePath: string,
+    toolName = 'Edit',
+  ): HookInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      cwd: project,
+      ...(agentType ? { agent_type: agentType } : {}),
+      tool_input: { file_path: filePath, content: 'x' },
+    };
+  }
+
+  function worktreeInput(agentType: string, filePath: string): HookInput {
+    return { ...projectInput(agentType, filePath), cwd: worktree };
+  }
+
+  // Pastas dos hooks (AI-15), sessão principal, raiz e projectDir pela mesma forma.
+  it.each(
+    [
+      '.claude/reviews/x.md',
+      '.claude/state/stop-exceptions.log',
+      '.claude/reviews/novo/sub/x.md',
+    ].flatMap((relative) =>
+      COMBINATIONS.map((combination): [string, Form, Form] => [
+        relative,
+        ...combination,
+      ]),
+    ),
+  )(
+    'AI-15 a sessão principal não escreve %s: raiz pela forma %s e alvo pela forma %s',
+    (relative, rootForm, targetForm) => {
+      for (const tool of ['Edit', 'Write']) {
+        const input = projectInput(
+          undefined,
+          join(projectIn(targetForm), relative),
+          tool,
+        );
+
+        expectDenied(decide(input, projectIn(rootForm), projectIn(rootForm)));
+      }
+    },
+  );
+
+  it.each(COMBINATIONS)(
+    'AI-15 controle: a sessão principal segue escrevendo o resto do projeto: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      for (const relative of ['src/x.ts', '.claude/hooks/x.mjs', 'AGENTS.md']) {
+        const input = projectInput(
+          undefined,
+          join(projectIn(targetForm), relative),
+        );
+
+        expectAllowed(decide(input, projectIn(rootForm), projectIn(rootForm)));
+      }
+    },
+  );
+
+  // O implementer isolado: a raiz é a da worktree, e o projectDir, o da pasta principal.
+  it.each(COMBINATIONS)(
+    'AI-26 o implementer isolado edita o código da worktree: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      for (const relative of ['src/x.ts', 'migrations/store/001_x.ts']) {
+        const input = worktreeInput(
+          'implementer',
+          join(worktreeIn(targetForm), relative),
+        );
+
+        expectAllowed(decide(input, worktreeIn(rootForm), projectIn(rootForm)));
+      }
+    },
+  );
+
+  it.each(COMBINATIONS)(
+    'AI-26 o implementer isolado não edita teste nem o que é protegido na worktree: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      for (const relative of [
+        'src/x.test.ts',
+        'test/helpers/clock.ts',
+        '.claude/hooks/x.mjs',
+        'AGENTS.md',
+      ]) {
+        const input = worktreeInput(
+          'implementer',
+          join(worktreeIn(targetForm), relative),
+        );
+
+        expectDenied(decide(input, worktreeIn(rootForm), projectIn(rootForm)));
+      }
+    },
+  );
+
+  it.each(COMBINATIONS)(
+    'AI-26 o test-writer isolado edita teste e não edita código da worktree: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      const allowed = worktreeInput(
+        'test-writer',
+        join(worktreeIn(targetForm), 'test/x.test.ts'),
+      );
+      const denied = worktreeInput(
+        'test-writer',
+        join(worktreeIn(targetForm), 'src/x.ts'),
+      );
+
+      expectAllowed(decide(allowed, worktreeIn(rootForm), projectIn(rootForm)));
+      expectDenied(decide(denied, worktreeIn(rootForm), projectIn(rootForm)));
+    },
+  );
+
+  // Alvo que ainda não existe: arquivo novo em pasta nova. A decisão é a mesma nas duas formas, porque o caminho se
+  // resolve pelo maior ancestral que existe.
+  it.each(COMBINATIONS)(
+    'AI-26 um arquivo novo numa pasta nova decide igual nas duas formas: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      const target = (relative: string): string =>
+        join(worktreeIn(targetForm), relative);
+      const decideFor = (agentType: string, relative: string) =>
+        decide(
+          worktreeInput(agentType, target(relative)),
+          worktreeIn(rootForm),
+          projectIn(rootForm),
+        );
+
+      expectAllowed(decideFor('implementer', 'src/pasta/nova/x.ts'));
+      expectDenied(decideFor('implementer', 'src/pasta/nova/x.test.ts'));
+      expectAllowed(decideFor('test-writer', 'test/pasta/nova/x.test.ts'));
+      expectDenied(decideFor('test-writer', 'src/pasta/nova/x.ts'));
+    },
+  );
+
+  it.each(COMBINATIONS)(
+    'AI-15 uma pasta nova dentro de .claude/reviews/ segue negada à sessão principal: raiz pela forma %s e alvo pela forma %s',
+    (rootForm, targetForm) => {
+      const input = projectInput(
+        undefined,
+        join(projectIn(targetForm), '.claude/reviews/pasta/nova/x.md'),
+        'Write',
+      );
+
+      expectDenied(decide(input, projectIn(rootForm), projectIn(rootForm)));
+    },
+  );
+
+  // Controle negativo: um alvo de fato fora do projeto segue negado ao agente, pelo caminho real e pelo link.
+  it.each([
+    ['pela forma real', () => foreign],
+    ['pelo link simbólico', () => foreignLink],
+  ])(
+    'AI-26 controle: o agente isolado não edita um alvo fora do projeto (%s)',
+    (_label, base) => {
+      for (const agentType of ['implementer', 'test-writer']) {
+        for (const relative of ['src/x.ts', 'test/x.test.ts']) {
+          for (const rootForm of FORMS) {
+            const input = worktreeInput(agentType, join(base(), relative));
+
+            expectDenied(
+              decide(input, worktreeIn(rootForm), projectIn(rootForm)),
+            );
+          }
+        }
+      }
+    },
+  );
+
+  // Controle negativo: o link simbólico da pasta do projeto não vira licença para a pasta irmã com o mesmo prefixo.
+  it('AI-26 controle: uma pasta irmã da worktree com o mesmo prefixo segue fora do repositório, pelo link', () => {
+    const input = worktreeInput(
+      'implementer',
+      join(`${worktreeIn('link')}-outra`, 'src/x.ts'),
+    );
+
+    expectDenied(decide(input, worktreeIn('real'), project));
+    expectDenied(decide(input, worktreeIn('link'), link));
   });
 });
 
