@@ -15,7 +15,11 @@ services:
       # Com --host o teste vai por TCP: na primeira subida a imagem roda um servidor temporário
       # só no socket Unix, e sem host o banco ficaria saudável antes de a porta abrir.
       # Usa 127.0.0.1 (IPv4 explícito), como recomenda a imagem oficial, pois localhost pode resolver para IPv6.
-      test: ["CMD-SHELL", "pg_isready --host 127.0.0.1 -U casecellshop -d casecellshop"]
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready --host 127.0.0.1 -U casecellshop -d casecellshop',
+        ]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -23,30 +27,36 @@ services:
   # Execução única: migra os dois schemas e grava o catálogo de exemplo do ERP simulado.
   migrate:
     build: .
-    command: ["node", "src/main/migrate.ts"]
+    command: ['node', 'src/main/migrate.ts']
     environment:
       DATABASE_URL: *database-url
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
+    restart: 'no'
 
   api:
     build: .
-    command: ["node", "src/main/api.ts"]
+    command: ['node', 'src/main/api.ts']
     environment:
       DATABASE_URL: *database-url
-      PORT: "3000"
+      PORT: '3000'
       OTEL_TRACES_EXPORTER: otlp
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       OTEL_SERVICE_NAME: casecellshop-api
     ports:
-      - "${API_PORT:-3000}:3000"
+      - '${API_PORT:-3000}:3000'
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
       # Cada chamada gera um trace de /health: na subida checa a cada 2 s, depois a cada 30 s.
       interval: 30s
       timeout: 3s
@@ -59,7 +69,7 @@ services:
 
   worker:
     build: .
-    command: ["node", "src/main/worker.ts"]
+    command: ['node', 'src/main/worker.ts']
     environment:
       DATABASE_URL: *database-url
       OTEL_TRACES_EXPORTER: otlp
@@ -95,7 +105,7 @@ services:
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
     ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"
+      - '${JAEGER_UI_PORT:-16686}:16686'
     restart: unless-stopped
 
 volumes:

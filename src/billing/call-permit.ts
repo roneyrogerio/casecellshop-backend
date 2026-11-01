@@ -29,7 +29,11 @@ function intervalOf(ms: number) {
 
 // Um UPDATE só: a condição e a gravação juntas é que impedem duas tentativas de ganharem a mesma
 // permissão (ler e gravar em dois comandos deixaria uma janela).
-export async function takeCallPermit(db: Kysely<StoreDb>, orderId: string, { minDelayMs, clearDead }: TakeCallPermitOptions): Promise<CallPermit> {
+export async function takeCallPermit(
+  db: Kysely<StoreDb>,
+  orderId: string,
+  { minDelayMs, clearDead }: TakeCallPermitOptions,
+): Promise<CallPermit> {
   const token = randomUUID();
   const taken = await db
     .updateTable('outbox')
@@ -40,16 +44,34 @@ export async function takeCallPermit(db: Kysely<StoreDb>, orderId: string, { min
       ...(clearDead ? { dead_at: null } : {}),
     })
     .where('order_id', '=', orderId)
-    .where((eb) => eb.or([eb('last_call_at', 'is', null), eb(eb('last_call_at', '+', intervalOf(minDelayMs)), '<=', sql<Date>`now()`)]))
+    .where((eb) =>
+      eb.or([
+        eb('last_call_at', 'is', null),
+        eb(
+          eb('last_call_at', '+', intervalOf(minDelayMs)),
+          '<=',
+          sql<Date>`now()`,
+        ),
+      ]),
+    )
     // O RETURNING devolve a linha nova, então o "enviado antes" sai da comparação: na primeira tomada
     // first_sent_at e last_call_at valem o mesmo now() da transação; nas seguintes, first_sent_at é mais antigo.
-    .returning((eb) => eb(eb.ref('first_sent_at'), '<', eb.ref('last_call_at')).as('sent_before'))
+    .returning((eb) =>
+      eb(eb.ref('first_sent_at'), '<', eb.ref('last_call_at')).as(
+        'sent_before',
+      ),
+    )
     .executeTakeFirst();
-  if (taken) return { granted: true, token, sentBefore: taken.sent_before === true };
+  if (taken)
+    return { granted: true, token, sentBefore: taken.sent_before === true };
 
   const row = await db
     .selectFrom('outbox')
-    .select((eb) => sql<number>`(extract(epoch from (${eb.ref('last_call_at')} + ${intervalOf(minDelayMs)} - now())) * 1000)::float8`.as('retry_in_ms'))
+    .select((eb) =>
+      sql<number>`(extract(epoch from (${eb.ref('last_call_at')} + ${intervalOf(minDelayMs)} - now())) * 1000)::float8`.as(
+        'retry_in_ms',
+      ),
+    )
     .where('order_id', '=', orderId)
     .executeTakeFirst();
   if (!row) throw new Error('a linha da outbox não existe');
@@ -59,7 +81,11 @@ export async function takeCallPermit(db: Kysely<StoreDb>, orderId: string, { min
 // Regrava o início da chamada para a criação que vem depois da consulta; false
 // quando o token já não vale. O token, e não o horário, porque o `Date` do JS perde
 // os microssegundos do now().
-export async function renewCallPermit(db: Kysely<StoreDb>, orderId: string, token: string): Promise<boolean> {
+export async function renewCallPermit(
+  db: Kysely<StoreDb>,
+  orderId: string,
+  token: string,
+): Promise<boolean> {
   const renewed = await db
     .updateTable('outbox')
     .set({ last_call_at: sql<Date>`now()` })

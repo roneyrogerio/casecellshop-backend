@@ -28,8 +28,13 @@ afterAll(async () => {
 
 // Nomes das migrações de uma pasta, sem a extensão, em ordem; é o que a kysely_migration deve listar.
 async function migrationNamesInFolder(schema: string): Promise<string[]> {
-  const folder = MIGRATION_FOLDERS.find((candidate) => candidate.schema === schema);
-  if (!folder) throw new Error(`a pasta do schema ${schema} não está em MIGRATION_FOLDERS`);
+  const folder = MIGRATION_FOLDERS.find(
+    (candidate) => candidate.schema === schema,
+  );
+  if (!folder)
+    throw new Error(
+      `a pasta do schema ${schema} não está em MIGRATION_FOLDERS`,
+    );
   const files = await readdir(folder.dir);
   return files
     .filter((file) => file.endsWith('.ts'))
@@ -40,12 +45,17 @@ async function migrationNamesInFolder(schema: string): Promise<string[]> {
 // O código e o nome da restrição vêm do erro do driver; a mensagem não é contrato.
 async function violation(
   promise: Promise<unknown>,
-): Promise<{ code: string | undefined; constraint: string | undefined } | undefined> {
+): Promise<
+  { code: string | undefined; constraint: string | undefined } | undefined
+> {
   try {
     await promise;
     return undefined;
   } catch (error) {
-    const { code, constraint } = error as { code?: string; constraint?: string };
+    const { code, constraint } = error as {
+      code?: string;
+      constraint?: string;
+    };
     return { code, constraint };
   }
 }
@@ -166,11 +176,27 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     );
 
     expect(result.rows).toEqual([
-      { table_name: 'invoices', contype: 'c', definition: 'CHECK ((total_cents >= 0))' },
+      {
+        table_name: 'invoices',
+        contype: 'c',
+        definition: 'CHECK ((total_cents >= 0))',
+      },
       { table_name: 'invoices', contype: 'p', definition: 'PRIMARY KEY (id)' },
-      { table_name: 'invoices', contype: 'u', definition: 'UNIQUE (dedup_key)' },
-      { table_name: 'products', contype: 'c', definition: 'CHECK ((on_hand >= 0))' },
-      { table_name: 'products', contype: 'c', definition: 'CHECK ((price_cents >= 0))' },
+      {
+        table_name: 'invoices',
+        contype: 'u',
+        definition: 'UNIQUE (dedup_key)',
+      },
+      {
+        table_name: 'products',
+        contype: 'c',
+        definition: 'CHECK ((on_hand >= 0))',
+      },
+      {
+        table_name: 'products',
+        contype: 'c',
+        definition: 'CHECK ((price_cents >= 0))',
+      },
       { table_name: 'products', contype: 'p', definition: 'PRIMARY KEY (sku)' },
     ]);
   });
@@ -182,7 +208,12 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
 
     // O nome do índice não é contrato (pode ser gerado): compara só a definição, sem o nome.
     const definitions = result.rows
-      .map((row) => row.indexdef.replace(/^CREATE (UNIQUE )?INDEX \S+ ON /, 'CREATE $1INDEX ON '))
+      .map((row) =>
+        row.indexdef.replace(
+          /^CREATE (UNIQUE )?INDEX \S+ ON /,
+          'CREATE $1INDEX ON ',
+        ),
+      )
       .sort();
     expect(definitions).toEqual([
       'CREATE INDEX ON erp_sim.invoices USING btree (reference)',
@@ -193,34 +224,47 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
 
   it('FND-11 o esquema do erp_sim recusa o que deve: CHECKs, unicidade e id informado à mão, e preenche o created_at', async () => {
     const sku = 'FND11-SKU-1';
-    await pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)', [
-      sku,
-      'Capa',
-    ]);
+    await pool.query(
+      'INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)',
+      [sku, 'Capa'],
+    );
 
     const negativePrice = await violation(
-      pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, -1, 1)', [
-        'FND11-SKU-2',
-        'Capa',
-      ]),
+      pool.query(
+        'INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, -1, 1)',
+        ['FND11-SKU-2', 'Capa'],
+      ),
     );
     const negativeStock = await violation(
-      pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 1, -1)', [
-        'FND11-SKU-3',
-        'Capa',
-      ]),
+      pool.query(
+        'INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 1, -1)',
+        ['FND11-SKU-3', 'Capa'],
+      ),
     );
     const duplicateSku = await violation(
-      pool.query('INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)', [
-        sku,
-        'Capa',
-      ]),
+      pool.query(
+        'INSERT INTO erp_sim.products (sku, name, price_cents, on_hand) VALUES ($1, $2, 100, 1)',
+        [sku, 'Capa'],
+      ),
     );
-    expect(negativePrice).toEqual({ code: '23514', constraint: 'products_price_cents_check' });
-    expect(negativeStock).toEqual({ code: '23514', constraint: 'products_on_hand_check' });
-    expect(duplicateSku).toEqual({ code: '23505', constraint: 'products_pkey' });
+    expect(negativePrice).toEqual({
+      code: '23514',
+      constraint: 'products_price_cents_check',
+    });
+    expect(negativeStock).toEqual({
+      code: '23514',
+      constraint: 'products_on_hand_check',
+    });
+    expect(duplicateSku).toEqual({
+      code: '23505',
+      constraint: 'products_pkey',
+    });
 
-    const created = await pool.query<{ id: string; created_at: Date; recent: boolean }>(
+    const created = await pool.query<{
+      id: string;
+      created_at: Date;
+      recent: boolean;
+    }>(
       `INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)
        RETURNING id::text, created_at, created_at BETWEEN now() - interval '1 minute' AND now() AS recent`,
     );
@@ -228,7 +272,9 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     expect(created.rows[0]?.recent).toBe(true);
 
     // Duas linhas com dedup_key nula e a mesma reference são aceitas: é o modo sem a H1b.
-    await pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)`);
+    await pool.query(
+      `INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-1', '[]'::jsonb, 0)`,
+    );
     const sameReference = await pool.query<{ total: string }>(
       `SELECT count(*)::text AS total FROM erp_sim.invoices WHERE reference = 'fnd11-ref-1' AND dedup_key IS NULL`,
     );
@@ -249,15 +295,25 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
       ),
     );
     const negativeTotal = await violation(
-      pool.query(`INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-2', '[]'::jsonb, -1)`),
+      pool.query(
+        `INSERT INTO erp_sim.invoices (reference, items, total_cents) VALUES ('fnd11-ref-2', '[]'::jsonb, -1)`,
+      ),
     );
     // GENERATED ALWAYS: informar o id à mão é recusado (428C9), sem restrição nomeada.
     const explicitId = await violation(
-      pool.query(`INSERT INTO erp_sim.invoices (id, reference, items, total_cents) VALUES (999, 'fnd11-ref-3', '[]'::jsonb, 0)`),
+      pool.query(
+        `INSERT INTO erp_sim.invoices (id, reference, items, total_cents) VALUES (999, 'fnd11-ref-3', '[]'::jsonb, 0)`,
+      ),
     );
     expect(uniqueConstraint.rows).toHaveLength(1);
-    expect(duplicateDedupKey).toEqual({ code: '23505', constraint: uniqueConstraint.rows[0]?.conname });
-    expect(negativeTotal).toEqual({ code: '23514', constraint: 'invoices_total_cents_check' });
+    expect(duplicateDedupKey).toEqual({
+      code: '23505',
+      constraint: uniqueConstraint.rows[0]?.conname,
+    });
+    expect(negativeTotal).toEqual({
+      code: '23514',
+      constraint: 'invoices_total_cents_check',
+    });
     expect(explicitId?.code).toBe('428C9');
   });
 
@@ -278,9 +334,14 @@ describe('FND-11 a migração erp_sim em TypeScript fixa o esquema do erp_sim', 
     const { pool: scratch, uri: scratchUri } = await container.createDatabase();
     await migrate(scratch);
 
-    const erpFolder = MIGRATION_FOLDERS.find((folder) => folder.schema === 'erp_sim');
-    if (!erpFolder) throw new Error('a pasta erp_sim não está em MIGRATION_FOLDERS');
-    const down = await runPlainMigrator(scratchUri, erpFolder, { rollbackAll: true });
+    const erpFolder = MIGRATION_FOLDERS.find(
+      (folder) => folder.schema === 'erp_sim',
+    );
+    if (!erpFolder)
+      throw new Error('a pasta erp_sim não está em MIGRATION_FOLDERS');
+    const down = await runPlainMigrator(scratchUri, erpFolder, {
+      rollbackAll: true,
+    });
 
     expect(down.error).toBeUndefined();
     expect(await tableExists(scratch, 'erp_sim.products')).toBe(false);

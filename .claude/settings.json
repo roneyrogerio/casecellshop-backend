@@ -3,14 +3,10 @@
   "model": "opus",
   "effortLevel": "high",
   "outputStyle": "Concise",
-  "enabledMcpjsonServers": [
-    "github"
-  ],
+  "enabledMcpjsonServers": ["github"],
   "worktree": {
     "baseRef": "head",
-    "symlinkDirectories": [
-      "node_modules"
-    ]
+    "symlinkDirectories": ["node_modules"]
   },
   "permissions": {
     "allow": [

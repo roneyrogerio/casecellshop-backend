@@ -2,9 +2,16 @@ import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from '../../../src/db/database.ts';
-import { type CallPermit, renewCallPermit, takeCallPermit } from '../../../src/billing/call-permit.ts';
+import {
+  type CallPermit,
+  renewCallPermit,
+  takeCallPermit,
+} from '../../../src/billing/call-permit.ts';
 import { createAppPool, PATIENT_LIMITS } from '../../helpers/checkout.ts';
-import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 import { MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 
 // Permissão de chamada por pedido (AD-024; design.md, "Worker: envio"): uma chamada ao ERP por pedido a
@@ -35,7 +42,10 @@ const db = () => createDb(pool);
 async function seedOutbox(): Promise<string> {
   const orderId = randomUUID();
   await database.pool.query('insert into orders (id) values ($1)', [orderId]);
-  await database.pool.query("insert into outbox (order_id, correlation_id, published_at) values ($1, 'corr-1', now())", [orderId]);
+  await database.pool.query(
+    "insert into outbox (order_id, correlation_id, published_at) values ($1, 'corr-1', now())",
+    [orderId],
+  );
   return orderId;
 }
 
@@ -62,7 +72,13 @@ async function readPermit(orderId: string): Promise<PermitRow> {
   );
   const row = result.rows[0];
   if (!row) throw new Error(`outbox inexistente para ${orderId}`);
-  return { callToken: row.call_token, firstSentAt: row.first_sent_at, lastCallAt: row.last_call_at, deadAt: row.dead_at, sinceCallMs: row.since_call_ms };
+  return {
+    callToken: row.call_token,
+    firstSentAt: row.first_sent_at,
+    lastCallAt: row.last_call_at,
+    deadAt: row.dead_at,
+    sinceCallMs: row.since_call_ms,
+  };
 }
 
 function granted(permit: CallPermit): Extract<CallPermit, { granted: true }> {
@@ -77,7 +93,9 @@ describe('ORD-02 a permissão de chamada respeita o atraso mínimo desde o iníc
     const permit = granted(await takeCallPermit(db(), orderId, options));
 
     expect(permit.sentBefore).toBe(false);
-    expect(permit.token).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(permit.token).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     const row = await readPermit(orderId);
     expect(row.callToken).toBe(permit.token);
     expect(row.firstSentAt).not.toBeNull();
@@ -105,13 +123,18 @@ describe('ORD-02 a permissão de chamada respeita o atraso mínimo desde o iníc
   it('ORD-02 a falta informada acompanha o relógio do banco: com a última chamada há 30 s, faltam uns 15 s', async () => {
     const orderId = await seedOutbox();
     await takeCallPermit(db(), orderId, options);
-    await database.pool.query("update outbox set last_call_at = now() - interval '30 seconds' where order_id = $1", [orderId]);
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '30 seconds' where order_id = $1",
+      [orderId],
+    );
 
     const refused = await takeCallPermit(db(), orderId, options);
 
     expect(refused.granted).toBe(false);
     if (refused.granted) throw new Error('devia ser recusada');
-    expect(refused.retryInMs).toBeGreaterThan(MIN_RETRY_DELAY_MS - 30_000 - 3_000);
+    expect(refused.retryInMs).toBeGreaterThan(
+      MIN_RETRY_DELAY_MS - 30_000 - 3_000,
+    );
     expect(refused.retryInMs).toBeLessThanOrEqual(MIN_RETRY_DELAY_MS - 30_000);
   });
 
@@ -119,7 +142,10 @@ describe('ORD-02 a permissão de chamada respeita o atraso mínimo desde o iníc
     const orderId = await seedOutbox();
     const first = granted(await takeCallPermit(db(), orderId, options));
     const original = await readPermit(orderId);
-    await database.pool.query("update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1", [orderId]);
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1",
+      [orderId],
+    );
 
     const again = granted(await takeCallPermit(db(), orderId, options));
 
@@ -145,10 +171,23 @@ describe('ORD-11 a permissão de chamada exclui duas chamadas simultâneas do me
   it('ORD-11 o worker zera o dead_at ao tomar a permissão, e a reconciliação (clearDead falso) não', async () => {
     const forWorker = await seedOutbox();
     const forReconciliation = await seedOutbox();
-    await database.pool.query("update outbox set dead_at = now() where order_id = any($1::uuid[])", [[forWorker, forReconciliation]]);
+    await database.pool.query(
+      'update outbox set dead_at = now() where order_id = any($1::uuid[])',
+      [[forWorker, forReconciliation]],
+    );
 
-    granted(await takeCallPermit(db(), forWorker, { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: true }));
-    granted(await takeCallPermit(db(), forReconciliation, { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: false }));
+    granted(
+      await takeCallPermit(db(), forWorker, {
+        minDelayMs: MIN_RETRY_DELAY_MS,
+        clearDead: true,
+      }),
+    );
+    granted(
+      await takeCallPermit(db(), forReconciliation, {
+        minDelayMs: MIN_RETRY_DELAY_MS,
+        clearDead: false,
+      }),
+    );
 
     expect((await readPermit(forWorker)).deadAt).toBeNull();
     expect((await readPermit(forReconciliation)).deadAt).not.toBeNull();
@@ -161,11 +200,20 @@ describe('ORD-11 a permissão de chamada exclui duas chamadas simultâneas do me
     for (let round = 1; round <= ROUNDS; round += 1) {
       const orderId = await seedOutbox();
 
-      const permits = await Promise.all(Array.from({ length: CONTENDERS }, () => takeCallPermit(db(), orderId, options)));
+      const permits = await Promise.all(
+        Array.from({ length: CONTENDERS }, () =>
+          takeCallPermit(db(), orderId, options),
+        ),
+      );
 
-      const winners = permits.filter((permit): permit is Extract<CallPermit, { granted: true }> => permit.granted);
+      const winners = permits.filter(
+        (permit): permit is Extract<CallPermit, { granted: true }> =>
+          permit.granted,
+      );
       expect(winners, `rodada ${round}`).toHaveLength(1);
-      expect((await readPermit(orderId)).callToken, `rodada ${round}`).toBe(winners[0]?.token);
+      expect((await readPermit(orderId)).callToken, `rodada ${round}`).toBe(
+        winners[0]?.token,
+      );
     }
   });
 
@@ -188,7 +236,10 @@ describe('ORD-11 a permissão de chamada exclui duas chamadas simultâneas do me
       if (arrived === 2) open();
       await opened;
       if (!read.rows[0]?.free) return false;
-      await database.pool.query('update outbox set last_call_at = now(), call_token = gen_random_uuid() where order_id = $1', [orderId]);
+      await database.pool.query(
+        'update outbox set last_call_at = now(), call_token = gen_random_uuid() where order_id = $1',
+        [orderId],
+      );
       return true;
     }
 
@@ -202,7 +253,10 @@ describe('ORD-04 a criação depois da consulta renova a permissão pelo token',
   it('ORD-04 com o token vigente, renewCallPermit regrava last_call_at para agora e devolve true', async () => {
     const orderId = await seedOutbox();
     const permit = granted(await takeCallPermit(db(), orderId, options));
-    await database.pool.query("update outbox set last_call_at = now() - interval '30 seconds' where order_id = $1", [orderId]);
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '30 seconds' where order_id = $1",
+      [orderId],
+    );
 
     const renewed = await renewCallPermit(db(), orderId, permit.token);
 
@@ -215,9 +269,15 @@ describe('ORD-04 a criação depois da consulta renova a permissão pelo token',
   it('ORD-04 com um token que já não vale (outra tentativa tomou a permissão), devolve false e não muda a linha', async () => {
     const orderId = await seedOutbox();
     const old = granted(await takeCallPermit(db(), orderId, options));
-    await database.pool.query("update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1", [orderId]);
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1",
+      [orderId],
+    );
     const current = granted(await takeCallPermit(db(), orderId, options));
-    await database.pool.query("update outbox set last_call_at = now() - interval '20 seconds' where order_id = $1", [orderId]);
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '20 seconds' where order_id = $1",
+      [orderId],
+    );
     const before = await readPermit(orderId);
 
     const renewed = await renewCallPermit(db(), orderId, old.token);

@@ -4,7 +4,11 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { PROBLEM_MEDIA_TYPE } from '../contract/index.ts';
 import { TransactionAbortedError } from '../db/database.ts';
-import { expectMatchesContract, findRoute, type ObservedResponse } from '../../test/helpers/contract.ts';
+import {
+  expectMatchesContract,
+  findRoute,
+  type ObservedResponse,
+} from '../../test/helpers/contract.ts';
 import { createErrorHandler } from './problem.ts';
 
 const CORRELATION_ID = 'fnd10-correlation-id';
@@ -48,13 +52,19 @@ function createApp(thrown: unknown) {
 }
 
 function observed(response: request.Response): ObservedResponse {
-  return { status: response.status, headers: response.headers, body: response.body };
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: response.body,
+  };
 }
 
 // Um erro de driver como o que a guarda recebe, com texto de SQL que nunca pode vazar.
 function abortedByDriverError(): TransactionAbortedError {
   const driverError = Object.assign(
-    new Error('current transaction is aborted, commands ignored until end of transaction block: select 1'),
+    new Error(
+      'current transaction is aborted, commands ignored until end of transaction block: select 1',
+    ),
     { code: '25P02' },
   );
   return new TransactionAbortedError({ cause: driverError });
@@ -68,7 +78,11 @@ describe('FND-10 a transação abortada vira 500 com o evento db.transaction_abo
 
     expect(response.status).toBe(500);
     expect(response.headers['content-type']).toContain(PROBLEM_MEDIA_TYPE);
-    expect(response.body).toMatchObject({ type: '/problems/internal-error', status: 500, correlationId: CORRELATION_ID });
+    expect(response.body).toMatchObject({
+      type: '/problems/internal-error',
+      status: 500,
+      correlationId: CORRELATION_ID,
+    });
     expectMatchesContract(findRoute('get', '/health'), observed(response));
   });
 
@@ -85,7 +99,12 @@ describe('FND-10 a transação abortada vira 500 com o evento db.transaction_abo
     expect(raw).not.toMatch(/select 1/i);
     expect(raw).not.toMatch(/\bat\s+\S+\s+\(.*:\d+:\d+\)/);
     expect(raw).not.toContain('stack');
-    expect(Object.keys(response.body as object).sort()).toEqual(['correlationId', 'status', 'title', 'type']);
+    expect(Object.keys(response.body as object).sort()).toEqual([
+      'correlationId',
+      'status',
+      'title',
+      'type',
+    ]);
   });
 
   it('FND-10 a transação abortada é defeito do código: a resposta não traz Retry-After', async () => {
@@ -102,12 +121,16 @@ describe('FND-10 a transação abortada vira 500 com o evento db.transaction_abo
 
     await request(app).get('/falha');
 
-    const aborted = lines.filter((line) => line.event === 'db.transaction_aborted');
+    const aborted = lines.filter(
+      (line) => line.event === 'db.transaction_aborted',
+    );
     expect(aborted).toHaveLength(1);
     expect(aborted[0]?.level).toBe('error');
     expect(aborted[0]?.correlationId).toBe(CORRELATION_ID);
     // Um erro só gera um log: o evento genérico não se soma ao específico.
-    expect(lines.filter((line) => line.event === 'unhandled_error')).toEqual([]);
+    expect(lines.filter((line) => line.event === 'unhandled_error')).toEqual(
+      [],
+    );
   });
 
   it('FND-10 outro erro qualquer continua com o evento unhandled_error', async () => {

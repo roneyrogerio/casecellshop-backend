@@ -23,13 +23,21 @@ function readText(...parts: string[]): string {
 
 describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
   it('AI-34 o .prettierrc.json usa aspas simples e deixa a largura no padrão (80)', () => {
-    const config = JSON.parse(readText('.prettierrc.json') || '{}') as Record<string, unknown>;
+    const config = JSON.parse(readText('.prettierrc.json') || '{}') as Record<
+      string,
+      unknown
+    >;
 
     expect(config.singleQuote).toBe(true);
     expect(config).not.toHaveProperty('printWidth');
   });
 
-  const IGNORED = ['openapi.yaml', 'src/db/types/', 'package-lock.json', 'migrations/'];
+  const IGNORED = [
+    'openapi.yaml',
+    'src/db/types/',
+    'package-lock.json',
+    'migrations/',
+  ];
 
   it.each(IGNORED)('AI-34 o .prettierignore lista %s', (entry) => {
     const lines = readText('.prettierignore')
@@ -44,7 +52,9 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
       .split('\n')
       .map((line) => line.trim());
 
-    expect(lines.some((line) => line === '*.md' || line === '**/*.md')).toBe(true);
+    expect(lines.some((line) => line === '*.md' || line === '**/*.md')).toBe(
+      true,
+    );
   });
 
   // O Prettier decide, e não a leitura das linhas: o padrão escrito tem de casar com o caminho de verdade.
@@ -56,20 +66,26 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
     'README.md',
     '.specs/features/casecellshop/spec.md',
   ])('AI-34 o Prettier ignora %s', async (path) => {
-    const info = await getFileInfo(join(root, path), { ignorePath: join(root, '.prettierignore') });
+    const info = await getFileInfo(join(root, path), {
+      ignorePath: join(root, '.prettierignore'),
+    });
 
     expect(info.ignored).toBe(true);
   });
 
   // Controle negativo: o .prettierignore não pode ter virado um "ignora tudo".
-  it.each(['src/app.ts', 'package.json', 'scripts/check-scripts.ts', '.claude/settings.json'])(
-    'AI-34 o Prettier não ignora %s',
-    async (path) => {
-      const info = await getFileInfo(join(root, path), { ignorePath: join(root, '.prettierignore') });
+  it.each([
+    'src/app.ts',
+    'package.json',
+    'scripts/check-scripts.ts',
+    '.claude/settings.json',
+  ])('AI-34 o Prettier não ignora %s', async (path) => {
+    const info = await getFileInfo(join(root, path), {
+      ignorePath: join(root, '.prettierignore'),
+    });
 
-      expect(info.ignored).toBe(false);
-    },
-  );
+    expect(info.ignored).toBe(false);
+  });
 });
 
 describe('AI-34 controle negativo: um arquivo fora do formato reprova o prettier --check', () => {
@@ -77,11 +93,18 @@ describe('AI-34 controle negativo: um arquivo fora do formato reprova o prettier
   function check(content: string): { status: number | null; output: string } {
     const file = join(makeTempDir('ai34-check-'), 'amostra.ts');
     writeFileSync(file, content);
-    const result = spawnSync(prettierBin, ['--config', join(root, '.prettierrc.json'), '--check', file], {
-      cwd: root,
-      encoding: 'utf8',
-    });
-    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    const result = spawnSync(
+      prettierBin,
+      ['--config', join(root, '.prettierrc.json'), '--check', file],
+      {
+        cwd: root,
+        encoding: 'utf8',
+      },
+    );
+    return {
+      status: result.status,
+      output: `${result.stdout}${result.stderr}`,
+    };
   }
 
   // O motivo da reprovação tem de ser o formato, e não uma configuração ausente (que também sai com código != 0).
@@ -111,11 +134,16 @@ describe('AI-34 o package.json', () => {
     expect(pkg.scripts['format:check']).toBe('prettier --check .');
   });
 
-  it.each(['verify', 'verify:full'])('AI-34 o %s roda npm run format:check (o pre-push reprova arquivo fora do formato)', (name) => {
-    const steps = (pkg.scripts[name] ?? '').split('&&').map((step) => step.trim());
+  it.each(['verify', 'verify:full'])(
+    'AI-34 o %s roda npm run format:check (o pre-push reprova arquivo fora do formato)',
+    (name) => {
+      const steps = (pkg.scripts[name] ?? '')
+        .split('&&')
+        .map((step) => step.trim());
 
-    expect(steps).toContain('npm run format:check');
-  });
+      expect(steps).toContain('npm run format:check');
+    },
+  );
 });
 
 interface Step {
@@ -130,17 +158,28 @@ interface Workflow {
 function runsPrettierCheck(workflow: Workflow): boolean {
   return Object.values(workflow.jobs ?? {})
     .flatMap((job) => job.steps ?? [])
-    .some((step) => /(^|\s)(?:\.\/)?node_modules\/\.bin\/prettier\s+--check(\s|$)/.test(step.run ?? ''));
+    .some((step) =>
+      /(^|\s)(?:\.\/)?node_modules\/\.bin\/prettier\s+--check(\s|$)/.test(
+        step.run ?? '',
+      ),
+    );
 }
 
 describe('AI-34 o ci.yml', () => {
   it('AI-34 o leitor do ci.yml acha o binário do Prettier com --check e recusa npm run e prettier sem --check', () => {
-    const job = (run: string) => parse(`jobs:\n  a:\n    steps:\n      - run: ${run}\n`) as Workflow;
+    const job = (run: string) =>
+      parse(`jobs:\n  a:\n    steps:\n      - run: ${run}\n`) as Workflow;
 
-    expect(runsPrettierCheck(job('node_modules/.bin/prettier --check .'))).toBe(true);
+    expect(runsPrettierCheck(job('node_modules/.bin/prettier --check .'))).toBe(
+      true,
+    );
     expect(runsPrettierCheck(job('npm run format:check'))).toBe(false);
-    expect(runsPrettierCheck(job('node_modules/.bin/prettier --write .'))).toBe(false);
-    expect(runsPrettierCheck(job('echo node_modules/.bin/prettier-fake --check .'))).toBe(false);
+    expect(runsPrettierCheck(job('node_modules/.bin/prettier --write .'))).toBe(
+      false,
+    );
+    expect(
+      runsPrettierCheck(job('echo node_modules/.bin/prettier-fake --check .')),
+    ).toBe(false);
   });
 
   it('AI-34 tem um passo que roda node_modules/.bin/prettier --check', () => {
@@ -161,15 +200,21 @@ function matches(matcher: string | undefined, toolName: string): boolean {
 }
 
 describe('AI-34 o hook do settings.json', () => {
-  const settings = JSON.parse(readText('.claude', 'settings.json')) as { hooks?: Record<string, HookEntry[]> };
+  const settings = JSON.parse(readText('.claude', 'settings.json')) as {
+    hooks?: Record<string, HookEntry[]>;
+  };
   const entry = (settings.hooks?.PostToolUse ?? []).find((candidate) =>
-    candidate.hooks.some((hook) => (hook.command ?? '').includes('.claude/hooks/format-edited.mjs')),
+    candidate.hooks.some((hook) =>
+      (hook.command ?? '').includes('.claude/hooks/format-edited.mjs'),
+    ),
   );
 
   it('AI-34 o PostToolUse roda o format-edited.mjs com node', () => {
     expect(entry).toBeDefined();
     expect(entry?.hooks.every((hook) => hook.type === 'command')).toBe(true);
-    expect(entry?.hooks.some((hook) => /^node\s/.test(hook.command ?? ''))).toBe(true);
+    expect(
+      entry?.hooks.some((hook) => /^node\s/.test(hook.command ?? '')),
+    ).toBe(true);
   });
 
   it('AI-34 o matcher cobre o Edit e o Write e não cobre o Bash nem o Read', () => {

@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 // AI-17: `npm run verify` espelha o CI sem os testes de integração; `npm run verify:full` troca os testes
 // unitários por todos os testes. Os dois são listas de `npm run` ligadas por `&&`.
 const root = join(import.meta.dirname, '..', '..');
-const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+  scripts: Record<string, string>;
+};
 
 // Cada passo vira o nome do script, com os argumentos depois de `--` quando há: `openapi -- --check`.
 // `npm test` é o mesmo script `test`. Devolve null para um passo que não é `npm run`/`npm test`.
@@ -35,22 +37,26 @@ const COMMON = [
 
 // O critério não dá o nome dos scripts das conferências do M2 (FND-09, AI-19): elas são achadas pelo corpo, que chama
 // o arquivo de scripts/ com node, como o ci.yml (AI-05).
-function scriptsRunning(file: string, scripts: Record<string, string>): string[] {
+function scriptsRunning(
+  file: string,
+  scripts: Record<string, string>,
+): string[] {
   return Object.entries(scripts)
     .filter(([, body]) => body.trim() === `node ${file}`)
     .map(([name]) => name);
 }
 
-const KYSELY_CHECK = scriptsRunning('scripts/check-kysely-usage.ts', pkg.scripts);
+const KYSELY_CHECK = scriptsRunning(
+  'scripts/check-kysely-usage.ts',
+  pkg.scripts,
+);
 const DB_TYPES_CHECK = scriptsRunning('scripts/check-db-types.ts', pkg.scripts);
 
 describe('AI-17 as conferências dos scripts enxergam o que procuram (controle negativo)', () => {
   it('AI-17 o leitor de passos reconhece npm run, npm test e a flag do openapi, e recusa o que não é npm', () => {
-    expect(stepsOf('npm run lint && npm run openapi -- --check && npm test')).toEqual([
-      'lint',
-      'openapi -- --check',
-      'test',
-    ]);
+    expect(
+      stepsOf('npm run lint && npm run openapi -- --check && npm test'),
+    ).toEqual(['lint', 'openapi -- --check', 'test']);
     expect(stepsOf('npm run lint && vitest run')).toEqual(['lint', null]);
     expect(stepsOf(undefined)).toEqual([null]);
   });
@@ -75,7 +81,9 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
       d: 'node scripts/check-migrations.ts',
     };
 
-    expect(scriptsRunning('scripts/check-kysely-usage.ts', sample)).toEqual(['a']);
+    expect(scriptsRunning('scripts/check-kysely-usage.ts', sample)).toEqual([
+      'a',
+    ]);
     expect(scriptsRunning('scripts/check-db-types.ts', sample)).toEqual([]);
   });
 
@@ -84,7 +92,9 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
 
     expect(steps).not.toContain(null);
     expect(KYSELY_CHECK).toHaveLength(1);
-    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test:unit', ...KYSELY_CHECK].sort());
+    expect([...steps].map(String).sort()).toEqual(
+      [...COMMON, 'test:unit', ...KYSELY_CHECK].sort(),
+    );
   });
 
   it('AI-17 o verify:full roda os mesmos passos, com todos os testes (npm test) no lugar de test:unit, e mais a conferência dos tipos do banco', () => {
@@ -93,7 +103,9 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     expect(steps).not.toContain(null);
     expect(KYSELY_CHECK).toHaveLength(1);
     expect(DB_TYPES_CHECK).toHaveLength(1);
-    expect([...steps].map(String).sort()).toEqual([...COMMON, 'test', ...KYSELY_CHECK, ...DB_TYPES_CHECK].sort());
+    expect([...steps].map(String).sort()).toEqual(
+      [...COMMON, 'test', ...KYSELY_CHECK, ...DB_TYPES_CHECK].sort(),
+    );
   });
 
   // A conferência dos tipos sobe o PostgreSQL pelo Docker, e o verify é o do pre-push.
@@ -109,17 +121,25 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
     const steps = stepsOf(pkg.scripts['verify:full']);
 
     expect(KYSELY_CHECK.length + DB_TYPES_CHECK.length).toBe(2);
-    for (const name of [...KYSELY_CHECK, ...DB_TYPES_CHECK]) expect(steps).toContain(name);
+    for (const name of [...KYSELY_CHECK, ...DB_TYPES_CHECK])
+      expect(steps).toContain(name);
   });
 
   // Controle negativo: o verify é o do pre-push e não pode carregar a integração (Docker).
   it('AI-17 o verify não roda npm test, a integração, o vitest direto nem o verify:full', () => {
     const steps = stepsOf(pkg.scripts.verify);
 
-    for (const forbidden of ['test', 'test:integration', 'test:changed', 'verify:full']) {
+    for (const forbidden of [
+      'test',
+      'test:integration',
+      'test:changed',
+      'verify:full',
+    ]) {
       expect(steps).not.toContain(forbidden);
     }
-    expect(pkg.scripts.verify ?? '').not.toMatch(/vitest|testcontainers|docker|integration/i);
+    expect(pkg.scripts.verify ?? '').not.toMatch(
+      /vitest|testcontainers|docker|integration/i,
+    );
   });
 
   it('AI-17 o verify:full não repete o test:unit, que o npm test já inclui', () => {
@@ -127,16 +147,22 @@ describe('AI-17 os scripts verify e verify:full do package.json', () => {
   });
 
   it('AI-17 todo script que o verify e o verify:full chamam existe no package.json', () => {
-    const names = [...stepsOf(pkg.scripts.verify), ...stepsOf(pkg.scripts['verify:full'])]
+    const names = [
+      ...stepsOf(pkg.scripts.verify),
+      ...stepsOf(pkg.scripts['verify:full']),
+    ]
       .filter((step): step is string => step !== null)
       .map((step) => step.split(' ')[0] ?? '');
 
     expect(names.length).toBeGreaterThan(0);
-    for (const name of names) expect(pkg.scripts[name], `script ${name}`).toBeTruthy();
+    for (const name of names)
+      expect(pkg.scripts[name], `script ${name}`).toBeTruthy();
   });
 
   it('AI-17 o script openapi do verify confere (--check) e não regrava o openapi.yaml', () => {
     expect(pkg.scripts.verify ?? '').toMatch(/npm run openapi -- --check/);
-    expect(pkg.scripts['verify:full'] ?? '').toMatch(/npm run openapi -- --check/);
+    expect(pkg.scripts['verify:full'] ?? '').toMatch(
+      /npm run openapi -- --check/,
+    );
   });
 });

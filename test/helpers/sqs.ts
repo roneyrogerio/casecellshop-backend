@@ -7,7 +7,11 @@ import {
   SendMessageCommand,
   SQSClient,
 } from '@aws-sdk/client-sqs';
-import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
+import {
+  GenericContainer,
+  Wait,
+  type StartedTestContainer,
+} from 'testcontainers';
 import { assert } from 'vitest';
 import {
   createQueue,
@@ -39,12 +43,22 @@ export async function startElasticMq(): Promise<TestElasticMq> {
   process.env['AWS_ACCESS_KEY_ID'] ??= FAKE_CREDENTIALS.accessKeyId;
   process.env['AWS_SECRET_ACCESS_KEY'] ??= FAKE_CREDENTIALS.secretAccessKey;
   // A espera é HTTP, de fora: a imagem nativa não tem shell para a checagem interna de porta do Testcontainers.
-  const container: StartedTestContainer = await new GenericContainer(ELASTICMQ_IMAGE)
+  const container: StartedTestContainer = await new GenericContainer(
+    ELASTICMQ_IMAGE,
+  )
     .withExposedPorts(ELASTICMQ_PORT)
-    .withWaitStrategy(Wait.forHttp('/?Action=ListQueues', ELASTICMQ_PORT).forStatusCodeMatching((status) => status < 500))
+    .withWaitStrategy(
+      Wait.forHttp('/?Action=ListQueues', ELASTICMQ_PORT).forStatusCodeMatching(
+        (status) => status < 500,
+      ),
+    )
     .start();
   const endpoint = `http://${container.getHost()}:${container.getMappedPort(ELASTICMQ_PORT)}`;
-  const client = new SQSClient({ endpoint, region: TEST_REGION, credentials: FAKE_CREDENTIALS });
+  const client = new SQSClient({
+    endpoint,
+    region: TEST_REGION,
+    credentials: FAKE_CREDENTIALS,
+  });
   return {
     endpoint,
     client,
@@ -68,25 +82,43 @@ export interface QueueOptions {
 }
 
 // O QueueUrl que o ElasticMQ devolve cita a porta interna (9324); o que vale é o caminho.
-function reachableUrl(emq: TestElasticMq, queueUrl: string | undefined): string {
-  if (queueUrl === undefined) throw new Error('o ElasticMQ não devolveu o QueueUrl');
+function reachableUrl(
+  emq: TestElasticMq,
+  queueUrl: string | undefined,
+): string {
+  if (queueUrl === undefined)
+    throw new Error('o ElasticMQ não devolveu o QueueUrl');
   return `${emq.endpoint}${new URL(queueUrl).pathname}`;
 }
 
 // A DLQ e depois a fila de origem com a mesma redrive policy do elasticmq.conf (design.md, "Fila no SQS").
-export async function createBillingQueues(emq: TestElasticMq, options: QueueOptions = {}): Promise<BillingQueues> {
+export async function createBillingQueues(
+  emq: TestElasticMq,
+  options: QueueOptions = {},
+): Promise<BillingQueues> {
   const suffix = randomUUID().slice(0, 8);
-  const dlq = await emq.client.send(new CreateQueueCommand({ QueueName: `billing-dlq-${suffix}` }));
+  const dlq = await emq.client.send(
+    new CreateQueueCommand({ QueueName: `billing-dlq-${suffix}` }),
+  );
   const dlqUrl = reachableUrl(emq, dlq.QueueUrl);
-  const attributes = await emq.client.send(new GetQueueAttributesCommand({ QueueUrl: dlqUrl, AttributeNames: ['QueueArn'] }));
+  const attributes = await emq.client.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: dlqUrl,
+      AttributeNames: ['QueueArn'],
+    }),
+  );
   const dlqArn = attributes.Attributes?.['QueueArn'];
-  if (dlqArn === undefined) throw new Error('o ElasticMQ não devolveu o ARN da DLQ');
+  if (dlqArn === undefined)
+    throw new Error('o ElasticMQ não devolveu o ARN da DLQ');
   const source = await emq.client.send(
     new CreateQueueCommand({
       QueueName: `billing-${suffix}`,
       Attributes: {
         VisibilityTimeout: String(options.visibilitySeconds ?? 60),
-        RedrivePolicy: JSON.stringify({ deadLetterTargetArn: dlqArn, maxReceiveCount: options.maxReceiveCount ?? 12 }),
+        RedrivePolicy: JSON.stringify({
+          deadLetterTargetArn: dlqArn,
+          maxReceiveCount: options.maxReceiveCount ?? 12,
+        }),
       },
     }),
   );
@@ -101,9 +133,15 @@ export interface OpenedQueues extends BillingQueues {
   close(): void;
 }
 
-export async function openBillingQueues(emq: TestElasticMq, options: QueueOptions = {}): Promise<OpenedQueues> {
+export async function openBillingQueues(
+  emq: TestElasticMq,
+  options: QueueOptions = {},
+): Promise<OpenedQueues> {
   const urls = await createBillingQueues(emq, options);
-  const client = createSqsClient({ endpoint: emq.endpoint, region: TEST_REGION });
+  const client = createSqsClient({
+    endpoint: emq.endpoint,
+    region: TEST_REGION,
+  });
   return {
     ...urls,
     client,
@@ -137,7 +175,8 @@ export async function startBlackHole(): Promise<BlackHole> {
     server.listen(0, '127.0.0.1', resolve);
   });
   const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('o servidor não respondeu a porta');
+  if (address === null || typeof address === 'string')
+    throw new Error('o servidor não respondeu a porta');
   return {
     url: `http://127.0.0.1:${address.port}`,
     requestCount: () => requests,
@@ -158,7 +197,10 @@ export interface Observed {
 
 // Espera a promessa por no máximo `guardMs` de tempo real. O prazo é do teste: uma promessa que não
 // termina vira `pending` (falha por asserção) em vez de travar o teste até o timeout do vitest.
-export async function observe(promise: Promise<unknown>, guardMs: number): Promise<Observed> {
+export async function observe(
+  promise: Promise<unknown>,
+  guardMs: number,
+): Promise<Observed> {
   const startedAt = performance.now();
   let timer: NodeJS.Timeout | undefined;
   const guard = new Promise<Observed['state']>((resolve) => {
@@ -184,19 +226,34 @@ export interface RawMessage {
   traceparentDataType: string | null;
 }
 
-export async function sendRaw(emq: TestElasticMq, queueUrl: string, body: string, traceparent?: string): Promise<void> {
+export async function sendRaw(
+  emq: TestElasticMq,
+  queueUrl: string,
+  body: string,
+  traceparent?: string,
+): Promise<void> {
   await emq.client.send(
     new SendMessageCommand({
       QueueUrl: queueUrl,
       MessageBody: body,
-      ...(traceparent === undefined ? {} : { MessageAttributes: { traceparent: { DataType: 'String', StringValue: traceparent } } }),
+      ...(traceparent === undefined
+        ? {}
+        : {
+            MessageAttributes: {
+              traceparent: { DataType: 'String', StringValue: traceparent },
+            },
+          }),
     }),
   );
 }
 
 // Recebe tudo o que está visível, de dez em dez, escondendo as mensagens por `visibilitySeconds`
 // (o teste usa uma fila só dele, então elas não voltam). Não espera: o teste só lê o estado.
-export async function drain(emq: TestElasticMq, queueUrl: string, visibilitySeconds = 300): Promise<RawMessage[]> {
+export async function drain(
+  emq: TestElasticMq,
+  queueUrl: string,
+  visibilitySeconds = 300,
+): Promise<RawMessage[]> {
   const messages: RawMessage[] = [];
   for (;;) {
     const response = await emq.client.send(
@@ -216,7 +273,9 @@ export async function drain(emq: TestElasticMq, queueUrl: string, visibilitySeco
       messages.push({
         body: message.Body ?? '',
         receiptHandle: message.ReceiptHandle ?? '',
-        receiveCount: Number(message.Attributes?.['ApproximateReceiveCount'] ?? '0'),
+        receiveCount: Number(
+          message.Attributes?.['ApproximateReceiveCount'] ?? '0',
+        ),
         traceparent: attribute?.StringValue ?? null,
         traceparentDataType: attribute?.DataType ?? null,
       });
@@ -225,18 +284,34 @@ export async function drain(emq: TestElasticMq, queueUrl: string, visibilitySeco
 }
 
 // ApproximateNumberOfMessages: as mensagens visíveis agora.
-export async function visibleCount(emq: TestElasticMq, queueUrl: string): Promise<number> {
-  const response = await emq.client.send(new GetQueueAttributesCommand({ QueueUrl: queueUrl, AttributeNames: ['ApproximateNumberOfMessages'] }));
+export async function visibleCount(
+  emq: TestElasticMq,
+  queueUrl: string,
+): Promise<number> {
+  const response = await emq.client.send(
+    new GetQueueAttributesCommand({
+      QueueUrl: queueUrl,
+      AttributeNames: ['ApproximateNumberOfMessages'],
+    }),
+  );
   return Number(response.Attributes?.['ApproximateNumberOfMessages'] ?? '0');
 }
 
 // ApproximateNumberOfMessagesNotVisible: as mensagens em voo (recebidas e ainda escondidas). Sozinha, a
 // contagem das visíveis não vê uma mensagem que um worker segura ou que o retry escondeu.
-export async function notVisibleCount(emq: TestElasticMq, queueUrl: string): Promise<number> {
+export async function notVisibleCount(
+  emq: TestElasticMq,
+  queueUrl: string,
+): Promise<number> {
   const response = await emq.client.send(
-    new GetQueueAttributesCommand({ QueueUrl: queueUrl, AttributeNames: ['ApproximateNumberOfMessagesNotVisible'] }),
+    new GetQueueAttributesCommand({
+      QueueUrl: queueUrl,
+      AttributeNames: ['ApproximateNumberOfMessagesNotVisible'],
+    }),
   );
-  return Number(response.Attributes?.['ApproximateNumberOfMessagesNotVisible'] ?? '0');
+  return Number(
+    response.Attributes?.['ApproximateNumberOfMessagesNotVisible'] ?? '0',
+  );
 }
 
 export interface QueueCounts {
@@ -244,19 +319,33 @@ export interface QueueCounts {
   notVisible: number;
 }
 
-export async function countsOf(emq: TestElasticMq, queueUrl: string): Promise<QueueCounts> {
-  return { visible: await visibleCount(emq, queueUrl), notVisible: await notVisibleCount(emq, queueUrl) };
+export async function countsOf(
+  emq: TestElasticMq,
+  queueUrl: string,
+): Promise<QueueCounts> {
+  return {
+    visible: await visibleCount(emq, queueUrl),
+    notVisible: await notVisibleCount(emq, queueUrl),
+  };
 }
 
 // Lê as contagens da resposta XML da API de consulta do SQS (`GET <fila>?Action=GetQueueAttributes&AttributeName.1=All`).
 // O teste do compose a usa de dentro do contêiner do worker, porque o ElasticMQ não publica porta no host.
 export function parseQueueCountsXml(xml: string): QueueCounts {
   const read = (attribute: string): number => {
-    const match = new RegExp(`<Name>${attribute}</Name>\\s*<Value>(\\d+)</Value>`).exec(xml);
-    if (!match) return assert.fail(`${attribute} não está na resposta do SQS: ${xml.slice(0, 300)}`);
+    const match = new RegExp(
+      `<Name>${attribute}</Name>\\s*<Value>(\\d+)</Value>`,
+    ).exec(xml);
+    if (!match)
+      return assert.fail(
+        `${attribute} não está na resposta do SQS: ${xml.slice(0, 300)}`,
+      );
     return Number(match[1]);
   };
-  return { visible: read('ApproximateNumberOfMessages'), notVisible: read('ApproximateNumberOfMessagesNotVisible') };
+  return {
+    visible: read('ApproximateNumberOfMessages'),
+    notVisible: read('ApproximateNumberOfMessagesNotVisible'),
+  };
 }
 
 // ---------------------------------------------------------------- fila observada
@@ -293,7 +382,10 @@ export interface ObservedQueue extends Queue {
   // Roda antes de o `receive` seguir para o SQS: o teste prende o recebimento sem sleep.
   beforeReceive(hook: () => Promise<void>, times?: number): void;
   // Roda depois de o SQS responder e antes de a resposta voltar a quem chamou.
-  afterReceive(hook: (messages: ReceivedMessage[]) => void | Promise<void>, times?: number): void;
+  afterReceive(
+    hook: (messages: ReceivedMessage[]) => void | Promise<void>,
+    times?: number,
+  ): void;
   // Faz as próximas `times` chamadas da operação lançarem, sem chegar ao SQS. É só falha: nunca devolve dado.
   inject(operation: QueueOperation, times?: number): Injection;
 }
@@ -318,11 +410,19 @@ export function observeQueue(inner: Queue): ObservedQueue {
   const visibilityChanges: (HandleCall & { seconds: number })[] = [];
   const orderByHandle = new Map<string, string | undefined>();
   const before: { remaining: number; hook: () => Promise<void> }[] = [];
-  const after: { remaining: number; hook: (messages: ReceivedMessage[]) => void | Promise<void> }[] = [];
-  const injections = new Map<QueueOperation, { remaining: number; state: { fired: number } }>();
+  const after: {
+    remaining: number;
+    hook: (messages: ReceivedMessage[]) => void | Promise<void>;
+  }[] = [];
+  const injections = new Map<
+    QueueOperation,
+    { remaining: number; state: { fired: number } }
+  >();
   let completedReceives = 0;
 
-  function takeHook<T extends { remaining: number }>(hooks: T[]): T | undefined {
+  function takeHook<T extends { remaining: number }>(
+    hooks: T[],
+  ): T | undefined {
     const hook = hooks.find((candidate) => candidate.remaining > 0);
     if (hook) hook.remaining -= 1;
     return hook;
@@ -344,7 +444,12 @@ export function observeQueue(inner: Queue): ObservedQueue {
   ): Promise<HandleResult> {
     const record = (result: HandleResult | 'rejected'): void => {
       if (operation === 'delete') deletes.push({ receiptHandle, result });
-      else visibilityChanges.push({ receiptHandle, seconds: seconds ?? 0, result });
+      else
+        visibilityChanges.push({
+          receiptHandle,
+          seconds: seconds ?? 0,
+          result,
+        });
     };
     try {
       maybeFail(operation);
@@ -377,18 +482,34 @@ export function observeQueue(inner: Queue): ObservedQueue {
     latestHandle(orderId) {
       // Pula o handle de uma mensagem já apagada: duas mensagens do mesmo pedido têm handles distintos,
       // e o que interessa ao teste é o da que segue na fila.
-      const deleted = new Set(deletes.filter((call) => call.result === 'ok').map((call) => call.receiptHandle));
+      const deleted = new Set(
+        deletes
+          .filter((call) => call.result === 'ok')
+          .map((call) => call.receiptHandle),
+      );
       for (let index = received.length - 1; index >= 0; index -= 1) {
         const message = received[index];
-        if (message && !deleted.has(message.receiptHandle) && (orderId === undefined || orderIdOfBody(message.body) === orderId)) {
+        if (
+          message &&
+          !deleted.has(message.receiptHandle) &&
+          (orderId === undefined || orderIdOfBody(message.body) === orderId)
+        ) {
           return message.receiptHandle;
         }
       }
       // Falha de asserção, e não erro de montagem: o worker que não recebeu da fila é o comportamento que falta.
-      return assert.fail(`o worker não recebeu nenhuma mensagem${orderId === undefined ? '' : ` do pedido ${orderId}`}`);
+      return assert.fail(
+        `o worker não recebeu nenhuma mensagem${orderId === undefined ? '' : ` do pedido ${orderId}`}`,
+      );
     },
-    deletesOf: (orderId) => deletes.filter((call) => orderByHandle.get(call.receiptHandle) === orderId),
-    changesOf: (orderId) => visibilityChanges.filter((call) => orderByHandle.get(call.receiptHandle) === orderId),
+    deletesOf: (orderId) =>
+      deletes.filter(
+        (call) => orderByHandle.get(call.receiptHandle) === orderId,
+      ),
+    changesOf: (orderId) =>
+      visibilityChanges.filter(
+        (call) => orderByHandle.get(call.receiptHandle) === orderId,
+      ),
     beforeReceive(hook, times = 1) {
       before.push({ remaining: times, hook });
     },
@@ -424,9 +545,14 @@ export function observeQueue(inner: Queue): ObservedQueue {
         completedReceives += 1;
       }
     },
-    delete: (receiptHandle) => handleCall('delete', receiptHandle, undefined, () => inner.delete(receiptHandle)),
+    delete: (receiptHandle) =>
+      handleCall('delete', receiptHandle, undefined, () =>
+        inner.delete(receiptHandle),
+      ),
     changeVisibility: (receiptHandle, seconds) =>
-      handleCall('changeVisibility', receiptHandle, seconds, () => inner.changeVisibility(receiptHandle, seconds)),
+      handleCall('changeVisibility', receiptHandle, seconds, () =>
+        inner.changeVisibility(receiptHandle, seconds),
+      ),
   };
 }
 
@@ -437,5 +563,7 @@ export function duplicatedOrderIds(messages: { body: string }[]): string[] {
     const { orderId } = JSON.parse(message.body) as { orderId: string };
     seen.set(orderId, (seen.get(orderId) ?? 0) + 1);
   }
-  return [...seen.entries()].filter(([, times]) => times > 1).map(([orderId]) => orderId);
+  return [...seen.entries()]
+    .filter(([, times]) => times > 1)
+    .map(([orderId]) => orderId);
 }

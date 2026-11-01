@@ -17,5 +17,8 @@ export function parseBillingMessage(body: string): ParsedBillingMessage {
   const parsed = BillingMessage.safeParse(json);
   if (parsed.success) return { valid: true, message: parsed.data };
   const orderId = (json as { orderId?: unknown } | null | undefined)?.orderId;
-  return { valid: false, orderId: typeof orderId === 'string' ? orderId : undefined };
+  return {
+    valid: false,
+    orderId: typeof orderId === 'string' ? orderId : undefined,
+  };
 }

@@ -14,12 +14,32 @@ const SUBAGENTS = new Set(['implementer', 'test-writer', 'reviewer']);
 // negado por padrão. A lista anterior, de verbos negados, deixava passar pull,
 // cherry-pick, worktree e config.
 const READ_VERBS = new Set([
-  'status', 'diff', 'log', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list',
-  'merge-base', 'blame', 'grep', 'cat-file', 'describe', 'shortlog',
+  'status',
+  'diff',
+  'log',
+  'show',
+  'ls-files',
+  'ls-tree',
+  'rev-parse',
+  'rev-list',
+  'merge-base',
+  'blame',
+  'grep',
+  'cat-file',
+  'describe',
+  'shortlog',
 ]);
 
 // Opções globais do git que levam o valor na palavra seguinte.
-const GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
+const GLOBAL_WITH_VALUE = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--super-prefix',
+]);
 
 // -c e --config-env definem configuração só para aquele comando, alias inclusive.
 const CONFIG_OPTIONS = new Set(['-c', '--config-env']);
@@ -77,7 +97,8 @@ function pushProblem({ globals, args }) {
   if (rest.length > 0) return 'mais de um destino';
   if (remote !== undefined && remote !== 'origin') return `remoto ${remote}`;
   if (target === undefined || target === 'HEAD') return null;
-  if (!BRANCH.test(target) || target.startsWith('refs/')) return `destino ${target}`;
+  if (!BRANCH.test(target) || target.startsWith('refs/'))
+    return `destino ${target}`;
   if (PROTECTED_TARGETS.has(target)) return `destino ${target}`;
   return null;
 }
@@ -90,10 +111,33 @@ function pushProblem({ globals, args }) {
 // contam na posição de comando, o corpo de um heredoc não é comando, e o
 // conteúdo de um sh -c é lido de novo, como comando.
 const INTERPRETER = /^(?:python[\d.]*|perl[\d.]*|ruby[\d.]*)$/;
-const WRAPPERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'xargs', 'sudo', 'timeout', 'nice']);
+const WRAPPERS = new Set([
+  'env',
+  'command',
+  'exec',
+  'nohup',
+  'time',
+  'xargs',
+  'sudo',
+  'timeout',
+  'nice',
+]);
 // Opções dos invólucros que levam o valor na palavra seguinte (timeout -s KILL,
 // nice -n 10, sudo -u x, env -u NOME).
-const WRAPPER_VALUE_OPTIONS = new Set(['-s', '--signal', '-k', '--kill-after', '-n', '--adjustment', '-u', '--user', '-g', '--group', '-C', '--chdir']);
+const WRAPPER_VALUE_OPTIONS = new Set([
+  '-s',
+  '--signal',
+  '-k',
+  '--kill-after',
+  '-n',
+  '--adjustment',
+  '-u',
+  '--user',
+  '-g',
+  '--group',
+  '-C',
+  '--chdir',
+]);
 const SHELLS = new Set(['sh', 'bash', 'zsh']);
 
 // Fecha uma substituição de comando que abre em start (logo depois do "$(" ou
@@ -107,7 +151,11 @@ function closingOf(text, start, opener) {
   }
   let depth = 1;
   for (let i = start; i < text.length; i += 1) {
-    if (text[i] === "'") i = text.indexOf("'", i + 1) === -1 ? text.length : text.indexOf("'", i + 1);
+    if (text[i] === "'")
+      i =
+        text.indexOf("'", i + 1) === -1
+          ? text.length
+          : text.indexOf("'", i + 1);
     else if (text[i] === '\\') i += 1;
     else if (text[i] === '(') depth += 1;
     else if (text[i] === ')' && (depth -= 1) === 0) return i;
@@ -154,7 +202,10 @@ function readShell(text) {
         if (text[j] === '\\' && /["\\$`]/.test(text[j + 1] ?? '')) {
           quoted += text[j + 1];
           j += 2;
-        } else if ((text[j] === '$' && text[j + 1] === '(') || text[j] === '`') {
+        } else if (
+          (text[j] === '$' && text[j + 1] === '(') ||
+          text[j] === '`'
+        ) {
           const start = text[j] === '`' ? j + 1 : j + 2;
           const end = closingOf(text, start, text[j] === '`' ? '`' : '(');
           substitutions.push(text.slice(start, end));
@@ -226,10 +277,17 @@ function commandWords(words) {
         continue;
       }
       // O timeout recebe a duração antes do comando.
-      if (/^\d+(?:\.\d+)?[smhd]?$/.test(word) && found.at(-1)?.name === 'timeout') continue;
+      if (
+        /^\d+(?:\.\d+)?[smhd]?$/.test(word) &&
+        found.at(-1)?.name === 'timeout'
+      )
+        continue;
       found.push({ name, args: words.slice(i + 1) });
       expectCommand = WRAPPERS.has(name);
-      if (SHELLS.has(name) && /^-[A-Za-z]*c[A-Za-z]*$/.test(words[i + 1] ?? '')) {
+      if (
+        SHELLS.has(name) &&
+        /^-[A-Za-z]*c[A-Za-z]*$/.test(words[i + 1] ?? '')
+      ) {
         found.push({ name: '-c', args: [words[i + 2] ?? ''] });
         break;
       }
@@ -239,7 +297,9 @@ function commandWords(words) {
 }
 
 function shellWriteProblem(command) {
-  const { segments, targets, substitutions } = readShell(stripHeredocBodies(command));
+  const { segments, targets, substitutions } = readShell(
+    stripHeredocBodies(command),
+  );
   const target = targets.find((path) => path !== '/dev/null');
   if (target !== undefined) return `o redirecionamento para ${target}`;
   for (const inner of substitutions) {
@@ -254,7 +314,11 @@ function shellWriteProblem(command) {
         continue;
       }
       if (INTERPRETER.test(name)) return `o interpretador ${name}`;
-      if (name === 'sed' && args.some((arg) => arg === '--in-place' || /^-[A-Za-z]*i/.test(arg))) return 'o sed -i';
+      if (
+        name === 'sed' &&
+        args.some((arg) => arg === '--in-place' || /^-[A-Za-z]*i/.test(arg))
+      )
+        return 'o sed -i';
       if (name === 'tee') return 'o tee';
     }
   }
@@ -277,9 +341,14 @@ export function check(input) {
   for (const words of segmentsOf(command)) {
     for (const call of gitCalls(words)) {
       if (subagent) {
-        const config = call.globals.find((option) => CONFIG_OPTIONS.has(option));
+        const config = call.globals.find((option) =>
+          CONFIG_OPTIONS.has(option),
+        );
         if (config) {
-          return { allow: false, reason: `${agentType} não roda git ${config}: a opção define configuração e alias só para aquele comando (AI-11).` };
+          return {
+            allow: false,
+            reason: `${agentType} não roda git ${config}: a opção define configuração e alias só para aquele comando (AI-11).`,
+          };
         }
         if (call.verb !== undefined && !READ_VERBS.has(call.verb)) {
           return {

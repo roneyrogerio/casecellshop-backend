@@ -11,7 +11,10 @@ export interface OrdersRoutes {
   handlers: RequestHandler[];
 }
 
-export function createOrdersRoutes(orders: OrdersRepository, logger: Logger): OrdersRoutes {
+export function createOrdersRoutes(
+  orders: OrdersRepository,
+  logger: Logger,
+): OrdersRoutes {
   const getOrderStatus: RequestHandler = async (req, res) => {
     const orderId = req.params['orderId'] as string;
     let found: OrderStatus | null;
@@ -20,11 +23,19 @@ export function createOrdersRoutes(orders: OrdersRepository, logger: Logger): Or
     } catch (error) {
       // Só a falha do banco é 503; um defeito do código segue para o middleware único (500).
       if (!isUnavailable(error)) throw error;
-      logger.warn({ event: 'order_status_failed', err: error }, 'o banco não respondeu à consulta do pedido');
+      logger.warn(
+        { event: 'order_status_failed', err: error },
+        'o banco não respondeu à consulta do pedido',
+      );
       throw databaseUnavailableProblem();
     }
     // O id fica fora do corpo do 404; o log só o recebe quando o pedido existe.
-    if (!found) throw new ProblemError({ status: 404, cause: 'not-found', title: 'Pedido não encontrado' });
+    if (!found)
+      throw new ProblemError({
+        status: 404,
+        cause: 'not-found',
+        title: 'Pedido não encontrado',
+      });
     res.locals['orderId'] = found.orderId;
     res.json(found);
   };

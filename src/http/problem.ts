@@ -43,7 +43,13 @@ export function databaseUnavailableProblem(): ProblemError {
 }
 
 export const notFoundHandler: RequestHandler = (_req, _res, next) => {
-  next(new ProblemError({ status: 404, cause: 'not-found', title: 'Recurso não encontrado' }));
+  next(
+    new ProblemError({
+      status: 404,
+      cause: 'not-found',
+      title: 'Recurso não encontrado',
+    }),
+  );
 };
 
 export function createErrorHandler(logger: Logger): ErrorRequestHandler {
@@ -58,10 +64,16 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
 
     if (error instanceof TransactionAbortedError) {
       // Defeito do código (erro capturado dentro da transação), não falha do cliente.
-      logger.error({ event: 'db.transaction_aborted', err: error, correlationId }, 'transação abortada antes do COMMIT');
+      logger.error(
+        { event: 'db.transaction_aborted', err: error, correlationId },
+        'transação abortada antes do COMMIT',
+      );
     } else if (!(error instanceof ProblemError)) {
       // O detalhe vai só para o log; a resposta nunca leva stack trace nem SQL.
-      logger.error({ event: 'unhandled_error', err: error, correlationId }, 'erro inesperado na requisição');
+      logger.error(
+        { event: 'unhandled_error', err: error, correlationId },
+        'erro inesperado na requisição',
+      );
     }
 
     const body: ProblemBody = {
@@ -75,7 +87,8 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
     };
 
     res.status(init.status);
-    for (const [name, value] of Object.entries(init.headers ?? {})) res.setHeader(name, value);
+    for (const [name, value] of Object.entries(init.headers ?? {}))
+      res.setHeader(name, value);
     // Definido antes do json(): o Express só põe application/json se ainda não houver tipo.
     res.setHeader('Content-Type', PROBLEM_MEDIA_TYPE);
     res.json(body);

@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import request from 'supertest';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
 
-export type MetricType = 'counter' | 'gauge' | 'histogram' | 'summary' | 'untyped';
+export type MetricType =
+  'counter' | 'gauge' | 'histogram' | 'summary' | 'untyped';
 
 export interface Sample {
   // Nome da série, com o sufixo (`_bucket`, `_sum`, `_count`) nos histogramas.
@@ -20,12 +21,18 @@ export interface MetricFamily {
 export type Exposition = Map<string, MetricFamily>;
 
 // O OpenTelemetry acrescenta o escopo a toda série; ele não é um label do design.
-const IGNORED_LABELS = new Set(['otel_scope_name', 'otel_scope_version', 'otel_scope_schema_url']);
+const IGNORED_LABELS = new Set([
+  'otel_scope_name',
+  'otel_scope_version',
+  'otel_scope_schema_url',
+]);
 const HISTOGRAM_SUFFIXES = ['_bucket', '_sum', '_count'];
 
 function parseLabels(text: string): Record<string, string> {
   const labels: Record<string, string> = {};
-  for (const match of text.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g)) {
+  for (const match of text.matchAll(
+    /([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g,
+  )) {
     const [, key, value] = match;
     if (key !== undefined && value !== undefined) labels[key] = value;
   }
@@ -41,7 +48,8 @@ export function parseExposition(text: string): Exposition {
     if (match?.[1] && match[2]) types.set(match[1], match[2] as MetricType);
   }
   const families: Exposition = new Map();
-  for (const [name, type] of types) families.set(name, { name, type, samples: [] });
+  for (const [name, type] of types)
+    families.set(name, { name, type, samples: [] });
   for (const line of text.split('\n')) {
     if (line === '' || line.startsWith('#')) continue;
     const match = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{.*\})?\s+(\S+)/.exec(line);
@@ -50,13 +58,20 @@ export function parseExposition(text: string): Exposition {
     const base =
       types.get(sampleName) !== undefined
         ? sampleName
-        : HISTOGRAM_SUFFIXES.map((suffix) => (sampleName.endsWith(suffix) ? sampleName.slice(0, -suffix.length) : undefined)).find(
-            (candidate) => candidate !== undefined && types.get(candidate) === 'histogram',
+        : HISTOGRAM_SUFFIXES.map((suffix) =>
+            sampleName.endsWith(suffix)
+              ? sampleName.slice(0, -suffix.length)
+              : undefined,
+          ).find(
+            (candidate) =>
+              candidate !== undefined && types.get(candidate) === 'histogram',
           );
     if (base === undefined) continue;
     const labels = parseLabels(match[2] ?? '');
     for (const ignored of IGNORED_LABELS) delete labels[ignored];
-    families.get(base)?.samples.push({ name: sampleName, labels, value: Number(match[3]) });
+    families
+      .get(base)
+      ?.samples.push({ name: sampleName, labels, value: Number(match[3]) });
   }
   return families;
 }
@@ -69,11 +84,19 @@ export async function scrapeMetrics(telemetry: Telemetry): Promise<Exposition> {
 }
 
 // Valor da série com exatamente estes labels (os de `le` incluídos, se pedidos).
-export function valueOf(families: Exposition, family: string, labels: Record<string, string> = {}, sampleName = family): number | undefined {
+export function valueOf(
+  families: Exposition,
+  family: string,
+  labels: Record<string, string> = {},
+  sampleName = family,
+): number | undefined {
   const found = families.get(family)?.samples.find((sample) => {
     if (sample.name !== sampleName) return false;
     const keys = Object.keys(sample.labels);
-    return keys.length === Object.keys(labels).length && keys.every((key) => sample.labels[key] === labels[key]);
+    return (
+      keys.length === Object.keys(labels).length &&
+      keys.every((key) => sample.labels[key] === labels[key])
+    );
   });
   return found?.value;
 }
@@ -82,7 +105,8 @@ export function valueOf(families: Exposition, family: string, labels: Record<str
 export function labelNames(families: Exposition): Set<string> {
   const names = new Set<string>();
   for (const family of families.values()) {
-    for (const sample of family.samples) for (const key of Object.keys(sample.labels)) names.add(key);
+    for (const sample of family.samples)
+      for (const key of Object.keys(sample.labels)) names.add(key);
   }
   return names;
 }

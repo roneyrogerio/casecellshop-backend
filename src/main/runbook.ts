@@ -18,11 +18,13 @@ function fail(message: string): never {
 }
 
 const [command, orderIdArgument] = process.argv.slice(2);
-if (command !== 'redrive' && command !== 'cancel') fail(`comando ausente ou desconhecido. ${USAGE}`);
+if (command !== 'redrive' && command !== 'cancel')
+  fail(`comando ausente ou desconhecido. ${USAGE}`);
 let orderId = '';
 if (command === 'cancel') {
   const parsed = OrderId.safeParse(orderIdArgument);
-  if (!parsed.success) fail(`o orderId é obrigatório e deve ser um UUID. ${USAGE}`);
+  if (!parsed.success)
+    fail(`o orderId é obrigatório e deve ser um UUID. ${USAGE}`);
   orderId = parsed.data;
 }
 
@@ -32,8 +34,14 @@ try {
   if (command === 'redrive') {
     const client = createSqsClientFromEnv();
     try {
-      const { before, remaining } = await redriveDlq({ client, dlqUrl: requireEnv('BILLING_DLQ_URL'), clock: systemClock });
-      process.stdout.write(`${before - remaining} mensagens movidas da DLQ para a fila (restam ${remaining})\n`);
+      const { before, remaining } = await redriveDlq({
+        client,
+        dlqUrl: requireEnv('BILLING_DLQ_URL'),
+        clock: systemClock,
+      });
+      process.stdout.write(
+        `${before - remaining} mensagens movidas da DLQ para a fila (restam ${remaining})\n`,
+      );
     } finally {
       client.destroy();
     }
@@ -41,13 +49,19 @@ try {
     const pool = createPool(requireEnv('DATABASE_URL'), logger);
     try {
       const { changed } = await cancelOrder(pool, orderId);
-      process.stdout.write(changed ? `pedido ${orderId} cancelado\n` : `pedido ${orderId} não mudou: já tinha desfecho\n`);
+      process.stdout.write(
+        changed
+          ? `pedido ${orderId} cancelado\n`
+          : `pedido ${orderId} não mudou: já tinha desfecho\n`,
+      );
     } finally {
       await pool.end();
     }
   }
 } catch (error) {
-  process.stderr.write(`falha no runbook: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `falha no runbook: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
   exitCode = 1;
 }
 process.exitCode = exitCode;

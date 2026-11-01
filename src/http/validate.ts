@@ -35,10 +35,16 @@ function collect(origin: string, error: z.ZodError, into: ProblemErrors): void {
     if (issue.code === 'unrecognized_keys') {
       // Um erro por chave desconhecida, com o nome dela no caminho (FND-03).
       for (const key of issue.keys) {
-        into.push({ path: [origin, ...issue.path.map(String), key].join('.'), message: messageFor(issue) });
+        into.push({
+          path: [origin, ...issue.path.map(String), key].join('.'),
+          message: messageFor(issue),
+        });
       }
     } else {
-      into.push({ path: [origin, ...issue.path.map(String)].join('.'), message: messageFor(issue) });
+      into.push({
+        path: [origin, ...issue.path.map(String)].join('.'),
+        message: messageFor(issue),
+      });
     }
   }
 }
@@ -48,7 +54,10 @@ function collect(origin: string, error: z.ZodError, into: ProblemErrors): void {
 export function validateRequest(route: RouteConfig): RequestHandler {
   const request = route.request ?? {};
   const media: unknown = request.body?.content['application/json'];
-  const body = typeof media === 'object' && media !== null && 'schema' in media ? media.schema : undefined;
+  const body =
+    typeof media === 'object' && media !== null && 'schema' in media
+      ? media.schema
+      : undefined;
 
   return (req, res, next) => {
     const errors: ProblemErrors = [];

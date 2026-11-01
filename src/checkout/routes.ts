@@ -1,6 +1,14 @@
-import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
+import express, {
+  type ErrorRequestHandler,
+  type RequestHandler,
+} from 'express';
 import type { Logger } from 'pino';
-import { CheckoutRequest, checkoutRoute, MAX_BODY_BYTES, type CheckoutAccepted } from '../contract/index.ts';
+import {
+  CheckoutRequest,
+  checkoutRoute,
+  MAX_BODY_BYTES,
+  type CheckoutAccepted,
+} from '../contract/index.ts';
 import { ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
@@ -9,7 +17,13 @@ import type { CheckoutRepository } from './repository.ts';
 // Segundos até o cliente consultar o status do pedido (também na repetição).
 const ACCEPTED_RETRY_AFTER_SECONDS = '4';
 
-type Outcome = 'accepted' | 'replay' | 'out_of_stock' | 'price_changed' | 'invalid' | 'unavailable';
+type Outcome =
+  | 'accepted'
+  | 'replay'
+  | 'out_of_stock'
+  | 'price_changed'
+  | 'invalid'
+  | 'unavailable';
 
 // Desfecho de cada recusa pela causa do problema; o que não está aqui é entrada recusada.
 function outcomeOf(cause: string): Outcome {
@@ -31,17 +45,33 @@ function parserProblem(error: unknown): ProblemError | undefined {
   const type = (error as { type?: unknown } | null)?.type;
   switch (type) {
     case 'entity.too.large':
-      return new ProblemError({ status: 413, cause: 'payload-too-large', title: 'Corpo acima de 16 KiB' });
+      return new ProblemError({
+        status: 413,
+        cause: 'payload-too-large',
+        title: 'Corpo acima de 16 KiB',
+      });
     case 'entity.parse.failed':
-      return new ProblemError({ status: 400, cause: 'invalid-request', title: 'JSON malformado' });
+      return new ProblemError({
+        status: 400,
+        cause: 'invalid-request',
+        title: 'JSON malformado',
+      });
     case 'encoding.unsupported':
     case 'charset.unsupported':
-      return new ProblemError({ status: 415, cause: 'unsupported-media-type', title: 'Codificação não suportada' });
+      return new ProblemError({
+        status: 415,
+        cause: 'unsupported-media-type',
+        title: 'Codificação não suportada',
+      });
     case 'request.aborted':
     case 'request.size.invalid':
     case 'stream.encoding.set':
     case 'entity.verify.failed':
-      return new ProblemError({ status: 400, cause: 'invalid-request', title: 'Corpo da requisição inválido' });
+      return new ProblemError({
+        status: 400,
+        cause: 'invalid-request',
+        title: 'Corpo da requisição inválido',
+      });
     default:
       return undefined;
   }
@@ -60,7 +90,13 @@ const markRoute: RequestHandler = (_req, res, next) => {
 
 const requireJson: RequestHandler = (req, _res, next) => {
   if (!req.is('application/json')) {
-    next(new ProblemError({ status: 415, cause: 'unsupported-media-type', title: 'Use Content-Type: application/json' }));
+    next(
+      new ProblemError({
+        status: 415,
+        cause: 'unsupported-media-type',
+        title: 'Use Content-Type: application/json',
+      }),
+    );
     return;
   }
   next();
@@ -69,7 +105,13 @@ const requireJson: RequestHandler = (req, _res, next) => {
 // A falta da chave tem causa própria e vem antes da validação do contrato.
 const requireKey: RequestHandler = (req, _res, next) => {
   if (req.headers['idempotency-key'] === undefined) {
-    next(new ProblemError({ status: 400, cause: 'idempotency-key-required', title: 'Idempotency-Key é obrigatória' }));
+    next(
+      new ProblemError({
+        status: 400,
+        cause: 'idempotency-key-required',
+        title: 'Idempotency-Key é obrigatória',
+      }),
+    );
     return;
   }
   next();
@@ -78,13 +120,23 @@ const requireKey: RequestHandler = (req, _res, next) => {
 const rejectDuplicateSku: RequestHandler = (req, _res, next) => {
   const skus = (req.body as CheckoutRequest).items.map((item) => item.sku);
   if (new Set(skus).size !== skus.length) {
-    next(new ProblemError({ status: 400, cause: 'duplicate-sku', title: 'SKU repetido no pedido' }));
+    next(
+      new ProblemError({
+        status: 400,
+        cause: 'duplicate-sku',
+        title: 'SKU repetido no pedido',
+      }),
+    );
     return;
   }
   next();
 };
 
-function createAccept(checkout: CheckoutRepository, telemetry: Telemetry, logger: Logger): RequestHandler {
+function createAccept(
+  checkout: CheckoutRepository,
+  telemetry: Telemetry,
+  logger: Logger,
+): RequestHandler {
   return async (req, res) => {
     const result = await checkout.create({
       idempotencyKey: req.headers['idempotency-key'] as string,
@@ -93,21 +145,40 @@ function createAccept(checkout: CheckoutRepository, telemetry: Telemetry, logger
     });
     res.locals['orderId'] = result.orderId;
     if (result.kind === 'accepted') {
-      logger.info({ event: 'checkout.accepted', orderId: result.orderId, correlationId: res.locals['correlationId'] }, 'checkout aceito');
+      logger.info(
+        {
+          event: 'checkout.accepted',
+          orderId: result.orderId,
+          correlationId: res.locals['correlationId'],
+        },
+        'checkout aceito',
+      );
     }
     telemetry.checkoutOutcome.add(1, { outcome: result.kind });
-    const body: CheckoutAccepted = { orderId: result.orderId, status: result.status, total: result.total };
-    res.status(202).setHeader('Location', `/orders/${result.orderId}/status`).setHeader('Retry-After', ACCEPTED_RETRY_AFTER_SECONDS).json(body);
+    const body: CheckoutAccepted = {
+      orderId: result.orderId,
+      status: result.status,
+      total: result.total,
+    };
+    res
+      .status(202)
+      .setHeader('Location', `/orders/${result.orderId}/status`)
+      .setHeader('Retry-After', ACCEPTED_RETRY_AFTER_SECONDS)
+      .json(body);
   };
 }
 
 // Erro de qualquer passo da rota: converte o do parser, conta o desfecho e registra a causa.
 // O erro segue para o middleware único, que monta o problem+json.
-function createOnError(telemetry: Telemetry, logger: Logger): ErrorRequestHandler {
+function createOnError(
+  telemetry: Telemetry,
+  logger: Logger,
+): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   return (error: unknown, _req, res, next) => {
-    const problem = error instanceof ProblemError ? error : parserProblem(error);
+    const problem =
+      error instanceof ProblemError ? error : parserProblem(error);
     if (!problem) {
       next(error);
       return;
@@ -115,17 +186,43 @@ function createOnError(telemetry: Telemetry, logger: Logger): ErrorRequestHandle
     const { cause, currentPrices } = problem.init;
     const correlationId = res.locals['correlationId'] as string;
     telemetry.checkoutOutcome.add(1, { outcome: outcomeOf(cause) });
-    logger.warn({ event: 'checkout.rejected', reason: cause, correlationId }, 'checkout recusado');
+    logger.warn(
+      { event: 'checkout.rejected', reason: cause, correlationId },
+      'checkout recusado',
+    );
     if (currentPrices) {
-      logger.warn({ event: 'checkout.price_changed', reason: cause, correlationId, items: currentPrices.length }, 'preço alterado desde que o cliente o viu');
+      logger.warn(
+        {
+          event: 'checkout.price_changed',
+          reason: cause,
+          correlationId,
+          items: currentPrices.length,
+        },
+        'preço alterado desde que o cliente o viu',
+      );
     }
     next(problem);
   };
 }
 
-export function createCheckoutRoutes(checkout: CheckoutRepository, telemetry: Telemetry, logger: Logger): CheckoutRoutes {
+export function createCheckoutRoutes(
+  checkout: CheckoutRepository,
+  telemetry: Telemetry,
+  logger: Logger,
+): CheckoutRoutes {
   const jsonBody = express.json({ limit: MAX_BODY_BYTES });
   const accept = createAccept(checkout, telemetry, logger);
   const onError = createOnError(telemetry, logger);
-  return { handlers: [markRoute, requireJson, jsonBody, requireKey, validateRequest(checkoutRoute), rejectDuplicateSku, accept, onError] };
+  return {
+    handlers: [
+      markRoute,
+      requireJson,
+      jsonBody,
+      requireKey,
+      validateRequest(checkoutRoute),
+      rejectDuplicateSku,
+      accept,
+      onError,
+    ],
+  };
 }

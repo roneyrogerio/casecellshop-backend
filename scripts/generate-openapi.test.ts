@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -20,15 +26,22 @@ afterEach(() => {
 });
 
 function generate(...args: string[]) {
-  return spawnSync(process.execPath, ['scripts/generate-openapi.ts', ...args], { cwd: root, encoding: 'utf8' });
+  return spawnSync(process.execPath, ['scripts/generate-openapi.ts', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+  });
 }
 
 function lint(file: string) {
-  return spawnSync(join(root, 'node_modules', '.bin', 'redocly'), ['lint', file], {
-    cwd: root,
-    encoding: 'utf8',
-    env: { ...process.env, REDOCLY_TELEMETRY: 'off' },
-  });
+  return spawnSync(
+    join(root, 'node_modules', '.bin', 'redocly'),
+    ['lint', file],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, REDOCLY_TELEMETRY: 'off' },
+    },
+  );
 }
 
 function writeCopy(name: string, content: string): string {
@@ -51,7 +64,10 @@ describe('FND-07 openapi.yaml commitado igual ao gerado e válido', () => {
   });
 
   it('FND-07 o --check sai com 1 para uma cópia alterada do openapi.yaml', () => {
-    const content = committed.replace('title: CaseCellShop API', 'title: CaseCellShop API alterada');
+    const content = committed.replace(
+      'title: CaseCellShop API',
+      'title: CaseCellShop API alterada',
+    );
     expect(content).not.toBe(committed);
     const altered = writeCopy('alterado.yaml', content);
 
@@ -62,7 +78,11 @@ describe('FND-07 openapi.yaml commitado igual ao gerado e válido', () => {
   });
 
   it('FND-07 o --check sai com 1 quando o arquivo comparado não existe', () => {
-    const result = generate('--check', '--file', join(workDir, 'inexistente.yaml'));
+    const result = generate(
+      '--check',
+      '--file',
+      join(workDir, 'inexistente.yaml'),
+    );
 
     expect(result.status).toBe(1);
   });

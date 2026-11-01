@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createLoopRunner, type LoopRunner, type LoopRunnerOptions } from './loop-runner.ts';
+import {
+  createLoopRunner,
+  type LoopRunner,
+  type LoopRunnerOptions,
+} from './loop-runner.ts';
 
 // Deixa as continuações das promessas rodarem, sem relógio nem temporizador.
 async function settle(): Promise<void> {
@@ -72,7 +76,9 @@ function createNaiveRunner(options: LoopRunnerOptions): LoopRunner {
 }
 
 // stop(), start() e stop() chamados sem esperar um ao outro: o start() pendente tem de desistir.
-async function runPendingStartScenario(create: (options: LoopRunnerOptions) => LoopRunner) {
+async function runPendingStartScenario(
+  create: (options: LoopRunnerOptions) => LoopRunner,
+) {
   const harness = createLoopHarness();
   const runner = create({ run: harness.run });
   await runner.start();
@@ -119,15 +125,26 @@ describe('executor de laço (createLoopRunner)', () => {
     const stopping = runner.stop().then(() => events.push('stop resolveu'));
     await settle();
     expect(events, 'o drain não roda enquanto o laço não terminou').toEqual([]);
-    expect(harness.runs[0]?.isRunning(), 'o laço é avisado de que deve parar').toBe(false);
+    expect(
+      harness.runs[0]?.isRunning(),
+      'o laço é avisado de que deve parar',
+    ).toBe(false);
 
     harness.runs[0]?.finish();
     await settle();
-    expect(events, 'o laço terminou, o drain começou e o stop() ainda espera').toEqual(['drain começou']);
+    expect(
+      events,
+      'o laço terminou, o drain começou e o stop() ainda espera',
+    ).toEqual(['drain começou']);
 
     drain.resolve();
     await stopping;
-    expect(events).toEqual(['drain começou', 'drain terminou', 'onStopped', 'stop resolveu']);
+    expect(events).toEqual([
+      'drain começou',
+      'drain terminou',
+      'onStopped',
+      'stop resolveu',
+    ]);
     expect(runner.isStopping()).toBe(false);
   });
 
@@ -156,12 +173,21 @@ describe('executor de laço (createLoopRunner)', () => {
     harness.runs[0]?.finish();
     await firstStop;
     await runner.start();
-    expect(harness.runs, 'o start() depois do stop() abre um laço novo').toHaveLength(2);
+    expect(
+      harness.runs,
+      'o start() depois do stop() abre um laço novo',
+    ).toHaveLength(2);
     expect(harness.runs[1]?.isRunning()).toBe(true);
 
     const secondStop = runner.stop();
-    expect(harness.runs[1]?.isRunning(), 'o segundo stop() manda o laço novo parar').toBe(false);
-    expect(await resolvedWithin(secondStop), 'o segundo stop() espera o laço novo terminar').toBe(false);
+    expect(
+      harness.runs[1]?.isRunning(),
+      'o segundo stop() manda o laço novo parar',
+    ).toBe(false);
+    expect(
+      await resolvedWithin(secondStop),
+      'o segundo stop() espera o laço novo terminar',
+    ).toBe(false);
     harness.runs[1]?.finish();
     await secondStop;
 
@@ -172,7 +198,10 @@ describe('executor de laço (createLoopRunner)', () => {
   it('ORD-20 um stop() chamado enquanto um start() está pendente faz esse start() desistir', async () => {
     const outcome = await runPendingStartScenario(createLoopRunner);
 
-    expect(outcome.loopsStarted, 'o start() pendente não abre um segundo laço').toBe(1);
+    expect(
+      outcome.loopsStarted,
+      'o start() pendente não abre um segundo laço',
+    ).toBe(1);
     expect(outcome.anyLoopStillRunning).toBe(false);
   });
 
@@ -216,9 +245,14 @@ describe('executor de laço (createLoopRunner)', () => {
     await runner.start();
 
     const stopping = runner.stop().then(() => events.push('stop resolveu'));
-    expect(events, 'o onStopping roda de forma síncrona no stop()').toEqual(['onStopping']);
+    expect(events, 'o onStopping roda de forma síncrona no stop()').toEqual([
+      'onStopping',
+    ]);
     expect(stoppingInsideHook).toBe(true);
-    expect(runningInsideHook, 'o laço já vê isRunning() falso quando o gancho acorda a espera').toBe(false);
+    expect(
+      runningInsideHook,
+      'o laço já vê isRunning() falso quando o gancho acorda a espera',
+    ).toBe(false);
     await settle();
     expect(events, 'o stop() ainda espera o laço').toEqual(['onStopping']);
 
@@ -246,7 +280,10 @@ describe('executor de laço (createLoopRunner)', () => {
   it('ORD-22 chamado duas vezes durante o encerramento, o stop() devolve o mesmo encerramento e chama o onStopping uma vez', async () => {
     const harness = createLoopHarness();
     let hookCalls = 0;
-    const runner = createLoopRunner({ run: harness.run, onStopping: () => (hookCalls += 1) });
+    const runner = createLoopRunner({
+      run: harness.run,
+      onStopping: () => (hookCalls += 1),
+    });
     await runner.start();
 
     const first = runner.stop();

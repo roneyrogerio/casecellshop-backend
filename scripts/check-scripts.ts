@@ -7,7 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 function scriptsOf(packageJson: string): Record<string, string> {
-  const parsed = JSON.parse(packageJson) as { scripts?: Record<string, string> };
+  const parsed = JSON.parse(packageJson) as {
+    scripts?: Record<string, string>;
+  };
   return parsed.scripts ?? {};
 }
 
@@ -23,12 +25,16 @@ export function scriptsDiffer(base: string, head: string): boolean {
 // commit do implementer leva o trailer dele e é barrado.
 export function mayChangeScripts(message: string): boolean {
   const subject = message.split('\n')[0] ?? '';
-  return /^(ci|build)(\(.+\))?!?:/.test(subject) || /^Assisted-by: main:/m.test(message);
+  return (
+    /^(ci|build)(\(.+\))?!?:/.test(subject) ||
+    /^Assisted-by: main:/m.test(message)
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const base = process.env.BASE_REF ?? 'main';
-  const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8' });
+  const git = (...args: string[]) =>
+    execFileSync('git', args, { encoding: 'utf8' });
   const show = (ref: string) => {
     try {
       return git('show', `${ref}:package.json`);
@@ -36,12 +42,24 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       return '{}';
     }
   };
-  const commits = git('rev-list', '--reverse', `origin/${base}..HEAD`, '--', 'package.json').split('\n').filter(Boolean);
+  const commits = git(
+    'rev-list',
+    '--reverse',
+    `origin/${base}..HEAD`,
+    '--',
+    'package.json',
+  )
+    .split('\n')
+    .filter(Boolean);
   const offenders = commits.filter(
-    (sha) => scriptsDiffer(show(`${sha}~1`), show(sha)) && !mayChangeScripts(git('log', '-1', '--format=%B', sha)),
+    (sha) =>
+      scriptsDiffer(show(`${sha}~1`), show(sha)) &&
+      !mayChangeScripts(git('log', '-1', '--format=%B', sha)),
   );
   for (const sha of offenders) {
-    console.error(`${sha.slice(0, 7)} muda o bloco "scripts" do package.json sem ser ci:/build: nem da sessão principal (o oráculo é dela).`);
+    console.error(
+      `${sha.slice(0, 7)} muda o bloco "scripts" do package.json sem ser ci:/build: nem da sessão principal (o oráculo é dela).`,
+    );
   }
   process.exitCode = offenders.length > 0 ? 1 : 0;
 }

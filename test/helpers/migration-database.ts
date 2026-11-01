@@ -1,7 +1,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from '@testcontainers/postgresql';
 import { Kysely, PostgresAdapter, PostgresDialect } from 'kysely';
 import {
   FileMigrationProvider,
@@ -18,10 +21,15 @@ import type { MigrationFolder } from '../../src/db/migrate.ts';
 // Kysely montado à mão, para os controles negativos provarem que o gancho do migrate é o que
 // faz a diferença.
 
-const FIXTURES_DIR = fileURLToPath(new URL('../fixtures/migrations/', import.meta.url));
+const FIXTURES_DIR = fileURLToPath(
+  new URL('../fixtures/migrations/', import.meta.url),
+);
 
 // Pasta de migrações de teste (caminho absoluto), com o schema da tabela de controle.
-export function fixtureFolder(name: string, schema = 'public'): MigrationFolder {
+export function fixtureFolder(
+  name: string,
+  schema = 'public',
+): MigrationFolder {
   return { dir: path.join(FIXTURES_DIR, name), schema };
 }
 
@@ -37,8 +45,13 @@ export interface MigrationContainer {
 }
 
 export async function startMigrationContainer(): Promise<MigrationContainer> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18.6').start();
-  const adminPool = new pg.Pool({ connectionString: container.getConnectionUri(), max: 2 });
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer(
+    'postgres:18.6',
+  ).start();
+  const adminPool = new pg.Pool({
+    connectionString: container.getConnectionUri(),
+    max: 2,
+  });
   adminPool.on('error', () => undefined);
   const pools: pg.Pool[] = [];
   let counter = 0;
@@ -81,7 +94,10 @@ class NoLockDialect extends PostgresDialect {
 export interface MigratorControl {
   // Ganchos do provider que o migrate do projeto define; aqui ficam de fora, salvo se passados.
   provider?: Pick<FileMigrationProviderProps, 'import' | 'onFileIgnored'>;
-  migrator?: Pick<MigratorProps, 'allowUnorderedMigrations' | 'disableTransactions'>;
+  migrator?: Pick<
+    MigratorProps,
+    'allowUnorderedMigrations' | 'disableTransactions'
+  >;
   withoutLock?: boolean;
   // Desfaz tudo (down de cada migração aplicada) em vez de subir.
   rollbackAll?: boolean;
@@ -96,29 +112,47 @@ export async function runPlainMigrator(
 ): Promise<MigrationResultSet> {
   const pool = new pg.Pool({ connectionString: uri, max: 4 });
   pool.on('error', () => undefined);
-  const dialect = control.withoutLock ? new NoLockDialect({ pool }) : new PostgresDialect({ pool });
+  const dialect = control.withoutLock
+    ? new NoLockDialect({ pool })
+    : new PostgresDialect({ pool });
   // O destroy do Kysely encerra o pool.
   const db = new Kysely<object>({ dialect });
   try {
     const migrator = new Migrator({
       db,
-      provider: new FileMigrationProvider({ fs, path, migrationFolder: folder.dir, ...control.provider }),
+      provider: new FileMigrationProvider({
+        fs,
+        path,
+        migrationFolder: folder.dir,
+        ...control.provider,
+      }),
       migrationTableSchema: folder.schema,
       ...control.migrator,
     });
-    return control.rollbackAll ? await migrator.migrateTo(NO_MIGRATIONS) : await migrator.migrateToLatest();
+    return control.rollbackAll
+      ? await migrator.migrateTo(NO_MIGRATIONS)
+      : await migrator.migrateToLatest();
   } finally {
     await db.destroy();
   }
 }
 
-export async function tableExists(pool: pg.Pool, qualifiedName: string): Promise<boolean> {
-  const result = await pool.query<{ found: string | null }>('SELECT to_regclass($1)::text AS found', [qualifiedName]);
+export async function tableExists(
+  pool: pg.Pool,
+  qualifiedName: string,
+): Promise<boolean> {
+  const result = await pool.query<{ found: string | null }>(
+    'SELECT to_regclass($1)::text AS found',
+    [qualifiedName],
+  );
   return result.rows[0]?.found !== null;
 }
 
 // Nomes gravados na tabela de controle do Kysely no schema dado, em ordem.
-export async function appliedMigrations(pool: pg.Pool, schema: string): Promise<string[]> {
+export async function appliedMigrations(
+  pool: pg.Pool,
+  schema: string,
+): Promise<string[]> {
   const result = await pool.query<{ name: string }>(
     `SELECT name FROM ${pg.escapeIdentifier(schema)}.kysely_migration ORDER BY name`,
   );

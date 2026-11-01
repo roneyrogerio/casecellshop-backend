@@ -19,12 +19,17 @@ function main() {
     const input = JSON.parse(readFileSync(0, 'utf8'));
     const file = targetToFormat(input);
     if (!file) return;
-    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+    const projectDir =
+      process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
     // O .prettierignore e o .prettierrc.json são achados a partir do arquivo.
-    spawnSync(join(projectDir, 'node_modules', '.bin', 'prettier'), ['--write', '--ignore-unknown', file], {
-      cwd: projectDir,
-      stdio: 'ignore',
-    });
+    spawnSync(
+      join(projectDir, 'node_modules', '.bin', 'prettier'),
+      ['--write', '--ignore-unknown', file],
+      {
+        cwd: projectDir,
+        stdio: 'ignore',
+      },
+    );
   } catch {
     // Sem formatar, o --check do pre-push e do CI aponta o arquivo.
   }

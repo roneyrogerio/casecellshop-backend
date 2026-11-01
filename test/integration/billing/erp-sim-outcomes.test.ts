@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CreateOrderResult } from '../../../src/erp/erp-client.ts';
-import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 import {
   countInvoices,
   createErpHarness,
@@ -54,7 +57,9 @@ describe('H1b: a criação é idempotente pela referência', () => {
     await seedErpProduct(database.pool, { sku, onHand: 100 });
 
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => client.createOrder(orderFor(reference, sku, 1))),
+      Array.from({ length: 20 }, () =>
+        client.createOrder(orderFor(reference, sku, 1)),
+      ),
     );
 
     const ids = new Set(results.map((result) => orderOf(result).erpOrderId));
@@ -69,7 +74,11 @@ describe('H1b: a criação é idempotente pela referência', () => {
     const reference = uniqueName('pedido-sem-h1b-corrida');
     await seedErpProduct(database.pool, { sku, onHand: 100 });
 
-    await Promise.all(Array.from({ length: 20 }, () => client.createOrder(orderFor(reference, sku, 1))));
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        client.createOrder(orderFor(reference, sku, 1)),
+      ),
+    );
 
     expect(await countInvoices(database.pool, reference)).toBe(20);
   });
@@ -83,14 +92,19 @@ describe('H1a: consulta pela referência', () => {
     await seedErpProduct(database.pool, { sku });
     const created = orderOf(await client.createOrder(orderFor(reference, sku)));
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'found', order: created });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'found',
+      order: created,
+    });
   });
 
   it('ORD-21 consultar uma referência nunca faturada dá not_found, e a consulta não cria fatura', async () => {
     const { client } = createErpHarness(database.erpPool);
     const reference = uniqueName('pedido-nunca-faturado');
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'not_found' });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'not_found',
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 });
@@ -117,13 +131,18 @@ describe('modo sem a H1b', () => {
     const first = orderOf(await client.createOrder(orderFor(reference, sku)));
     await client.createOrder(orderFor(reference, sku));
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'found', order: first });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'found',
+      order: first,
+    });
   });
 
   it('ORD-21 a H1a continua valendo sem a H1b: referência nunca faturada dá not_found', async () => {
     const { client } = createErpHarness(database.erpPool, { withoutH1b: true });
 
-    expect(await client.findOrderByReference(uniqueName('pedido-sem-h1b-vazio'))).toEqual({ kind: 'not_found' });
+    expect(
+      await client.findOrderByReference(uniqueName('pedido-sem-h1b-vazio')),
+    ).toEqual({ kind: 'not_found' });
   });
 
   it('ORD-21 o modo sem a H1b vale por instância: uma instância com a H1b, no mesmo banco, continua deduplicando', async () => {
@@ -173,7 +192,9 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
     const { client } = createErpHarness(database.erpPool);
     const reference = uniqueName('pedido-sku-desconhecido');
 
-    const result = await client.createOrder(orderFor(reference, uniqueName('SKU-QUE-NAO-EXISTE')));
+    const result = await client.createOrder(
+      orderFor(reference, uniqueName('SKU-QUE-NAO-EXISTE')),
+    );
 
     expect(result).toEqual({ kind: 'permanent', reason: 'rejected' });
     expect(await countInvoices(database.pool, reference)).toBe(0);
@@ -207,7 +228,9 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
     await seedErpProduct(database.pool, { sku, onHand: 0 });
     await client.createOrder(orderFor(reference, sku));
 
-    expect(await client.findOrderByReference(reference)).toEqual({ kind: 'not_found' });
+    expect(await client.findOrderByReference(reference)).toEqual({
+      kind: 'not_found',
+    });
   });
 
   it('ORD-21 com estoque, a criação fatura e baixa o estoque do ERP', async () => {
@@ -216,7 +239,9 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
     const reference = uniqueName('pedido-h2-ok');
     await seedErpProduct(database.pool, { sku, onHand: 5 });
 
-    expect((await client.createOrder(orderFor(reference, sku, 5))).kind).toBe('ok');
+    expect((await client.createOrder(orderFor(reference, sku, 5))).kind).toBe(
+      'ok',
+    );
 
     expect(await countInvoices(database.pool, reference)).toBe(1);
     expect(await erpOnHand(database.pool, sku)).toBe(0);

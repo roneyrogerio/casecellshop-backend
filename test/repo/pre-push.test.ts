@@ -1,8 +1,21 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, git, initRepo, makeTempDir } from '../helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  git,
+  initRepo,
+  makeTempDir,
+} from '../helpers/git-sandbox.ts';
 
 // O hook fica em .githooks/ (AI-08) e não tem arquivo de origem ao lado: o teste mora em test/repo/,
 // onde ficam os testes de configuração do repositório.
@@ -25,16 +38,24 @@ function makeFakeNpm(exitCode: number): FakeNpm {
   const log = join(dir, 'npm.log');
   mkdirSync(bin);
   const fake = join(bin, 'npm');
-  writeFileSync(fake, `#!/bin/sh\n{ echo "$*"; pwd; } >> '${log}'\nexit ${exitCode}\n`);
+  writeFileSync(
+    fake,
+    `#!/bin/sh\n{ echo "$*"; pwd; } >> '${log}'\nexit ${exitCode}\n`,
+  );
   chmodSync(fake, 0o755);
   return {
     bin,
     calls: () => {
       if (!existsSync(log)) return [];
-      const lines = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '');
+      const lines = readFileSync(log, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '');
       const calls: { args: string; cwd: string }[] = [];
       for (let index = 0; index + 1 < lines.length; index += 2) {
-        calls.push({ args: lines[index] ?? '', cwd: realpathSync(lines[index + 1] ?? '') });
+        calls.push({
+          args: lines[index] ?? '',
+          cwd: realpathSync(lines[index + 1] ?? ''),
+        });
       }
       return calls;
     },
@@ -45,18 +66,34 @@ function isolatedEnv(npm: FakeNpm): NodeJS.ProcessEnv {
   return { ...process.env, PATH: `${npm.bin}:${process.env.PATH ?? ''}` };
 }
 
-const REFS = 'refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x 0000000000000000000000000000000000000000\n';
+const REFS =
+  'refs/heads/x 1111111111111111111111111111111111111111 refs/heads/x 0000000000000000000000000000000000000000\n';
 
 // Como o git chama: $1 é o nome do remoto, $2 a URL já reescrita pelo insteadOf, e as refs entram pela entrada padrão.
 // O hook roda dentro de um repositório de teste (a raiz dele é o que o `npm run verify` deve receber como cwd).
-function runHook(url: string, options: { npmExit?: number; subdir?: string } = {}) {
+function runHook(
+  url: string,
+  options: { npmExit?: number; subdir?: string } = {},
+) {
   const project = makeTempDir('prepush-run-');
   initRepo(project);
   const npm = makeFakeNpm(options.npmExit ?? 0);
-  const cwd = options.subdir === undefined ? project : join(project, options.subdir);
+  const cwd =
+    options.subdir === undefined ? project : join(project, options.subdir);
   mkdirSync(cwd, { recursive: true });
-  const result = spawnSync(hook, ['origin', url], { input: REFS, encoding: 'utf8', cwd, env: isolatedEnv(npm) });
-  return { code: result.status, stderr: result.stderr, error: result.error, npm, project };
+  const result = spawnSync(hook, ['origin', url], {
+    input: REFS,
+    encoding: 'utf8',
+    cwd,
+    env: isolatedEnv(npm),
+  });
+  return {
+    code: result.status,
+    stderr: result.stderr,
+    error: result.error,
+    npm,
+    project,
+  };
 }
 
 describe('AI-08 o .githooks/pre-push é versionado e executável', () => {
@@ -66,7 +103,11 @@ describe('AI-08 o .githooks/pre-push é versionado e executável', () => {
   });
 
   it('AI-08 o git ls-files -s registra o modo 100755', () => {
-    const result = spawnSync('git', ['ls-files', '-s', '--', '.githooks/pre-push'], { cwd: root, encoding: 'utf8' });
+    const result = spawnSync(
+      'git',
+      ['ls-files', '-s', '--', '.githooks/pre-push'],
+      { cwd: root, encoding: 'utf8' },
+    );
 
     expect(result.stdout.startsWith('100755 ')).toBe(true);
   }, 60_000);
@@ -90,16 +131,23 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
     'HTTPS://github.com/a/b.git',
     ' https://github.com/a/b.git',
     '',
-  ])('AI-08 recusa a URL "%s" com código diferente de 0 e o motivo no stderr', (url) => {
-    const result = runHook(url);
+  ])(
+    'AI-08 recusa a URL "%s" com código diferente de 0 e o motivo no stderr',
+    (url) => {
+      const result = runHook(url);
 
-    expect(result.error).toBeUndefined();
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).not.toBe('');
-  }, 60_000);
+      expect(result.error).toBeUndefined();
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).not.toBe('');
+    },
+    60_000,
+  );
 
   // Controle negativo: a URL HTTPS do GitHub passa.
-  it.each(['https://github.com/roneyrogerio/casecellshop-backend.git', 'https://github.com/a/b'])(
+  it.each([
+    'https://github.com/roneyrogerio/casecellshop-backend.git',
+    'https://github.com/a/b',
+  ])(
     'AI-08 deixa passar a URL "%s" com código 0',
     (url) => {
       const result = runHook(url);
@@ -111,7 +159,11 @@ describe('AI-08 o pre-push só deixa passar a URL que começa por https://github
   );
 
   it('AI-08 sem argumentos recusa', () => {
-    const result = spawnSync(hook, [], { input: '', encoding: 'utf8', env: isolatedEnv(makeFakeNpm(0)) });
+    const result = spawnSync(hook, [], {
+      input: '',
+      encoding: 'utf8',
+      env: isolatedEnv(makeFakeNpm(0)),
+    });
 
     expect(result.status).not.toBe(0);
   }, 60_000);
@@ -131,7 +183,11 @@ describe('AI-08 o pre-push recusa o push de verdade, depois de o insteadOf reesc
     const args = ['-c', `url.${bare}.insteadOf=https://github.com/a/b.git`];
     if (hooksPath !== null) args.push('-c', `core.hooksPath=${hooksPath}`);
     args.push('push', 'origin', 'HEAD:refs/heads/feature');
-    return spawnSync('git', args, { cwd: project, encoding: 'utf8', env: isolatedEnv(makeFakeNpm(0)) });
+    return spawnSync('git', args, {
+      cwd: project,
+      encoding: 'utf8',
+      env: isolatedEnv(makeFakeNpm(0)),
+    });
   }
 
   function branchesIn(bare: string): string {
@@ -165,14 +221,18 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
     const result = runHook(ACCEPTED);
 
     expect(result.code).toBe(0);
-    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+    expect(result.npm.calls()).toEqual([
+      { args: 'run verify', cwd: result.project },
+    ]);
   }, 60_000);
 
   it('AI-17 chamado de uma subpasta, roda o verify na raiz do repositório, e não na subpasta', () => {
     const result = runHook(ACCEPTED, { subdir: 'src/checkout' });
 
     expect(result.code).toBe(0);
-    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+    expect(result.npm.calls()).toEqual([
+      { args: 'run verify', cwd: result.project },
+    ]);
   }, 60_000);
 
   it('AI-17 com o verify falhando, o push é recusado (código diferente de 0)', () => {
@@ -180,7 +240,9 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
 
     expect(result.error).toBeUndefined();
     expect(result.code).not.toBe(0);
-    expect(result.npm.calls()).toEqual([{ args: 'run verify', cwd: result.project }]);
+    expect(result.npm.calls()).toEqual([
+      { args: 'run verify', cwd: result.project },
+    ]);
   }, 60_000);
 
   it('AI-17 o código do verify que falhou com outro valor também recusa o push', () => {
@@ -191,7 +253,13 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
   }, 60_000);
 
   // Controle negativo: o verify só roda depois da URL; a URL recusada nunca chega ao npm.
-  it.each(['git@github.com:a/b.git', 'ssh://git@github.com/a/b.git', '/tmp/x.git', 'https://github.com.evil.com/a/b.git', ''])(
+  it.each([
+    'git@github.com:a/b.git',
+    'ssh://git@github.com/a/b.git',
+    '/tmp/x.git',
+    'https://github.com.evil.com/a/b.git',
+    '',
+  ])(
     'AI-17 com a URL "%s" recusada, o npm nunca é chamado',
     (url) => {
       const result = runHook(url);

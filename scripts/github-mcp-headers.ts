@@ -36,7 +36,10 @@ export function buildHeaders(token: string): Record<string, string> {
 // ambiente (o Claude Code as tira do helper): devolve {} e a autenticação fica
 // com o ambiente da nuvem. Na máquina, sem token, devolve null e o CLI falha
 // sem imprimir nada, para a conexão nunca cair em outra credencial.
-export function headersFor(env: { remote: boolean }, token: string | undefined): Record<string, string> | null {
+export function headersFor(
+  env: { remote: boolean },
+  token: string | undefined,
+): Record<string, string> | null {
   if (env.remote) return {};
   return token ? buildHeaders(token) : null;
 }
@@ -44,9 +47,14 @@ export function headersFor(env: { remote: boolean }, token: string | undefined):
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const headers = headersFor({ remote }, remote ? undefined : readToken(readIdentity(root), root));
+  const headers = headersFor(
+    { remote },
+    remote ? undefined : readToken(readIdentity(root), root),
+  );
   if (!headers) {
-    process.stderr.write('Sem identidade configurada ou sem token: veja o diagnóstico de início de sessão (npm run check:env).\n');
+    process.stderr.write(
+      'Sem identidade configurada ou sem token: veja o diagnóstico de início de sessão (npm run check:env).\n',
+    );
     process.exit(1);
   }
   process.stdout.write(JSON.stringify(headers));

@@ -11,7 +11,10 @@ function buildPool(config: pg.PoolConfig, logger: Logger): pg.Pool {
   const pool = new pg.Pool(config);
   // Sem este ouvinte, o erro de uma conexão ociosa derrubaria o processo.
   pool.on('error', (error) => {
-    logger.error({ event: 'db_pool_error', err: error }, 'erro numa conexão ociosa do banco');
+    logger.error(
+      { event: 'db_pool_error', err: error },
+      'erro numa conexão ociosa do banco',
+    );
   });
   return pool;
 }
@@ -35,6 +38,16 @@ export function createPool(connectionString: string, logger: Logger): pg.Pool {
 // prazo de 1 s: nada espera indefinidamente, e um banco mudo deixaria o migrate
 // parado para sempre, com a API e o worker sem subir. Roda uma vez e sai, então
 // duas conexões bastam.
-export function createMigrationPool(connectionString: string, logger: Logger): pg.Pool {
-  return buildPool({ connectionString, max: 2, connectionTimeoutMillis: CONNECTION_TIMEOUT_MS }, logger);
+export function createMigrationPool(
+  connectionString: string,
+  logger: Logger,
+): pg.Pool {
+  return buildPool(
+    {
+      connectionString,
+      max: 2,
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+    },
+    logger,
+  );
 }

@@ -2,7 +2,11 @@ import type { Pool } from 'pg';
 import type { Logger } from 'pino';
 import { createDb } from '../db/database.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
-import { MAX_RECEIVE_BATCH, type Queue, type ReceivedMessage } from '../queue/sqs.ts';
+import {
+  MAX_RECEIVE_BATCH,
+  type Queue,
+  type ReceivedMessage,
+} from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import { createSemaphore, type Semaphore } from '../shared/semaphore.ts';
@@ -65,14 +69,26 @@ interface WorkerContext extends AttemptContext {
 
 // Corpo fora do schema: a fila é uma entrada como outra qualquer. Não responde ao SQS, para a
 // mensagem voltar e chegar à DLQ pelo limite de recebimentos.
-function rejectInvalid(logger: Logger, received: ReceivedMessage, orderId: string | undefined): void {
+function rejectInvalid(
+  logger: Logger,
+  received: ReceivedMessage,
+  orderId: string | undefined,
+): void {
   logger.error(
-    { event: 'outbox.invalid_message', attempt: received.receiveCount, ...(orderId === undefined ? {} : { orderId }) },
+    {
+      event: 'outbox.invalid_message',
+      attempt: received.receiveCount,
+      ...(orderId === undefined ? {} : { orderId }),
+    },
     'corpo da mensagem fora do schema: a mensagem fica sem resposta',
   );
 }
 
-function attempt(ctx: WorkerContext, received: ReceivedMessage, receivedAt: number): Promise<void> {
+function attempt(
+  ctx: WorkerContext,
+  received: ReceivedMessage,
+  receivedAt: number,
+): Promise<void> {
   const parsed = parseBillingMessage(received.body);
   if (!parsed.valid) {
     rejectInvalid(ctx.logger, received, parsed.orderId);
@@ -87,13 +103,22 @@ function attempt(ctx: WorkerContext, received: ReceivedMessage, receivedAt: numb
     deadline: receivedAt + ctx.settings.visibilitySeconds * 1000,
   };
   // A tentativa continua o trace do checkout e o correlationId dele; o mixin do logger lê os dois do contexto ativo.
-  const options = { name: 'outbox.attempt', traceparent: message.traceparent, correlationId: message.correlationId, attributes: { orderId: message.orderId, attempt: message.attempt } };
-  return runConsumerSpan(ctx.telemetry, options, (span) => runAttempt(ctx, message, span));
+  const options = {
+    name: 'outbox.attempt',
+    traceparent: message.traceparent,
+    correlationId: message.correlationId,
+    attributes: { orderId: message.orderId, attempt: message.attempt },
+  };
+  return runConsumerSpan(ctx.telemetry, options, (span) =>
+    runAttempt(ctx, message, span),
+  );
 }
 
 // Recebe até as permissões livres e dispara as tentativas sem esperá-las: `done` resolve quando
 // todas terminam. Cada tentativa devolve a sua permissão ao fim.
-async function receiveRound(ctx: WorkerContext): Promise<{ count: number; done: Promise<void> }> {
+async function receiveRound(
+  ctx: WorkerContext,
+): Promise<{ count: number; done: Promise<void> }> {
   const { semaphore, queue, clock, settings } = ctx;
   const permits = await semaphore.acquireFree();
   if (ctx.isStopping()) {
@@ -104,32 +129,57 @@ async function receiveRound(ctx: WorkerContext): Promise<{ count: number; done: 
   // Lido antes do recebimento: o prazo da mensagem nunca passa do que o SQS concede.
   const receivedAt = clock.now();
   try {
-    received = await queue.receive({ max: Math.min(permits, MAX_RECEIVE_BATCH), waitSeconds: settings.receiveWaitSeconds, visibilitySeconds: settings.visibilitySeconds });
+    received = await queue.receive({
+      max: Math.min(permits, MAX_RECEIVE_BATCH),
+      waitSeconds: settings.receiveWaitSeconds,
+      visibilitySeconds: settings.visibilitySeconds,
+    });
   } catch (error) {
     semaphore.release(permits);
     throw error;
   }
   semaphore.release(permits - received.length);
-  const done = Promise.all(received.map((message) => attempt(ctx, message, receivedAt).finally(() => semaphore.release(1)))).then(() => undefined);
+  const done = Promise.all(
+    received.map((message) =>
+      attempt(ctx, message, receivedAt).finally(() => semaphore.release(1)),
+    ),
+  ).then(() => undefined);
   return { count: received.length, done };
 }
 
 // Não espera a rodada: uma chamada lenta não segura a vazão das outras, e o recebimento
 // seguinte já espera por uma permissão livre; o long polling faz a espera com a fila vazia.
-async function pollLoop(ctx: WorkerContext, inFlight: Set<Promise<void>>, isRunning: () => boolean): Promise<void> {
+async function pollLoop(
+  ctx: WorkerContext,
+  inFlight: Set<Promise<void>>,
+  isRunning: () => boolean,
+): Promise<void> {
   while (isRunning()) {
     try {
       const round = await receiveRound(ctx);
       inFlight.add(round.done);
       void round.done.finally(() => inFlight.delete(round.done));
     } catch (error) {
-      ctx.logger.error({ event: 'worker.poll_error', err: error }, 'falha na rodada do worker');
+      ctx.logger.error(
+        { event: 'worker.poll_error', err: error },
+        'falha na rodada do worker',
+      );
       if (isRunning()) await ctx.clock.sleep(POLL_ERROR_BACKOFF_MS);
     }
   }
 }
 
-export function createWorker({ pool, queue, erp, semaphore, logger, telemetry, clock, random = Math.random, config }: WorkerDependencies): Worker {
+export function createWorker({
+  pool,
+  queue,
+  erp,
+  semaphore,
+  logger,
+  telemetry,
+  clock,
+  random = Math.random,
+  config,
+}: WorkerDependencies): Worker {
   const settings: WorkerConfig = { ...DEFAULT_WORKER_CONFIG, ...config };
   const ctx: WorkerContext = {
     db: createDb(pool),
@@ -148,8 +198,10 @@ export function createWorker({ pool, queue, erp, semaphore, logger, telemetry, c
   const runner = createLoopRunner({
     run: (isRunning) => pollLoop(ctx, inFlight, isRunning),
     drain: () => Promise.all(inFlight),
-    onStarted: () => logger.info({ event: 'worker_started' }, 'worker iniciado'),
-    onStopped: () => logger.info({ event: 'worker_stopped' }, 'worker encerrado'),
+    onStarted: () =>
+      logger.info({ event: 'worker_started' }, 'worker iniciado'),
+    onStopped: () =>
+      logger.info({ event: 'worker_stopped' }, 'worker encerrado'),
   });
 
   return {

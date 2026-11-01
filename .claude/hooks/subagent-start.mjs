@@ -14,7 +14,9 @@ import { rootFor } from './path-guard.mjs';
 // lint, os tipos e os testes do hook de parada não rodam. Devolve se instalou.
 export function ensureDependencies(dir, run) {
   if (existsSync(join(dir, 'node_modules'))) return false;
-  run('npm', ['ci', '--no-audit', '--no-fund', '--prefer-offline'], { cwd: dir });
+  run('npm', ['ci', '--no-audit', '--no-fund', '--prefer-offline'], {
+    cwd: dir,
+  });
   return true;
 }
 
@@ -23,18 +25,26 @@ function main() {
   try {
     input = JSON.parse(readFileSync(0, 'utf8'));
   } catch {
-    process.stderr.write('subagent-start: entrada do hook ilegível; sem retrato do git, a parada registra exceção\n');
+    process.stderr.write(
+      'subagent-start: entrada do hook ilegível; sem retrato do git, a parada registra exceção\n',
+    );
     process.exit(1);
   }
   try {
-    const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+    const projectDir =
+      process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
     const file = snapshotFile(input.session_id, input.agent_id);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(takeSnapshot(projectDir)));
     const root = rootFor(input, projectDir);
-    if (root !== projectDir) ensureDependencies(root, (command, args, options) => spawnSync(command, args, { ...options, stdio: 'ignore' }));
+    if (root !== projectDir)
+      ensureDependencies(root, (command, args, options) =>
+        spawnSync(command, args, { ...options, stdio: 'ignore' }),
+      );
   } catch (error) {
-    process.stderr.write(`subagent-start: retrato do git não gravado (${error.message})\n`);
+    process.stderr.write(
+      `subagent-start: retrato do git não gravado (${error.message})\n`,
+    );
     process.exit(1);
   }
 }

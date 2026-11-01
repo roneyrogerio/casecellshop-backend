@@ -8,20 +8,30 @@ const FIXED_ACCOUNT = /honeyforge/i;
 
 // Código de produção dos trilhos: scripts e hooks, fora os testes.
 function isProductionRail(file: string): boolean {
-  const inScope = file.startsWith('scripts/') || file.startsWith('.claude/hooks/');
+  const inScope =
+    file.startsWith('scripts/') || file.startsWith('.claude/hooks/');
   return inScope && /\.(ts|mjs)$/.test(file) && !file.endsWith('.test.ts');
 }
 
 // Arquivos rastreados e também os novos ainda não adicionados, para o teste valer antes do commit.
 function railFiles(): string[] {
-  const result = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  return result.stdout.split('\n').filter((file) => file !== '' && isProductionRail(file));
+  const result = spawnSync(
+    'git',
+    ['ls-files', '--cached', '--others', '--exclude-standard'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
+  return result.stdout
+    .split('\n')
+    .filter((file) => file !== '' && isProductionRail(file));
 }
 
-function filesWithFixedAccount(files: string[], read: (file: string) => string): string[] {
+function filesWithFixedAccount(
+  files: string[],
+  read: (file: string) => string,
+): string[] {
   return files.filter((file) => FIXED_ACCOUNT.test(read(file)));
 }
 
@@ -30,7 +40,11 @@ describe('AI-14 nenhuma conta fixa no código', () => {
     const files = railFiles();
 
     expect(files.length).toBeGreaterThan(5);
-    expect(filesWithFixedAccount(files, (file) => readFileSync(join(root, file), 'utf8'))).toEqual([]);
+    expect(
+      filesWithFixedAccount(files, (file) =>
+        readFileSync(join(root, file), 'utf8'),
+      ),
+    ).toEqual([]);
   }, 60_000);
 
   // Controle negativo: a busca acha o texto num conteúdo inventado que o tenha.
@@ -40,11 +54,15 @@ describe('AI-14 nenhuma conta fixa no código', () => {
       'scripts/b.ts': 'export const LOGIN = undefined;\n',
     };
 
-    expect(filesWithFixedAccount(Object.keys(fake), (file) => fake[file] ?? '')).toEqual(['scripts/a.ts']);
+    expect(
+      filesWithFixedAccount(Object.keys(fake), (file) => fake[file] ?? ''),
+    ).toEqual(['scripts/a.ts']);
   });
 
   it('AI-14 scripts/lib/bot-token.ts não existe mais', () => {
-    expect(existsSync(join(root, 'scripts', 'lib', 'bot-token.ts'))).toBe(false);
+    expect(existsSync(join(root, 'scripts', 'lib', 'bot-token.ts'))).toBe(
+      false,
+    );
   });
 
   it('AI-14 scripts/lib/identity.ts existe', () => {

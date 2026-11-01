@@ -58,7 +58,8 @@ export type FindOrderResult =
   | ErpTransient
   | ErpConfigError;
 
-export type ListCatalogResult = { kind: 'ok'; page: ErpCatalogPage } | ErpTransient | ErpConfigError;
+export type ListCatalogResult =
+  { kind: 'ok'; page: ErpCatalogPage } | ErpTransient | ErpConfigError;
 
 // Cada operação devolve um resultado de lista fechada; nenhuma lança por causa do ERP.
 export interface ErpClient {

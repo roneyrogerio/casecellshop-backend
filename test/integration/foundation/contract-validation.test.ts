@@ -3,10 +3,18 @@ import { pino } from 'pino';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
-import { CorrelationId, HealthStatus, PROBLEM_MEDIA_TYPE, Problem } from '../../../src/contract/index.ts';
+import {
+  CorrelationId,
+  HealthStatus,
+  PROBLEM_MEDIA_TYPE,
+  Problem,
+} from '../../../src/contract/index.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
-import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
+import {
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const healthRoute = findRoute('get', '/health');
@@ -38,7 +46,9 @@ describe('FND-03 requisição fora do contrato', () => {
     const problem = Problem.parse(res.body);
     expect(problem.status).toBe(400);
     expect(problem.type).toBe('/problems/invalid-request');
-    expect(problem.errors?.some((error) => error.path.includes('verbose'))).toBe(true);
+    expect(
+      problem.errors?.some((error) => error.path.includes('verbose')),
+    ).toBe(true);
   });
 
   it('FND-03 o correlationId do corpo do 400 é igual ao cabeçalho x-request-id', async () => {
@@ -60,7 +70,10 @@ describe('FND-03 requisição fora do contrato', () => {
 
   it('FND-03 um X-Request-Id válido volta igual no cabeçalho e no correlationId do 400', async () => {
     const id = 'pedido-fnd03_ABC.123';
-    const res = await request(app).get('/health').query({ verbose: 'true' }).set('X-Request-Id', id);
+    const res = await request(app)
+      .get('/health')
+      .query({ verbose: 'true' })
+      .set('X-Request-Id', id);
 
     expect(res.status).toBe(400);
     expect(res.headers['x-request-id']).toBe(id);
@@ -81,16 +94,22 @@ describe('FND-03 requisição fora do contrato', () => {
     ['com 129 caracteres', 'a'.repeat(129)],
     ['com caractere não ASCII', 'id-ç'],
     ['vazio', ''],
-  ])('FND-03 um X-Request-Id inválido (%s) é trocado por um UUID válido pelo CorrelationId', async (_label, sent) => {
-    const res = await request(app).get('/health').query({ verbose: 'true' }).set('X-Request-Id', sent);
+  ])(
+    'FND-03 um X-Request-Id inválido (%s) é trocado por um UUID válido pelo CorrelationId',
+    async (_label, sent) => {
+      const res = await request(app)
+        .get('/health')
+        .query({ verbose: 'true' })
+        .set('X-Request-Id', sent);
 
-    expect(res.status).toBe(400);
-    const returned = res.headers['x-request-id'] as string;
-    expect(returned).not.toBe(sent);
-    expect(CorrelationId.safeParse(returned).success).toBe(true);
-    expect(returned).toMatch(UUID);
-    expect(Problem.parse(res.body).correlationId).toBe(returned);
-  });
+      expect(res.status).toBe(400);
+      const returned = res.headers['x-request-id'] as string;
+      expect(returned).not.toBe(sent);
+      expect(CorrelationId.safeParse(returned).success).toBe(true);
+      expect(returned).toMatch(UUID);
+      expect(Problem.parse(res.body).correlationId).toBe(returned);
+    },
+  );
 
   it('FND-03 sem X-Request-Id a API gera um UUID e o devolve no 200 e no 400', async () => {
     const ok = await request(app).get('/health');
@@ -102,7 +121,9 @@ describe('FND-03 requisição fora do contrato', () => {
   });
 
   it('FND-03 o 200 do /health passa pelo schema da rota, com o x-request-id no cabeçalho', async () => {
-    const res = await request(app).get('/health').set('X-Request-Id', 'saude-1');
+    const res = await request(app)
+      .get('/health')
+      .set('X-Request-Id', 'saude-1');
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/json/);
@@ -112,9 +133,13 @@ describe('FND-03 requisição fora do contrato', () => {
   });
 
   it('FND-03 o tipo de conteúdo do 400 é exatamente application/problem+json', async () => {
-    const res = await request(app).get('/health').query({ outro: '1', mais: '2' });
+    const res = await request(app)
+      .get('/health')
+      .query({ outro: '1', mais: '2' });
 
     expect(res.status).toBe(400);
-    expect((res.headers['content-type'] as string).split(';')[0]).toBe(PROBLEM_MEDIA_TYPE);
+    expect((res.headers['content-type'] as string).split(';')[0]).toBe(
+      PROBLEM_MEDIA_TYPE,
+    );
   });
 });

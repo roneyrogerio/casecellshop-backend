@@ -19,7 +19,9 @@ let check: (input: GuardInput) => Verdict;
 // Cada grupo que usa `check` o carrega, para a falta do módulo não esconder os testes de processo.
 async function loadCheck(): Promise<void> {
   const hookPath = join(import.meta.dirname, 'bash-guard.mjs');
-  const module = (await import(pathToFileURL(hookPath).href)) as { check: typeof check };
+  const module = (await import(pathToFileURL(hookPath).href)) as {
+    check: typeof check;
+  };
   check = module.check;
 }
 
@@ -43,7 +45,10 @@ const FORBIDDEN_VERBS = [
 ];
 
 function bash(agentType: string | undefined, command: string): GuardInput {
-  return { ...(agentType ? { agent_type: agentType } : {}), tool_input: { command } };
+  return {
+    ...(agentType ? { agent_type: agentType } : {}),
+    tool_input: { command },
+  };
 }
 
 // O mesmo comando de git, em cada posição em que um shell o executaria.
@@ -64,21 +69,34 @@ function positions(gitCommand: string): [string, string][] {
 describe('AI-11 o bash-guard nega aos subagentes os comandos que mudam o estado do git', () => {
   beforeAll(loadCheck);
 
-  it.each(FORBIDDEN_VERBS)('AI-11 nega git %s em qualquer posição, para os três subagentes', (verb) => {
-    for (const agentType of SUBAGENTS) {
-      for (const [label, command] of positions(`git ${verb} -x arg`)) {
-        const verdict = check(bash(agentType, command));
-        expect(verdict.allow, `${agentType} ${label}: ${command}`).toBe(false);
-        expect(verdict.reason, `${agentType} ${label}`).toBeTruthy();
+  it.each(FORBIDDEN_VERBS)(
+    'AI-11 nega git %s em qualquer posição, para os três subagentes',
+    (verb) => {
+      for (const agentType of SUBAGENTS) {
+        for (const [label, command] of positions(`git ${verb} -x arg`)) {
+          const verdict = check(bash(agentType, command));
+          expect(verdict.allow, `${agentType} ${label}: ${command}`).toBe(
+            false,
+          );
+          expect(verdict.reason, `${agentType} ${label}`).toBeTruthy();
+        }
       }
-    }
-  });
+    },
+  );
 
-  it.each(FORBIDDEN_VERBS)('AI-11 nega git -C <dir> %s, mesmo com mais espaços', (verb) => {
-    for (const command of [`git -C ../outro ${verb}`, `git -C /tmp/x   ${verb} --all`, `git   ${verb}`, `echo a; git -C . ${verb}`]) {
-      expect(check(bash('implementer', command)).allow, command).toBe(false);
-    }
-  });
+  it.each(FORBIDDEN_VERBS)(
+    'AI-11 nega git -C <dir> %s, mesmo com mais espaços',
+    (verb) => {
+      for (const command of [
+        `git -C ../outro ${verb}`,
+        `git -C /tmp/x   ${verb} --all`,
+        `git   ${verb}`,
+        `echo a; git -C . ${verb}`,
+      ]) {
+        expect(check(bash('implementer', command)).allow, command).toBe(false);
+      }
+    },
+  );
 
   it.each([
     'git commit -m "feat: x"',
@@ -91,7 +109,8 @@ describe('AI-11 o bash-guard nega aos subagentes os comandos que mudam o estado 
     'git branch -D main',
     'git tag -d v1',
   ])('AI-11 nega o comando completo "%s"', (command) => {
-    for (const agentType of SUBAGENTS) expect(check(bash(agentType, command)).allow).toBe(false);
+    for (const agentType of SUBAGENTS)
+      expect(check(bash(agentType, command)).allow).toBe(false);
   });
 
   // Controle negativo: o que só lê o estado, e os outros comandos, passam.
@@ -131,12 +150,15 @@ describe('AI-11 o bash-guard nega aos subagentes os comandos que mudam o estado 
 describe('AI-11 a sessão principal passa', () => {
   beforeAll(loadCheck);
 
-  it.each(['git commit -m "feat: x"', 'git push origin HEAD', 'git reset --hard', 'sh -c "git checkout main"', 'git status'])(
-    'AI-11 sem agent_type libera "%s"',
-    (command) => {
-      expect(check(bash(undefined, command)).allow).toBe(true);
-    },
-  );
+  it.each([
+    'git commit -m "feat: x"',
+    'git push origin HEAD',
+    'git reset --hard',
+    'sh -c "git checkout main"',
+    'git status',
+  ])('AI-11 sem agent_type libera "%s"', (command) => {
+    expect(check(bash(undefined, command)).allow).toBe(true);
+  });
 });
 
 // As formas de escrever o git que a regex antiga não reconhecia (A12): o shell as executa do mesmo jeito.
@@ -199,37 +221,54 @@ const SUBAGENT_ALLOWED_FORMS = [
 describe('AI-11 os subagentes não escapam da guarda pela grafia do git (A12)', () => {
   beforeAll(loadCheck);
 
-  it.each(SUBAGENT_DENIED_FORMS)('AI-11 nega "%s" aos três subagentes', (command) => {
-    for (const agentType of SUBAGENTS) {
-      const verdict = check(bash(agentType, command));
-      expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
-      expect(verdict.reason, `${agentType}: ${command}`).toBeTruthy();
-    }
-  });
-
-  // Controle negativo: o que só lê o estado do git, e o que nem é git, segue liberado.
-  it.each(SUBAGENT_ALLOWED_FORMS)('AI-11 libera "%s" aos três subagentes', (command) => {
-    for (const agentType of SUBAGENTS) {
-      expect(check(bash(agentType, command)).allow, `${agentType}: ${command}`).toBe(true);
-    }
-  });
-
-  // Controle negativo: a negação é só dos subagentes; a sessão principal usa as mesmas formas, que não são push perigoso.
-  it.each(SUBAGENT_DENIED_FORMS.filter((command) => !command.includes('--git-dir') && !command.includes('alias.p=push p')))(
-    'AI-11 a sessão principal passa com "%s"',
+  it.each(SUBAGENT_DENIED_FORMS)(
+    'AI-11 nega "%s" aos três subagentes',
     (command) => {
-      expect(check(bash(undefined, command)).allow, command).toBe(true);
-    },
-  );
-
-  it.each(['git pull', 'git fetch', 'git add .', 'git worktree add ../x', 'git config core.hooksPath x'])(
-    'AI-11 nega "%s" ao subagente em qualquer posição',
-    (command) => {
-      for (const [label, positioned] of positions(command)) {
-        expect(check(bash('implementer', positioned)).allow, `${label}: ${positioned}`).toBe(false);
+      for (const agentType of SUBAGENTS) {
+        const verdict = check(bash(agentType, command));
+        expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
+        expect(verdict.reason, `${agentType}: ${command}`).toBeTruthy();
       }
     },
   );
+
+  // Controle negativo: o que só lê o estado do git, e o que nem é git, segue liberado.
+  it.each(SUBAGENT_ALLOWED_FORMS)(
+    'AI-11 libera "%s" aos três subagentes',
+    (command) => {
+      for (const agentType of SUBAGENTS) {
+        expect(
+          check(bash(agentType, command)).allow,
+          `${agentType}: ${command}`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  // Controle negativo: a negação é só dos subagentes; a sessão principal usa as mesmas formas, que não são push perigoso.
+  it.each(
+    SUBAGENT_DENIED_FORMS.filter(
+      (command) =>
+        !command.includes('--git-dir') && !command.includes('alias.p=push p'),
+    ),
+  )('AI-11 a sessão principal passa com "%s"', (command) => {
+    expect(check(bash(undefined, command)).allow, command).toBe(true);
+  });
+
+  it.each([
+    'git pull',
+    'git fetch',
+    'git add .',
+    'git worktree add ../x',
+    'git config core.hooksPath x',
+  ])('AI-11 nega "%s" ao subagente em qualquer posição', (command) => {
+    for (const [label, positioned] of positions(command)) {
+      expect(
+        check(bash('implementer', positioned)).allow,
+        `${label}: ${positioned}`,
+      ).toBe(false);
+    }
+  });
 });
 
 const MAIN_PUSH_ALLOWED = [
@@ -270,25 +309,42 @@ const MAIN_PUSH_DENIED = [
 describe('AI-11 o git push da sessão principal só passa na forma estreita (A2)', () => {
   beforeAll(loadCheck);
 
-  it.each(MAIN_PUSH_ALLOWED)('AI-11 a sessão principal pode "%s"', (command) => {
-    expect(check(bash(undefined, command)).allow, command).toBe(true);
-  });
+  it.each(MAIN_PUSH_ALLOWED)(
+    'AI-11 a sessão principal pode "%s"',
+    (command) => {
+      expect(check(bash(undefined, command)).allow, command).toBe(true);
+    },
+  );
 
-  it.each(MAIN_PUSH_ALLOWED)('AI-11 a sessão principal pode "%s" depois de ; e de &&', (command) => {
-    expect(check(bash(undefined, `npm test && ${command}`)).allow, command).toBe(true);
-    expect(check(bash(undefined, `echo a; ${command}`)).allow, command).toBe(true);
-  });
+  it.each(MAIN_PUSH_ALLOWED)(
+    'AI-11 a sessão principal pode "%s" depois de ; e de &&',
+    (command) => {
+      expect(
+        check(bash(undefined, `npm test && ${command}`)).allow,
+        command,
+      ).toBe(true);
+      expect(check(bash(undefined, `echo a; ${command}`)).allow, command).toBe(
+        true,
+      );
+    },
+  );
 
-  it.each(MAIN_PUSH_DENIED)('AI-11 a sessão principal não pode "%s"', (command) => {
-    const verdict = check(bash(undefined, command));
+  it.each(MAIN_PUSH_DENIED)(
+    'AI-11 a sessão principal não pode "%s"',
+    (command) => {
+      const verdict = check(bash(undefined, command));
 
-    expect(verdict.allow, command).toBe(false);
-    expect(verdict.reason, command).toBeTruthy();
-  });
+      expect(verdict.allow, command).toBe(false);
+      expect(verdict.reason, command).toBeTruthy();
+    },
+  );
 
-  it.each(MAIN_PUSH_DENIED)('AI-11 o implementer também não pode "%s"', (command) => {
-    expect(check(bash('implementer', command)).allow, command).toBe(false);
-  });
+  it.each(MAIN_PUSH_DENIED)(
+    'AI-11 o implementer também não pode "%s"',
+    (command) => {
+      expect(check(bash('implementer', command)).allow, command).toBe(false);
+    },
+  );
 
   // O mesmo push perigoso, escrito de outros jeitos: a regra não depende da grafia.
   it.each([
@@ -302,18 +358,25 @@ describe('AI-11 o git push da sessão principal só passa na forma estreita (A2)
     '{ git push --mirror; }',
     '/usr/bin/git push origin +HEAD',
     'xargs git push --all',
-  ])('AI-11 a sessão principal não pode o push perigoso escrito como "%s"', (command) => {
-    expect(check(bash(undefined, command)).allow, command).toBe(false);
-  });
-
-  it.each(['git push origin HEAD -f', 'git push origin --delete x', 'git push origin main'])(
-    'AI-11 a sessão principal não pode "%s" em nenhuma posição',
+  ])(
+    'AI-11 a sessão principal não pode o push perigoso escrito como "%s"',
     (command) => {
-      for (const [label, positioned] of positions(command)) {
-        expect(check(bash(undefined, positioned)).allow, `${label}: ${positioned}`).toBe(false);
-      }
+      expect(check(bash(undefined, command)).allow, command).toBe(false);
     },
   );
+
+  it.each([
+    'git push origin HEAD -f',
+    'git push origin --delete x',
+    'git push origin main',
+  ])('AI-11 a sessão principal não pode "%s" em nenhuma posição', (command) => {
+    for (const [label, positioned] of positions(command)) {
+      expect(
+        check(bash(undefined, positioned)).allow,
+        `${label}: ${positioned}`,
+      ).toBe(false);
+    }
+  });
 
   // Controle negativo: negar o push perigoso não pode tirar da sessão principal o resto.
   it.each([
@@ -398,14 +461,17 @@ const SUBAGENT_FILE_WRITE_ALLOWED = [
 describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
   beforeAll(loadCheck);
 
-  it.each(SUBAGENT_FILE_WRITE_DENIED)('AI-11 nega "%s" aos três subagentes e manda usar Edit e Write', (command) => {
-    for (const agentType of SUBAGENTS) {
-      const verdict = check(bash(agentType, command));
-      expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
-      expect(verdict.reason, `${agentType}: ${command}`).toContain('Edit');
-      expect(verdict.reason, `${agentType}: ${command}`).toContain('Write');
-    }
-  });
+  it.each(SUBAGENT_FILE_WRITE_DENIED)(
+    'AI-11 nega "%s" aos três subagentes e manda usar Edit e Write',
+    (command) => {
+      for (const agentType of SUBAGENTS) {
+        const verdict = check(bash(agentType, command));
+        expect(verdict.allow, `${agentType}: ${command}`).toBe(false);
+        expect(verdict.reason, `${agentType}: ${command}`).toContain('Edit');
+        expect(verdict.reason, `${agentType}: ${command}`).toContain('Write');
+      }
+    },
+  );
 
   it.each(['python3 x.py', "sed -i 's/a/b/' f.ts", 'echo x > f.ts'])(
     'AI-11 nega a escrita de arquivo "%s" em qualquer posição',
@@ -413,7 +479,9 @@ describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
       for (const agentType of SUBAGENTS) {
         for (const [label, positioned] of positions(command)) {
           const verdict = check(bash(agentType, positioned));
-          expect(verdict.allow, `${agentType} ${label}: ${positioned}`).toBe(false);
+          expect(verdict.allow, `${agentType} ${label}: ${positioned}`).toBe(
+            false,
+          );
           expect(verdict.reason, `${agentType} ${label}`).toBeTruthy();
         }
       }
@@ -421,20 +489,25 @@ describe('AI-11 os subagentes não escrevem arquivo pelo Bash', () => {
   );
 
   // Controle negativo: ler, testar e descartar a saída seguem liberados.
-  it.each(SUBAGENT_FILE_WRITE_ALLOWED)('AI-11 libera "%s" aos três subagentes', (command) => {
-    for (const agentType of SUBAGENTS) {
-      const verdict = check(bash(agentType, command));
-      expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
-    }
-  });
-
-  // Controle negativo: a negação é só dos subagentes.
-  it.each(['python3 x.py', "sed -i 's/a/b/' f.ts", 'echo x > f.ts', "cat > f.ts <<'EOF'\nx\nEOF"])(
-    'AI-11 a sessão principal segue livre para "%s"',
+  it.each(SUBAGENT_FILE_WRITE_ALLOWED)(
+    'AI-11 libera "%s" aos três subagentes',
     (command) => {
-      expect(check(bash(undefined, command)).allow, command).toBe(true);
+      for (const agentType of SUBAGENTS) {
+        const verdict = check(bash(agentType, command));
+        expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
+      }
     },
   );
+
+  // Controle negativo: a negação é só dos subagentes.
+  it.each([
+    'python3 x.py',
+    "sed -i 's/a/b/' f.ts",
+    'echo x > f.ts',
+    "cat > f.ts <<'EOF'\nx\nEOF",
+  ])('AI-11 a sessão principal segue livre para "%s"', (command) => {
+    expect(check(bash(undefined, command)).allow, command).toBe(true);
+  });
 });
 
 // Dentro de aspas duplas o shell executa `$(…)` e crase e lê `\"` como escape; invólucros com opção e `>&arquivo` também escrevem (A16, A17).
@@ -486,12 +559,15 @@ describe('AI-11 os subagentes não escrevem arquivo por dentro de aspas duplas n
   );
 
   // Controle negativo: o que só lê, descarta a saída ou é literal segue liberado.
-  it.each(SUBAGENT_QUOTED_AND_WRAPPED_ALLOWED)('AI-11 libera "%s" aos três subagentes', (command) => {
-    for (const agentType of SUBAGENTS) {
-      const verdict = check(bash(agentType, command));
-      expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
-    }
-  });
+  it.each(SUBAGENT_QUOTED_AND_WRAPPED_ALLOWED)(
+    'AI-11 libera "%s" aos três subagentes',
+    (command) => {
+      for (const agentType of SUBAGENTS) {
+        const verdict = check(bash(agentType, command));
+        expect(verdict.allow, `${agentType}: ${command}`).toBe(true);
+      }
+    },
+  );
 });
 
 describe('AI-11 o bash-guard como processo', () => {
@@ -501,9 +577,16 @@ describe('AI-11 o bash-guard como processo', () => {
     const result = spawnSync(process.execPath, [hook], {
       input: raw,
       encoding: 'utf8',
-      env: { ...process.env, CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..') },
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: join(import.meta.dirname, '..', '..'),
+      },
     });
-    return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+    return {
+      code: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
   }
 
   function payload(agentType: string | undefined, command: string): string {
@@ -530,7 +613,9 @@ describe('AI-11 o bash-guard como processo', () => {
   function isDenied(result: ReturnType<typeof run>): boolean {
     if (result.code === 2) return result.stderr !== '';
     if (result.code !== 0 || result.stdout === '') return false;
-    const output = JSON.parse(result.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+    const output = JSON.parse(result.stdout) as {
+      hookSpecificOutput?: { permissionDecision?: string };
+    };
     return output.hookSpecificOutput?.permissionDecision === 'deny';
   }
 
@@ -539,17 +624,27 @@ describe('AI-11 o bash-guard como processo', () => {
   });
 
   it('AI-11 o reviewer com sh -c "git push" é recusado', () => {
-    expect(isDenied(run(payload('reviewer', 'sh -c "git push origin HEAD"')))).toBe(true);
+    expect(
+      isDenied(run(payload('reviewer', 'sh -c "git push origin HEAD"'))),
+    ).toBe(true);
   });
 
-  it.each(['(git push)', 'env git push', '"git" push', 'git -c alias.p=push p', 'git --git-dir .git push'])(
-    'AI-11 o implementer com %s é recusado',
-    (command) => {
-      expect(isDenied(run(payload('implementer', command)))).toBe(true);
-    },
-  );
+  it.each([
+    '(git push)',
+    'env git push',
+    '"git" push',
+    'git -c alias.p=push p',
+    'git --git-dir .git push',
+  ])('AI-11 o implementer com %s é recusado', (command) => {
+    expect(isDenied(run(payload('implementer', command)))).toBe(true);
+  });
 
-  it.each(['git push origin --delete chore/x', 'git push -d origin chore/x', 'git push origin HEAD -f', 'git push --mirro'])(
+  it.each([
+    'git push origin --delete chore/x',
+    'git push -d origin chore/x',
+    'git push origin HEAD -f',
+    'git push --mirro',
+  ])(
     'AI-11 a sessão principal com %s é recusada com código 2 e o motivo no stderr',
     (command) => {
       const result = run(payload(undefined, command));
@@ -559,7 +654,11 @@ describe('AI-11 o bash-guard como processo', () => {
     },
   );
 
-  it.each(['git push', 'git push -u origin HEAD', 'git push origin chore/ai-factory-v2'])(
+  it.each([
+    'git push',
+    'git push -u origin HEAD',
+    'git push origin chore/ai-factory-v2',
+  ])(
     'AI-11 controle: a sessão principal com %s passa, sem saída',
     (command) => {
       const result = run(payload(undefined, command));
@@ -584,7 +683,9 @@ describe('AI-11 o bash-guard como processo', () => {
   });
 
   it("AI-11 o test-writer com python3 - <<'EOF' é recusado com código 2 e o motivo no stderr", () => {
-    const result = run(payload('test-writer', "python3 - <<'EOF'\nprint(1)\nEOF"));
+    const result = run(
+      payload('test-writer', "python3 - <<'EOF'\nprint(1)\nEOF"),
+    );
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('Edit');

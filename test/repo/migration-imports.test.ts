@@ -3,7 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 
 interface SourceFile {
   path: string;
@@ -15,7 +18,8 @@ interface SourceFile {
 // Uma migração só pode importar de `kysely` (e de subcaminhos dele): nada de `src/`, de caminho
 // relativo ou de `node:`, para uma constante da aplicação que mude depois não mudar o esquema que
 // uma migração antiga cria.
-const IMPORT_PATTERN = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"`]([^'"`]+)['"`]/g;
+const IMPORT_PATTERN =
+  /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"`]([^'"`]+)['"`]/g;
 
 function isAllowedSpecifier(specifier: string): boolean {
   return specifier === 'kysely' || specifier.startsWith('kysely/');
@@ -27,7 +31,9 @@ function findMigrationImportViolations(files: SourceFile[]): string[] {
     for (const match of file.content.matchAll(IMPORT_PATTERN)) {
       const specifier = match[1];
       if (specifier !== undefined && !isAllowedSpecifier(specifier)) {
-        violations.push(`${file.path} importa de '${specifier}', e uma migração só pode importar de kysely`);
+        violations.push(
+          `${file.path} importa de '${specifier}', e uma migração só pode importar de kysely`,
+        );
       }
     }
   }
@@ -40,7 +46,9 @@ function listMigrationFiles(): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name !== '.gitkeep')
-    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
+    .map((entry) =>
+      path.relative(root, path.join(entry.parentPath, entry.name)),
+    )
     .sort();
 }
 
@@ -48,7 +56,9 @@ describe('FND-11 as migrações do repositório são .ts e só importam de kysel
   it('FND-11 todo arquivo de migrations/ é um .ts com nome AAAAMMDDHHMMSS_nome.ts, e a migração erp_sim está lá', () => {
     const files = listMigrationFiles();
 
-    expect(files).toContain('migrations/erp_sim/20260101000000_create_erp_sim.ts');
+    expect(files).toContain(
+      'migrations/erp_sim/20260101000000_create_erp_sim.ts',
+    );
     for (const file of files) {
       expect(path.basename(file), file).toMatch(/^\d{14}_[a-z0-9_]+\.ts$/);
     }
@@ -57,7 +67,10 @@ describe('FND-11 as migrações do repositório são .ts e só importam de kysel
   it('FND-11 cada arquivo de migrations/ só importa de kysely, sem import de src/ nem relativo', () => {
     const files = listMigrationFiles()
       .filter((file) => file.endsWith('.ts'))
-      .map((file) => ({ path: file, content: readFileSync(path.join(root, file), 'utf8') }));
+      .map((file) => ({
+        path: file,
+        content: readFileSync(path.join(root, file), 'utf8'),
+      }));
 
     // Sem nenhum .ts a conferência passaria vazia: a migração erp_sim em .ts precisa existir.
     expect(files.length).toBeGreaterThan(0);
@@ -85,15 +98,36 @@ describe('FND-11 controle negativo do conferidor de imports das migrações', ()
   });
 
   it.each([
-    ["import { TABLE } from '../../src/db/constants.ts';", '../../src/db/constants.ts'],
-    ["import type { DB } from '../../src/db/types/store.ts';", '../../src/db/types/store.ts'],
+    [
+      "import { TABLE } from '../../src/db/constants.ts';",
+      '../../src/db/constants.ts',
+    ],
+    [
+      "import type { DB } from '../../src/db/types/store.ts';",
+      '../../src/db/types/store.ts',
+    ],
     ["import { x } from './outra-migracao.ts';", './outra-migracao.ts'],
-    ["import {\n  TABLE,\n} from '../../src/db/constants.ts';", '../../src/db/constants.ts'],
+    [
+      "import {\n  TABLE,\n} from '../../src/db/constants.ts';",
+      '../../src/db/constants.ts',
+    ],
     ["import '../../src/setup.ts';", '../../src/setup.ts'],
-    ["export { TABLE } from '../../src/db/constants.ts';", '../../src/db/constants.ts'],
-    ["const { TABLE } = await import('../../src/db/constants.ts');", '../../src/db/constants.ts'],
-    ['const { TABLE } = await import(`../../src/db/constants.ts`);', '../../src/db/constants.ts'],
-    ['const { TABLE } = require(`../../src/db/constants.ts`);', '../../src/db/constants.ts'],
+    [
+      "export { TABLE } from '../../src/db/constants.ts';",
+      '../../src/db/constants.ts',
+    ],
+    [
+      "const { TABLE } = await import('../../src/db/constants.ts');",
+      '../../src/db/constants.ts',
+    ],
+    [
+      'const { TABLE } = await import(`../../src/db/constants.ts`);',
+      '../../src/db/constants.ts',
+    ],
+    [
+      'const { TABLE } = require(`../../src/db/constants.ts`);',
+      '../../src/db/constants.ts',
+    ],
     ['const { readFileSync } = await import(`node:fs`);', 'node:fs'],
     ["import { readFileSync } from 'node:fs';", 'node:fs'],
     ["import pg from 'pg';", 'pg'],
@@ -101,12 +135,16 @@ describe('FND-11 controle negativo do conferidor de imports das migrações', ()
     const violations = findMigrationImportViolations(sample(importLine));
 
     expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain('migrations/store/20260101000000_amostra.ts');
+    expect(violations[0]).toContain(
+      'migrations/store/20260101000000_amostra.ts',
+    );
     expect(violations[0]).toContain(specifier);
   });
 
   it('FND-11 uma violação por import: o import de kysely ao lado do de src/ não a esconde', () => {
-    const files = sample("import { sql } from 'kysely';\nimport { TABLE } from '../../src/db/constants.ts';");
+    const files = sample(
+      "import { sql } from 'kysely';\nimport { TABLE } from '../../src/db/constants.ts';",
+    );
 
     expect(findMigrationImportViolations(files)).toHaveLength(1);
   });

@@ -1,9 +1,22 @@
 import type { Kysely, Transaction } from 'kysely';
 import type { Pool } from 'pg';
 import type { Clock } from '../../shared/clock.ts';
-import { createErpDb, runInTransaction, type ErpSimDb } from '../../db/database.ts';
-import type { ErpCatalogItem, ErpOrderItem, ErpOrderRequest } from '../erp-client.ts';
-import { ErpNetworkError, type ErpRequest, type ErpResponse, type ErpTransport } from '../transport.ts';
+import {
+  createErpDb,
+  runInTransaction,
+  type ErpSimDb,
+} from '../../db/database.ts';
+import type {
+  ErpCatalogItem,
+  ErpOrderItem,
+  ErpOrderRequest,
+} from '../erp-client.ts';
+import {
+  ErpNetworkError,
+  type ErpRequest,
+  type ErpResponse,
+  type ErpTransport,
+} from '../transport.ts';
 
 const CATALOG_PAGE_SIZE = 50;
 
@@ -78,7 +91,9 @@ function orderFromRow(row: { id: string; reference: string }) {
 
 // O motivo do sinal, como o contrato do transporte manda; embrulha o que não for Error.
 function abortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error('Chamada ao ERP abortada');
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Chamada ao ERP abortada');
 }
 
 function abortedPromise(signal: AbortSignal): Promise<never> {
@@ -87,7 +102,9 @@ function abortedPromise(signal: AbortSignal): Promise<never> {
       reject(abortReason(signal));
       return;
     }
-    signal.addEventListener('abort', () => reject(abortReason(signal)), { once: true });
+    signal.addEventListener('abort', () => reject(abortReason(signal)), {
+      once: true,
+    });
   });
 }
 
@@ -102,7 +119,12 @@ function trackWrite({ writes }: Sim, write: Promise<unknown>): void {
 }
 
 function nextBehavior(sim: Sim, request: ErpRequest): ErpSimBehavior {
-  const reference = request.op === 'createOrder' ? request.body.reference : request.op === 'findOrder' ? request.reference : undefined;
+  const reference =
+    request.op === 'createOrder'
+      ? request.body.reference
+      : request.op === 'findOrder'
+        ? request.reference
+        : undefined;
   const index = sim.queue.findIndex(
     ({ match }) =>
       (match.op === undefined || match.op === request.op) &&
@@ -123,13 +145,18 @@ async function listCatalog({ db }: Sim, page: number): Promise<ErpResponse> {
     .limit(CATALOG_PAGE_SIZE + 1)
     .offset(offset)
     .execute();
-  const items: ErpCatalogItem[] = rows.slice(0, CATALOG_PAGE_SIZE).map((row) => ({
-    sku: row.sku,
-    name: row.name,
-    priceCents: row.price_cents,
-    onHand: row.on_hand,
-  }));
-  return { status: 200, body: { items, hasNext: rows.length > CATALOG_PAGE_SIZE } };
+  const items: ErpCatalogItem[] = rows
+    .slice(0, CATALOG_PAGE_SIZE)
+    .map((row) => ({
+      sku: row.sku,
+      name: row.name,
+      priceCents: row.price_cents,
+      onHand: row.on_hand,
+    }));
+  return {
+    status: 200,
+    body: { items, hasNext: rows.length > CATALOG_PAGE_SIZE },
+  };
 }
 
 async function findOrder({ db }: Sim, reference: string): Promise<ErpResponse> {
@@ -147,7 +174,10 @@ async function findOrder({ db }: Sim, reference: string): Promise<ErpResponse> {
 }
 
 // H2: baixa o estoque uma linha por UPDATE, em ordem de SKU para não haver deadlock.
-async function decrementStock(trx: Transaction<ErpSimDb>, items: ErpOrderItem[]): Promise<void> {
+async function decrementStock(
+  trx: Transaction<ErpSimDb>,
+  items: ErpOrderItem[],
+): Promise<void> {
   const ordered = [...items].sort((a, b) => a.sku.localeCompare(b.sku));
   for (const item of ordered) {
     const updated = await trx
@@ -162,13 +192,23 @@ async function decrementStock(trx: Transaction<ErpSimDb>, items: ErpOrderItem[])
         .select('sku')
         .where('sku', '=', item.sku)
         .executeTakeFirst();
-      throw new InvoiceRefused(known ? 'out_of_stock' : 'unknown_product', item.sku);
+      throw new InvoiceRefused(
+        known ? 'out_of_stock' : 'unknown_product',
+        item.sku,
+      );
     }
   }
 }
 
-async function invoice({ withoutH1b }: Sim, trx: Transaction<ErpSimDb>, request: ErpOrderRequest): Promise<ErpResponse> {
-  const totalCents = request.items.reduce((sum, item) => sum + item.quantity * item.unitPriceCents, 0);
+async function invoice(
+  { withoutH1b }: Sim,
+  trx: Transaction<ErpSimDb>,
+  request: ErpOrderRequest,
+): Promise<ErpResponse> {
+  const totalCents = request.items.reduce(
+    (sum, item) => sum + item.quantity * item.unitPriceCents,
+    0,
+  );
   // H1b: a unicidade da dedup_key decide; sem ela a chave é nula e nada conflita.
   const created = await trx
     .insertInto('erp_sim.invoices')
@@ -195,7 +235,10 @@ async function invoice({ withoutH1b }: Sim, trx: Transaction<ErpSimDb>, request:
   return { status: 201, body: orderFromRow(created) };
 }
 
-async function createOrder(sim: Sim, request: ErpOrderRequest): Promise<ErpResponse> {
+async function createOrder(
+  sim: Sim,
+  request: ErpOrderRequest,
+): Promise<ErpResponse> {
   try {
     return await runInTransaction(sim.db, (trx) => invoice(sim, trx, request));
   } catch (error) {
@@ -221,7 +264,11 @@ function handleTracked(sim: Sim, request: ErpRequest): Promise<ErpResponse> {
 
 // Espera o atraso ou o aborto, o que vier primeiro; o relógio não cancela o sleep, então
 // o ouvinte do sinal é solto quando o atraso vence.
-function sleepUnlessAborted(clock: Clock, ms: number, signal: AbortSignal): Promise<void> {
+function sleepUnlessAborted(
+  clock: Clock,
+  ms: number,
+  signal: AbortSignal,
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
       reject(abortReason(signal));
@@ -244,18 +291,38 @@ function invoiceLater(sim: Sim, request: ErpRequest, delayMs: number): void {
   });
 }
 
-type FaultyBehavior = Extract<ErpSimBehavior, { mode: 'invoice_no_response' | 'invoice_after' | 'fast_502_then_invoice' | 'hang' }>;
+type FaultyBehavior = Extract<
+  ErpSimBehavior,
+  {
+    mode:
+      | 'invoice_no_response'
+      | 'invoice_after'
+      | 'fast_502_then_invoice'
+      | 'hang';
+  }
+>;
 
 function isFaulty(behavior: ErpSimBehavior): behavior is FaultyBehavior {
-  return ['invoice_no_response', 'invoice_after', 'fast_502_then_invoice', 'hang'].includes(behavior.mode);
+  return [
+    'invoice_no_response',
+    'invoice_after',
+    'fast_502_then_invoice',
+    'hang',
+  ].includes(behavior.mode);
 }
 
 // Os comportamentos em que a fatura pode sair sem a chamada ver a resposta.
-function sendFaulty(sim: Sim, behavior: FaultyBehavior, request: ErpRequest, signal: AbortSignal): Promise<ErpResponse> {
+function sendFaulty(
+  sim: Sim,
+  behavior: FaultyBehavior,
+  request: ErpRequest,
+  signal: AbortSignal,
+): Promise<ErpResponse> {
   switch (behavior.mode) {
     case 'invoice_no_response':
       // A gravação não depende do sinal: a fatura sai mesmo que a chamada seja abortada.
-      if (request.op === 'createOrder') trackWrite(sim, createOrder(sim, request.body));
+      if (request.op === 'createOrder')
+        trackWrite(sim, createOrder(sim, request.body));
       return abortedPromise(signal);
     case 'invoice_after':
       invoiceLater(sim, request, behavior.delayMs);
@@ -268,7 +335,11 @@ function sendFaulty(sim: Sim, behavior: FaultyBehavior, request: ErpRequest, sig
   }
 }
 
-async function send(sim: Sim, request: ErpRequest, signal: AbortSignal): Promise<ErpResponse> {
+async function send(
+  sim: Sim,
+  request: ErpRequest,
+  signal: AbortSignal,
+): Promise<ErpResponse> {
   const behavior = nextBehavior(sim, request);
   if (isFaulty(behavior)) return sendFaulty(sim, behavior, request, signal);
   switch (behavior.mode) {
@@ -291,8 +362,19 @@ async function send(sim: Sim, request: ErpRequest, signal: AbortSignal): Promise
 // referência), H1b (fatura idempotente pela referência), H2 (recusa sem estoque) e
 // H3 (fatura pelo preço enviado). Tudo no schema erp_sim, que sobrevive ao reinício
 // do worker.
-export function createSimulatedErp({ pool, clock, withoutH1b = false }: SimulatedErpOptions): SimulatedErp {
-  const sim: Sim = { db: createErpDb(pool), clock, withoutH1b, queue: [], defaultBehavior: { mode: 'normal' }, writes: new Set() };
+export function createSimulatedErp({
+  pool,
+  clock,
+  withoutH1b = false,
+}: SimulatedErpOptions): SimulatedErp {
+  const sim: Sim = {
+    db: createErpDb(pool),
+    clock,
+    withoutH1b,
+    queue: [],
+    defaultBehavior: { mode: 'normal' },
+    writes: new Set(),
+  };
 
   const script: ErpSimScript = {
     enqueue(behavior, match = {}) {
@@ -307,5 +389,8 @@ export function createSimulatedErp({ pool, clock, withoutH1b = false }: Simulate
     },
   };
 
-  return { transport: { send: (request, signal) => send(sim, request, signal) }, script };
+  return {
+    transport: { send: (request, signal) => send(sim, request, signal) },
+    script,
+  };
 }

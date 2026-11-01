@@ -3,42 +3,68 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, makeTempDir } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  makeTempDir,
+} from '../../test/helpers/git-sandbox.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
+const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 const hook = join(root, '.claude', 'hooks', 'format-edited.mjs');
 
 // O hook decide pelo nome da ferramenta e pelo `file_path` (AI-34); a tabela inteira roda dentro do processo.
 let targetToFormat: (input: unknown) => string | null;
 
 beforeAll(async () => {
-  ({ targetToFormat } = (await import(pathToFileURL(hook).href)) as { targetToFormat: typeof targetToFormat });
+  ({ targetToFormat } = (await import(pathToFileURL(hook).href)) as {
+    targetToFormat: typeof targetToFormat;
+  });
 });
 
 afterAll(cleanupTempDirs);
 
 describe('AI-34 o hook depois do Edit e do Write escolhe o arquivo a formatar', () => {
-  it.each(['Edit', 'Write'])('AI-34 %s com file_path devolve esse caminho', (toolName) => {
-    expect(
-      targetToFormat({
-        hook_event_name: 'PostToolUse',
-        tool_name: toolName,
-        tool_input: { file_path: '/repo/src/app.ts' },
-      }),
-    ).toBe('/repo/src/app.ts');
-  });
+  it.each(['Edit', 'Write'])(
+    'AI-34 %s com file_path devolve esse caminho',
+    (toolName) => {
+      expect(
+        targetToFormat({
+          hook_event_name: 'PostToolUse',
+          tool_name: toolName,
+          tool_input: { file_path: '/repo/src/app.ts' },
+        }),
+      ).toBe('/repo/src/app.ts');
+    },
+  );
 
-  it.each(['Bash', 'Read', 'Skill', 'SubagentHandback', 'NotebookEdit', 'edit'])(
+  it.each([
+    'Bash',
+    'Read',
+    'Skill',
+    'SubagentHandback',
+    'NotebookEdit',
+    'edit',
+  ])(
     'AI-34 %s, que não é o Edit nem o Write, devolve null mesmo com file_path',
     (toolName) => {
-      expect(targetToFormat({ tool_name: toolName, tool_input: { file_path: '/repo/src/app.ts' } })).toBeNull();
+      expect(
+        targetToFormat({
+          tool_name: toolName,
+          tool_input: { file_path: '/repo/src/app.ts' },
+        }),
+      ).toBeNull();
     },
   );
 
   it.each([
     ['sem tool_input', { tool_name: 'Edit' }],
     ['com tool_input vazio', { tool_name: 'Write', tool_input: {} }],
-    ['com file_path que não é texto', { tool_name: 'Edit', tool_input: { file_path: 42 } }],
+    [
+      'com file_path que não é texto',
+      { tool_name: 'Edit', tool_input: { file_path: 42 } },
+    ],
     ['sem tool_name', { tool_input: { file_path: '/repo/src/app.ts' } }],
   ])('AI-34 entrada %s devolve null', (_label, input) => {
     expect(targetToFormat(input)).toBeNull();
@@ -62,7 +88,11 @@ function runHook(raw: string, projectDir: string = root): Run {
 }
 
 function edited(toolName: string, filePath: string): string {
-  return JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: toolName, tool_input: { file_path: filePath } });
+  return JSON.stringify({
+    hook_event_name: 'PostToolUse',
+    tool_name: toolName,
+    tool_input: { file_path: filePath },
+  });
 }
 
 // Fora do formato com qualquer configuração: ponto e vírgula dobrado e espaços a mais.
@@ -70,15 +100,18 @@ const MESSY = 'const   a   =   1;;\n';
 const FORMATTED = 'const a = 1;\n';
 
 describe('AI-34 o hook como processo (stdin, arquivo, código de saída)', () => {
-  it.each(['Edit', 'Write'])('AI-34 depois do %s o arquivo editado sai formatado e o hook termina com 0', (toolName) => {
-    const file = join(makeTempDir('ai34-hook-'), 'amostra.ts');
-    writeFileSync(file, MESSY);
+  it.each(['Edit', 'Write'])(
+    'AI-34 depois do %s o arquivo editado sai formatado e o hook termina com 0',
+    (toolName) => {
+      const file = join(makeTempDir('ai34-hook-'), 'amostra.ts');
+      writeFileSync(file, MESSY);
 
-    const result = runHook(edited(toolName, file));
+      const result = runHook(edited(toolName, file));
 
-    expect(result.code).toBe(0);
-    expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
-  });
+      expect(result.code).toBe(0);
+      expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
+    },
+  );
 
   it('AI-34 outra ferramenta não formata nada', () => {
     const file = join(makeTempDir('ai34-hook-'), 'amostra.ts');

@@ -29,7 +29,10 @@ afterAll(async () => {
   await container?.stop();
 });
 
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(/\/$/, '');
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 
 describe('FND-11 migrate aplica as pastas pelo Migrator do Kysely', () => {
   it('FND-11 as duas pastas do repositório são o padrão, a da loja antes e o erp_sim depois', () => {
@@ -42,23 +45,37 @@ describe('FND-11 migrate aplica as pastas pelo Migrator do Kysely', () => {
   it('FND-11 aplica as pastas na ordem dada, cada uma com a kysely_migration no próprio schema', async () => {
     const { pool } = await container.createDatabase();
 
-    await migrate(pool, [fixtureFolder('order/first'), fixtureFolder('order/second', 'fnd11_second')]);
+    await migrate(pool, [
+      fixtureFolder('order/first'),
+      fixtureFolder('order/second', 'fnd11_second'),
+    ]);
 
     // A pasta "second" escreve numa tabela que só a "first" cria: a ordem aparece no registro.
-    const log = await pool.query<{ who: string }>('SELECT who FROM fnd11_order_log ORDER BY id');
-    expect(log.rows.map((row) => row.who)).toEqual(['first-1', 'first-2', 'second-1']);
+    const log = await pool.query<{ who: string }>(
+      'SELECT who FROM fnd11_order_log ORDER BY id',
+    );
+    expect(log.rows.map((row) => row.who)).toEqual([
+      'first-1',
+      'first-2',
+      'second-1',
+    ]);
     expect(await appliedMigrations(pool, 'public')).toEqual([
       '20260101000000_create_log',
       '20260101000001_second_migration',
     ]);
-    expect(await appliedMigrations(pool, 'fnd11_second')).toEqual(['20260101000000_uses_log']);
+    expect(await appliedMigrations(pool, 'fnd11_second')).toEqual([
+      '20260101000000_uses_log',
+    ]);
   });
 
   it('FND-11 controle negativo: as pastas na ordem inversa rejeitam, porque a ordem dada é a que vale', async () => {
     const { pool } = await container.createDatabase();
 
     await expect(
-      migrate(pool, [fixtureFolder('order/second', 'fnd11_second'), fixtureFolder('order/first')]),
+      migrate(pool, [
+        fixtureFolder('order/second', 'fnd11_second'),
+        fixtureFolder('order/first'),
+      ]),
     ).rejects.toThrow(/fnd11_order_log/);
 
     expect(await tableExists(pool, 'public.fnd11_order_log')).toBe(false);
@@ -84,13 +101,19 @@ describe('FND-11 migrate aplica as pastas pelo Migrator do Kysely', () => {
     const { uri, pool } = await container.createDatabase();
     await migrate(pool, [fixtureFolder('out-of-order/executed')]);
 
-    await expect(migrate(pool, [fixtureFolder('out-of-order/complete')])).rejects.toThrow(/20260102000000_b/);
+    await expect(
+      migrate(pool, [fixtureFolder('out-of-order/complete')]),
+    ).rejects.toThrow(/20260102000000_b/);
 
     expect(await tableExists(pool, 'public.fnd11_order_a')).toBe(false);
     // Controle negativo: com allowUnorderedMigrations o Migrator aplicaria a migração atrasada.
-    const control = await runPlainMigrator(uri, fixtureFolder('out-of-order/complete'), {
-      migrator: { allowUnorderedMigrations: true },
-    });
+    const control = await runPlainMigrator(
+      uri,
+      fixtureFolder('out-of-order/complete'),
+      {
+        migrator: { allowUnorderedMigrations: true },
+      },
+    );
     expect(control.error).toBeUndefined();
     expect(await tableExists(pool, 'public.fnd11_order_a')).toBe(true);
   });
@@ -100,7 +123,9 @@ describe('FND-11 migrate recusa o que o migrador pularia ou aceitaria em silênc
   it('FND-11 um .sql na pasta faz o migrate rejeitar, e nada da pasta é aplicado', async () => {
     const { pool } = await container.createDatabase();
 
-    await expect(migrate(pool, [fixtureFolder('leftover-sql')])).rejects.toThrow(/20260101000001_old\.sql/);
+    await expect(
+      migrate(pool, [fixtureFolder('leftover-sql')]),
+    ).rejects.toThrow(/20260101000001_old\.sql/);
 
     expect(await tableExists(pool, 'public.fnd11_sql_ok')).toBe(false);
     expect(await tableExists(pool, 'public.fnd11_sql_leftover')).toBe(false);
@@ -120,7 +145,9 @@ describe('FND-11 migrate recusa o que o migrador pularia ou aceitaria em silênc
   it('FND-11 um .ts que não exporta up (só down) faz o migrate rejeitar pelo onFileIgnored', async () => {
     const { pool } = await container.createDatabase();
 
-    await expect(migrate(pool, [fixtureFolder('missing-up')])).rejects.toThrow(/20260101000001_only_down\.ts/);
+    await expect(migrate(pool, [fixtureFolder('missing-up')])).rejects.toThrow(
+      /20260101000001_only_down\.ts/,
+    );
 
     expect(await tableExists(pool, 'public.fnd11_missing_up_ok')).toBe(false);
   });
@@ -161,32 +188,47 @@ describe('FND-11 migrate recusa o que o migrador pularia ou aceitaria em silênc
 describe('FND-11 migrate só aceita módulo .ts com down', () => {
   const cases = [
     ['um .mjs', 'mjs', '20260101000000_module.mjs', 'fnd11_mjs'],
-    ['um .ts sem down', 'ts-missing-down', '20260101000000_missing_down.ts', 'fnd11_missing_down'],
+    [
+      'um .ts sem down',
+      'ts-missing-down',
+      '20260101000000_missing_down.ts',
+      'fnd11_missing_down',
+    ],
   ] as const;
 
-  it.each(cases)('FND-11 %s faz o migrate rejeitar pelo import, e a migração não é aplicada', async (_label, scenario, file, table) => {
-    const { pool } = await container.createDatabase();
+  it.each(cases)(
+    'FND-11 %s faz o migrate rejeitar pelo import, e a migração não é aplicada',
+    async (_label, scenario, file, table) => {
+      const { pool } = await container.createDatabase();
 
-    await expect(migrate(pool, [fixtureFolder(scenario)])).rejects.toThrow(file);
+      await expect(migrate(pool, [fixtureFolder(scenario)])).rejects.toThrow(
+        file,
+      );
 
-    expect(await tableExists(pool, `public.${table}`)).toBe(false);
-  });
+      expect(await tableExists(pool, `public.${table}`)).toBe(false);
+    },
+  );
 
-  it.each(cases)('FND-11 controle negativo de %s: sem o import próprio a migração é aplicada', async (_label, scenario, _file, table) => {
-    const { uri, pool } = await container.createDatabase();
+  it.each(cases)(
+    'FND-11 controle negativo de %s: sem o import próprio a migração é aplicada',
+    async (_label, scenario, _file, table) => {
+      const { uri, pool } = await container.createDatabase();
 
-    const result = await runPlainMigrator(uri, fixtureFolder(scenario));
+      const result = await runPlainMigrator(uri, fixtureFolder(scenario));
 
-    expect(result.error).toBeUndefined();
-    expect(await tableExists(pool, `public.${table}`)).toBe(true);
-  });
+      expect(result.error).toBeUndefined();
+      expect(await tableExists(pool, `public.${table}`)).toBe(true);
+    },
+  );
 });
 
 describe('FND-11 as pendentes de um schema rodam numa transação só', () => {
   it('FND-11 uma segunda migração que lança erro faz o migrate rejeitar sem deixar nada da primeira', async () => {
     const { pool } = await container.createDatabase();
 
-    await expect(migrate(pool, [fixtureFolder('fails-on-second')])).rejects.toThrow(/falha de propósito/);
+    await expect(
+      migrate(pool, [fixtureFolder('fails-on-second')]),
+    ).rejects.toThrow(/falha de propósito/);
 
     expect(await tableExists(pool, 'public.fnd11_fail_first')).toBe(false);
     // Nem o que a segunda fez antes de lançar.
@@ -197,35 +239,56 @@ describe('FND-11 as pendentes de um schema rodam numa transação só', () => {
   it('FND-11 controle negativo: com disableTransactions a primeira migração fica gravada', async () => {
     const { uri, pool } = await container.createDatabase();
 
-    const result = await runPlainMigrator(uri, fixtureFolder('fails-on-second'), {
-      migrator: { disableTransactions: true },
-    });
+    const result = await runPlainMigrator(
+      uri,
+      fixtureFolder('fails-on-second'),
+      {
+        migrator: { disableTransactions: true },
+      },
+    );
 
     expect(result.error).toBeInstanceOf(Error);
     expect(await tableExists(pool, 'public.fnd11_fail_first')).toBe(true);
-    expect(await appliedMigrations(pool, 'public')).toEqual(['20260101000000_first']);
+    expect(await appliedMigrations(pool, 'public')).toEqual([
+      '20260101000000_first',
+    ]);
   });
 });
 
 describe('FND-11 o down da migração da loja desfaz o up', () => {
-  const storeTables = ['products', 'inventory', 'orders', 'order_items', 'idempotency_keys', 'outbox'];
+  const storeTables = [
+    'products',
+    'inventory',
+    'orders',
+    'order_items',
+    'idempotency_keys',
+    'outbox',
+  ];
 
   it('FND-11 o down da migração da loja remove as seis tabelas, e subir de novo recria', async () => {
     const { uri, pool } = await container.createDatabase();
-    const storeFolder = MIGRATION_FOLDERS.find((candidate) => candidate.schema === 'public');
-    if (!storeFolder) throw new Error('a pasta da loja não está em MIGRATION_FOLDERS');
+    const storeFolder = MIGRATION_FOLDERS.find(
+      (candidate) => candidate.schema === 'public',
+    );
+    if (!storeFolder)
+      throw new Error('a pasta da loja não está em MIGRATION_FOLDERS');
     await migrate(pool, [storeFolder]);
-    for (const table of storeTables) expect(await tableExists(pool, `public.${table}`), table).toBe(true);
+    for (const table of storeTables)
+      expect(await tableExists(pool, `public.${table}`), table).toBe(true);
 
-    const down = await runPlainMigrator(uri, storeFolder, { rollbackAll: true });
+    const down = await runPlainMigrator(uri, storeFolder, {
+      rollbackAll: true,
+    });
 
     expect(down.error).toBeUndefined();
-    for (const table of storeTables) expect(await tableExists(pool, `public.${table}`), table).toBe(false);
+    for (const table of storeTables)
+      expect(await tableExists(pool, `public.${table}`), table).toBe(false);
     expect(await appliedMigrations(pool, 'public')).toEqual([]);
 
     await migrate(pool, [storeFolder]);
 
-    for (const table of storeTables) expect(await tableExists(pool, `public.${table}`), table).toBe(true);
+    for (const table of storeTables)
+      expect(await tableExists(pool, `public.${table}`), table).toBe(true);
     expect((await appliedMigrations(pool, 'public')).length).toBeGreaterThan(0);
   });
 });
@@ -246,7 +309,9 @@ async function holdBarrier(uri: string): Promise<{ release(): Promise<void> }> {
     async release() {
       if (released) return;
       released = true;
-      await client.query('SELECT pg_advisory_unlock($1::bigint)', [BARRIER_KEY]);
+      await client.query('SELECT pg_advisory_unlock($1::bigint)', [
+        BARRIER_KEY,
+      ]);
       await client.end();
     },
   };
@@ -255,7 +320,10 @@ async function holdBarrier(uri: string): Promise<{ release(): Promise<void> }> {
 // Quantas conexões esperam por um advisory lock neste banco há pelo menos `minWaitSeconds`, pelo
 // relógio do banco. Com o lock do migrador, uma chamada espera a chave da barreira e a outra espera
 // o lock do migrador; sem ele, as duas esperam a chave da barreira.
-async function advisoryWaiters(pool: pg.Pool, minWaitSeconds: number): Promise<number> {
+async function advisoryWaiters(
+  pool: pg.Pool,
+  minWaitSeconds: number,
+): Promise<number> {
   const result = await pool.query<{ waiting: number }>(
     `SELECT count(*)::int AS waiting
        FROM pg_locks lock
@@ -302,7 +370,10 @@ async function runOverlapped<T>(
 
 function describeOutcome(outcome: PromiseSettledResult<unknown>): string {
   if (outcome.status === 'fulfilled') return 'fulfilled';
-  const { code, message } = outcome.reason as { code?: string; message?: string };
+  const { code, message } = outcome.reason as {
+    code?: string;
+    message?: string;
+  };
   return `rejected ${code ?? ''} ${message ?? ''}`.trim();
 }
 
@@ -345,10 +416,19 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
           // A chave primária da tabela de controle impediria uma linha repetida; o que prova a espera
           // é nenhuma das duas chamadas ter falhado no CREATE TABLE repetido, no statement_timeout (57014)
           // nem no lock_timeout (55P03).
-          expect(settled.map(describeOutcome)).toEqual(['fulfilled', 'fulfilled']);
-          expect(await appliedMigrations(database.pool, 'public')).toEqual(expectedNames);
-          expect(await tableExists(database.pool, 'public.fnd11_conc_a')).toBe(true);
-          expect(await tableExists(database.pool, 'public.fnd11_conc_b')).toBe(true);
+          expect(settled.map(describeOutcome)).toEqual([
+            'fulfilled',
+            'fulfilled',
+          ]);
+          expect(await appliedMigrations(database.pool, 'public')).toEqual(
+            expectedNames,
+          );
+          expect(await tableExists(database.pool, 'public.fnd11_conc_a')).toBe(
+            true,
+          );
+          expect(await tableExists(database.pool, 'public.fnd11_conc_b')).toBe(
+            true,
+          );
         } finally {
           await migrationPool.end();
         }
@@ -362,17 +442,25 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
       const database = await container.createDatabase();
       const requestPool = createPool(database.uri, logger);
       try {
-        const settled = await runOverlapped(database, WAIT_PAST_REQUEST_LIMITS_SECONDS, () => [
-          migrate(requestPool, [folder]),
-          migrate(requestPool, [folder]),
-        ]);
+        const settled = await runOverlapped(
+          database,
+          WAIT_PAST_REQUEST_LIMITS_SECONDS,
+          () => [
+            migrate(requestPool, [folder]),
+            migrate(requestPool, [folder]),
+          ],
+        );
 
         // Os 2 s do lock_timeout vencem os 5 s do statement_timeout; aceitam-se os dois códigos para o
         // teste não depender de qual limite o servidor aplica primeiro.
-        const failures = settled.filter((outcome) => outcome.status === 'rejected');
+        const failures = settled.filter(
+          (outcome) => outcome.status === 'rejected',
+        );
         expect(failures.length).toBeGreaterThanOrEqual(1);
         for (const failure of failures) {
-          expect((failure.reason as { code?: string }).code).toMatch(/^(55P03|57014)$/);
+          expect((failure.reason as { code?: string }).code).toMatch(
+            /^(55P03|57014)$/,
+          );
         }
       } finally {
         await requestPool.end();
@@ -385,9 +473,15 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
     const migrationPool = createMigrationPool(database.uri, logger);
     const requestPool = createPool(database.uri, logger);
     try {
-      const show = async (pool: pg.Pool): Promise<{ statement: string; lock: string }> => {
-        const statement = await pool.query<{ statement_timeout: string }>('SHOW statement_timeout');
-        const lock = await pool.query<{ lock_timeout: string }>('SHOW lock_timeout');
+      const show = async (
+        pool: pg.Pool,
+      ): Promise<{ statement: string; lock: string }> => {
+        const statement = await pool.query<{ statement_timeout: string }>(
+          'SHOW statement_timeout',
+        );
+        const lock = await pool.query<{ lock_timeout: string }>(
+          'SHOW lock_timeout',
+        );
         return {
           statement: statement.rows[0]?.statement_timeout ?? '',
           lock: lock.rows[0]?.lock_timeout ?? '',
@@ -413,10 +507,15 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
 
       // O Migrator não lança: a falha vem em `error`. Não se fixa o código do erro (varia com a
       // corrida: relação já existe ou violação de unicidade no catálogo).
-      const failures = settled.filter((outcome) => outcome.status === 'rejected' || outcome.value.error !== undefined);
+      const failures = settled.filter(
+        (outcome) =>
+          outcome.status === 'rejected' || outcome.value.error !== undefined,
+      );
       expect(failures).toHaveLength(1);
       // Quem venceu a corrida aplicou as duas migrações, uma vez.
-      expect(await appliedMigrations(database.pool, 'public')).toEqual(expectedNames);
+      expect(await appliedMigrations(database.pool, 'public')).toEqual(
+        expectedNames,
+      );
     }
   }, 120_000);
 });
@@ -464,11 +563,15 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
         },
         { timeout: 20_000 },
       );
-      const victim = clients.find((client) => (client as unknown as { processID: number }).processID === sleepingPid);
-      expect(victim).toBeDefined();
-      (victim as unknown as { connection: { stream: Socket } }).connection.stream.destroy(
-        new Error('socket destruído pelo teste'),
+      const victim = clients.find(
+        (client) =>
+          (client as unknown as { processID: number }).processID ===
+          sleepingPid,
       );
+      expect(victim).toBeDefined();
+      (
+        victim as unknown as { connection: { stream: Socket } }
+      ).connection.stream.destroy(new Error('socket destruído pelo teste'));
 
       const outcome = await pending;
       // O 'error' do cliente é emitido no mesmo evento do socket; um turno do laço basta para um crash aparecer.
@@ -476,7 +579,8 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
       return { outcome, uncaught };
     } finally {
       process.removeAllListeners('uncaughtException');
-      for (const listener of previous) process.on('uncaughtException', listener);
+      for (const listener of previous)
+        process.on('uncaughtException', listener);
       // O servidor continua no pg_sleep depois de o cliente cair; encerra o backend para não segurar o lock.
       await database.pool.query(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE $1`,
@@ -496,7 +600,9 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
     expect(result.outcome).toBeInstanceOf(Error);
     expect(result.uncaught).toEqual([]);
     // A migração não terminou: nada dela ficou gravado.
-    expect(await tableExists(database.pool, 'public.fnd10_destroyed_socket')).toBe(false);
+    expect(
+      await tableExists(database.pool, 'public.fnd10_destroyed_socket'),
+    ).toBe(false);
   }, 60_000);
 
   it('FND-10 controle negativo: o Migrator do Kysely sobre o pool cru, no mesmo cenário, gera uma uncaughtException', async () => {
@@ -508,13 +614,19 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
       const db = new Kysely<object>({ dialect: new PostgresDialect({ pool }) });
       const migrator = new Migrator({
         db,
-        provider: new FileMigrationProvider({ fs, path, migrationFolder: folder.dir }),
+        provider: new FileMigrationProvider({
+          fs,
+          path,
+          migrationFolder: folder.dir,
+        }),
         migrationTableSchema: folder.schema,
       });
       return migrator.migrateToLatest();
     });
 
     expect(result.uncaught.length).toBeGreaterThan(0);
-    expect(result.uncaught[0]?.message).toContain('socket destruído pelo teste');
+    expect(result.uncaught[0]?.message).toContain(
+      'socket destruído pelo teste',
+    );
   }, 60_000);
 });

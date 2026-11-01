@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CreateOrderResult } from '../../../src/erp/erp-client.ts';
-import { createPool, startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
-import { createErpHarness, orderFor, seedErpProduct, uniqueName } from '../../helpers/erp.ts';
+import {
+  createPool,
+  startMigratedDatabase,
+  type TestDatabase,
+} from '../../helpers/database.ts';
+import {
+  createErpHarness,
+  orderFor,
+  seedErpProduct,
+  uniqueName,
+} from '../../helpers/erp.ts';
 
 let database: TestDatabase;
 
@@ -42,10 +51,14 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
       const second = createErpHarness(restartedErpPool);
 
       const found = await second.client.findOrderByReference(reference);
-      if (created.kind !== 'ok') throw new Error('a primeira criação deveria ter dado ok');
+      if (created.kind !== 'ok')
+        throw new Error('a primeira criação deveria ter dado ok');
       expect(found).toEqual({ kind: 'found', order: created.order });
 
-      const invoices = await database.pool.query<{ total: string; total_cents: string }>(
+      const invoices = await database.pool.query<{
+        total: string;
+        total_cents: string;
+      }>(
         'SELECT count(*)::text AS total, coalesce(sum(total_cents), 0)::text AS total_cents FROM erp_sim.invoices WHERE reference = $1',
         [reference],
       );
@@ -61,7 +74,9 @@ describe('FND-04 fatura do ERP simulado sobrevive ao reinício do worker', () =>
     const pool = createPool(database.uri);
     try {
       const { client } = createErpHarness(pool);
-      expect(await client.findOrderByReference('pedido-fnd04-inexistente')).toEqual({ kind: 'not_found' });
+      expect(
+        await client.findOrderByReference('pedido-fnd04-inexistente'),
+      ).toEqual({ kind: 'not_found' });
     } finally {
       await pool.end();
     }
@@ -78,11 +93,18 @@ describe('o estado do ERP simulado vive no banco, não na instância', () => {
     const sku = uniqueName('PERSIST-SKU');
     const reference = uniqueName('pedido-persistente');
     await seedErpProduct(database.pool, { sku });
-    const created = orderOf(await createErpHarness(database.erpPool).client.createOrder(orderFor(reference, sku)));
+    const created = orderOf(
+      await createErpHarness(database.erpPool).client.createOrder(
+        orderFor(reference, sku),
+      ),
+    );
 
     const otherPool = createPool(database.uri);
     try {
-      const found = await createErpHarness(otherPool).client.findOrderByReference(reference);
+      const found =
+        await createErpHarness(otherPool).client.findOrderByReference(
+          reference,
+        );
       expect(found).toEqual({ kind: 'found', order: created });
     } finally {
       await otherPool.end();

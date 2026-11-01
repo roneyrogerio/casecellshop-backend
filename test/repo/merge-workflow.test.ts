@@ -26,7 +26,14 @@ const EXPECTED_PERMISSIONS = {
 } as const;
 
 function loadWorkflow(): Workflow {
-  const path = join(import.meta.dirname, '..', '..', '.github', 'workflows', 'merge-on-approval.yml');
+  const path = join(
+    import.meta.dirname,
+    '..',
+    '..',
+    '.github',
+    'workflows',
+    'merge-on-approval.yml',
+  );
   return parse(readFileSync(path, 'utf8')) as Workflow;
 }
 
@@ -51,19 +58,25 @@ function jobsRequireOwnerApproval(workflow: Workflow): boolean {
     jobs.every(
       (job) =>
         (job.if ?? '').includes("github.event.review.state == 'approved'") &&
-        (job.if ?? '').includes("github.event.review.author_association == 'OWNER'"),
+        (job.if ?? '').includes(
+          "github.event.review.author_association == 'OWNER'",
+        ),
     )
   );
 }
 
 function permissionsAreExact(workflow: Workflow): boolean {
-  const blocks = [workflow.permissions, ...jobsOf(workflow).map((job) => job.permissions)].filter(
-    (block): block is Record<string, string> => block !== undefined,
-  );
+  const blocks = [
+    workflow.permissions,
+    ...jobsOf(workflow).map((job) => job.permissions),
+  ].filter((block): block is Record<string, string> => block !== undefined);
   return (
     blocks.length > 0 &&
     blocks.every(
-      (block) => Object.keys(block).length === 2 && block.contents === 'write' && block['pull-requests'] === 'write',
+      (block) =>
+        Object.keys(block).length === 2 &&
+        block.contents === 'write' &&
+        block['pull-requests'] === 'write',
     )
   );
 }
@@ -71,7 +84,11 @@ function permissionsAreExact(workflow: Workflow): boolean {
 function mergesWithAutoMergeCommit(workflow: Workflow): boolean {
   return stepsOf(workflow).some((step) => {
     const run = step.run ?? '';
-    return run.includes('gh pr merge') && /--auto\b/.test(run) && /--merge\b/.test(run);
+    return (
+      run.includes('gh pr merge') &&
+      /--auto\b/.test(run) &&
+      /--merge\b/.test(run)
+    );
   });
 }
 
@@ -123,7 +140,9 @@ describe('AI-10 workflow merge-on-approval', () => {
     const workflow = loadWorkflow();
 
     expect(permissionsAreExact(workflow)).toBe(true);
-    expect(permissionsAreExact({ permissions: { contents: 'write' } })).toBe(false);
+    expect(permissionsAreExact({ permissions: { contents: 'write' } })).toBe(
+      false,
+    );
     expect(
       permissionsAreExact({
         permissions: { ...EXPECTED_PERMISSIONS, actions: 'write' },

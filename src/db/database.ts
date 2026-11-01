@@ -1,4 +1,11 @@
-import { Kysely, PostgresDialect, type PostgresPool, type PostgresPoolClient, sql, type Transaction } from 'kysely';
+import {
+  Kysely,
+  PostgresDialect,
+  type PostgresPool,
+  type PostgresPoolClient,
+  sql,
+  type Transaction,
+} from 'kysely';
 import type { Pool } from 'pg';
 import type { DB as ErpSimDb } from './types/erp-sim.ts';
 import type { DB as StoreDb } from './types/store.ts';
@@ -51,7 +58,10 @@ export function createPoolAdapter(pool: Pool): PostgresPool {
       const originalRelease = raw.release;
       const wrappedQuery = (...args: unknown[]): unknown => {
         const result = originalQuery.apply(client, args);
-        if (/^\s*rollback\s*;?\s*$/i.test(queryText(args[0]) ?? '') && result instanceof Promise) {
+        if (
+          /^\s*rollback\s*;?\s*$/i.test(queryText(args[0]) ?? '') &&
+          result instanceof Promise
+        ) {
           return result.catch((error: unknown) => {
             discard ??= toError(error);
             throw error;
@@ -74,16 +84,23 @@ export function createPoolAdapter(pool: Pool): PostgresPool {
 
 // O pool pertence a quem o criou: o Kysely nunca é destruído aqui.
 export function createDb(pool: Pool): Kysely<StoreDb> {
-  return new Kysely<StoreDb>({ dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }) });
+  return new Kysely<StoreDb>({
+    dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }),
+  });
 }
 
 export function createErpDb(pool: Pool): Kysely<ErpSimDb> {
-  return new Kysely<ErpSimDb>({ dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }) });
+  return new Kysely<ErpSimDb>({
+    dialect: new PostgresDialect({ pool: createPoolAdapter(pool) }),
+  });
 }
 
 // Único invólucro de transação (FND-10). Uma consulta de guarda antes do COMMIT
 // pega a transação que um erro capturado já abortou (25P02).
-export async function runInTransaction<DB, T>(db: Kysely<DB>, fn: (trx: Transaction<DB>) => Promise<T>): Promise<T> {
+export async function runInTransaction<DB, T>(
+  db: Kysely<DB>,
+  fn: (trx: Transaction<DB>) => Promise<T>,
+): Promise<T> {
   const trx = await db.startTransaction().execute();
   try {
     const result = await fn(trx);

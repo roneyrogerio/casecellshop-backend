@@ -1,14 +1,28 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { checkDbTypes } from '../../../scripts/check-db-types.ts';
 import { migrate } from '../../../src/db/migrate.ts';
-import { fixtureFolder, type MigrationContainer, startMigrationContainer } from '../../helpers/migration-database.ts';
+import {
+  fixtureFolder,
+  type MigrationContainer,
+  startMigrationContainer,
+} from '../../helpers/migration-database.ts';
 
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(/\/$/, '');
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(
+  /\/$/,
+  '',
+);
 const versionedDir = path.join(repoRoot, 'src', 'db', 'types');
 const TYPE_FILES = ['store.ts', 'erp-sim.ts'];
 
@@ -24,7 +38,8 @@ afterAll(async () => {
 });
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0))
+    rmSync(dir, { recursive: true, force: true });
 });
 
 // Pasta no temporário do sistema, nunca dentro do repositório: um lint paralelo esbarraria nela.
@@ -36,7 +51,8 @@ function makeTempDir(): string {
 
 function copyVersionedTypes(): string {
   const dir = makeTempDir();
-  for (const file of TYPE_FILES) cpSync(path.join(versionedDir, file), path.join(dir, file));
+  for (const file of TYPE_FILES)
+    cpSync(path.join(versionedDir, file), path.join(dir, file));
   return dir;
 }
 
@@ -57,12 +73,16 @@ describe('FND-09 a conferência dos tipos do banco', () => {
       // A migração nova entra junto das do repositório, com a tabela de controle num schema próprio:
       // duas pastas com a mesma tabela de controle fariam o Migrator reprovar a migração "ausente".
       await migrate(pool);
-      await migrate(pool, [fixtureFolder(`db-types/${fixtureName}`, 'fnd09_controle')]);
+      await migrate(pool, [
+        fixtureFolder(`db-types/${fixtureName}`, 'fnd09_controle'),
+      ]);
 
       const divergences = await checkDbTypes({ databaseUrl: uri });
 
       expect(divergences.length).toBeGreaterThan(0);
-      expect(divergences.some((sentence) => sentence.includes(typeFile))).toBe(true);
+      expect(divergences.some((sentence) => sentence.includes(typeFile))).toBe(
+        true,
+      );
     },
   );
 
@@ -71,34 +91,52 @@ describe('FND-09 a conferência dos tipos do banco', () => {
     const outDir = copyVersionedTypes();
     const target = path.join(outDir, 'erp-sim.ts');
     const original = readFileSync(target, 'utf8');
-    const edited = original.replace('export interface DB {', 'export interface DB {\n  editado_a_mao: never;');
+    const edited = original.replace(
+      'export interface DB {',
+      'export interface DB {\n  editado_a_mao: never;',
+    );
     expect(edited).not.toBe(original);
     writeFileSync(target, edited);
 
     const divergences = await checkDbTypes({ databaseUrl: uri, outDir });
 
-    expect(divergences.some((sentence) => sentence.includes('erp-sim.ts'))).toBe(true);
-    expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(false);
+    expect(
+      divergences.some((sentence) => sentence.includes('erp-sim.ts')),
+    ).toBe(true);
+    expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(
+      false,
+    );
   });
 
   it('FND-09 controle negativo: um arquivo a mais no outDir (extra.ts, escrito à mão) devolve divergência citando esse arquivo', async () => {
     const { uri } = await container.createDatabase();
     const outDir = copyVersionedTypes();
-    writeFileSync(path.join(outDir, 'extra.ts'), 'export interface Extra {\n  coluna: string;\n}\n');
+    writeFileSync(
+      path.join(outDir, 'extra.ts'),
+      'export interface Extra {\n  coluna: string;\n}\n',
+    );
 
     const divergences = await checkDbTypes({ databaseUrl: uri, outDir });
 
-    expect(divergences.some((sentence) => sentence.includes('extra.ts'))).toBe(true);
+    expect(divergences.some((sentence) => sentence.includes('extra.ts'))).toBe(
+      true,
+    );
     // Os dois arquivos gerados continuam batendo: só o que sobra é citado.
-    expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(false);
-    expect(divergences.some((sentence) => sentence.includes('erp-sim.ts'))).toBe(false);
+    expect(divergences.some((sentence) => sentence.includes('store.ts'))).toBe(
+      false,
+    );
+    expect(
+      divergences.some((sentence) => sentence.includes('erp-sim.ts')),
+    ).toBe(false);
   });
 
   it('FND-09 a cópia dos versionados, sem edição, não tem divergência (o par do controle negativo da edição à mão)', async () => {
     const { uri } = await container.createDatabase();
     const outDir = copyVersionedTypes();
 
-    await expect(checkDbTypes({ databaseUrl: uri, outDir })).resolves.toEqual([]);
+    await expect(checkDbTypes({ databaseUrl: uri, outDir })).resolves.toEqual(
+      [],
+    );
   });
 
   it('FND-09 write: true numa pasta temporária grava os arquivos de cada schema, e depois eles conferem sem divergência', async () => {
@@ -108,7 +146,9 @@ describe('FND-09 a conferência dos tipos do banco', () => {
     await checkDbTypes({ databaseUrl: uri, outDir, write: true });
 
     expect(readdirSync(outDir).sort()).toEqual([...TYPE_FILES].sort());
-    await expect(checkDbTypes({ databaseUrl: uri, outDir })).resolves.toEqual([]);
+    await expect(checkDbTypes({ databaseUrl: uri, outDir })).resolves.toEqual(
+      [],
+    );
   });
 
   it('FND-09 o arquivo gerado não traz kysely_migration nem kysely_migration_lock, nem enum', async () => {
@@ -134,10 +174,16 @@ describe('FND-09 o script ignora a configuração do kysely-codegen em arquivo e
   // Pasta de trabalho com as duas formas de configuração, as duas pedindo camelCase.
   function makeConfiguredCwd(): string {
     const dir = makeTempDir();
-    writeFileSync(path.join(dir, '.kysely-codegenrc.json'), JSON.stringify({ camelCase: true }));
+    writeFileSync(
+      path.join(dir, '.kysely-codegenrc.json'),
+      JSON.stringify({ camelCase: true }),
+    );
     writeFileSync(
       path.join(dir, 'package.json'),
-      JSON.stringify({ name: 'amostra-fnd09', 'kysely-codegen': { camelCase: true } }),
+      JSON.stringify({
+        name: 'amostra-fnd09',
+        'kysely-codegen': { camelCase: true },
+      }),
     );
     return dir;
   }
@@ -149,7 +195,15 @@ describe('FND-09 o script ignora a configuração do kysely-codegen em arquivo e
 
     const output = execFileSync(
       path.join(repoRoot, 'node_modules', '.bin', 'kysely-codegen'),
-      ['--dialect', 'postgres', '--url', uri, '--default-schema', 'erp_sim', '--print'],
+      [
+        '--dialect',
+        'postgres',
+        '--url',
+        uri,
+        '--default-schema',
+        'erp_sim',
+        '--print',
+      ],
       { cwd, encoding: 'utf8' },
     );
 

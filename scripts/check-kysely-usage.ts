@@ -31,15 +31,52 @@ interface Scan {
   templates: Template[];
 }
 
-type Context = { kind: 'code'; depth: number } | { kind: 'template'; template: Template; partStart: number };
+type Context =
+  | { kind: 'code'; depth: number }
+  | { kind: 'template'; template: Template; partStart: number };
 
 // Um `sql`, com ou sem o tipo genérico, logo antes da crase.
 const SQL_TAG = /\bsql\s*(?:<[^`;]*>)?\s*$/;
 
 // Depois destes, uma `/` abre um regex literal, e não uma divisão: é a regra que
 // os analisadores de JavaScript usam, pelo token anterior.
-const REGEX_AFTER_PUNCTUATOR = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^']);
-const REGEX_AFTER_KEYWORD = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'yield', 'await']);
+const REGEX_AFTER_PUNCTUATOR = new Set([
+  '(',
+  ',',
+  '=',
+  ':',
+  '[',
+  '!',
+  '&',
+  '|',
+  '?',
+  '{',
+  '}',
+  ';',
+  '+',
+  '-',
+  '*',
+  '%',
+  '<',
+  '>',
+  '~',
+  '^',
+]);
+const REGEX_AFTER_KEYWORD = new Set([
+  'return',
+  'typeof',
+  'case',
+  'do',
+  'else',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'throw',
+  'yield',
+  'await',
+]);
 
 function startsRegex(chars: readonly string[], at: number): boolean {
   let k = at - 1;
@@ -84,7 +121,8 @@ function scan(content: string): Scan {
   };
   const blankComment = (from: number, to: number): void => {
     blank(from, to);
-    for (let k = from; k < to; k++) if (withStrings[k] !== '\n') withStrings[k] = ' ';
+    for (let k = from; k < to; k++)
+      if (withStrings[k] !== '\n') withStrings[k] = ' ';
   };
   const templates: Template[] = [];
   const stack: Context[] = [{ kind: 'code', depth: 0 }];
@@ -136,12 +174,17 @@ function scan(content: string): Scan {
       }
     } else if (c === "'" || c === '"') {
       let j = i + 1;
-      while (j < content.length && content[j] !== c && content[j] !== '\n') j += content[j] === '\\' ? 2 : 1;
+      while (j < content.length && content[j] !== c && content[j] !== '\n')
+        j += content[j] === '\\' ? 2 : 1;
       blank(i + 1, j);
       i = j + 1;
     } else if (c === '`') {
       const before = chars.slice(Math.max(0, i - 200), i).join('');
-      const template: Template = { tagged: SQL_TAG.test(before), start: i, parts: [] };
+      const template: Template = {
+        tagged: SQL_TAG.test(before),
+        start: i,
+        parts: [],
+      };
       templates.push(template);
       stack.push({ kind: 'template', template, partStart: i + 1 });
       i++;
@@ -180,33 +223,54 @@ function startsCallback(code: string, from: number): boolean {
   let depth = 0;
   for (let k = 0; k < rest.length; k++) {
     if (rest[k] === '(') depth++;
-    else if (rest[k] === ')' && --depth === 0) return /^\s*=>/.test(rest.slice(k + 1));
+    else if (rest[k] === ')' && --depth === 0)
+      return /^\s*=>/.test(rest.slice(k + 1));
   }
   return false;
 }
 
 const FORBIDDEN_ANYWHERE: [RegExp, string][] = [
-  [/\bsql\s*\.\s*(?:raw|lit|ref|id|table)\b/g, 'sql.raw, sql.lit, sql.ref, sql.id e sql.table põem texto cru no SQL'],
-  [/\.\s*dynamic\b/g, 'o db.dynamic aceita nome de coluna em tempo de execução'],
-  [/\bCompiledQuery\s*\.\s*raw\b/g, 'o CompiledQuery.raw executa SQL montado fora do builder'],
-  [/\bexecuteQuery\s*\(/g, 'o executeQuery executa SQL montado fora do builder'],
+  [
+    /\bsql\s*\.\s*(?:raw|lit|ref|id|table)\b/g,
+    'sql.raw, sql.lit, sql.ref, sql.id e sql.table põem texto cru no SQL',
+  ],
+  [
+    /\.\s*dynamic\b/g,
+    'o db.dynamic aceita nome de coluna em tempo de execução',
+  ],
+  [
+    /\bCompiledQuery\s*\.\s*raw\b/g,
+    'o CompiledQuery.raw executa SQL montado fora do builder',
+  ],
+  [
+    /\bexecuteQuery\s*\(/g,
+    'o executeQuery executa SQL montado fora do builder',
+  ],
   [/\bgetExecutor\s*\(/g, 'o getExecutor executa SQL montado fora do builder'],
 ];
 
 // O acesso direto e as transações ficam no invólucro de src/db/ (FND-10).
 const FORBIDDEN_OUTSIDE_DB: [RegExp, string][] = [
   [/\.\s*query\s*\(/g, 'o .query() do pg fica só em src/db/'],
-  [/\.\s*transaction\s*\(/g, 'a transação abre só pelo runInTransaction de src/db/'],
-  [/\bstartTransaction\s*\(/g, 'a transação abre só pelo runInTransaction de src/db/'],
+  [
+    /\.\s*transaction\s*\(/g,
+    'a transação abre só pelo runInTransaction de src/db/',
+  ],
+  [
+    /\bstartTransaction\s*\(/g,
+    'a transação abre só pelo runInTransaction de src/db/',
+  ],
 ];
 
 const CALLBACK_METHODS = /\.\s*(set|values|doUpdateSet)\s*\(/g;
 
 // O `sql` com outro nome ou fora da forma de tag escaparia de todas as regras,
 // que procuram a palavra `sql` (A10 do #11).
-const SQL_RENAMED_IMPORT = /\bimport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]kysely['"]/g;
+const SQL_RENAMED_IMPORT =
+  /\bimport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]kysely['"]/g;
 const SQL_ALIASED = /(?:^|[,{\s])sql\s+as\s+[A-Za-z_$]/;
-const SQL_ASSIGNED = /(?<![=!<>])=\s*sql\b(?!\s*(?:<[^`;]*>\s*)?`)(?!\s*[.([])/g;
+const SQL_ASSIGNED =
+  /(?<![=!<>])=\s*sql\b(?!\s*(?:<[^`;]*>\s*)?`)(?!\s*[.([])/g;
 const SQL_BRACKET = /\bsql\s*\[/g;
 
 // Uma função guardada num nome do arquivo e passada ao set, values ou doUpdateSet
@@ -218,13 +282,17 @@ const FUNCTION_BINDINGS = [
 
 function functionNames(code: string): Set<string> {
   const names = new Set<string>();
-  for (const pattern of FUNCTION_BINDINGS) for (const [, name] of code.matchAll(pattern)) if (name) names.add(name);
+  for (const pattern of FUNCTION_BINDINGS)
+    for (const [, name] of code.matchAll(pattern)) if (name) names.add(name);
   return names;
 }
 const WHOLE_COMMAND = /^\s*(?:select|insert|update|delete|with)\b/i;
 const IDENTIFIER = /[A-Za-z_][A-Za-z0-9_]*/g;
 
-function violationsOf(file: SourceFile, columns: ReadonlySet<string>): string[] {
+function violationsOf(
+  file: SourceFile,
+  columns: ReadonlySet<string>,
+): string[] {
   const { code, withStrings, templates } = scan(file.content);
   const found: { offset: number; reason: string }[] = [];
 
@@ -232,7 +300,10 @@ function violationsOf(file: SourceFile, columns: ReadonlySet<string>): string[] 
   for (const match of code.matchAll(CALLBACK_METHODS)) {
     const argument = match.index + match[0].length;
     const named = /^\s*([A-Za-z_$][\w$]*)\s*\)/.exec(code.slice(argument))?.[1];
-    if (startsCallback(code, argument) || (named !== undefined && functions.has(named))) {
+    if (
+      startsCallback(code, argument) ||
+      (named !== undefined && functions.has(named))
+    ) {
       found.push({
         offset: match.index,
         reason: `${match[1]} com callback deixa passar uma coluna desconhecida no tsc; use a forma de objeto`,
@@ -241,27 +312,44 @@ function violationsOf(file: SourceFile, columns: ReadonlySet<string>): string[] 
   }
   for (const match of withStrings.matchAll(SQL_RENAMED_IMPORT)) {
     if (SQL_ALIASED.test(match[1] ?? '')) {
-      found.push({ offset: match.index, reason: 'o sql importado com outro nome escapa desta conferência; importe como sql' });
+      found.push({
+        offset: match.index,
+        reason:
+          'o sql importado com outro nome escapa desta conferência; importe como sql',
+      });
     }
   }
   for (const match of code.matchAll(SQL_ASSIGNED)) {
-    found.push({ offset: match.index, reason: 'o sql guardado em outra variável escapa desta conferência' });
+    found.push({
+      offset: match.index,
+      reason: 'o sql guardado em outra variável escapa desta conferência',
+    });
   }
   for (const match of code.matchAll(SQL_BRACKET)) {
-    found.push({ offset: match.index, reason: 'o acesso ao sql por colchete escapa desta conferência' });
+    found.push({
+      offset: match.index,
+      reason: 'o acesso ao sql por colchete escapa desta conferência',
+    });
   }
-  const rules = file.path.startsWith('src/db/') ? FORBIDDEN_ANYWHERE : [...FORBIDDEN_ANYWHERE, ...FORBIDDEN_OUTSIDE_DB];
+  const rules = file.path.startsWith('src/db/')
+    ? FORBIDDEN_ANYWHERE
+    : [...FORBIDDEN_ANYWHERE, ...FORBIDDEN_OUTSIDE_DB];
   for (const [pattern, reason] of rules) {
-    for (const match of code.matchAll(pattern)) found.push({ offset: match.index, reason });
+    for (const match of code.matchAll(pattern))
+      found.push({ offset: match.index, reason });
   }
   for (const template of templates) {
     if (!template.tagged) continue;
     if (WHOLE_COMMAND.test(template.parts[0] ?? '')) {
-      found.push({ offset: template.start, reason: 'comando inteiro dentro de sql`…`; escreva pelo builder' });
+      found.push({
+        offset: template.start,
+        reason: 'comando inteiro dentro de sql`…`; escreva pelo builder',
+      });
     }
     const cited = new Set<string>();
     for (const part of template.parts) {
-      for (const [word] of part.matchAll(IDENTIFIER)) if (columns.has(word)) cited.add(word);
+      for (const [word] of part.matchAll(IDENTIFIER))
+        if (columns.has(word)) cited.add(word);
     }
     if (cited.size > 0) {
       found.push({
@@ -273,7 +361,10 @@ function violationsOf(file: SourceFile, columns: ReadonlySet<string>): string[] 
 
   return found
     .sort((a, b) => a.offset - b.offset)
-    .map(({ offset, reason }) => `${file.path}:${lineAt(file.content, offset)}: ${reason}`);
+    .map(
+      ({ offset, reason }) =>
+        `${file.path}:${lineAt(file.content, offset)}: ${reason}`,
+    );
 }
 
 // As colunas de todas as tabelas dos arquivos gerados em typesDir (FND-09): as
@@ -283,24 +374,35 @@ export function readGeneratedColumns(typesDir: string): Set<string> {
   for (const name of readdirSync(typesDir)) {
     if (!name.endsWith('.ts')) continue;
     const content = readFileSync(path.join(typesDir, name), 'utf8');
-    for (const [, table, body] of content.matchAll(/export interface (\w+)\s*\{([^}]*)\}/g)) {
+    for (const [, table, body] of content.matchAll(
+      /export interface (\w+)\s*\{([^}]*)\}/g,
+    )) {
       if (table === 'DB' || body === undefined) continue;
-      for (const [, , key] of body.matchAll(/^\s*(["']?)(\w+)\1\??\s*:/gm)) if (key) columns.add(key);
+      for (const [, , key] of body.matchAll(/^\s*(["']?)(\w+)\1\??\s*:/gm))
+        if (key) columns.add(key);
     }
   }
   return columns;
 }
 
 // Uma frase por ocorrência, com arquivo e linha; vazio quando não há violação.
-export function findKyselyViolations(files: readonly SourceFile[], columns: ReadonlySet<string>): string[] {
-  return files.filter((file) => !file.path.endsWith('.test.ts')).flatMap((file) => violationsOf(file, columns));
+export function findKyselyViolations(
+  files: readonly SourceFile[],
+  columns: ReadonlySet<string>,
+): string[] {
+  return files
+    .filter((file) => !file.path.endsWith('.test.ts'))
+    .flatMap((file) => violationsOf(file, columns));
 }
 
 // Pelo caminho real: no macOS a pasta temporária é um link (/var → /private/var), e o
 // import.meta.url já vem resolvido.
 function isMain(): boolean {
   try {
-    return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href;
+    return (
+      import.meta.url ===
+      pathToFileURL(realpathSync(process.argv[1] ?? '')).href
+    );
   } catch {
     return false;
   }
@@ -309,11 +411,23 @@ function isMain(): boolean {
 if (isMain()) {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const srcDir = path.join(root, 'src');
-  const files: SourceFile[] = readdirSync(srcDir, { recursive: true, encoding: 'utf8' })
+  const files: SourceFile[] = readdirSync(srcDir, {
+    recursive: true,
+    encoding: 'utf8',
+  })
     .map((relative) => relative.split(path.sep).join('/'))
-    .filter((relative) => relative.endsWith('.ts') && !relative.startsWith('db/types/'))
-    .map((relative) => ({ path: `src/${relative}`, content: readFileSync(path.join(srcDir, relative), 'utf8') }));
-  const violations = findKyselyViolations(files, readGeneratedColumns(path.join(srcDir, 'db', 'types')));
+    .filter(
+      (relative) =>
+        relative.endsWith('.ts') && !relative.startsWith('db/types/'),
+    )
+    .map((relative) => ({
+      path: `src/${relative}`,
+      content: readFileSync(path.join(srcDir, relative), 'utf8'),
+    }));
+  const violations = findKyselyViolations(
+    files,
+    readGeneratedColumns(path.join(srcDir, 'db', 'types')),
+  );
   for (const violation of violations) console.error(violation);
   process.exitCode = violations.length > 0 ? 1 : 0;
 }

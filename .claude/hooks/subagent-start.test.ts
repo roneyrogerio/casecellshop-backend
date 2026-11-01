@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, commitEmpty, initRepo, makeTempDir } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  commitEmpty,
+  initRepo,
+  makeTempDir,
+} from '../../test/helpers/git-sandbox.ts';
 
 interface Snapshot {
   head: string;
@@ -19,15 +24,23 @@ interface SnapshotModule {
 
 const hook = join(import.meta.dirname, 'subagent-start.mjs');
 
-type Run = (command: string, args: string[], options: { cwd: string }) => unknown;
+type Run = (
+  command: string,
+  args: string[],
+  options: { cwd: string },
+) => unknown;
 
 let snapshots: SnapshotModule;
 // Devolve se instalou; a instalação em si (o `run`) é injetada.
 let ensureDependencies: (dir: string, run: Run) => boolean | Promise<boolean>;
 
 beforeAll(async () => {
-  snapshots = (await import(pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href)) as SnapshotModule;
-  const start = (await import(pathToFileURL(hook).href)) as { ensureDependencies: typeof ensureDependencies };
+  snapshots = (await import(
+    pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href
+  )) as SnapshotModule;
+  const start = (await import(pathToFileURL(hook).href)) as {
+    ensureDependencies: typeof ensureDependencies;
+  };
   ensureDependencies = start.ensureDependencies;
 });
 
@@ -44,10 +57,15 @@ function makeSandbox(): Sandbox {
   return { project, tmp: makeTempDir('start-tmp-') };
 }
 
-function run(sandbox: Sandbox, raw: string, env: { projectDir?: string | null } = {}) {
+function run(
+  sandbox: Sandbox,
+  raw: string,
+  env: { projectDir?: string | null } = {},
+) {
   const base: NodeJS.ProcessEnv = { ...process.env, TMPDIR: sandbox.tmp };
   delete base.CLAUDE_PROJECT_DIR;
-  const projectDir = env.projectDir === undefined ? sandbox.project : env.projectDir;
+  const projectDir =
+    env.projectDir === undefined ? sandbox.project : env.projectDir;
   if (projectDir !== null) base.CLAUDE_PROJECT_DIR = projectDir;
   const result = spawnSync(process.execPath, [hook], {
     input: raw,
@@ -58,7 +76,10 @@ function run(sandbox: Sandbox, raw: string, env: { projectDir?: string | null } 
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-function startInput(sandbox: Sandbox, extra: Record<string, unknown> = {}): string {
+function startInput(
+  sandbox: Sandbox,
+  extra: Record<string, unknown> = {},
+): string {
   return JSON.stringify({
     hook_event_name: 'SubagentStart',
     session_id: 's1',
@@ -81,8 +102,14 @@ function pathIn(sandbox: Sandbox, sessionId: string, agentId: string): string {
   }
 }
 
-function readSnapshot(sandbox: Sandbox, sessionId = 's1', agentId = 'a1'): Snapshot {
-  return JSON.parse(readFileSync(pathIn(sandbox, sessionId, agentId), 'utf8')) as Snapshot;
+function readSnapshot(
+  sandbox: Sandbox,
+  sessionId = 's1',
+  agentId = 'a1',
+): Snapshot {
+  return JSON.parse(
+    readFileSync(pathIn(sandbox, sessionId, agentId), 'utf8'),
+  ) as Snapshot;
 }
 
 describe('AI-12 o hook de início grava o retrato do git do agente', () => {
@@ -91,11 +118,16 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
     (agentType) => {
       const sandbox = makeSandbox();
 
-      const result = run(sandbox, startInput(sandbox, { agent_type: agentType }));
+      const result = run(
+        sandbox,
+        startInput(sandbox, { agent_type: agentType }),
+      );
 
       expect(result.code).toBe(0);
       expect(result.stdout).toBe('');
-      expect(readSnapshot(sandbox)).toEqual(snapshots.takeSnapshot(sandbox.project));
+      expect(readSnapshot(sandbox)).toEqual(
+        snapshots.takeSnapshot(sandbox.project),
+      );
     },
   );
 
@@ -106,7 +138,9 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
 
     expect(pathIn(sandbox, 's1', 'a1').startsWith(sandbox.tmp)).toBe(true);
     expect(existsSync(pathIn(sandbox, 's1', 'a1'))).toBe(true);
-    expect(readdirSync(sandbox.project).filter((name) => name.includes('snapshot'))).toEqual([]);
+    expect(
+      readdirSync(sandbox.project).filter((name) => name.includes('snapshot')),
+    ).toEqual([]);
   });
 
   it('AI-12 cada agente tem o seu retrato', () => {
@@ -116,7 +150,9 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
     commitEmpty(sandbox.project);
     run(sandbox, startInput(sandbox, { agent_id: 'a2' }));
 
-    expect(readSnapshot(sandbox, 's1', 'a1').head).not.toBe(readSnapshot(sandbox, 's1', 'a2').head);
+    expect(readSnapshot(sandbox, 's1', 'a1').head).not.toBe(
+      readSnapshot(sandbox, 's1', 'a2').head,
+    );
   });
 
   it('AI-12 rodar de novo (retomada) sobrescreve o retrato', () => {
@@ -129,7 +165,9 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
 
     expect(result.code).toBe(0);
     expect(readSnapshot(sandbox).head).not.toBe(first.head);
-    expect(readSnapshot(sandbox)).toEqual(snapshots.takeSnapshot(sandbox.project));
+    expect(readSnapshot(sandbox)).toEqual(
+      snapshots.takeSnapshot(sandbox.project),
+    );
   });
 
   it('AI-12 sem CLAUDE_PROJECT_DIR usa o cwd da entrada', () => {
@@ -138,7 +176,9 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
     const result = run(sandbox, startInput(sandbox), { projectDir: null });
 
     expect(result.code).toBe(0);
-    expect(readSnapshot(sandbox)).toEqual(snapshots.takeSnapshot(sandbox.project));
+    expect(readSnapshot(sandbox)).toEqual(
+      snapshots.takeSnapshot(sandbox.project),
+    );
   });
 
   // Controle negativo: a entrada ilegível não grava retrato nenhum e avisa, sem bloquear o início do agente com código 2.
@@ -146,16 +186,19 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
     ['texto que não é JSON', 'isto não é json'],
     ['entrada vazia', ''],
     ['JSON truncado', '{"session_id": "s1", "agent_id": '],
-  ])('AI-12 entrada ilegível sai com código diferente de 0, avisa no stderr e não grava (%s)', (_label, raw) => {
-    const sandbox = makeSandbox();
+  ])(
+    'AI-12 entrada ilegível sai com código diferente de 0, avisa no stderr e não grava (%s)',
+    (_label, raw) => {
+      const sandbox = makeSandbox();
 
-    const result = run(sandbox, raw);
+      const result = run(sandbox, raw);
 
-    expect(result.code).not.toBe(0);
-    expect(result.code).not.toBe(2);
-    expect(result.stderr).not.toBe('');
-    expect(readdirSync(sandbox.tmp)).toEqual([]);
-  });
+      expect(result.code).not.toBe(0);
+      expect(result.code).not.toBe(2);
+      expect(result.stderr).not.toBe('');
+      expect(readdirSync(sandbox.tmp)).toEqual([]);
+    },
+  );
 });
 
 // A worktree nasce sem node_modules (a pasta é ignorada pelo git), e o agente nela não roda lint nem testes sem
@@ -197,7 +240,9 @@ describe('AI-25 o hook de início instala as dependências da worktree quando fa
 
   it('AI-25 depois de instalar, uma segunda chamada (retomada) não instala de novo', async () => {
     const dir = makeTempDir('ai25-');
-    const { calls, run } = recorder((cwd) => mkdirSync(join(cwd, 'node_modules')));
+    const { calls, run } = recorder((cwd) =>
+      mkdirSync(join(cwd, 'node_modules')),
+    );
 
     expect(await ensureDependencies(dir, run)).toBe(true);
     expect(await ensureDependencies(dir, run)).toBe(false);

@@ -16,16 +16,28 @@ export function check(input, deps) {
   const args = input.tool_input ?? {};
 
   if (tool.endsWith('__create_pull_request') && args.draft !== true) {
-    return { allow: false, reason: 'O PR nasce em rascunho: chame create_pull_request com draft: true.' };
+    return {
+      allow: false,
+      reason:
+        'O PR nasce em rascunho: chame create_pull_request com draft: true.',
+    };
   }
 
   // Todo draft que não seja true tira do rascunho para o portão: um "false" ou um
   // 0 não pode passar por fora só por não ser o booleano.
-  if (tool.endsWith('__update_pull_request') && 'draft' in args && args.draft !== true) {
+  if (
+    tool.endsWith('__update_pull_request') &&
+    'draft' in args &&
+    args.draft !== true
+  ) {
     // O dono lê o que está no GitHub: o HEAD local precisa estar publicado, e o
     // registro do post-tool prova que o /security-review abriu nesse commit.
     const git = deps.git();
-    if (!git) return { allow: false, reason: 'Sem git legível, o PR não sai do rascunho (AI-16).' };
+    if (!git)
+      return {
+        allow: false,
+        reason: 'Sem git legível, o PR não sai do rascunho (AI-16).',
+      };
     if (git.upstream !== git.head) {
       return {
         allow: false,
@@ -51,7 +63,8 @@ export function check(input, deps) {
       if (git && deps.securityReviewed(git.head)) return { allow: true };
       return {
         allow: false,
-        reason: 'O relatório de segurança só vai ao PR depois do /security-review no HEAD atual (AI-16).',
+        reason:
+          'O relatório de segurança só vai ao PR depois do /security-review no HEAD atual (AI-16).',
       };
     }
     // O outro comentário do fluxo é o relatório do reviewer, gravado por hook
@@ -79,19 +92,26 @@ function main() {
     process.stderr.write('github-guard: entrada do hook ilegível\n');
     process.exit(2);
   }
-  const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+  const projectDir =
+    process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
   const reviewsDir = join(projectDir, '.claude', 'reviews');
   const decision = check(input, {
     git: () => {
       const rev = (ref) => {
-        const run = spawnSync('git', ['-C', projectDir, 'rev-parse', '--verify', '--quiet', ref], { encoding: 'utf8' });
+        const run = spawnSync(
+          'git',
+          ['-C', projectDir, 'rev-parse', '--verify', '--quiet', ref],
+          { encoding: 'utf8' },
+        );
         return run.status === 0 ? run.stdout.trim() : null;
       };
       const head = rev('HEAD');
       // O upstream é a referência remota local (@{u}), atualizada pelo próprio push.
       return head ? { head, upstream: rev('@{upstream}') } : null;
     },
-    securityReviewed: (sha) => /^[0-9a-f]{40,64}$/.test(sha) && existsSync(join(securityReviewDir(projectDir), sha)),
+    securityReviewed: (sha) =>
+      /^[0-9a-f]{40,64}$/.test(sha) &&
+      existsSync(join(securityReviewDir(projectDir), sha)),
     reviewBodies: () =>
       existsSync(reviewsDir)
         ? readdirSync(reviewsDir)
