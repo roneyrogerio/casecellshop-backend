@@ -6,8 +6,9 @@ import {
   SpanKind,
   SpanStatusCode,
   trace,
+  type Span,
 } from '@opentelemetry/api';
-import type { RequestHandler } from 'express';
+import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
 import { logContext } from '../shared/logging.ts';
@@ -24,6 +25,69 @@ function correlationIdFrom(header: string | string[] | undefined): string {
 
 function statusClass(status: number): string {
   return `${Math.floor(status / 100)}xx`;
+}
+
+interface ConcludedRequest {
+  telemetry: Telemetry;
+  logger: Logger;
+  req: Request;
+  res: Response;
+  span: Span;
+  correlationId: string;
+  startedAt: bigint;
+}
+
+// Fecha o span, mede a duração e registra o log da requisição.
+function concludeRequest({
+  telemetry,
+  logger,
+  req,
+  res,
+  span,
+  correlationId,
+  startedAt,
+}: ConcludedRequest): void {
+  const route =
+    typeof res.locals['route'] === 'string' ? res.locals['route'] : 'unmatched';
+  const status = res.statusCode;
+  const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+
+  span.updateName(`${req.method} ${route}`);
+  span.setAttributes({
+    'http.route': route,
+    'http.request.method': req.method,
+    'http.response.status_code': status,
+  });
+  if (status >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
+  const spanContext = span.spanContext();
+  span.end();
+
+  // Labels de lista fechada: rota como template, método e classe de status.
+  telemetry.httpRequestDuration.record(seconds, {
+    route,
+    method: req.method,
+    status_class: statusClass(status),
+  });
+  // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
+  // O orderId entra só quando o handler o gravou (pedido existente).
+  const orderId =
+    typeof res.locals['orderId'] === 'string'
+      ? res.locals['orderId']
+      : undefined;
+  logger[status >= 500 ? 'error' : 'info'](
+    {
+      ...(orderId === undefined ? {} : { orderId }),
+      event: 'http_request',
+      correlationId,
+      trace_id: spanContext.traceId,
+      span_id: spanContext.spanId,
+      route,
+      method: req.method,
+      status,
+      duration_ms: Math.round(seconds * 1000),
+    },
+    'requisição concluída',
+  );
 }
 
 // Primeiro middleware: fixa o correlationId, abre o span SERVER (continuando um
@@ -56,49 +120,15 @@ export function requestContext(
     const finish = () => {
       if (finished) return;
       finished = true;
-      const route =
-        typeof res.locals['route'] === 'string'
-          ? res.locals['route']
-          : 'unmatched';
-      const status = res.statusCode;
-      const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
-
-      span.updateName(`${req.method} ${route}`);
-      span.setAttributes({
-        'http.route': route,
-        'http.request.method': req.method,
-        'http.response.status_code': status,
+      concludeRequest({
+        telemetry,
+        logger,
+        req,
+        res,
+        span,
+        correlationId,
+        startedAt,
       });
-      if (status >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
-      const spanContext = span.spanContext();
-      span.end();
-
-      // Labels de lista fechada: rota como template, método e classe de status.
-      telemetry.httpRequestDuration.record(seconds, {
-        route,
-        method: req.method,
-        status_class: statusClass(status),
-      });
-      // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
-      // O orderId entra só quando o handler o gravou (pedido existente).
-      const orderId =
-        typeof res.locals['orderId'] === 'string'
-          ? res.locals['orderId']
-          : undefined;
-      logger[status >= 500 ? 'error' : 'info'](
-        {
-          ...(orderId === undefined ? {} : { orderId }),
-          event: 'http_request',
-          correlationId,
-          trace_id: spanContext.traceId,
-          span_id: spanContext.spanId,
-          route,
-          method: req.method,
-          status,
-          duration_ms: Math.round(seconds * 1000),
-        },
-        'requisição concluída',
-      );
     };
     res.on('finish', finish);
     // Cliente que desconecta antes da resposta: o span não pode ficar aberto.
