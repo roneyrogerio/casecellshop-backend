@@ -112,7 +112,7 @@ services:
   # Fala com a API pela rede do compose; a versão e o digest da imagem moram só aqui, e o
   # Dependabot sobe os dois juntos. A semente e o número de exemplos vêm do ambiente.
   schemathesis:
-    image: ghcr.io/schemathesis/schemathesis:4.32.4@sha256:b501f25d00fa6e2b393ddd1b525a11bb560d593fd06268491595c2e439090bf0
+    image: ghcr.io/schemathesis/schemathesis:4.33.0@sha256:57cdf625c01901bc050355225251a7fc255c0cd8a07d4ac77fb86e4d3ffb25a2
     profiles: ['fuzz']
     command:
       - run
