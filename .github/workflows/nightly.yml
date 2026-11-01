@@ -83,6 +83,9 @@ jobs:
       - name: Suíte com a ordem embaralhada
         env:
           SEED: ${{ github.run_id }}${{ matrix.seed }}
+          # FND-15: as propriedades do fast-check rodam com a semente da execução e mais casos.
+          FAST_CHECK_SEED: ${{ github.run_id }}${{ matrix.seed }}
+          FAST_CHECK_NUM_RUNS: '1000'
         run: |
           echo "Semente: $SEED"
           npm test -- --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED" --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json"

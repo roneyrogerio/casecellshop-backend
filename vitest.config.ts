@@ -37,6 +37,9 @@ export default defineConfig({
           // mesmo relatório. Os testes de hooks abrem centenas de processos git
           // e node, e não disputam a CPU com os prazos da integração (FND-13).
           sequence: { groupOrder: 1 },
+          // FND-15: a semente e o número de casos do fast-check, fixos no PR e
+          // vindos do ambiente no agendado.
+          setupFiles: ['./test/helpers/property-setup.ts'],
         },
       },
       {
