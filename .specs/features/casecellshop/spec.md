@@ -73,7 +73,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
   - **Classificação do ERP** (`createErpClient`, com transporte falso): qualquer status e corpo dão um resultado da lista fechada do contrato do `ErpClient`; o 404 da criação do pedido é sempre `config_error`.
   - **Mensagem da fila** (`parseBillingMessage`): qualquer texto vira uma mensagem válida ou o resultado de mensagem inválida, sem lançar.
   - **Validação da requisição** (`validateRequest`): qualquer corpo fora do contrato dá `400` em problem+json com um erro por campo e mensagens só da lista do módulo, sem lançar.
-  - **Contexto da requisição** (o middleware de `src/http/request-context.ts`): qualquer `X-Request-Id` recebido vira um `correlationId` válido pelo contrato, e qualquer status vira uma das classes `1xx` a `5xx` no label da métrica.
+  - **Contexto da requisição** (o middleware de `src/http/request-context.ts`): qualquer `X-Request-Id` recebido vira um `correlationId` válido pelo contrato, e qualquer status de 100 a 599 vira o próprio código no atributo `http.response.status_code` da métrica, com o `error.type` só no `5xx` (AD-029).
   - **Semente:** o PR roda com uma semente fixa e o número padrão de casos; o agendado roda com a semente da execução e mais casos; a semente e o caminho do contraexemplo de uma falha saem no log, para reproduzir.
   - **Controle negativo:** para cada propriedade, uma versão da função com a invariante quebrada (no próprio teste) é reprovada pela mesma propriedade.
 
@@ -251,10 +251,11 @@ Com relógio controlado:
 - **OBS-04** Um pedido sem desfecho em 60 s é contado uma vez, mesmo com várias réplicas da API.
 - **OBS-05** Um `orderId` leva aos logs e a um trace da requisição ao ERP.
 - **OBS-06** Uma sincronização que baixa o `on_hand` de um SKU para menos que o `reserved` aparece no gauge de SKUs com `reserved > on_hand`, e uma rejeição por falta de estoque no ERP soma no counter de rejeições por falta de estoque; o alerta de furo de estoque do README usa as duas séries (M5).
-- **OBS-07** As métricas e os eventos de log seguem um catálogo só, em `src/shared/telemetry-metrics.ts` e `src/shared/telemetry-events.ts`, com os nomes da semântica do OpenTelemetry (AD-029):
+- **OBS-07** As métricas e os eventos de log são declarados por pasta, num `telemetry.ts` ao lado do código que os emite, com os tipos e a conferência das regras em `src/shared/telemetry-catalog.ts`, e seguem os nomes da semântica do OpenTelemetry (AD-029):
   - **Métricas:** cada uma tem nome, instrumento, unidade (UCUM), descrição, fronteiras (nos histogramas) e atributos, cada atributo com a lista fechada de valores. O nome usa ponto entre namespaces e snake_case dentro de cada um, sem `_total` e sem a unidade. O HTTP usa a convenção `http.server.request.duration`, com os nomes de `@opentelemetry/semantic-conventions`; as métricas e os atributos próprios começam por `casecellshop.`.
   - **Eventos de log:** cada um tem nome, nível e campos. O nome segue `casecellshop.<domínio>.<evento>`, em snake_case, sem valor variável; uma falha termina em `failed`.
-  - **Tipos:** o código cria os instrumentos e escreve os eventos a partir do catálogo, e o `tsc` recusa uma métrica, um evento ou um valor de atributo fora dele.
+  - **Tipos:** cada pasta cria os próprios instrumentos e escreve os próprios eventos a partir da própria declaração, e o `tsc` recusa uma métrica, um evento ou um valor de atributo fora dela.
+  - **Agregado:** `scripts/telemetry-catalog.ts` junta as declarações para a documentação e para os testes; um teste de repositório confere que toda pasta com `telemetry.ts` entra, que nenhum nome se repete e que o agregado não tem violação das regras.
   - **Prometheus:** um teste fixa os nomes que o `/metrics` exporta, já traduzidos pelo exportador.
   - **Documentação:** `.specs/features/casecellshop/telemetry.md` é gerado do catálogo, e um teste de repositório o gera de novo e compara.
   - **Controle negativo:** um nome com `_total` ou com a unidade, um nome sem o prefixo fora da convenção, um evento fora do catálogo, um valor de atributo fora da lista e a documentação defasada reprovam.

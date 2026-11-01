@@ -27,6 +27,7 @@ import {
 } from '@opentelemetry/sdk-trace';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { optionalEnv } from './config.ts';
+import type { LogEventSpec } from './telemetry-catalog.ts';
 import { logContext } from './logging.ts';
 import { resolveServiceIdentity } from './service-identity.ts';
 
@@ -303,3 +304,28 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
     },
   };
 }
+
+// OBS-07 (AD-029): os eventos do encerramento do processo (lifecycle.ts), a telemetria declarada por esta pasta.
+export const PROCESS_LOG_EVENTS = {
+  'casecellshop.process.shutdown.started': {
+    level: 'info',
+    description: 'O processo recebeu o sinal e começou a encerrar.',
+    fields: ['signal'],
+  },
+  'casecellshop.process.shutdown.completed': {
+    level: 'info',
+    description: 'O processo encerrou no prazo.',
+    fields: [],
+  },
+  'casecellshop.process.shutdown.timed_out': {
+    level: 'error',
+    description:
+      'O encerramento passou do prazo e o processo saiu com código 1.',
+    fields: [],
+  },
+  'casecellshop.process.shutdown.failed': {
+    level: 'error',
+    description: 'O encerramento falhou.',
+    fields: ['err'],
+  },
+} as const satisfies Record<string, LogEventSpec>;

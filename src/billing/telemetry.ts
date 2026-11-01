@@ -1,98 +1,53 @@
-// OBS-07 (AD-029): o catálogo dos eventos de log, fonte única dos nomes, dos níveis e dos campos. O nome segue
-// `casecellshop.<domínio>.<evento>`, em snake_case e sem valor variável; uma falha termina em `failed`.
-export type LogLevel = 'info' | 'warn' | 'error';
+// OBS-07 (AD-029): a telemetria do faturamento: o relay, o worker e a reconciliação.
+import type { LogEventSpec, MetricSpec } from '../shared/telemetry-catalog.ts';
 
-export interface LogEventSpec {
-  readonly level: LogLevel;
-  readonly description: string;
-  // Os campos próprios do evento, além dos que todo log leva (service, env, version, correlationId,
-  // trace_id, span_id, trace_flags). `err` é o erro serializado pelo pino.
-  readonly fields: readonly string[];
-}
+const ATTEMPT_OUTCOMES = [
+  'invoiced',
+  'failed',
+  'retry',
+  'deferred',
+  'closed',
+  'lease_short',
+  'dead',
+] as const;
 
-export const LOG_EVENTS = {
-  'casecellshop.http.request.completed': {
-    level: 'info',
+export const BILLING_METRICS = {
+  'casecellshop.outbox.attempts': {
+    instrument: 'counter',
+    unit: '{attempt}',
     description:
-      'Fim de uma requisição HTTP; sai como `error` quando o status é 5xx.',
-    fields: ['route', 'method', 'status', 'duration_ms', 'orderId'],
+      'Tentativas da outbox por desfecho; o `dead` é contado pela reconciliação.',
+    attributes: {
+      'casecellshop.outbox.attempt.outcome': {
+        description: 'Desfecho da tentativa.',
+        values: { kind: 'enum', values: ATTEMPT_OUTCOMES },
+      },
+    },
   },
-  'casecellshop.http.request.failed': {
-    level: 'error',
-    description: 'Erro sem tratamento numa rota; a resposta é o 500 genérico.',
-    fields: ['err'],
-  },
-  'casecellshop.checkout.accepted': {
-    level: 'info',
-    description: 'Checkout aceito, com o pedido criado.',
-    fields: ['orderId'],
-  },
-  'casecellshop.checkout.rejected': {
-    level: 'warn',
-    description: 'Checkout recusado; `reason` é o tipo do problem.',
-    fields: ['reason'],
-  },
-  'casecellshop.checkout.price_changed': {
-    level: 'warn',
-    description: 'Checkout recusado porque o preço informado mudou.',
-    fields: ['reason', 'items'],
-  },
-  'casecellshop.checkout.db.unavailable': {
-    level: 'warn',
-    description: 'O banco não respondeu no checkout; a resposta é 503.',
-    fields: ['err', 'step'],
-  },
-  'casecellshop.orders.db.unavailable': {
-    level: 'warn',
-    description: 'O banco não respondeu na leitura do status do pedido.',
-    fields: ['err'],
-  },
-  'casecellshop.health.db.unavailable': {
-    level: 'warn',
-    description: 'O banco não respondeu ao /health.',
-    fields: ['err'],
-  },
-  'casecellshop.db.transaction.aborted': {
-    level: 'error',
-    description: 'A transação foi abortada antes do COMMIT.',
-    fields: ['err'],
-  },
-  'casecellshop.db.pool.failed': {
-    level: 'error',
-    description: 'Erro numa conexão ociosa do pool.',
-    fields: ['err'],
-  },
-  'casecellshop.process.shutdown.started': {
-    level: 'info',
-    description: 'O processo recebeu o sinal e começou a encerrar.',
-    fields: ['signal'],
-  },
-  'casecellshop.process.shutdown.completed': {
-    level: 'info',
-    description: 'O processo encerrou no prazo.',
-    fields: [],
-  },
-  'casecellshop.process.shutdown.timed_out': {
-    level: 'error',
+  'casecellshop.outbox.orphan_conclusions': {
+    instrument: 'counter',
+    unit: '{conclusion}',
     description:
-      'O encerramento passou do prazo e o processo saiu com código 1.',
-    fields: [],
+      'Conclusões que não afetaram linha porque o token já não valia.',
+    attributes: {},
   },
-  'casecellshop.process.shutdown.failed': {
-    level: 'error',
-    description: 'O encerramento falhou.',
-    fields: ['err'],
+  'casecellshop.outbox.published.messages': {
+    instrument: 'counter',
+    unit: '{message}',
+    description: 'Linhas da outbox publicadas no SQS pelo relay.',
+    attributes: {},
   },
-  'casecellshop.api.started': {
-    level: 'info',
-    description: 'A API começou a escutar.',
-    fields: ['port'],
+  'casecellshop.order.accept_to_invoice.duration': {
+    instrument: 'histogram',
+    unit: 's',
+    description: 'Tempo do aceite do pedido até o faturamento no ERP.',
+    // Do aceite ao faturamento pode levar minutos (H4, backoff): a fronteira em 60 separa o normal do lento.
+    buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1800],
+    attributes: {},
   },
-  'casecellshop.migration.completed': {
-    level: 'info',
-    description: 'As migrações dos dois schemas terminaram.',
-    fields: [],
-  },
+} as const satisfies Record<string, MetricSpec>;
+
+export const BILLING_LOG_EVENTS = {
   'casecellshop.worker.started': {
     level: 'info',
     description: 'O worker começou a receber da fila.',
@@ -102,11 +57,6 @@ export const LOG_EVENTS = {
     level: 'info',
     description: 'O worker parou de receber da fila.',
     fields: [],
-  },
-  'casecellshop.worker.metrics_server.started': {
-    level: 'info',
-    description: 'O servidor do /metrics do worker começou a escutar.',
-    fields: ['port'],
   },
   'casecellshop.worker.poll.failed': {
     level: 'error',
@@ -216,5 +166,3 @@ export const LOG_EVENTS = {
     fields: ['status'],
   },
 } as const satisfies Record<string, LogEventSpec>;
-
-export type LogEventName = keyof typeof LOG_EVENTS;
