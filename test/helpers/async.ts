@@ -11,8 +11,9 @@ export async function settle(rounds = 5): Promise<void> {
 
 // Prazo, em tempo real, para o que o teste espera de um efeito (do worker, do relay, da reconciliação, da
 // fila): igual ao `testTimeout` do projeto de integração (vitest.config.ts; conferido em test/repo). Serve só
-// para o teste não ficar parado para sempre e dar uma falha de asserção que diz o que faltou; não decide
-// se o teste passa (FND-13).
+// para a espera não ser eterna; não decide se o teste passa (FND-13). Como o timeout do teste começou a contar
+// antes da espera, no projeto `integration` ele dispara primeiro: a falha de um efeito que não veio aparece
+// como timeout do teste, e o prazo daqui só vale onde o timeout do Vitest é maior (ou não existe).
 export const WAIT_GUARD_MS = 60_000;
 
 // Espera um efeito com o relógio manual andando: a cada volta que falha, `advance` leva o relógio até a próxima

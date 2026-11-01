@@ -529,8 +529,9 @@ export interface PollHandle {
   until<T>(wait: Promise<T>): Promise<T>;
 }
 
-// Prazo, em tempo real (WAIT_GUARD_MS), para o que o teste espera do worker: sem ele, um comportamento que falta
-// viraria um teste pendurado até o timeout do vitest, em vez de uma falha de asserção que diz o que não aconteceu.
+// Prazo, em tempo real (WAIT_GUARD_MS), para o que o teste espera do worker: só impede a espera eterna. Com o
+// prazo igual ao testTimeout, e o timeout do teste contando desde antes, no projeto `integration` a falha de um
+// comportamento que falta aparece como timeout do teste; a mensagem daqui só chega onde o timeout do Vitest é maior.
 export async function within<T>(
   wait: Promise<T>,
   what: string,

@@ -8,6 +8,7 @@ interface ProjectConfig {
   test?: {
     name?: string;
     testTimeout?: number;
+    maxWorkers?: number;
     sequence?: { groupOrder?: number };
   };
 }
@@ -85,10 +86,76 @@ describe('AI-52 o npm test roda o projeto unit antes do integration', () => {
   });
 });
 
+// Quantos arquivos de integração rodam ao mesmo tempo (FND-13, "Paralelismo"): com mais de 4 contêineres
+// de banco, o Docker de 4 CPUs derrubou um banco no meio da suíte. Devolve o que falta, uma frase por problema.
+const INTEGRATION_MAX_WORKERS = 4;
+
+function maxWorkersViolations(source: unknown): string[] {
+  const integration = projectNamed(projectsOf(source), 'integration');
+  if (integration?.maxWorkers === undefined)
+    return ['o projeto integration precisa declarar maxWorkers'];
+  if (integration.maxWorkers !== INTEGRATION_MAX_WORKERS)
+    return [
+      `o projeto integration roda ${integration.maxWorkers} arquivos ao mesmo tempo, e o limite é ${INTEGRATION_MAX_WORKERS}`,
+    ];
+  return [];
+}
+
+// Uma cópia da configuração em que o projeto integration muda o maxWorkers (ou perde a chave, com `undefined`).
+function withIntegrationMaxWorkers(
+  source: unknown,
+  maxWorkers: number | undefined,
+): unknown {
+  const projects = projectsOf(source).map((project) =>
+    project.test?.name === 'integration'
+      ? { ...project, test: { ...project.test, maxWorkers } }
+      : project,
+  );
+  return { ...(source as object), test: { projects } };
+}
+
+function withoutIntegrationMaxWorkers(source: unknown): unknown {
+  const projects = projectsOf(source).map((project) => {
+    if (project.test?.name !== 'integration') return project;
+    const { maxWorkers: _removed, ...rest } = project.test;
+    return { ...project, test: rest };
+  });
+  return { ...(source as object), test: { projects } };
+}
+
 describe('FND-13 o prazo real das esperas é o testTimeout do projeto de integração', () => {
   it('FND-13 WAIT_GUARD_MS dos testes é igual ao testTimeout do projeto integration', () => {
     const integration = projectNamed(projectsOf(config), 'integration');
 
     expect(integration?.testTimeout).toBe(WAIT_GUARD_MS);
+  });
+});
+
+describe('FND-13 o projeto de integração roda no máximo 4 arquivos ao mesmo tempo', () => {
+  it('FND-13 o projeto integration declara maxWorkers igual a 4', () => {
+    expect(maxWorkersViolations(config)).toEqual([]);
+    expect(projectNamed(projectsOf(config), 'integration')?.maxWorkers).toBe(
+      INTEGRATION_MAX_WORKERS,
+    );
+  });
+
+  it('FND-13 controle negativo: uma configuração sem o maxWorkers do integration reprova', () => {
+    const violations = maxWorkersViolations(
+      withoutIntegrationMaxWorkers(config),
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain('precisa declarar maxWorkers');
+  });
+
+  it('FND-13 controle negativo: um maxWorkers diferente de 4 no integration reprova', () => {
+    for (const other of [1, 3, 5, 8]) {
+      const violations = maxWorkersViolations(
+        withIntegrationMaxWorkers(config, other),
+      );
+
+      expect(violations, `maxWorkers ${other}`).toHaveLength(1);
+      expect(violations[0]).toContain('o limite é 4');
+    }
   });
 });

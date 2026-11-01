@@ -39,6 +39,7 @@ import {
   createAppPool,
   line,
   PATIENT_LIMITS,
+  PATIENT_LOCK_TIMEOUT_MS,
   postCheckout,
   seedProduct,
   startCheckoutHarness,
@@ -544,6 +545,11 @@ describe('ORD-22 relay publica as linhas da outbox', () => {
   });
 
   it('ORD-22 controle negativo: dois relés ingênuos (sem SKIP LOCKED) com a janela forçada publicam as mesmas linhas', async () => {
+    // O pool dos relés ingênuos tem de levar o lock_timeout paciente (FND-13): se voltasse ao de produção, o
+    // segundo relé estouraria o prazo do banco e o teste mediria a máquina, não a falta do SKIP LOCKED.
+    expect(naivePool.options).toMatchObject({
+      lock_timeout: PATIENT_LOCK_TIMEOUT_MS,
+    });
     const queues = await freshQueues();
     const accepted = await acceptMany(10);
     const window = windowedSend(queues.queue, 2);
