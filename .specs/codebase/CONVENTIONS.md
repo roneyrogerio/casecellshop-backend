@@ -22,11 +22,11 @@ Valem para todo o repositório, desde o primeiro commit.
   | `src/main/` | entradas | Um arquivo por processo (`api.ts`, `worker.ts`, `runbook.ts`, `migrate.ts`): lê a configuração, monta as dependências e liga o processo. Nenhuma regra de negócio |
   | `src/app.ts` | composição | A fábrica do app HTTP, sem abrir porta, que a API e os testes usam |
   | `src/checkout/`, `src/orders/`, `src/health/`, `src/billing/`, `src/catalog/` (M4) | negócio | Tudo de uma capacidade: rotas, consultas, e os laços e comandos que rodam fora da requisição (o relay, o worker, a reconciliação e o runbook ficam em `billing/`) |
-  | `src/erp/`, `src/db/`, `src/queue/`, `src/http/`, `src/cache/` (M4) | fronteira | A porta e o adaptador de cada tecnologia: o ERP (com o simulado em `erp/sim/`), o PostgreSQL, o SQS, o Express e o cache em processo |
+  | `src/erp/`, `src/db/`, `src/queue/`, `src/http/`, `src/cache/` (M4) | fronteira | Um sistema externo: a porta, definida pela conversa de que o negócio precisa (`ErpClient`, `Queue`), e o adaptador da tecnologia que a atende. O ERP (com o simulado em `erp/sim/`), o PostgreSQL, o SQS, o Express e o cache em processo |
   | `src/contract/` | contrato | Os schemas em zod da API e da mensagem do faturamento; o `openapi.yaml` sai daqui |
   | `src/shared/` | transversal | Relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo |
 
-  - As dependências seguem um sentido só: `main/` e `app.ts` montam tudo; o negócio usa a fronteira, o contrato e o `shared/`; a fronteira e o `shared/` não importam pastas de negócio, e uma pasta de negócio não importa o interior de outra.
+  - As dependências seguem um sentido só: `main/` monta cada processo e `app.ts` monta o app HTTP; o negócio usa a fronteira, o contrato e o `shared/`; a fronteira não importa pastas de negócio, o `shared/` não importa nenhuma outra pasta de `src/`, e uma pasta de negócio não importa outra.
   - Arquivo novo entra na pasta da capacidade ou da tecnologia que ele serve. Uma pasta nova de negócio nasce com o marco que traz a capacidade, nunca uma pasta por camada (`services/`, `repositories/`) ou genérica (`utils/`).
   - As migrações ficam fora de `src/`, em `migrations/<schema>/`, e os scripts do repositório em `scripts/`.
   - O sentido das dependências, o ERP simulado montado só em `src/main/` e a ausência de ciclos são conferidos pelo `npm run lint` (`no-restricted-imports` por pasta e `import/no-cycle`, AD-026).

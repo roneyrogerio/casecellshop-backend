@@ -97,7 +97,7 @@ The first trailer credits the model that produced most of the commit; the second
 
 Record a decision in the PR that makes it when it changes structure, a quality attribute, a dependency, a contract or how the system is built; is costly to reverse; had two or more viable options; or corrects an earlier decision. Do not record easy-to-refactor internals or how-to steps.
 
-- Product or architecture: a new `### AD-NNN` block in `STATE.md` (context, decision, alternatives, trade-off, "Rever quando", references). It is accepted by the merge of its PR. An accepted AD is never edited except its status line: a new AD supersedes it ("substituída por AD-NNN").
+- Product or architecture: a new `### AD-NNN` block in `STATE.md`, in the form of `.specs/README.md`. It is accepted by the merge of its PR. An accepted AD changes only in its status line or by a dated erratum that keeps the decision; a new AD supersedes it ("substituída por AD-NNN").
 - Tool or process: a row in the tool table of `STATE.md`.
 - Open risk or a mistake that changed course: the risk table or a new `L-NNN` lesson.
 - State the decision and its reason in the project's terms (the effect here). Research informs the decision and stays out of the repository: no market comparisons, adoption numbers or "project X does it" in `STATE.md`, the README or commit messages; sources go only under "Referências".

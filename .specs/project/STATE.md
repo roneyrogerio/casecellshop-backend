@@ -3,7 +3,7 @@
 **Atualizado em:** 31/10/2026
 **Trabalho atual:** M3 — Processamento assíncrono (M2 concluído)
 
-Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita não é editada: se mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
+Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, alternativas consideradas, trade-off e quando rever), as escolhas de ferramenta, os riscos, as lições e as ideias adiadas. O "como" de cada decisão está no [`design.md`](../features/casecellshop/design.md). Uma decisão aceita só recebe errata de redação que não muda a decisão, registrada abaixo do status (`.specs/README.md`, "Ciclo"); se a decisão mudar, uma nova `AD` a substitui, e a antiga passa a "substituída por AD-NNN". As versões citadas foram conferidas em 28 e 29/10/2026.
 
 ---
 
@@ -288,7 +288,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 **Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, o destino dos achados `baixa` de texto, pela AD-022, e a leitura de uns 10 minutos do mantenedor, pela AD-023.
 
-**Errata (31/10/2026, PR #17):** a última frase do contexto trocou a lista de autores e empresas pelo princípio técnico que ela resumia; a decisão não mudou.
+**Errata (31/10/2026, PR #17):** a última frase do contexto trocou a lista de autores e empresas pelo princípio que ela resumia, sem acrescentar afirmação; a decisão não mudou.
 
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
@@ -298,7 +298,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 - **Limites de palavras:** herdados da skill `tlc-spec-driven`, forçaram commits de compressão.
 - **Oráculo exposto:** o `implementer` podia editar o CI e as configurações que decidem se o trabalho dele está certo.
 
-Os seis problemas têm a mesma origem: a verificação dependia de quem implementava e de aprovações humanas em cada passo. Um agente que pode editar o próprio critério de aceite pode passar sem acertar, e uma verificação determinística, fora do alcance de quem implementa, dá o mesmo resultado em toda execução; a pessoa fica onde a decisão é dela, na intenção e no merge.
+O princípio adotado é a verificação determinística e independente de quem implementa, com o humano na intenção e no merge.
 
 **Decisão.**
 
@@ -700,8 +700,8 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 - **Uma pasta por capacidade do negócio:** `checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`. Cada uma guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão mudam juntos quando o faturamento muda (AD-021, AD-024), então ficam juntos em `src/billing/`.
 - **Uma pasta por sistema externo:** `erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`. Cada uma tem a porta, definida pela conversa de que o negócio precisa (`ErpClient`, `Queue`), e o adaptador da tecnologia que a atende. O ERP simulado é um adaptador da porta `ErpClient`, e o ERP real entra no lugar dele sem mudar a regra de negócio (AD-004).
 - **`src/shared/`** guarda o que todo o código usa e que não conhece o negócio: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
-- **`src/main/`** tem uma entrada por processo e é o único lugar que monta as dependências. **`src/app.ts`** é a fábrica do app HTTP, sem abrir porta, para os testes subirem o app pelo supertest.
-- As dependências seguem um sentido só: de `main/` para o negócio, e do negócio para a fronteira, o contrato e o `shared/`. A fronteira e o `shared/` não importam pastas de negócio, e uma pasta de negócio não importa outra. O lint confere esse sentido (AD-026).
+- **`src/main/`** tem uma entrada por processo e monta as dependências de cada processo. **`src/app.ts`** monta o app HTTP (rotas e repositórios) sem abrir porta, para os testes subirem o app pelo supertest.
+- As dependências seguem um sentido só: de `main/` para o negócio, e do negócio para a fronteira, o contrato e o `shared/`. A fronteira não importa pastas de negócio, o `shared/` não importa nenhuma outra pasta de `src/`, e uma pasta de negócio não importa outra. O lint confere esse sentido (AD-026).
 - Nos testes, a pasta de integração é a área do `spec.md`, como desde o M1. Os testes do ERP simulado vão para a área do critério que provam, e as migrações de exemplo ganham nomes em inglês.
 
 **Alternativas consideradas:**
@@ -713,14 +713,14 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 
 **Trade-off.** Uma mudança só de lugar, sem comportamento novo, que mexe em muitos imports e nos caminhos citados na spec e na documentação.
 
-**Rever quando:** uma capacidade nova não couber numa pasta só, ou uma pasta de negócio precisar do interior de outra.
+**Rever quando:** uma capacidade nova não couber numa pasta só, ou uma pasta de negócio precisar de outra.
 
 **Referências:**
 
 - Robert C. Martin, *Clean Architecture*, 1.ª ed., cap. 13 ("Component Cohesion", princípio do fechamento comum) e cap. 14 ("Component Coupling", princípio das dependências acíclicas): agrupar o que muda junto e manter as dependências sem ciclo.
 - [Alistair Cockburn, *Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/), consultado em 31/10/2026: a porta é definida pelo propósito da conversa, e o adaptador é a parte específica da tecnologia; uma porta pode ter vários adaptadores.
-- [Mark Seemann, *Composition Root*](https://blog.ploeh.dk/2011/07/28/CompositionRoot/): a montagem das dependências fica junto da entrada de cada processo.
-- [Yoni Goldberg et al., *Node.js Best Practices*, "Structure your solution by components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
+- [Mark Seemann, *Composition Root*](https://blog.ploeh.dk/2011/07/28/CompositionRoot/), consultado em 31/10/2026: a montagem das dependências fica junto da entrada de cada processo.
+- [Yoni Goldberg et al., *Node.js Best Practices*, "Structure your solution by components"](https://github.com/goldbergyoni/nodebestpractices/blob/194a827cec4006d11df028a6a88397d57a851d59/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
 
 ### AD-026 · Limites de tamanho, complexidade e dependências conferidos pelo lint
 
@@ -750,10 +750,10 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 
 **Referências:**
 
-- [ESLint, *max-lines*](https://eslint.org/docs/latest/rules/max-lines): "não há um número máximo objetivo" de linhas por arquivo, e as recomendações vão de 100 a 500; o padrão da regra é 300. Os limites desta AD são, portanto, escolha do projeto dentro da faixa usual, e não um número de consenso.
-- [ESLint, *complexity*](https://eslint.org/docs/latest/rules/complexity): as variantes `classic` e `modified`.
+- [ESLint, *max-lines*](https://eslint.org/docs/latest/rules/max-lines), consultado em 31/10/2026: "não há um número máximo objetivo" de linhas por arquivo, e as recomendações vão de 100 a 500; o padrão da regra é 300. Os limites desta AD são, portanto, escolha do projeto dentro da faixa usual, e não um número de consenso.
+- [ESLint, *complexity*](https://eslint.org/docs/latest/rules/complexity), consultado em 31/10/2026: as variantes `classic` e `modified`.
 - Thomas J. McCabe, *A Complexity Measure*, IEEE Transactions on Software Engineering, SE-2(4), 1976: o limite de 10 de complexidade ciclomática por módulo.
-- [Google, *TypeScript Style Guide*](https://google.github.io/styleguide/tsguide.html): uma função acima de umas 40 linhas pede que se pense em dividi-la.
+- [Google, *TypeScript Style Guide*, "Function Length"](https://google.github.io/styleguide/tsguide.html), consultado em 31/10/2026: sem limite rígido, uma função acima de umas 40 linhas pede que se pense em dividi-la.
 - [oxc, regras do oxlint](https://oxc.rs/docs/guide/usage/linter/rules.html), consultado em 31/10/2026: as regras nativas e as que exigem plugin.
 - [Anthropic, *Claude Code: Best practices*](https://code.claude.com/docs/en/best-practices), consultado em 31/10/2026: o que precisa acontecer toda vez vai para um hook ou para o CI, não para as instruções.
 

@@ -227,7 +227,8 @@
         "src/db/**/*.ts",
         "src/erp/**/*.ts",
         "src/http/**/*.ts",
-        "src/queue/**/*.ts"
+        "src/queue/**/*.ts",
+        "src/cache/**/*.ts"
       ],
       "rules": {
         "no-restricted-imports": [

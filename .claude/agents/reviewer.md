@@ -29,11 +29,11 @@ Use Bash for read-only commands: run `grep` and `find` to search (this version h
 
 1. **Criteria:** each criterion in scope for this round (the slice criteria; on the whole-PR round, every criterion of the milestone) has a test named with its ID, and that test would fail if the behavior broke.
 2. **Spec and decisions:** the code does what `design.md` and the ADs say. A divergence not marked `SPEC_DEVIATION` is a finding.
-3. **Concurrency and consistency:** lock order; conditional `UPDATE`s and compare-and-set; the idempotency key with `ON CONFLICT`; the outbox written in the same transaction as the order; no ERP call inside a transaction; the claim token on every outbox transition; the database clock for stored deadlines.
+3. **Concurrency and consistency:** lock order; conditional `UPDATE`s and compare-and-set; the idempotency key with `ON CONFLICT`; the outbox written in the same transaction as the order; no ERP call inside a transaction; the per-order call permit taken before the first ERP call of an attempt and renewed by its token before the next (compare-and-set on `outbox.last_call_at`, AD-024); the database clock for stored deadlines.
 4. **Failure paths:** what happens when the database, the ERP or the process fails at each step; error classification, retries and the DLQ.
 5. **Contract:** routes, statuses, headers and bodies match the contract in `src/contract/`; handlers take their types from it; the committed `openapi.yaml` is the generated one; errors in `application/problem+json`.
 6. **Observability:** required log fields and events; metric names and labels, never `orderId` or `sku`; spans where `design.md` lists them.
-7. **Oracle and history:** test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none deletes, skips or weakens a test unless an earlier finding asked for it (`git log -p <base>..<head> -- test/ '*.test.ts'`); no change to the CI, `scripts/`, `vitest.config.ts`, `tsconfig.json`, `.oxlintrc.json`, `commitlint.config.mjs` or the scripts in `package.json` narrows which tests run, loosens a check or drops one; an accepted `### AD-NNN` block changed only in its status line.
+7. **Oracle and history:** test changes (`*.test.ts` files and `test/`) only in `test:` commits, and none deletes, skips or weakens a test unless an earlier finding asked for it (`git log -p <base>..<head> -- test/ '*.test.ts'`); no change to the CI, `scripts/`, `vitest.config.ts`, `tsconfig.json`, `.oxlintrc.json`, `commitlint.config.mjs` or the scripts in `package.json` narrows which tests run, loosens a check or drops one; an accepted `### AD-NNN` block changed only in its status line or by an `**Errata (…)**` line under it that keeps the decision and adds no claim.
 
 ## Security checklist
 

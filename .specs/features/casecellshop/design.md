@@ -22,7 +22,7 @@ graph LR
 
 O compose roda o PostgreSQL, um serviço de migração, o ElasticMQ (o SQS local), a API e um worker. O processo do worker roda o relay, o envio ao ERP, a reconciliação e a sincronização, e o ERP simulado roda no processo dele.
 
-O código fica numa pasta por capacidade do negócio (`checkout/`, `orders/`, `health/`, `billing/`, `catalog/`), uma por tecnologia de fronteira (`erp/`, `db/`, `queue/`, `http/`, `cache/`), o transversal em `shared/` e uma entrada por processo em `main/`, como em [`CONVENTIONS.md`](../../codebase/CONVENTIONS.md), "Pastas do código" (AD-025).
+O código fica numa pasta por capacidade do negócio (`checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`), uma por sistema externo (`erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`), o transversal em `shared/` e uma entrada por processo em `main/`, como em [`CONVENTIONS.md`](../../codebase/CONVENTIONS.md), "Pastas do código" (AD-025).
 
 ## Dados
 
