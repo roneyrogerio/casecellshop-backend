@@ -1,7 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "oxc", "unicorn", "vitest", "import", "node"],
-  "jsPlugins": ["./scripts/lint-rules/kysely.ts"],
+  "jsPlugins": [
+    "./scripts/lint-rules/kysely.ts",
+    "./scripts/lint-rules/test-waits.ts"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -430,6 +433,14 @@
         "kysely/no-sql-command": "off",
         "kysely/no-sql-column": "off",
         "kysely/no-direct-query": "off"
+      }
+    },
+    {
+      "files": ["test/integration/**/*.ts", "test/helpers/**/*.ts"],
+      "rules": {
+        "test-waits/no-fixed-step": "error",
+        "test-waits/wait-guard": "error",
+        "test-waits/no-port-before-up": "error"
       }
     }
   ]
