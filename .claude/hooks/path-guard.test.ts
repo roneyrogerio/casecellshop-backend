@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -19,6 +18,7 @@ import {
   makeTempDir,
 } from '../../test/helpers/git-sandbox.ts';
 import { repoRoot as root } from '../../test/helpers/repo-root.ts';
+import { runNode } from '../../test/helpers/run-node.ts';
 
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
 
@@ -91,11 +91,10 @@ function runHook(
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (projectDir === undefined) delete env.CLAUDE_PROJECT_DIR;
   else env.CLAUDE_PROJECT_DIR = projectDir;
-  const result = spawnSync(process.execPath, [hook], {
-    input: rawInput,
-    encoding: 'utf8',
+  const result = runNode(hook, [], {
+    cwd: cwd ?? process.cwd(),
     env,
-    ...(cwd ? { cwd } : {}),
+    input: rawInput,
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -222,6 +221,7 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     'test/prettier.config.mjs',
     'test/.oxlintrc.json',
     'test/vitest.config.ts',
+    'test/coverage-floor.json',
     'test/knip.json',
     'test/.editorconfig',
     'test/.eslintignore',
@@ -332,6 +332,8 @@ const IMPLEMENTER_VERIFICATION_CONFIG = [
   'knip.json',
   '.jscpd.json',
   '.jscpd-baseline.json',
+  // AI-37: o piso de cobertura é um dado que o vitest.config.ts importa.
+  'coverage-floor.json',
   '.editorconfig',
   'package.yaml',
 ];
@@ -400,6 +402,9 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   'src/.editorconfig',
   'src/package.yaml',
   'src/knip.json',
+  'coverage-floor.json',
+  'src/coverage-floor.json',
+  'src/a/coverage-floor.json',
   // O oxlint lê o .eslintignore por padrão (AI-48) e o Prettier lê a chave `prettier` de um package.json aninhado.
   '.eslintignore',
   'src/.eslintignore',
@@ -454,6 +459,8 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
     'src/kysely-codegen/index.ts',
     'src/shared/prettier-like.ts',
     'src/shared/knip-like.ts',
+    'src/coverage-floor.ts',
+    'src/shared/coverage-floor-loader.ts',
   ])('AI-04 o implementer continua podendo editar %s', (path) => {
     for (const [, variant] of variants(path))
       expectAllowed(edit('implementer', variant));

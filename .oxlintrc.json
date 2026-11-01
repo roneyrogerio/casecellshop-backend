@@ -3,7 +3,8 @@
   "plugins": ["typescript", "oxc", "unicorn", "vitest", "import", "node"],
   "jsPlugins": [
     "./scripts/lint-rules/kysely.ts",
-    "./scripts/lint-rules/test-waits.ts"
+    "./scripts/lint-rules/test-waits.ts",
+    "./scripts/lint-rules/test-imports.ts"
   ],
   "categories": {
     "correctness": "error"
@@ -470,6 +471,21 @@
               }
             ]
           }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
         ]
       }
     },
@@ -506,11 +522,30 @@
               }
             ]
           }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              },
+              {
+                "name": "node:child_process",
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
         ]
       }
     },
     {
-      "files": ["test/repo/**/*.ts"],
+      "files": ["test/repo/**/*.ts", ".claude/**/*.test.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -524,6 +559,17 @@
                   "execFileSync",
                   "default"
                 ],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
                 "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
               }
             ]
@@ -554,6 +600,17 @@
               }
             ]
           }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
         ]
       }
     },
@@ -580,6 +637,21 @@
               }
             ]
           }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
         ]
       }
     },
@@ -590,7 +662,8 @@
         "test/integration/foundation/api-fuzz-negative-control.test.ts"
       ],
       "rules": {
-        "no-restricted-imports": "off"
+        "no-restricted-imports": "off",
+        "test-imports/no-restricted-dynamic-import": "off"
       }
     }
   ]

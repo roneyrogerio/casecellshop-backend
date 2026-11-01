@@ -135,7 +135,17 @@ jobs:
       # FND-12: na perna do piso, os testes que sobem o compose ficam de fora, porque a
       # imagem fixa o Node do Dockerfile e repetiria o que a perna do .nvmrc já testou.
       # AI-37: a cobertura de src/ e o piso dela, uma vez só, na perna do .nvmrc.
-      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json" ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
+      # AI-49: o json-summary vai para fora da árvore do repositório, onde um
+      # relatório versionado não toma o lugar do medido.
+      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json" ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reportsDirectory="$RUNNER_TEMP/coverage"' || '' }}
+
+      # AI-49: a cobertura medida contra o piso da base, e não contra o piso que o
+      # vitest.config.ts, a linha de comando ou o ambiente do PR passaram ao Vitest.
+      - name: Cobertura medida contra o piso da base
+        if: matrix.node == 'nvmrc' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-baselines.ts --measured "$RUNNER_TEMP/coverage/coverage-summary.json"
 
       # AI-18: a tabela que o dono lê antes de aprovar; informa e não reprova. Roda
       # também com teste vermelho, que é quando ela mais ajuda, e uma vez só.

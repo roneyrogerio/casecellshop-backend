@@ -6,31 +6,15 @@
 // um regex no meio do código não confunde nada (A5 do #12).
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { RuleTester } from 'oxlint/plugins-dev';
-
-// O oxlint não exporta os tipos de regra; vêm do RuleTester, que os recebe.
-type Rule = Parameters<RuleTester['run']>[1];
-type Context = Parameters<Extract<Rule, { create: unknown }>['create']>[0];
-
-// Só os campos que as regras leem; a árvore é a ESTree do oxlint.
-interface Node {
-  type: string;
-  range: [number, number];
-  parent?: Node;
-  [key: string]: unknown;
-}
-
-type Handlers = Record<string, (node: Node) => void>;
-type Visitor = ReturnType<Extract<Rule, { create: unknown }>['create']>;
-
-// Os visitantes leem a árvore pela forma mínima acima; a conversão fica só aqui.
-const visit = (handlers: Handlers): Visitor => handlers as unknown as Visitor;
-
-const child = (node: Node, key: string): Node | undefined =>
-  node[key] as Node | undefined;
-
-const nameOf = (node: Node | undefined): string | undefined =>
-  node?.type === 'Identifier' ? (node['name'] as string) : undefined;
+import {
+  child,
+  type Context,
+  importSource,
+  nameOf,
+  type Node,
+  visit,
+  type Visitor,
+} from './ast.ts';
 
 // O nome da propriedade lida: k.sql, k['sql'] ou o método de pool.query().
 function propertyName(member: Node): string | undefined {
@@ -106,17 +90,6 @@ const ALIAS_MESSAGE =
 
 // Membros que devolvem o sql por outro nome: o sql do Kysely não os usa como API.
 const ALIAS_METHODS = new Set(['bind', 'call', 'apply']);
-
-// O texto da origem de um import('…'), em string ou em template sem valor.
-function importSource(node: Node): unknown {
-  const source = child(node, 'source');
-  if (source?.type === 'Literal') return source['value'];
-  const quasis = (source?.['quasis'] ?? []) as Node[];
-  const [only] = quasis;
-  return source?.type === 'TemplateLiteral' && quasis.length === 1 && only
-    ? (only['value'] as { cooked?: string }).cooked
-    : undefined;
-}
 
 // Pais em que o identificador, onde quer que esteja, é nome e não valor:
 // declarar uma variável sql local não leva o do Kysely adiante.

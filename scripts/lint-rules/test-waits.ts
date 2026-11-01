@@ -3,32 +3,16 @@
 // test/integration/ e test/helpers/. A leitura é pela árvore de sintaxe, como no
 // plugin do Kysely: comentário e string não contam, e o prazo é lido como
 // expressão (A3 da Revisão 1 do PR C).
-import type { RuleTester } from 'oxlint/plugins-dev';
-
-type Rule = Parameters<RuleTester['run']>[1];
-type Context = Parameters<Extract<Rule, { create: unknown }>['create']>[0];
-type Visitor = ReturnType<Extract<Rule, { create: unknown }>['create']>;
-
-// Só os campos que as regras leem; a árvore é a ESTree do oxlint.
-interface Node {
-  type: string;
-  range: [number, number];
-  parent?: Node;
-  [key: string]: unknown;
-}
-
-type Handlers = Record<string, (node: Node) => void>;
-
-// Os visitantes leem a árvore pela forma mínima acima; a conversão fica só aqui.
-const visit = (handlers: Handlers): Visitor => handlers as unknown as Visitor;
-
-const child = (node: Node | undefined, key: string): Node | undefined =>
-  node?.[key] as Node | undefined;
+import {
+  child,
+  type Context,
+  nameOf,
+  type Node,
+  visit,
+  type Visitor,
+} from './ast.ts';
 
 const args = (call: Node): Node[] => (call['arguments'] ?? []) as Node[];
-
-const nameOf = (node: Node | undefined): string | undefined =>
-  node?.type === 'Identifier' ? (node['name'] as string) : undefined;
 
 const isNode = (value: unknown): value is Node =>
   typeof value === 'object' &&
@@ -260,12 +244,17 @@ const waitGuard = {
 
 const COMPOSE_UP = 'upComposeProject';
 
-const isZero = (node: Node | undefined): boolean =>
-  node?.type === 'Literal' && node['value'] === 0;
+// Porta fixa é um número literal maior que 0. Qualquer outra forma (0, uma
+// variável, undefined, uma função no lugar da porta) pode deixar o sistema
+// escolher a porta antes do up (A16 do #29), então só esta passa.
+const isFixedPort = (node: Node | undefined): boolean =>
+  node?.type === 'Literal' &&
+  typeof node['value'] === 'number' &&
+  node['value'] > 0;
 
 // O port de um listen({ port, host }).
-function portOf(options: Node): Node | undefined {
-  if (options.type !== 'ObjectExpression') return undefined;
+function portOf(options: Node | undefined): Node | undefined {
+  if (options?.type !== 'ObjectExpression') return undefined;
   for (const property of (options['properties'] ?? []) as Node[])
     if (nameOf(child(property, 'key')) === 'port')
       return child(property, 'value');
@@ -298,7 +287,7 @@ const noPortBeforeUp = {
       CallExpression(node) {
         if (calleeName(node) !== 'listen') return;
         const [first] = args(node);
-        if (!first || isZero(first) || isZero(portOf(first)))
+        if (!isFixedPort(first) && !isFixedPort(portOf(first)))
           report(node, 'um listen sem porta fixa');
       },
       ImportDeclaration(node) {

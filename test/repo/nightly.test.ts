@@ -6,6 +6,7 @@ import {
   FUZZ_UPLOAD_IF,
   REPORT_DIR_STEP,
   reportDirAfterFuzz,
+  reportDirBeforeCheckout,
   SHARED_FUZZ_CASES,
 } from '../helpers/api-fuzz-job.ts';
 import {
@@ -1089,6 +1090,16 @@ describe('FND-16 as conferências do job api-fuzz enxergam o que procuram (contr
 
     expect(apiFuzzViolations(late)).toEqual([
       'o diretório do relatório é criado depois do fuzzing',
+    ]);
+  });
+
+  it('FND-16 o api-fuzz que cria o schemathesis-report antes do checkout reprova', () => {
+    const early = parseYaml<NightlyWorkflow>(
+      GOOD.replace(API_FUZZ_JOB, () => reportDirBeforeCheckout(API_FUZZ_JOB)),
+    );
+
+    expect(apiFuzzViolations(early)).toEqual([
+      'o diretório do relatório é criado antes do checkout',
     ]);
   });
 
