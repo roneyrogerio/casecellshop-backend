@@ -27,7 +27,17 @@ interface Dependabot {
 const PREFIXES: Record<string, string> = {
   npm: 'build(deps)',
   'github-actions': 'ci(deps)',
+  'docker-compose': 'build(deps)',
 };
+
+// A versão maior do PostgreSQL pede migrar o diretório de dados: o Dependabot não a propõe.
+function holdsMajor(update: Update, name: string): boolean {
+  return (update.ignore ?? []).some(
+    (rule) =>
+      rule['dependency-name'] === name &&
+      rule['update-types']?.includes('version-update:semver-major'),
+  );
+}
 
 function updateViolations(update: Update): string[] {
   const id = update['package-ecosystem'] ?? '?';
@@ -47,13 +57,14 @@ function updateViolations(update: Update): string[] {
   if (id === 'npm' && update['versioning-strategy'] !== 'increase')
     violations.push('npm: versioning-strategy não é increase');
   // O @types/node segue o piso do engines (Node 24.12): uma versão maior deixaria o tsc aceitar API que não existe nele.
-  const holdsTypesNode = (update.ignore ?? []).some(
-    (rule) =>
-      rule['dependency-name'] === '@types/node' &&
-      rule['update-types']?.includes('version-update:semver-major'),
-  );
-  if (id === 'npm' && !holdsTypesNode)
+  if (id === 'npm' && !holdsMajor(update, '@types/node'))
     violations.push('npm: sem o ignore das versões maiores do @types/node');
+  if (id === 'docker-compose' && !holdsMajor(update, 'postgres'))
+    violations.push(
+      'docker-compose: sem o ignore das versões maiores do postgres',
+    );
+  if (id === 'docker-compose' && Object.keys(update.groups ?? {}).length !== 1)
+    violations.push('docker-compose: não tem exatamente um grupo');
   return violations;
 }
 
@@ -66,13 +77,29 @@ function dependabotViolations(config: Dependabot | undefined): string[] {
   if (
     JSON.stringify(
       ecosystems.sort((a, b) => String(a).localeCompare(String(b))),
-    ) !== '["github-actions","npm"]'
+    ) !== '["docker-compose","github-actions","npm"]'
   )
     violations.push(`ecossistemas: ${ecosystems.join(', ')}`);
   return [...violations, ...updates.flatMap(updateViolations)];
 }
 
 // --- linha de base em memória -----------------------------------------------------------------------------------
+
+const DOCKER_BLOCK = `  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: postgres
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: build(deps)
+    groups:
+      images:
+        patterns: ['*']
+`;
 
 const GOOD = `
 version: 2
@@ -103,10 +130,17 @@ updates:
         patterns: ['*']
     commit-message:
       prefix: ci(deps)
-`;
+${DOCKER_BLOCK}`;
 
 function edited(from: string, to: string): Dependabot {
   return parseYaml<Dependabot>(mutated(GOOD, from, to));
+}
+
+// A edição atinge só o bloco do docker-compose, e não a primeira ocorrência do texto no arquivo.
+function editedDocker(from: string, to: string): Dependabot {
+  return parseYaml<Dependabot>(
+    GOOD.replace(DOCKER_BLOCK, mutated(DOCKER_BLOCK, from, to)),
+  );
 }
 
 describe('AI-45 a conferência do dependabot.yml enxerga o que procura (controle negativo)', () => {
@@ -126,6 +160,10 @@ describe('AI-45 a conferência do dependabot.yml enxerga o que procura (controle
     [
       'as actions sem cooldown',
       '    cooldown:\n      default-days: 7\n    groups:\n      actions:',
+    ],
+    [
+      'as imagens do compose sem cooldown',
+      '    cooldown:\n      default-days: 7\n    ignore:\n      - dependency-name: postgres',
     ],
   ])('AI-45 %s reprova', (_label, removed) => {
     const withoutCooldown = removed.replace(
@@ -180,6 +218,46 @@ describe('AI-45 a conferência do dependabot.yml enxerga o que procura (controle
   ])('AI-45 %s reprova', (_label, from, to) => {
     expect(dependabotViolations(edited(from, to))).not.toEqual([]);
   });
+
+  it('AI-45 sem o bloco do docker-compose, reprova', () => {
+    expect(
+      dependabotViolations(
+        parseYaml<Dependabot>(mutated(GOOD, DOCKER_BLOCK, '')),
+      ),
+    ).not.toEqual([]);
+  });
+
+  it.each([
+    [
+      'sem o ignore do postgres',
+      "    ignore:\n      - dependency-name: postgres\n        update-types: ['version-update:semver-major']\n",
+      '',
+    ],
+    [
+      'com o ignore de outra imagem que o postgres',
+      'dependency-name: postgres',
+      'dependency-name: redis',
+    ],
+    [
+      'com o ignore do postgres só das versões menores',
+      "['version-update:semver-major']",
+      "['version-update:semver-minor']",
+    ],
+    ['com o prefixo errado', 'prefix: build(deps)', 'prefix: chore(deps)'],
+    ['com o prefixo das actions', 'prefix: build(deps)', 'prefix: ci(deps)'],
+    ['com cooldown de 3 dias', 'default-days: 7', 'default-days: 3'],
+    ['com atualização diária', 'interval: weekly', 'interval: daily'],
+    ['com atualização mensal', 'interval: weekly', 'interval: monthly'],
+    ['com o diretório fora da raiz', 'directory: /', 'directory: /docker'],
+    ['sem grupo que pega tudo', "patterns: ['*']", "patterns: ['ghcr.io/*']"],
+    [
+      'com um segundo grupo',
+      "      images:\n        patterns: ['*']\n",
+      "      images:\n        patterns: ['*']\n      extra:\n        patterns: ['postgres']\n",
+    ],
+  ])('AI-45 o bloco do docker-compose %s reprova', (_label, from, to) => {
+    expect(dependabotViolations(editedDocker(from, to))).not.toEqual([]);
+  });
 });
 
 describe('AI-45 o .github/dependabot.yml atualiza o npm e as actions toda semana, com cooldown de 7 dias', () => {
@@ -187,7 +265,7 @@ describe('AI-45 o .github/dependabot.yml atualiza o npm e as actions toda semana
     expect(existsSync(join(repoRoot, '.github', 'dependabot.yml'))).toBe(true);
   });
 
-  it('AI-45 os dois ecossistemas são semanais, com cooldown de 7 dias, um grupo que pega tudo e o prefixo certo; o npm mantém a versão exata (increase)', () => {
+  it('AI-45 os três ecossistemas são semanais, com cooldown de 7 dias, um grupo que pega tudo e o prefixo certo; o npm mantém a versão exata (increase) e o docker-compose não sobe o postgres de versão maior', () => {
     expect(
       dependabotViolations(
         readRepoYaml<Dependabot>('.github', 'dependabot.yml'),

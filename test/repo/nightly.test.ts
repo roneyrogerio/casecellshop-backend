@@ -27,6 +27,7 @@ import { DEFAULT_NUM_RUNS } from '../helpers/property-setup.ts';
 // vazia é o que o arquivo deve ter, e os controles negativos montam um YAML de propósito errado.
 
 interface NightlyJob extends CiJob {
+  env?: Record<string, unknown>;
   strategy?: {
     'fail-fast'?: unknown;
     matrix?: { node?: string[]; seed?: unknown };
@@ -39,9 +40,9 @@ interface NightlyWorkflow extends CiWorkflow {
 }
 
 const SHA = 'c'.repeat(40);
-const JOB_IDS = ['flaky-hunt', 'main-full', 'report', 'workflows'];
+const JOB_IDS = ['api-fuzz', 'flaky-hunt', 'main-full', 'report', 'workflows'];
 // O report espera todos os outros jobs, e roda em qualquer resultado deles.
-const REPORT_NEEDS = ['main-full', 'flaky-hunt', 'workflows'];
+const REPORT_NEEDS = ['main-full', 'flaky-hunt', 'workflows', 'api-fuzz'];
 const SEEDS = 3;
 
 // Cada conferência que o `main-full` herda do job `checks` do ci.yml (AI-42), menos as que só valem em pull_request.
@@ -146,7 +147,7 @@ function permissionViolations(workflow: NightlyWorkflow): string[] {
   const violations = topPermissionViolations(workflow);
   if (!same(workflow.permissions, { contents: 'read' }))
     violations.push('o topo não é só contents: read');
-  for (const id of ['main-full', 'flaky-hunt', 'workflows'])
+  for (const id of ['main-full', 'flaky-hunt', 'workflows', 'api-fuzz'])
     for (const grant of writeGrants(workflow.jobs?.[id]?.permissions))
       violations.push(`${id} roda código e tem ${grant}`);
   if (!same(workflow.jobs?.report?.permissions, { issues: 'write' }))
@@ -387,6 +388,83 @@ function flakyHuntViolations(workflow: NightlyWorkflow): string[] {
   ];
 }
 
+// --- api-fuzz (FND-16) -----------------------------------------------------------------------------------------
+
+const ALWAYS_STEP = /^(?:\$\{\{\s*)?always\(\)(?:\s*\}\})?$/;
+const FUZZ_RUN =
+  /(^|\n)\s*docker compose --profile fuzz run --rm schemathesis(\s|$)/;
+
+// O fuzzing sobe o compose (a API saudável), roda o serviço do perfil fuzz com a semente da execução, guarda o
+// relatório mesmo quando o fuzzing reprova e derruba o compose com os volumes ao final, em qualquer resultado.
+function apiFuzzViolations(workflow: NightlyWorkflow): string[] {
+  const job = workflow.jobs?.['api-fuzz'];
+  if (job === undefined) return ['falta o job api-fuzz'];
+  const violations: string[] = [];
+  const minutes = job['timeout-minutes'];
+  if (typeof minutes !== 'number' || !(minutes > 0))
+    violations.push('timeout-minutes não é um número positivo');
+  // Sem permissions no job vale o topo (só contents: read); com, só contents: read.
+  if (
+    job.permissions !== undefined &&
+    !same(job.permissions, { contents: 'read' })
+  )
+    violations.push('o job não tem só contents: read');
+  const steps = job.steps ?? [];
+
+  const checkoutAt = steps.findIndex((step) =>
+    (step.uses ?? '').startsWith('actions/checkout@'),
+  );
+  if (checkoutAt < 0) violations.push('sem checkout');
+  else if (String(steps[checkoutAt]?.with?.['persist-credentials']) !== 'false')
+    violations.push('o checkout guarda a credencial');
+
+  const runAt = steps.findIndex((step) => FUZZ_RUN.test(step.run ?? ''));
+  const run = steps[runAt];
+  if (run === undefined)
+    violations.push(
+      'sem o passo docker compose --profile fuzz run --rm schemathesis',
+    );
+  else {
+    if (runAt < checkoutAt) violations.push('o fuzzing roda antes do checkout');
+    if (run.run?.includes('${{') === true)
+      violations.push('o run do fuzzing interpola uma expressão');
+    if (run['continue-on-error'] !== undefined)
+      violations.push('o fuzzing tem continue-on-error: a falha não reprova');
+    const seed = text(run.env?.['FUZZ_SEED'] ?? job.env?.['FUZZ_SEED']);
+    if (seed === '') violations.push('falta FUZZ_SEED no env do fuzzing');
+    else if (!seed.includes('github.run_id'))
+      violations.push('FUZZ_SEED não depende da execução (github.run_id)');
+  }
+
+  const uploadAt = steps.findIndex((step) =>
+    (step.uses ?? '').startsWith('actions/upload-artifact@'),
+  );
+  const upload = steps[uploadAt];
+  if (upload === undefined) violations.push('sem passo upload-artifact');
+  else {
+    if (uploadAt < runAt) violations.push('o upload vem antes do fuzzing');
+    if (!NOT_CANCELLED.test((upload.if ?? '').trim()))
+      violations.push(
+        `if ${JSON.stringify(upload.if)} do upload não é !cancelled()`,
+      );
+    if (!text(upload.with?.path).includes('schemathesis-report'))
+      violations.push('o artefato não guarda o diretório schemathesis-report');
+  }
+
+  const down = steps.at(-1);
+  if (
+    !/^docker compose (?:--profile fuzz )?down\b/.test((down?.run ?? '').trim())
+  )
+    violations.push('o último passo não é docker compose down');
+  else {
+    if (!tokensOf(down?.run ?? '').includes('-v'))
+      violations.push('o docker compose down não remove os volumes (-v)');
+    if (!ALWAYS_STEP.test((down?.if ?? '').trim()))
+      violations.push(`if ${JSON.stringify(down?.if)} do down não é always()`);
+  }
+  return violations;
+}
+
 // --- o arquivo todo --------------------------------------------------------------------------------------------
 
 function workflowViolations(workflow: NightlyWorkflow): string[] {
@@ -429,6 +507,7 @@ const ALL_CHECKS = (workflow: NightlyWorkflow): string[] => [
   ...reportViolations(workflow),
   ...mainFullViolations(workflow),
   ...flakyHuntViolations(workflow),
+  ...apiFuzzViolations(workflow),
   ...zizmorJobViolations(workflow, GOOD_ZIZMOR_USES),
   ...workflowViolations(workflow),
 ];
@@ -460,6 +539,34 @@ const UPLOAD = `      - uses: actions/upload-artifact@${SHA} # v4.6.2
           name: vitest-shuffle-\${{ matrix.seed }}
           path: \${{ runner.temp }}/vitest-shuffle.json
           retention-days: 7
+`;
+
+const API_FUZZ_JOB = `  api-fuzz:
+    name: Fuzzing da API
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@${SHA} # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Fuzzing com o Schemathesis
+        env:
+          FUZZ_SEED: \${{ github.run_id }}
+        run: |
+          echo "Semente: $FUZZ_SEED"
+          docker compose --profile fuzz run --rm schemathesis
+      - uses: actions/upload-artifact@${SHA} # v7.0.2
+        if: \${{ !cancelled() }}
+        with:
+          name: schemathesis-report
+          path: schemathesis-report
+          retention-days: 7
+      - name: Derruba o compose e os volumes
+        if: always()
+        run: docker compose down -v
 `;
 
 const GOOD = `
@@ -507,7 +614,7 @@ ${UPLOAD}  workflows:
           token: \${{ github.token }}
   report:
     name: Abrir, comentar ou fechar a issue
-    needs: [main-full, flaky-hunt, workflows]
+    needs: [main-full, flaky-hunt, workflows, api-fuzz]
     if: \${{ always() }}
     runs-on: ubuntu-latest
     permissions:
@@ -531,10 +638,17 @@ ${UPLOAD}  workflows:
           elif [ -n "$number" ]; then
             gh issue close "$number" --comment "Passou: $RUN_URL"
           fi
-`;
+${API_FUZZ_JOB}`;
 
 function edited(from: string, to: string): NightlyWorkflow {
   return parseYaml<NightlyWorkflow>(mutated(GOOD, from, to));
+}
+
+// A edição atinge só o job api-fuzz (o último do arquivo), e não a primeira ocorrência do texto.
+function editedFuzz(from: string, to: string): NightlyWorkflow {
+  return parseYaml<NightlyWorkflow>(
+    GOOD.replace(API_FUZZ_JOB, mutated(API_FUZZ_JOB, from, to)),
+  );
 }
 
 // Os três primeiros jobs (main-full, flaky-hunt e workflows) abrem com o mesmo checkout; a edição da ocorrência de
@@ -643,7 +757,7 @@ const PERMISSION_CASES: Case[] = [
 ];
 
 const REPORT_STEP = '      - name: Abre, comenta ou fecha a issue\n';
-const NEEDS = '    needs: [main-full, flaky-hunt, workflows]\n';
+const NEEDS = '    needs: [main-full, flaky-hunt, workflows, api-fuzz]\n';
 const ALWAYS = '    if: ${{ always() }}\n';
 
 const REPORT_CASES: Case[] = [
@@ -663,12 +777,25 @@ const REPORT_CASES: Case[] = [
     REPORT_STEP,
     `      - run: node scripts/criteria-report.ts\n${REPORT_STEP}`,
   ],
-  ['sem o main-full em needs', NEEDS, '    needs: [flaky-hunt, workflows]\n'],
-  ['sem o flaky-hunt em needs', NEEDS, '    needs: [main-full, workflows]\n'],
+  [
+    'sem o main-full em needs',
+    NEEDS,
+    '    needs: [flaky-hunt, workflows, api-fuzz]\n',
+  ],
+  [
+    'sem o flaky-hunt em needs',
+    NEEDS,
+    '    needs: [main-full, workflows, api-fuzz]\n',
+  ],
   [
     'sem o workflows (zizmor) em needs',
     NEEDS,
-    '    needs: [main-full, flaky-hunt]\n',
+    '    needs: [main-full, flaky-hunt, api-fuzz]\n',
+  ],
+  [
+    'sem o api-fuzz em needs (FND-16)',
+    NEEDS,
+    '    needs: [main-full, flaky-hunt, workflows]\n',
   ],
   ['que só roda em failure()', ALWAYS, '    if: ${{ failure() }}\n'],
   [
@@ -957,6 +1084,156 @@ describe('AI-46 as conferências do nightly.yml enxergam o que procuram (control
   );
 });
 
+const FUZZ_STEP = '      - name: Fuzzing com o Schemathesis\n';
+const FUZZ_UPLOAD_IF = '        if: ${{ !cancelled() }}\n';
+
+const API_FUZZ_CASES: Case[] = [
+  ['sem timeout-minutes', '    timeout-minutes: 30\n', ''],
+  [
+    'com timeout-minutes por expressão',
+    'timeout-minutes: 30',
+    "timeout-minutes: ${{ fromJSON('30') }}",
+  ],
+  [
+    'com timeout-minutes em texto',
+    'timeout-minutes: 30',
+    "timeout-minutes: 'x'",
+  ],
+  ['com timeout-minutes zero', 'timeout-minutes: 30', 'timeout-minutes: 0'],
+  ['com contents: write', '      contents: read\n', '      contents: write\n'],
+  [
+    'com issues: write além de contents: read',
+    '      contents: read\n',
+    '      contents: read\n      issues: write\n',
+  ],
+  [
+    'com pull-requests: write além de contents: read',
+    '      contents: read\n',
+    '      contents: read\n      pull-requests: write\n',
+  ],
+  [
+    'em write-all',
+    '    permissions:\n      contents: read\n',
+    '    permissions: write-all\n',
+  ],
+  [
+    'sem o checkout',
+    `      - uses: actions/checkout@${SHA} # v7.0.1\n        with:\n          ref: main\n          persist-credentials: false\n`,
+    '',
+  ],
+  [
+    'com a credencial guardada no checkout',
+    'persist-credentials: false',
+    'persist-credentials: true',
+  ],
+  [
+    'sem rodar o serviço do fuzzing',
+    'docker compose --profile fuzz run --rm schemathesis',
+    'echo sem fuzzing',
+  ],
+  [
+    'rodando sem o perfil fuzz',
+    'docker compose --profile fuzz run',
+    'docker compose run',
+  ],
+  ['rodando sem --rm', ' --rm schemathesis', ' schemathesis'],
+  ['rodando outro serviço', 'run --rm schemathesis', 'run --rm api'],
+  [
+    'com continue-on-error no fuzzing',
+    FUZZ_STEP,
+    `${FUZZ_STEP}        continue-on-error: true\n`,
+  ],
+  ['sem a FUZZ_SEED', '          FUZZ_SEED: ${{ github.run_id }}\n', ''],
+  [
+    'com a FUZZ_SEED fixa',
+    'FUZZ_SEED: ${{ github.run_id }}',
+    "FUZZ_SEED: '20261101'",
+  ],
+  [
+    'com a FUZZ_SEED que não vem de github.run_id',
+    'FUZZ_SEED: ${{ github.run_id }}',
+    'FUZZ_SEED: ${{ github.run_number }}',
+  ],
+  [
+    'com a semente interpolada no run',
+    'echo "Semente: $FUZZ_SEED"',
+    'echo "Semente: ${{ github.run_id }}"',
+  ],
+  [
+    'sem o upload do relatório',
+    `      - uses: actions/upload-artifact@${SHA} # v7.0.2\n${FUZZ_UPLOAD_IF}        with:\n          name: schemathesis-report\n          path: schemathesis-report\n          retention-days: 7\n`,
+    '',
+  ],
+  ['com o upload sem !cancelled()', FUZZ_UPLOAD_IF, ''],
+  ['com o upload só em sucesso', '${{ !cancelled() }}', '${{ success() }}'],
+  [
+    'com o upload de outro diretório',
+    'path: schemathesis-report',
+    'path: reports',
+  ],
+  [
+    'sem o docker compose down no fim',
+    '      - name: Derruba o compose e os volumes\n        if: always()\n        run: docker compose down -v\n',
+    '',
+  ],
+  [
+    'com o down sem remover os volumes',
+    'docker compose down -v',
+    'docker compose down',
+  ],
+  [
+    'com o down sem if',
+    '        if: always()\n        run: docker compose down -v',
+    '        run: docker compose down -v',
+  ],
+  ['com o down só em sucesso', 'if: always()', 'if: success()'],
+  ['com o down só em falha', 'if: always()', 'if: failure()'],
+];
+
+describe('FND-16 as conferências do job api-fuzz enxergam o que procuram (controle negativo)', () => {
+  it('FND-16 o job correto passa (controle positivo)', () => {
+    expect(apiFuzzViolations(parseYaml<NightlyWorkflow>(GOOD))).toEqual([]);
+    expect(ALL_CHECKS(parseYaml<NightlyWorkflow>(GOOD))).toEqual([]);
+  });
+
+  it('FND-16 sem o job api-fuzz, reprova', () => {
+    expect(
+      apiFuzzViolations(
+        parseYaml<NightlyWorkflow>(mutated(GOOD, API_FUZZ_JOB, '')),
+      ),
+    ).toEqual(['falta o job api-fuzz']);
+  });
+
+  it('FND-16 o job api-fuzz sem permissions próprias herda o topo e passa', () => {
+    expect(
+      apiFuzzViolations(
+        editedFuzz('    permissions:\n      contents: read\n', ''),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each(API_FUZZ_CASES)(
+    'FND-16 o api-fuzz %s reprova',
+    (_label, from, to) => {
+      expect(apiFuzzViolations(editedFuzz(from, to))).not.toEqual([]);
+    },
+  );
+
+  it.each([
+    ['contents', '      contents: read\n', '      contents: write\n'],
+    [
+      'issues',
+      '      contents: read\n',
+      '      contents: read\n      issues: write\n',
+    ],
+  ])(
+    'AI-05 o api-fuzz com %s: write reprova nas permissões do arquivo',
+    (_label, from, to) => {
+      expect(permissionViolations(editedFuzz(from, to))).not.toEqual([]);
+    },
+  );
+});
+
 describe('AI-46 as checagens do main-full são as do job checks do ci.yml', () => {
   const ciChecks = stepsOfJob(readCi(), 'checks').filter(
     (step) => step.run !== undefined && step.if === undefined,
@@ -1108,7 +1385,7 @@ describe('AI-46 o nightly.yml do repositório', () => {
     expect(writers).toEqual(['report']);
   });
 
-  it('AI-46 o report roda em qualquer resultado depois dos três jobs, abre ou comenta a issue na falha e a fecha quando tudo passa, sem checkout nem instalação', () => {
+  it('AI-46 o report roda em qualquer resultado depois dos quatro jobs (main-full, flaky-hunt, workflows e api-fuzz), abre ou comenta a issue na falha e a fecha quando tudo passa, sem checkout nem instalação', () => {
     expect(reportViolations(workflow())).toEqual([]);
   });
 
@@ -1122,6 +1399,10 @@ describe('AI-46 o nightly.yml do repositório', () => {
 
   it('AI-46 o flaky-hunt roda a suíte embaralhada em três pernas e guarda o resultado num artefato curto', () => {
     expect(flakyHuntViolations(workflow())).toEqual([]);
+  });
+
+  it('FND-16 o job api-fuzz sobe o compose, roda o serviço schemathesis com a semente da execução, guarda o relatório e derruba o compose em qualquer resultado', () => {
+    expect(apiFuzzViolations(workflow())).toEqual([]);
   });
 
   it('AI-46 fixa toda action por SHA, não interpola contexto no run e não repete teste (retry)', () => {
