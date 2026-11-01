@@ -115,7 +115,12 @@ export function compareSnapshots(before, after, { agentRoot } = {}) {
   const changes = [];
   if (before.head !== after.head) changes.push(`HEAD passou de ${before.head} para ${after.head}`);
   const own = agentRoot ? resolve(agentRoot) : null;
-  const agentBranches = own ? [before.worktreeBranches?.[own], after.worktreeBranches?.[own]].filter(Boolean) : [];
+  // Do início, a branch da worktree do agente; da parada, só uma branch que nem
+  // existia no início (criada durante a execução), nunca uma que já existia e
+  // passou a ser usada ali, como a main (A2 da Revisão 2 do #19).
+  const existed = refMap(before.refs);
+  const atStop = own ? after.worktreeBranches?.[own] : undefined;
+  const agentBranches = [own ? before.worktreeBranches?.[own] : undefined, atStop && !existed.has(atStop) ? atStop : undefined].filter(Boolean);
   const ignored = new Set([...(before.foreignBranches ?? []), ...agentBranches]);
   const refs = describeRefs(before.refs, after.refs, ignored);
   if (refs.length > 0) changes.push(`refs mudaram: ${refs.join('; ')}`);
