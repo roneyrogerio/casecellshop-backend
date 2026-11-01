@@ -149,7 +149,7 @@ async function awaitInvoiced(orderId: string): Promise<void> {
         status: 'invoiced',
       });
     },
-    { timeout: 90_000, interval: 500 },
+    { timeout: 2 * WAIT_GUARD_MS, interval: 500 },
   );
 }
 

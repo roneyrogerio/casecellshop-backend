@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CheckoutAccepted, Problem } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   APP_POOL_SIZE,
   checkoutBody,
@@ -316,6 +317,28 @@ async function waitingOnLock(excludePid: number): Promise<number> {
   return result.rows[0]?.n ?? 0;
 }
 
+// Dispara o checkout e espera por condição que ele esteja de fato parado num lock do banco, segurado pelo teste.
+async function startCheckoutBlockedOnLock(
+  product: Parameters<typeof line>[0],
+  key: string,
+  holderPid: number,
+) {
+  const startedAt = Date.now();
+  const pending = postCheckout(
+    productionHarness.server,
+    checkoutBody(line(product)),
+    { key },
+  );
+  // Se o teste falhar antes do await, a promessa solta não pode virar rejeição sem dono.
+  void pending.catch(() => undefined);
+  await vi.waitFor(
+    async () =>
+      expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
+    { timeout: WAIT_GUARD_MS, interval: 50 },
+  );
+  return { pending, startedAt };
+}
+
 async function backendPid(client: pg.Client): Promise<number> {
   const result = await client.query<{ pid: number }>(
     'select pg_backend_pid() as pid',
@@ -340,19 +363,10 @@ describe('CHK-08 lock_timeout', () => {
       ]);
       const holderPid = await backendPid(holder);
 
-      const startedAt = Date.now();
-      const pending = postCheckout(
-        productionHarness.server,
-        checkoutBody(line(product)),
-        { key },
-      );
-      // Se o teste falhar antes do await, a promessa solta não pode virar rejeição sem dono.
-      void pending.catch(() => undefined);
-      // Espera por condição: o checkout está de fato parado num lock do banco.
-      await vi.waitFor(
-        async () =>
-          expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
-        { timeout: 5_000, interval: 50 },
+      const { pending, startedAt } = await startCheckoutBlockedOnLock(
+        product,
+        key,
+        holderPid,
       );
 
       const res = await pending;
@@ -403,17 +417,10 @@ describe('CHK-08 lock_timeout', () => {
       // O que a transação do teste ainda não confirmou não aparece para os outros.
       before = await footprint(database.pool);
 
-      const startedAt = Date.now();
-      const pending = postCheckout(
-        productionHarness.server,
-        checkoutBody(line(product)),
-        { key },
-      );
-      void pending.catch(() => undefined);
-      await vi.waitFor(
-        async () =>
-          expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
-        { timeout: 5_000, interval: 50 },
+      const { pending, startedAt } = await startCheckoutBlockedOnLock(
+        product,
+        key,
+        holderPid,
       );
 
       const res = await pending;

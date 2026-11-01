@@ -1,4 +1,5 @@
 import type { Socket } from 'node:net';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   Kysely,
   PostgresDialect,
@@ -108,7 +109,7 @@ async function destroySocketDuringQuery(
         );
         expect(active.rows[0]?.total).toBe(1);
       },
-      { timeout: 10_000 },
+      { timeout: WAIT_GUARD_MS },
     );
     const client = clients[0] as unknown as { connection: { stream: Socket } };
     client.connection.stream.destroy(new Error('socket destruído pelo teste'));
@@ -176,7 +177,7 @@ describe('FND-10 o adaptador do pool: descarte da conexão cujo ROLLBACK falhou'
         async () => {
           expect(await backendExists(pidInTransaction)).toBe(false);
         },
-        { timeout: 10_000 },
+        { timeout: WAIT_GUARD_MS },
       );
     } finally {
       await pool.end();

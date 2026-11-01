@@ -17,6 +17,7 @@ import {
   PROBLEM_MEDIA_TYPE,
   Problem,
 } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   checkoutBody,
   countKeyRows,
@@ -655,27 +656,33 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     expect(replay.status).toBe(202);
     const { orderId } = CheckoutAccepted.parse(first.body);
 
-    await vi.waitFor(() => {
-      const accepted = harness.logLines.find(
-        (entry) =>
-          entry['event'] === 'checkout.accepted' &&
-          entry['correlationId'] === firstId,
-      );
-      expect(accepted, 'checkout.accepted ausente').toBeDefined();
-      expect(accepted?.['level']).toBe('info');
-      expect(accepted?.['orderId']).toBe(orderId);
-      for (const correlationId of [firstId, replayId]) {
-        const http = harness.logLines.find(
+    await vi.waitFor(
+      () => {
+        const accepted = harness.logLines.find(
           (entry) =>
-            entry['event'] === 'http_request' &&
-            entry['correlationId'] === correlationId,
+            entry['event'] === 'checkout.accepted' &&
+            entry['correlationId'] === firstId,
         );
-        expect(http, `http_request de ${correlationId} ausente`).toBeDefined();
-        expect(http?.['status']).toBe(202);
-        expect(http?.['route']).toBe('/checkout');
-        expect(http?.['orderId']).toBe(orderId);
-      }
-    });
+        expect(accepted, 'checkout.accepted ausente').toBeDefined();
+        expect(accepted?.['level']).toBe('info');
+        expect(accepted?.['orderId']).toBe(orderId);
+        for (const correlationId of [firstId, replayId]) {
+          const http = harness.logLines.find(
+            (entry) =>
+              entry['event'] === 'http_request' &&
+              entry['correlationId'] === correlationId,
+          );
+          expect(
+            http,
+            `http_request de ${correlationId} ausente`,
+          ).toBeDefined();
+          expect(http?.['status']).toBe(202);
+          expect(http?.['route']).toBe('/checkout');
+          expect(http?.['orderId']).toBe(orderId);
+        }
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 
   it('OBS-01 o checkout.rejected (warn) traz a causa da recusa por falta de estoque', async () => {
@@ -687,18 +694,21 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     });
     expect(res.status).toBe(409);
 
-    await vi.waitFor(() => {
-      const rejected = harness.logLines.find(
-        (entry) =>
-          entry['event'] === 'checkout.rejected' &&
-          entry['correlationId'] === correlationId,
-      );
-      expect(rejected, 'checkout.rejected ausente').toBeDefined();
-      expect(rejected?.['level']).toBe('warn');
-      // O nome do campo da causa é do implementer; o valor é a causa do type do problema.
-      const { msg: _msg, time: _time, ...fields } = rejected ?? {};
-      expect(JSON.stringify(fields)).toMatch(/out[-_]of[-_]stock/);
-    });
+    await vi.waitFor(
+      () => {
+        const rejected = harness.logLines.find(
+          (entry) =>
+            entry['event'] === 'checkout.rejected' &&
+            entry['correlationId'] === correlationId,
+        );
+        expect(rejected, 'checkout.rejected ausente').toBeDefined();
+        expect(rejected?.['level']).toBe('warn');
+        // O nome do campo da causa é do implementer; o valor é a causa do type do problema.
+        const { msg: _msg, time: _time, ...fields } = rejected ?? {};
+        expect(JSON.stringify(fields)).toMatch(/out[-_]of[-_]stock/);
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 
   it('OBS-01 o preço alterado deixa um log de nível warn (checkout.price_changed ou checkout.rejected) com a causa', async () => {
@@ -712,16 +722,19 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     );
     expect(res.status).toBe(409);
 
-    await vi.waitFor(() => {
-      const entry = harness.logLines.find(
-        (candidate) =>
-          candidate['correlationId'] === correlationId &&
-          (candidate['event'] === 'checkout.price_changed' ||
-            candidate['event'] === 'checkout.rejected'),
-      );
-      expect(entry, 'log de preço alterado ausente').toBeDefined();
-      expect(entry?.['level']).toBe('warn');
-    });
+    await vi.waitFor(
+      () => {
+        const entry = harness.logLines.find(
+          (candidate) =>
+            candidate['correlationId'] === correlationId &&
+            (candidate['event'] === 'checkout.price_changed' ||
+              candidate['event'] === 'checkout.rejected'),
+        );
+        expect(entry, 'log de preço alterado ausente').toBeDefined();
+        expect(entry?.['level']).toBe('warn');
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 });
 
@@ -783,25 +796,28 @@ describe('OBS-02 counter de desfecho do checkout', () => {
         invalid.status,
       ]).toEqual([202, 202, 409, 409, 400]);
 
-      await vi.waitFor(async () => {
-        const { outcomes } = await checkoutOutcomes(own.app);
-        for (const outcome of [
-          'accepted',
-          'replay',
-          'out_of_stock',
-          'price_changed',
-          'invalid',
-        ]) {
-          expect(
-            outcomes.get(outcome) ?? 0,
-            `outcome ${outcome}`,
-          ).toBeGreaterThanOrEqual(1);
-        }
-        // Os desfechos de uma só ocorrência contam exatamente uma vez.
-        expect(outcomes.get('out_of_stock')).toBe(1);
-        expect(outcomes.get('price_changed')).toBe(1);
-        expect(outcomes.get('invalid')).toBe(1);
-      });
+      await vi.waitFor(
+        async () => {
+          const { outcomes } = await checkoutOutcomes(own.app);
+          for (const outcome of [
+            'accepted',
+            'replay',
+            'out_of_stock',
+            'price_changed',
+            'invalid',
+          ]) {
+            expect(
+              outcomes.get(outcome) ?? 0,
+              `outcome ${outcome}`,
+            ).toBeGreaterThanOrEqual(1);
+          }
+          // Os desfechos de uma só ocorrência contam exatamente uma vez.
+          expect(outcomes.get('out_of_stock')).toBe(1);
+          expect(outcomes.get('price_changed')).toBe(1);
+          expect(outcomes.get('invalid')).toBe(1);
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
 
       const { labelNames, text } = await checkoutOutcomes(own.app);
       expect(labelNames.has('outcome')).toBe(true);

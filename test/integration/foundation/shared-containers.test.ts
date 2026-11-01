@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CreateQueueCommand } from '@aws-sdk/client-sqs';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   startMigratedDatabase,
   uriOfDatabase,
@@ -204,7 +205,7 @@ describe('FND-14 um PostgreSQL por rodada, um banco clonado por arquivo', () => 
           `CREATE DATABASE "${clone}" TEMPLATE "${template}"`,
         );
       },
-      { timeout: 10_000 },
+      { timeout: WAIT_GUARD_MS },
     );
     expect(await databaseExists(clone)).toBe(true);
   });

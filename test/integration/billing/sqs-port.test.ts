@@ -124,7 +124,7 @@ describe('ORD-22 porta do SQS: envio', () => {
       // O prazo de 5 s corre em tempo real dentro do SDK, não no relógio injetável: o teste mede o tempo decorrido.
       const outcome = await observe(
         queue.send([{ id: 'm1', body: 'x', traceparent: null }]),
-        12_000,
+        WAIT_GUARD_MS,
       );
 
       expect(

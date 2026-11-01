@@ -16,6 +16,7 @@ import {
   vi,
 } from 'vitest';
 import { HealthStatus } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   expectMatchesContract,
   findRoute,
@@ -45,20 +46,20 @@ async function inspect(container: ComposeContainer) {
 
 // Espera, com prazo e intervalo curto, o serviço estar em execução. Confere o estado no Docker a cada
 // tentativa, sem pausa fixa: termina assim que o contêiner sobe e falha com o nome do serviço se o prazo acaba.
-const WAIT_TIMEOUT_MS = 60_000;
+// O prazo é o WAIT_GUARD_MS (FND-13): serve só para a espera não ser eterna.
 
 // O prazo do onTestFinished do restart cobre as duas esperas em sequência (elasticmq e worker), cada uma com o
 // prazo padrão, mais a folga de inspecionar e ligar o contêiner antes de cada espera. Igual à soma, ele cortaria a
 // restauração no pior caso e deixaria o ambiente parado para os testes seguintes do arquivo embaralhado.
-const RESTORE_TIMEOUT_MS = 2 * WAIT_TIMEOUT_MS + 30_000;
+const RESTORE_TIMEOUT_MS = 2 * WAIT_GUARD_MS + 30_000;
 
-async function waitUntilRunning(service: string, timeout = WAIT_TIMEOUT_MS) {
+async function waitUntilRunning(service: string) {
   await vi.waitFor(
     async () => {
       const { State } = await inspect(environment.getContainer(service));
       expect(State.Running, `${service} deveria estar rodando`).toBe(true);
     },
-    { timeout, interval: 250 },
+    { timeout: WAIT_GUARD_MS, interval: 250 },
   );
 }
 

@@ -357,7 +357,7 @@ async function runOverlapped<T>(
         if (finishedEarly) return;
         expect(await advisoryWaiters(database.pool, minWaitSeconds)).toBe(2);
       },
-      { timeout: 30_000, interval: 100 },
+      { timeout: WAIT_GUARD_MS, interval: 100 },
     );
     await barrier.release();
     return await outcomes;
