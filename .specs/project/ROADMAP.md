@@ -168,7 +168,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
   - A13, o `requestedRelative` da guarda de caminho compara o texto sem o prefixo real e com caixa, então o caminho absoluto em outra caixa ou pela forma `/tmp` pula a conferência do nome pedido (aplicar a mesma comparação do caminho real); a confirmar por teste;
   - A14, o `hookOwned` só olha o caminho real, e um link em `.claude/reviews/` para um arquivo editável seria gravado pela sessão principal (conferir também o caminho pedido); a confirmar por teste;
   - A15, uma chave computada para o `thresholds` mais uma isca com o piso da base passam no `check-baselines` (exigir a menção dentro do bloco `coverage:` e reprovar chave computada nele);
-  - A16, a forma de uma linha do piso esbarra na largura de 80 do Prettier, e pisos com casas decimais quebram o objeto em várias linhas, o que reprova (registrar no AI-49 um `// prettier-ignore` na linha, ou pisos inteiros);
+  - A16, a forma de uma linha do piso esbarra na largura de 80 do Prettier, e dois pisos com casa decimal passam da largura e quebram o objeto em várias linhas, o que reprova (registrar no AI-49 um `// prettier-ignore` na linha, ou pisos inteiros);
   - A17, o retrato antigo, com o status em texto, de um agente que começou antes da atualização faz o `JSON.parse` lançar a cada parada, e o `catch` não conta as devoluções (tratar o status que não é JSON como retrato antigo e registrar exceção);
   - A18, nenhum teste cobre a origem do rename na pasta principal, somada pelo `originsOf` (um caso não isolado com `git mv test/… src/…`);
   - A19, nenhum teste cobre o ciclo de links nem o limite de 40 do `realPath` (um teste com `a → b`, `b → a` que termina e decide);
