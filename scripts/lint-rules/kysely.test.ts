@@ -250,6 +250,46 @@ const regexAfterAlias = afterRegexCases(
   'const q = sql`now()`;',
 );
 
+const SQL_IMPORT = "import { sql } from 'kysely';\n";
+
+// Regressão do A1 do #21: formas em que o sql do import vira valor (e não tag nem membro) e que a lista de
+// pais permitidos reprova, com um erro cada.
+const aliasEscapes: [string, string][] = [
+  ['o sql como corpo de uma seta', 'const f = () => sql;'],
+  ['o sql como superclasse (extends sql)', 'class X extends sql {}'],
+  [
+    'o sql sob asserção de tipo, que escaparia do no-restricted-properties',
+    '(sql as any).raw(1);',
+  ],
+  ['o sql em propriedade abreviada, com um só erro', 'const o = { sql };'],
+  ['o sql dentro de um spread de argumento', 'f(...[sql]);'],
+  ['o sql como valor padrão de desestruturação', 'const { s = sql } = k;'],
+  ['o sql num operador lógico', 'const s = a || sql;'],
+  ['o sql chamado como função, sem tag', "sql(['x']);"],
+];
+
+// O que a regra deixa passar: posição de tipo, nome local que não é o import, membro opcional não computado e
+// sql como chave escrita por extenso.
+const aliasAllowed: [string, string][] = [
+  [
+    'o sql em posição de tipo (typeof sql)',
+    `${SQL_IMPORT}type T = typeof sql;`,
+  ],
+  [
+    'um parâmetro local chamado sql, sem import',
+    'function f(sql) { return sql`1`; }',
+  ],
+  [
+    'o sql como objeto de um membro opcional não computado',
+    `${SQL_IMPORT}sql?.join(xs);`,
+  ],
+  ['o sql como nome de método de classe, sem import', 'class A { sql() {} }'],
+  [
+    'o sql como chave de objeto escrita por extenso, sem import',
+    'const o = { sql: 1 };',
+  ],
+];
+
 tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
   valid: [
     ok('o import normal de sql', "import { sql } from 'kysely';"),
@@ -321,6 +361,7 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       'a forma proibida citada em comentário e em texto',
       "// const s = sql; import { sql as s } from 'kysely';\nconst t = 'const s = sql;';",
     ),
+    ...aliasAllowed.map(([label, code]) => ok(label, code)),
     ...regexAfterAlias.valid,
   ],
   invalid: [
@@ -406,6 +447,7 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       'a reexportação direta do sql do kysely com o mesmo nome',
       "export { sql } from 'kysely';",
     ),
+    ...aliasEscapes.map(([label, code]) => bad(label, `${SQL_IMPORT}${code}`)),
     ...regexAfterAlias.invalid,
   ],
 });
