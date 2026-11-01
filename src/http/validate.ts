@@ -26,7 +26,8 @@ const MESSAGES: Record<z.core.$ZodIssue['code'], string> = {
 };
 
 function messageFor(issue: z.core.$ZodIssue): string {
-  return MESSAGES[issue.code];
+  // O Record já faz o tsc acusar código novo; a genérica cobre um código que o zod gere só em execução.
+  return MESSAGES[issue.code] ?? 'Valor inválido';
 }
 
 function collect(origin: string, error: z.ZodError, into: ProblemErrors): void {

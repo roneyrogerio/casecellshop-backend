@@ -4,10 +4,10 @@
 import { cancelOrder, redriveDlq } from '../billing/runbook.ts';
 import { OrderId } from '../contract/orders.ts';
 import { createPool } from '../db/pool.ts';
-import { createSqsClientFromEnv } from '../queue/sqs.ts';
 import { systemClock } from '../shared/clock.ts';
 import { requireEnv } from '../shared/config.ts';
 import { createLogger } from '../shared/logging.ts';
+import { createSqsClientFromEnv } from './sqs-client.ts';
 
 const USAGE = 'uso: node src/main/runbook.ts redrive | cancel <orderId>';
 
