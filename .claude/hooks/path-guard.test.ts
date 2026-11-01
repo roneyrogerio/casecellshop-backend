@@ -1651,3 +1651,139 @@ describe('AI-26 a guarda decide com um ciclo de links e com uma cadeia além de 
     expectDenied(decideFor('implementer', 'src/.oxlintrc.json'));
   });
 });
+
+// A3 da Revisão 1 da fatia 2 (AI-26, AI-15): não se sabe se a ferramenta Write normaliza o `..` pelo texto antes de
+// gravar. Com `src/deep` apontando para `src/a/b/c`, o pedido `src/deep/../../scripts/x.mjs` é `scripts/x.mjs` pelo
+// texto e `src/a/scripts/x.mjs` pelo caminho real. A guarda nega se qualquer das duas leituras cai num lugar protegido.
+describe('AI-26 a guarda também nega quando o .. lido pelo texto cai num lugar protegido', () => {
+  let project: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-texto-');
+    mkdirSync(join(project, 'src', 'a', 'b', 'c'), { recursive: true });
+    symlinkSync('a/b/c', join(project, 'src', 'deep'));
+  });
+
+  afterAll(cleanupTempDirs);
+
+  function decideFor(
+    agentType: string | undefined,
+    filePath: string,
+    tool = 'Write',
+  ): string | null {
+    const input: HookInput = {
+      ...editInput(agentType, filePath),
+      tool_name: tool,
+      cwd: project,
+    };
+    return decide(input, project, project);
+  }
+
+  // O texto, e não o `join`: o `join` já resolveria o `..` antes da guarda.
+  const forms: [string, (relative: string) => string][] = [
+    ['relativo', (relative) => relative],
+    ['absoluto', (relative) => `${project}/${relative}`],
+  ];
+
+  describe.each(forms)('pedido %s', (_form, pick) => {
+    it.each([
+      ['scripts/', 'src/deep/../../scripts/x.mjs'],
+      ['.claude/', 'src/deep/../../.claude/hooks/x.mjs'],
+      ['.specs/', 'src/deep/../../.specs/x.md'],
+      ['src/contract/', 'src/deep/../../src/contract/x.ts'],
+      ['test/', 'src/deep/../../test/x.ts'],
+    ])(
+      'AI-26 o implementer não grava em %s pelo .. depois do link, lido pelo texto',
+      (_label, relative) => {
+        for (const tool of ['Write', 'Edit']) {
+          expectDenied(decideFor('implementer', pick(relative), tool));
+        }
+      },
+    );
+
+    it.each([
+      ['.claude/reviews/x.md', 'src/deep/../../.claude/reviews/x.md'],
+      ['.claude/state/x.log', 'src/deep/../../.claude/state/x.log'],
+    ])(
+      'AI-15 a sessão principal não grava em %s pelo .. depois do link, lido pelo texto',
+      (_label, relative) => {
+        for (const tool of ['Write', 'Edit']) {
+          const reason = decideFor(undefined, pick(relative), tool);
+
+          expectDenied(reason);
+          expect(reason).toContain('gravados só pelos hooks');
+        }
+      },
+    );
+
+    // Controle negativo: o mesmo texto fica em src/ pelos dois jeitos (src/y.ts e src/a/b/y.ts) e segue liberado.
+    it('AI-26 controle: src/deep/../y.ts fica em src/ pelos dois jeitos e segue liberado ao implementer e à sessão principal', () => {
+      expectAllowed(decideFor('implementer', pick('src/deep/../y.ts')));
+      expectAllowed(decideFor(undefined, pick('src/deep/../y.ts')));
+    });
+  });
+
+  it('AI-26 controle: o implementer segue sem escrever teste, e a sessão principal segue escrevendo fora das pastas dos hooks', () => {
+    expectDenied(decideFor('implementer', 'src/deep/../y.test.ts'));
+    expectAllowed(decideFor(undefined, 'src/deep/../../notes/x.md'));
+  });
+});
+
+// A5 da Revisão 1 da fatia 2 (AI-15): com o cwd numa worktree, `rel` e `fromProject` são reais e ficam fora das
+// pastas dos hooks, e `requested` é null (o caminho está fora da worktree). Só o pedido relativo à pasta principal
+// (`requestedFromProject`) nega a gravação pelo link de .claude/reviews/ que aponta para fora.
+describe('AI-15 a sessão principal com o cwd numa worktree não grava um link de .claude/reviews/ da pasta principal que aponta para fora', () => {
+  let project: string;
+  let worktree: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai15-wtlink-');
+    initRepo(project);
+    worktree = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt-ai15-link');
+    mkdirSync(join(project, 'notes'), { recursive: true });
+    mkdirSync(join(project, '.claude', 'reviews'), { recursive: true });
+    writeFileSync(join(project, 'notes', 'r.md'), 'x\n');
+    symlinkSync(
+      '../../notes/r.md',
+      join(project, '.claude', 'reviews', 'r.md'),
+    );
+  });
+
+  afterAll(cleanupTempDirs);
+
+  function fromWorktree(filePath: string, tool: string): HookInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      tool_name: tool,
+      cwd: worktree,
+      tool_input: { file_path: filePath, content: 'x' },
+    };
+  }
+
+  function decideInWorktree(filePath: string, tool: string): string | null {
+    const input = fromWorktree(filePath, tool);
+    return decide(input, rootFor(input, project), project);
+  }
+
+  it('AI-15 a raiz das regras é a worktree, e não a pasta principal', () => {
+    expect(rootFor(fromWorktree('x', 'Write'), project)).toBe(worktree);
+  });
+
+  it('AI-15 o link .claude/reviews/r.md da pasta principal, que aponta para fora, é negado pelo caminho absoluto', () => {
+    for (const tool of ['Write', 'Edit']) {
+      const reason = decideInWorktree(
+        join(project, '.claude', 'reviews', 'r.md'),
+        tool,
+      );
+
+      expectDenied(reason);
+      expect(reason).toContain('gravados só pelos hooks');
+    }
+  });
+
+  // Controle negativo: o destino do link, escrito direto, segue liberado à sessão principal.
+  it('AI-15 controle: notes/r.md da pasta principal, escrito direto, segue liberado', () => {
+    expectAllowed(decideInWorktree(join(project, 'notes', 'r.md'), 'Write'));
+  });
+});
