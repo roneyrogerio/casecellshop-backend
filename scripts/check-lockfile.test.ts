@@ -135,6 +135,87 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
     expect(violations.join('\n')).not.toContain('node_modules/good');
   });
 
+  it('AI-05 a entrada de link real do workspace ({ resolved: "packages/x", link: true }) passa', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/zod': GOOD_ENTRY,
+      'node_modules/x': { resolved: 'packages/x', link: true },
+      'packages/x': { name: 'x', version: '1.0.0' },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 um lockfile com lockfileVersion 1 (pacotes em dependencies, sem packages) reprova, e cita lockfileVersion', () => {
+    const text = JSON.stringify({
+      name: 'x',
+      lockfileVersion: 1,
+      requires: true,
+      dependencies: {
+        zod: { version: '4.6.7', resolved: GOOD_RESOLVED },
+      },
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining('lockfileVersion'),
+    ]);
+  });
+
+  it('AI-05 um lockfile com lockfileVersion 2 e packages passa', () => {
+    const text = JSON.stringify({
+      name: 'x',
+      lockfileVersion: 2,
+      packages: { ...ROOT, 'node_modules/zod': GOOD_ENTRY },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it.each([
+    ['um objeto vazio', '{}'],
+    ['sem packages', JSON.stringify({ name: 'x', lockfileVersion: 3 })],
+    [
+      'packages nulo',
+      JSON.stringify({ name: 'x', lockfileVersion: 3, packages: null }),
+    ],
+    [
+      'packages como lista',
+      JSON.stringify({
+        name: 'x',
+        lockfileVersion: 3,
+        packages: [GOOD_ENTRY],
+      }),
+    ],
+    [
+      'packages como texto',
+      JSON.stringify({ name: 'x', lockfileVersion: 3, packages: 'texto' }),
+    ],
+  ])(
+    'AI-05 %s reprova (sem packages não há o que conferir, e passar seria falso)',
+    (_label, text) => {
+      const violations = lockfileViolations(text);
+
+      expect(violations.length).toBeGreaterThan(0);
+      expect(violations.join('\n')).toMatch(/packages|lockfileVersion/);
+    },
+  );
+
+  it.each([
+    ['sem resolved nem integrity', {}],
+    ['sem resolved', { integrity: GOOD_INTEGRITY }],
+    ['sem integrity', { resolved: GOOD_RESOLVED }],
+    ['com link: false e sem resolved', { link: false }],
+  ])(
+    'AI-05 uma entrada %s, que não é a raiz nem link, reprova e cita o pacote',
+    (_label, entry) => {
+      const text = lock({ ...ROOT, 'node_modules/zod': entry });
+
+      expect(lockfileViolations(text)).toEqual([
+        expect.stringContaining('node_modules/zod'),
+      ]);
+    },
+  );
+
   it('AI-05 o package-lock.json do repositório passa', () => {
     const text = readFileSync(join(repoRoot, 'package-lock.json'), 'utf8');
 

@@ -369,4 +369,28 @@ describe('AI-49 o CLI do check-baselines compara com a origin/BASE_REF', () => {
 
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it('AI-49 só o arquivo da linha de base falta na base (o PR que o cria): a ref existe e o CLI sai com 0', () => {
+    const { run } = prSandbox({
+      base: { config: config(FLOOR) },
+      head: {
+        config: config(FLOOR),
+        baseline: baseline(BASE_FINGERPRINTS),
+      },
+    });
+    const result = run();
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('AI-49 BASE_REF apontando para uma ref que não existe sai com código diferente de 0 (sem a base não há o que comparar)', () => {
+    const { dir } = prSandbox({
+      base: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
+      head: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
+    });
+    const result = runScript(dir, FILE, { BASE_REF: 'ref-que-nao-existe' });
+
+    expect(result.status).not.toBe(0);
+    expect(result.status).not.toBeNull();
+  });
 });
