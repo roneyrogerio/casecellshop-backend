@@ -77,6 +77,9 @@ import {
 let database: TestDatabase;
 let harness: CheckoutHarness;
 let relayPool: pg.Pool;
+// Pool dos relés ingênuos do controle negativo (FND-13): o lock_timeout de produção (2 s) cortaria o segundo relé
+// na espera pela linha travada, e o teste mediria a máquina, não a falta do SKIP LOCKED.
+let naivePool: pg.Pool;
 let emq: TestElasticMq;
 let blackHole: BlackHole;
 let sharedTelemetry: Telemetry;
@@ -86,6 +89,7 @@ beforeAll(async () => {
   database = await startMigratedDatabase();
   harness = await startCheckoutHarness(database, APP_POOL_SIZE, PATIENT_LIMITS);
   relayPool = createAppPool(database.uri, 10);
+  naivePool = createAppPool(database.uri, 10, PATIENT_LIMITS);
   sharedTelemetry = createTelemetry({
     spanExporter: new InMemorySpanExporter(),
   });
@@ -107,6 +111,7 @@ afterAll(async () => {
   await emq?.stop();
   await sharedTelemetry?.shutdown();
   await relayPool?.end();
+  await naivePool?.end();
   await harness?.close();
   await database?.stop();
 });
@@ -544,8 +549,8 @@ describe('ORD-22 relay publica as linhas da outbox', () => {
     const window = windowedSend(queues.queue, 2);
 
     await Promise.all([
-      naivePublishOnce(relayPool, window.queue),
-      naivePublishOnce(relayPool, window.queue),
+      naivePublishOnce(naivePool, window.queue),
+      naivePublishOnce(naivePool, window.queue),
     ]);
 
     const messages = await drain(emq, queues.queueUrl);

@@ -98,6 +98,82 @@ const testFiles = readdirSync(billingDir)
   .filter((name) => name.endsWith('.test.ts'))
   .map((name) => path.join(billingDir, name));
 
+// Os testes de compose deixam o Docker escolher a porta do host (API_PORT=0 e JAEGER_UI_PORT=0) e a leem depois do
+// `up`. Escolher a porta antes (`freePort`, ou um `listen(0)` num servidor `node:net` que se fecha em seguida) deixa
+// uma janela em que outro processo a ocupa, e o `up` falha com "address already in use" sob carga.
+function portPickingViolations(source: string): string[] {
+  const code = source.replace(/^\s*\/\/.*$/gm, '');
+  const found: string[] = [];
+  if (/\bfreePort\b/.test(code)) found.push('declara ou usa um freePort');
+  if (/\.listen\(\s*0\b/.test(code))
+    found.push('escolhe a porta com listen(0) antes do up');
+  // `import type { Socket } from 'node:net'` (só o tipo) não acha porta nenhuma e fica de fora.
+  if (/^\s*import\s+(?!type\b)[^;]*from\s+['"]node:net['"]/m.test(code))
+    found.push('importa node:net para achar uma porta livre');
+  return found;
+}
+
+function integrationTestFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) return integrationTestFiles(full);
+    return entry.name.endsWith('.test.ts') ? [full] : [];
+  });
+}
+
+describe('FND-13 a porta do host dos testes de compose', () => {
+  const integrationDir = path.join(repoRoot, 'test', 'integration');
+  const files = integrationTestFiles(integrationDir);
+
+  it('FND-13 nenhum teste de integração escolhe uma porta livre antes do compose up: o Docker escolhe com a porta 0', () => {
+    const violations = files.flatMap((file) =>
+      portPickingViolations(readFileSync(file, 'utf8')).map(
+        (reason) => `${path.relative(repoRoot, file)}: ${reason}`,
+      ),
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('FND-13 os testes de compose passam a porta 0 ao compose e leem a porta publicada depois do up', () => {
+    for (const name of [
+      'foundation/compose.test.ts',
+      'billing/worker-compose.test.ts',
+    ]) {
+      const source = readFileSync(path.join(integrationDir, name), 'utf8');
+      expect(source, name).toContain('upComposeProject(');
+      expect(source, name).toContain('publishedPort(');
+    }
+    const helper = readFileSync(
+      path.join(repoRoot, 'test', 'helpers', 'compose.ts'),
+      'utf8',
+    );
+    expect(helper).toMatch(/API_PORT:\s*'0'/);
+    expect(helper).toMatch(/JAEGER_UI_PORT:\s*'0'/);
+  });
+
+  it('FND-13 controle negativo: um freePort com listen(0) e node:net reprova nas três regras', () => {
+    const sample = [
+      "import { createServer } from 'node:net';",
+      'async function freePort() {',
+      '  const server = createServer();',
+      "  server.listen(0, '127.0.0.1', () => server.close());",
+      '}',
+    ].join('\n');
+
+    expect(portPickingViolations(sample)).toHaveLength(3);
+  });
+
+  it('FND-13 controle negativo: ler a porta publicada pelo Docker e citar listen(0) só em comentário passa', () => {
+    const sample = [
+      '// o antigo freePort fazia listen(0) e fechava o servidor',
+      "apiPort = publishedPort(environment, 'api-1', 3000);",
+    ].join('\n');
+
+    expect(portPickingViolations(sample)).toEqual([]);
+  });
+});
+
 describe('FND-13 as esperas dos testes de faturamento', () => {
   it.each(
     [...testFiles, ...helperFiles].map((file) => [
