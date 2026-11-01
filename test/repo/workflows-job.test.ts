@@ -6,6 +6,7 @@ import {
   readCi,
   stepsOfJob,
   unpinnedUses,
+  zizmorStepViolations,
   type CiWorkflow,
 } from '../helpers/ci-workflow.ts';
 
@@ -14,6 +15,11 @@ import {
 
 const SHA = 'b'.repeat(40);
 const RELEASE = 'https://github.com/rhysd/actionlint/releases/download';
+// O sha256 do tarball vem fixo no workflow: um arquivo de checksums baixado da mesma release seria trocado junto com
+// uma release trocada, e não prova nada.
+const TARBALL_NAME = 'actionlint_1.7.12_linux_amd64.tar.gz';
+const TARBALL_SHA256 =
+  '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8';
 const TARBALL = /^actionlint_(\d+\.\d+\.\d+)_linux_amd64\.tar\.gz$/;
 const CHECKSUMS = /^actionlint_(\d+\.\d+\.\d+)_checksums\.txt$/;
 const URL_OF_RELEASE = new RegExp(
@@ -55,7 +61,8 @@ function shapeViolations(workflow: CiWorkflow): string[] {
   ];
 }
 
-// O tarball e o arquivo de checksums vêm da mesma release, de versão fixa em semver, nunca `latest`.
+// O tarball vem da release de versão fixa em semver, nunca `latest`; o arquivo de checksums, se ainda for baixado,
+// tem de ser da mesma versão, mas não é mais exigido.
 function releaseViolations(script: string): string[] {
   const urls = script.match(/https:\/\/[^\s"']+/g) ?? [];
   const found = urls.map((url) => URL_OF_RELEASE.exec(url));
@@ -69,14 +76,26 @@ function releaseViolations(script: string): string[] {
   const violations: string[] = [];
   if (!files.some((file) => TARBALL.test(file)))
     violations.push('não baixa o tarball linux_amd64');
-  if (!files.some((file) => CHECKSUMS.test(file)))
-    violations.push('não baixa o arquivo de checksums');
   if (versions.size !== 1 || versions.has(undefined))
-    violations.push('as versões do tarball e dos checksums divergem');
+    violations.push('as versões da URL e dos arquivos divergem');
   return violations;
 }
 
-// Baixar, conferir o sha256, só então extrair e rodar: a ordem importa, porque conferir depois não protege.
+// O sha256 fixo e o nome do tarball ficam na mesma linha, no formato que o `sha256sum --check` lê, antes do `tar`.
+function pinnedHashViolations(script: string, extract: number): string[] {
+  const pair = script
+    .split('\n')
+    .find(
+      (line) => line.includes(TARBALL_SHA256) && line.includes(TARBALL_NAME),
+    );
+  if (pair === undefined)
+    return [`falta o sha256 fixo ${TARBALL_SHA256} junto de ${TARBALL_NAME}`];
+  if (extract >= 0 && script.indexOf(TARBALL_SHA256) > extract)
+    return ['o sha256 fixo vem depois do tar'];
+  return [];
+}
+
+// Baixar, conferir o sha256 fixo, só então extrair e rodar: a ordem importa, porque conferir depois não protege.
 function actionlintViolations(workflow: CiWorkflow): string[] {
   const script = scriptOf(workflow);
   const violations = releaseViolations(script);
@@ -90,6 +109,7 @@ function actionlintViolations(workflow: CiWorkflow): string[] {
   if (check < 0) violations.push('não confere o sha256 (sha256sum --check)');
   if (extract < 0) violations.push('não extrai o tarball (tar)');
   if (run < 0) violations.push('não roda ./actionlint');
+  violations.push(...pinnedHashViolations(script, extract));
   if (
     [download, check, extract, run].every((at) => at >= 0) &&
     !(download < check && check < extract && extract < run)
@@ -99,27 +119,8 @@ function actionlintViolations(workflow: CiWorkflow): string[] {
   return violations;
 }
 
-const SEMVER = /^\d+\.\d+\.\d+$/;
-const JOB_TOKEN = /^\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/;
-
 function zizmorViolations(workflow: CiWorkflow): string[] {
-  const steps = jobSteps(workflow).filter((step) =>
-    (step.uses ?? '').startsWith('zizmorcore/zizmor-action@'),
-  );
-  const [step] = steps;
-  if (steps.length !== 1 || step === undefined)
-    return [`${steps.length} passos da zizmor-action, esperado 1`];
-  const violations: string[] = [];
-  if (!/@[0-9a-f]{40}$/.test(step.uses ?? ''))
-    violations.push('a action não está fixada por SHA de 40 caracteres');
-  const { version, token } = step.with ?? {};
-  if (!SEMVER.test(String(version)))
-    violations.push(`version ${String(version)} não é X.Y.Z exato`);
-  if (String(step.with?.['advanced-security']) !== 'false')
-    violations.push('advanced-security não é false');
-  if (!JOB_TOKEN.test(String(token)))
-    violations.push('falta o token do job (github.token)');
-  return violations;
+  return zizmorStepViolations(jobSteps(workflow));
 }
 
 // --- linha de base em memória -----------------------------------------------------------------------------------
@@ -135,10 +136,9 @@ jobs:
           persist-credentials: false
       - name: actionlint
         run: |
-          curl -sSLO ${RELEASE}/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          curl -sSLO ${RELEASE}/v1.7.12/actionlint_1.7.12_checksums.txt
-          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt
-          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          curl -sSLO ${RELEASE}/v1.7.12/${TARBALL_NAME}
+          echo "${TARBALL_SHA256}  ${TARBALL_NAME}" | sha256sum --check
+          tar -xzf ${TARBALL_NAME} actionlint
           ./actionlint -color
       - uses: zizmorcore/zizmor-action@${SHA} # v0.8.0
         with:
@@ -147,11 +147,16 @@ jobs:
           token: \${{ github.token }}
 `;
 
-const CHECK_LINE = 'sha256sum --check --ignore-missing';
-const CHECK_THEN_TAR = `${CHECK_LINE} actionlint_1.7.12_checksums.txt
-          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint`;
-const TAR_THEN_CHECK = `tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
-          ${CHECK_LINE} actionlint_1.7.12_checksums.txt`;
+const PINNED_PAIR = `${TARBALL_SHA256}  ${TARBALL_NAME}`;
+const CHECK_LINE = `echo "${PINNED_PAIR}" | sha256sum --check`;
+const TAR_LINE = `tar -xzf ${TARBALL_NAME} actionlint`;
+const CHECK_THEN_TAR = `${CHECK_LINE}
+          ${TAR_LINE}`;
+const TAR_THEN_CHECK = `${TAR_LINE}
+          ${CHECK_LINE}`;
+const CHECKSUMS_URL = `${RELEASE}/v1.7.12/actionlint_1.7.12_checksums.txt`;
+const ONLY_CHECKSUMS = `curl -sSLO ${CHECKSUMS_URL}
+          sha256sum --check --ignore-missing actionlint_1.7.12_checksums.txt`;
 
 function edited(from: string, to: string): CiWorkflow {
   return parseWorkflow(mutated(GOOD, from, to));
@@ -200,21 +205,32 @@ describe('AI-43 as conferências do job workflows enxergam o que procuram (contr
   it.each([
     [
       'a URL com latest',
-      `${RELEASE}/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz`,
+      `${RELEASE}/v1.7.12/${TARBALL_NAME}`,
       'https://github.com/rhysd/actionlint/releases/latest/download/actionlint_linux_amd64.tar.gz',
     ],
     [
-      'a versão do checksums diferente da do tarball',
-      `${RELEASE}/v1.7.12/actionlint_1.7.12_checksums.txt`,
-      `${RELEASE}/v1.7.11/actionlint_1.7.11_checksums.txt`,
+      'o tarball de outra versão que a da URL',
+      `${RELEASE}/v1.7.12/${TARBALL_NAME}`,
+      `${RELEASE}/v1.7.12/actionlint_1.7.11_linux_amd64.tar.gz`,
+    ],
+    ['o passo sem sha256sum', CHECK_LINE, 'true'],
+    ['o sha256sum sem --check', '| sha256sum --check', '| sha256sum'],
+    ['o sha256sum depois do tar', CHECK_THEN_TAR, TAR_THEN_CHECK],
+    [
+      'só o checksums da mesma release, sem o sha256 fixo',
+      CHECK_LINE,
+      ONLY_CHECKSUMS,
     ],
     [
-      'o passo sem sha256sum',
-      `${CHECK_LINE} actionlint_1.7.12_checksums.txt`,
-      'true',
+      'um sha256 diferente do fixo',
+      TARBALL_SHA256,
+      `${'0'.repeat(8)}${TARBALL_SHA256.slice(8)}`,
     ],
-    ['o sha256sum sem --check', CHECK_LINE, 'sha256sum'],
-    ['o sha256sum depois do tar', CHECK_THEN_TAR, TAR_THEN_CHECK],
+    [
+      'o sha256 fixo sem o nome do tarball na mesma linha',
+      PINNED_PAIR,
+      `${TARBALL_SHA256}  outro.tar.gz`,
+    ],
     [
       'o erro engolido com || true',
       './actionlint -color',

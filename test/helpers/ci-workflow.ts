@@ -19,7 +19,9 @@ export interface CiJob {
   name?: string;
   needs?: string | string[];
   if?: string;
+  environment?: unknown;
   permissions?: unknown;
+  'timeout-minutes'?: unknown;
   strategy?: {
     'fail-fast'?: unknown;
     matrix?: { node?: string[] };
@@ -28,6 +30,7 @@ export interface CiJob {
 }
 
 export interface CiWorkflow {
+  name?: string;
   on?: Record<string, unknown>;
   permissions?: unknown;
   jobs?: Record<string, CiJob>;
@@ -133,6 +136,35 @@ export function runsToolThroughNpm(
     const run = step.run ?? '';
     return new RegExp(tool).test(run) && /npm\s+(?:run|exec|x)\b/.test(run);
   });
+}
+
+export function same(value: unknown, expected: unknown): boolean {
+  return JSON.stringify(value) === JSON.stringify(expected);
+}
+
+const SEMVER = /^\d+\.\d+\.\d+$/;
+const JOB_TOKEN = /^\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/;
+
+// AI-43 e AI-46: a zizmor-action fixada por SHA, com a versão do zizmor exata, advanced-security false (o achado
+// reprova o job pelo código de saída) e o token de leitura do job para as auditorias que consultam a API.
+export function zizmorStepViolations(steps: CiStep[]): string[] {
+  const found = steps.filter((step) =>
+    (step.uses ?? '').startsWith('zizmorcore/zizmor-action@'),
+  );
+  const [step] = found;
+  if (found.length !== 1 || step === undefined)
+    return [`${found.length} passos da zizmor-action, esperado 1`];
+  const violations: string[] = [];
+  if (!/@[0-9a-f]{40}$/.test(step.uses ?? ''))
+    violations.push('a action não está fixada por SHA de 40 caracteres');
+  const { version, token } = step.with ?? {};
+  if (!SEMVER.test(String(version)))
+    violations.push(`version ${String(version)} não é X.Y.Z exato`);
+  if (String(step.with?.['advanced-security']) !== 'false')
+    violations.push('advanced-security não é false');
+  if (!JOB_TOKEN.test(String(token)))
+    violations.push('falta o token do job (github.token)');
+  return violations;
 }
 
 export function workflowOf(run: string): CiWorkflow {

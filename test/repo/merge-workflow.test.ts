@@ -1,207 +1,542 @@
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
+import {
+  mutated,
+  parseYaml,
+  readRepoYaml,
+  readWorkflowFile,
+  repoRoot,
+  same,
+  stepsOfWorkflow,
+  workflowsDir,
+  type CiJob,
+  type CiStep,
+  type CiWorkflow,
+} from '../helpers/ci-workflow.ts';
 
-interface Step {
-  uses?: string;
-  run?: string;
+// AI-10: o merge segue a aprovação do dono e sai em nome de um GitHub App. Dois workflows:
+// - merge-on-approval.yml roda a versão que está no PR; por isso não tem secret nem permissão, e só confere a revisão;
+// - merge-by-app.yml roda em workflow_run do anterior, na versão da main, sem checkout, no ambiente `merge`, com o
+//   token do App gerado na hora. O `.github/zizmor.yml` dispensa o dangerous-triggers só nele.
+// Cada conferência devolve as violações; a lista vazia é o que o arquivo deve ter, e os controles negativos tiram uma
+// condição de cada vez de uma cópia em memória.
+
+const APPROVAL_FILE = 'merge-on-approval.yml';
+const BY_APP_FILE = 'merge-by-app.yml';
+const APP_TOKEN_ACTION =
+  'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510';
+
+const APPROVAL_CONDITIONS = [
+  "github.event.review.state == 'approved'",
+  "github.event.review.author_association == 'OWNER'",
+  'github.event.pull_request.head.repo.full_name == github.repository',
+];
+const BY_APP_CONDITIONS = [
+  "github.event.workflow_run.conclusion == 'success'",
+  "github.event.workflow_run.event == 'pull_request_review'",
+  'github.event.workflow_run.head_repository.full_name == github.repository',
+];
+
+interface RunTrigger {
+  workflows?: string[];
+  types?: string[];
 }
 
-interface Job {
-  if?: string;
-  permissions?: Record<string, string>;
-  steps?: Step[];
-}
+const noSpaces = (value: unknown): string => String(value).replace(/\s+/g, '');
+const flat = (value: string | undefined): string =>
+  (value ?? '').replace(/\s+/g, ' ');
+const jobsOf = (workflow: CiWorkflow): [string, CiJob][] =>
+  Object.entries(workflow.jobs ?? {});
+const runsOf = (steps: CiStep[]): string[] =>
+  steps.map((step) => step.run ?? '');
 
-interface Workflow {
-  on?: Record<string, { types?: string[] }>;
-  permissions?: Record<string, string>;
-  jobs?: Record<string, Job>;
-}
-
-const EXPECTED_PERMISSIONS = {
-  contents: 'write',
-  'pull-requests': 'write',
-} as const;
-
-function loadWorkflow(): Workflow {
-  const path = join(
-    import.meta.dirname,
-    '..',
-    '..',
-    '.github',
-    'workflows',
-    'merge-on-approval.yml',
-  );
-  return parse(readFileSync(path, 'utf8')) as Workflow;
-}
-
-function jobsOf(workflow: Workflow): Job[] {
-  return Object.values(workflow.jobs ?? {});
-}
-
-function stepsOf(workflow: Workflow): Step[] {
-  return jobsOf(workflow).flatMap((job) => job.steps ?? []);
-}
-
-// Critérios como funções, para provar também que reprovam uma variação do arquivo (controle negativo).
-function triggersOnSubmittedReview(workflow: Workflow): boolean {
-  const types = workflow.on?.pull_request_review?.types;
-  return Array.isArray(types) && types.length === 1 && types[0] === 'submitted';
-}
-
-function jobsRequireOwnerApproval(workflow: Workflow): boolean {
-  const jobs = jobsOf(workflow);
-  return (
-    jobs.length > 0 &&
-    jobs.every(
-      (job) =>
-        (job.if ?? '').includes("github.event.review.state == 'approved'") &&
-        (job.if ?? '').includes(
-          "github.event.review.author_association == 'OWNER'",
-        ),
-    )
-  );
-}
-
-// AI-05: a escrita fica no job; o topo do arquivo só lê (vazio ou read).
-function permissionsAreExact(workflow: Workflow): boolean {
-  const blocks = jobsOf(workflow)
-    .map((job) => job.permissions)
-    .filter((block): block is Record<string, string> => block !== undefined);
-  const topWrites = Object.values(workflow.permissions ?? {}).includes('write');
-  return (
-    !topWrites &&
-    blocks.length > 0 &&
-    blocks.every(
-      (block) =>
-        Object.keys(block).length === 2 &&
-        block.contents === 'write' &&
-        block['pull-requests'] === 'write',
-    )
-  );
-}
-
-function mergesWithAutoMergeCommit(workflow: Workflow): boolean {
-  return stepsOf(workflow).some((step) => {
-    const run = step.run ?? '';
-    return (
-      run.includes('gh pr merge') &&
-      /--auto\b/.test(run) &&
-      /--merge\b/.test(run)
-    );
-  });
-}
-
-function checksOutCode(workflow: Workflow): boolean {
-  return stepsOf(workflow).some(
+// O PR roda a versão do arquivo que está nele; nenhum dos dois baixa o código do PR.
+function checkoutViolations(workflow: CiWorkflow): string[] {
+  return stepsOfWorkflow(workflow).some(
     (step) =>
       (step.uses ?? '').startsWith('actions/checkout') ||
       /git checkout|gh pr checkout|git clone|git fetch/.test(step.run ?? ''),
-  );
+  )
+    ? ['baixa o código do PR (checkout)']
+    : [];
 }
 
-describe('AI-10 workflow merge-on-approval', () => {
-  it('AI-10 roda em pull_request_review com types [submitted]', () => {
-    const workflow = loadWorkflow();
+function permissionViolations(workflow: CiWorkflow): string[] {
+  const violations: string[] = [];
+  if (!same(workflow.permissions, {}))
+    violations.push('permissions do topo não é {}');
+  for (const [id, job] of jobsOf(workflow))
+    if (!same(job.permissions, {}))
+      violations.push(`o job ${id} não tem permissions: {}`);
+  return violations;
+}
 
-    expect(triggersOnSubmittedReview(workflow)).toBe(true);
-    expect(
-      triggersOnSubmittedReview({
-        on: { pull_request_review: { types: ['submitted', 'edited'] } },
-      }),
-    ).toBe(false);
-    expect(
-      triggersOnSubmittedReview({
-        on: { pull_request: { types: ['submitted'] } },
-      }),
-    ).toBe(false);
+// Cada condição obrigatória no `if` do job; uma alternativa (`||`) as desfaria.
+function conditionViolations(
+  workflow: CiWorkflow,
+  required: string[],
+): string[] {
+  const violations: string[] = [];
+  for (const [id, job] of jobsOf(workflow)) {
+    const condition = flat(job.if);
+    for (const part of required)
+      if (!condition.includes(part))
+        violations.push(`o if do job ${id} não exige: ${part}`);
+    if (condition.includes('||'))
+      violations.push(`o if do job ${id} tem uma alternativa (||)`);
+  }
+  return violations;
+}
+
+function approvalViolations(workflow: CiWorkflow): string[] {
+  const trigger = workflow.on?.pull_request_review as RunTrigger | undefined;
+  const violations = [
+    ...permissionViolations(workflow),
+    ...conditionViolations(workflow, APPROVAL_CONDITIONS),
+    ...checkoutViolations(workflow),
+  ];
+  if (Object.keys(workflow.on ?? {}).join() !== 'pull_request_review')
+    violations.push('o gatilho não é só pull_request_review');
+  if (!same(trigger?.types, ['submitted']))
+    violations.push('os types não são [submitted]');
+  if (jobsOf(workflow).length === 0) violations.push('falta o job');
+  if (JSON.stringify(workflow).includes('secrets.'))
+    violations.push('usa secrets.');
+  if (
+    runsOf(stepsOfWorkflow(workflow)).some((run) => run.includes('gh pr merge'))
+  )
+    violations.push('roda gh pr merge');
+  return violations;
+}
+
+function environmentName(job: CiJob): unknown {
+  const { environment } = job;
+  return typeof environment === 'object' && environment !== null
+    ? (environment as { name?: unknown }).name
+    : environment;
+}
+
+// O token do App sai do ambiente `merge`, só com as duas permissões do merge, por action fixada por SHA.
+function appTokenViolations(steps: CiStep[]): string[] {
+  const step = steps.find((candidate) =>
+    (candidate.uses ?? '').startsWith('actions/create-github-app-token@'),
+  );
+  if (step === undefined) return ['falta o actions/create-github-app-token'];
+  const violations: string[] = [];
+  if (step.uses !== APP_TOKEN_ACTION)
+    violations.push(`a action não é ${APP_TOKEN_ACTION}`);
+  const inputs = step.with ?? {};
+  if (noSpaces(inputs['client-id']) !== '${{vars.MERGE_APP_CLIENT_ID}}')
+    violations.push('client-id não vem de vars.MERGE_APP_CLIENT_ID');
+  if (noSpaces(inputs['private-key']) !== '${{secrets.MERGE_APP_PRIVATE_KEY}}')
+    violations.push('private-key não vem de secrets.MERGE_APP_PRIVATE_KEY');
+  const scopes = Object.entries(inputs)
+    .filter(([name]) => name.startsWith('permission-'))
+    .map(([name, level]) => `${name}=${String(level)}`)
+    .sort();
+  if (
+    !same(scopes, [
+      'permission-contents=write',
+      'permission-pull-requests=write',
+    ])
+  )
+    violations.push(`permissões do token: [${scopes.join(', ')}]`);
+  return violations;
+}
+
+// A conferência da revisão APPROVED de OWNER vem antes do `gh pr merge --auto --merge`, no mesmo script.
+function mergeStepViolations(steps: CiStep[]): string[] {
+  const merge = steps.find((step) => (step.run ?? '').includes('gh pr merge'));
+  if (merge === undefined) return ['falta o passo com gh pr merge'];
+  const run = merge.run ?? '';
+  const violations: string[] = [];
+  const at = run.indexOf('gh pr merge');
+  for (const word of ['APPROVED', 'OWNER'])
+    if (!run.includes(word)) violations.push(`o passo não confere ${word}`);
+    else if (run.indexOf(word) > at)
+      violations.push(`${word} é conferido depois do gh pr merge`);
+  const command = run.slice(at);
+  if (!/--auto\b/.test(command) || !/--merge\b/.test(command))
+    violations.push('o gh pr merge não é --auto --merge');
+  return violations;
+}
+
+function byAppViolations(
+  workflow: CiWorkflow,
+  approvalName: string | undefined,
+): string[] {
+  const trigger = workflow.on?.workflow_run as RunTrigger | undefined;
+  const violations = [
+    ...permissionViolations(workflow),
+    ...conditionViolations(workflow, BY_APP_CONDITIONS),
+    ...checkoutViolations(workflow),
+  ];
+  if (Object.keys(workflow.on ?? {}).join() !== 'workflow_run')
+    violations.push('o gatilho não é só workflow_run');
+  if (approvalName === undefined || !same(trigger?.workflows, [approvalName]))
+    violations.push(`workflows não é [${approvalName}]`);
+  if (!same(trigger?.types, ['completed']))
+    violations.push('os types não são [completed]');
+  if (jobsOf(workflow).length === 0) violations.push('falta o job');
+  for (const [id, job] of jobsOf(workflow))
+    if (environmentName(job) !== 'merge')
+      violations.push(`o job ${id} não usa o environment merge`);
+  const steps = stepsOfWorkflow(workflow);
+  if (runsOf(steps).some((run) => run.includes('${{')))
+    violations.push('um run interpola uma expressão (passe por env)');
+  return [
+    ...violations,
+    ...appTokenViolations(steps),
+    ...mergeStepViolations(steps),
+  ];
+}
+
+// O audit dangerous-triggers dispensado só para o merge-by-app.yml; o nome do arquivo, com ou sem a pasta.
+function zizmorViolations(config: unknown): string[] {
+  const rules = (config as { rules?: Record<string, { ignore?: unknown }> })
+    ?.rules;
+  const ignored = rules?.['dangerous-triggers']?.ignore;
+  const names = Array.isArray(ignored)
+    ? ignored.map((entry) =>
+        String(entry)
+          .replace(/^\.github\/workflows\//, '')
+          .replace(/(?::\d+)+$/, ''),
+      )
+    : [];
+  return same(names, [BY_APP_FILE]) &&
+    (ignored as unknown[]).every((entry) => !String(entry).includes('*'))
+    ? []
+    : [
+        `dangerous-triggers ignora [${names.join(', ')}], esperado só ${BY_APP_FILE}`,
+      ];
+}
+
+// --- linhas de base em memória -----------------------------------------------------------------------------------
+
+const APPROVAL_GOOD = `
+name: Merge na aprovação
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  approved:
+    name: Confere a aprovação do dono
+    permissions: {}
+    if: >-
+      github.event.review.state == 'approved' &&
+      github.event.review.author_association == 'OWNER' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Aprovação do dono registrada"
+`;
+
+const APPROVER_JOB = '    runs-on: ubuntu-latest\n    steps:\n';
+
+const CHECK_LINES = `          approved=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" --jq '.[] | select(.state == "APPROVED" and .author_association == "OWNER") | .commit_id')
+          echo "$approved" | grep -qx "$HEAD_SHA" || exit 1
+`;
+const MERGE_LINE = '          gh pr merge "$PR_NUMBER" --auto --merge\n';
+
+const BY_APP_GOOD = `
+name: Merge pelo App
+on:
+  workflow_run:
+    workflows: ['Merge na aprovação']
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  merge:
+    name: Liga o auto-merge pelo App
+    environment: merge
+    permissions: {}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request_review' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: ${APP_TOKEN_ACTION} # v3.1.1
+        with:
+          client-id: \${{ vars.MERGE_APP_CLIENT_ID }}
+          private-key: \${{ secrets.MERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Liga o auto-merge com merge commit
+        env:
+          GH_TOKEN: \${{ steps.app-token.outputs.token }}
+          GH_REPO: \${{ github.repository }}
+          PR_NUMBER: \${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: \${{ github.event.workflow_run.head_sha }}
+        run: |
+${CHECK_LINES}${MERGE_LINE}`;
+
+const ZIZMOR_GOOD = `
+rules:
+  dangerous-triggers:
+    ignore:
+      - merge-by-app.yml
+`;
+
+type Case = readonly [label: string, from: string, to: string];
+
+const APPROVAL_CASES: Case[] = [
+  [
+    'com um gatilho a mais',
+    '  pull_request_review:\n    types: [submitted]\n',
+    '  pull_request_review:\n    types: [submitted]\n  pull_request_target:\n',
+  ],
+  ['com types além de submitted', '[submitted]', '[submitted, edited]'],
+  [
+    'com permissão de escrita no topo',
+    'permissions: {}\n\njobs:',
+    'permissions:\n  contents: write\n\njobs:',
+  ],
+  ['sem permissions: {} no topo', 'permissions: {}\n\njobs:', 'jobs:'],
+  [
+    'com permissão no job',
+    '    permissions: {}\n',
+    '    permissions:\n      contents: write\n',
+  ],
+  ['sem permissions: {} no job', '    permissions: {}\n', ''],
+  [
+    'com um secret',
+    '      - run: echo "Aprovação do dono registrada"\n',
+    '      - env:\n          CHAVE: ${{ secrets.MERGE_APP_PRIVATE_KEY }}\n        run: echo "$CHAVE"\n',
+  ],
+  [
+    'que liga o auto-merge',
+    '      - run: echo "Aprovação do dono registrada"\n',
+    '      - run: gh pr merge "$PR_NUMBER" --auto --merge\n',
+  ],
+  [
+    'com checkout',
+    APPROVER_JOB,
+    `${APPROVER_JOB}      - uses: actions/checkout@${'a'.repeat(40)}\n`,
+  ],
+  [
+    'sem exigir a revisão approved',
+    "      github.event.review.state == 'approved' &&\n",
+    '',
+  ],
+  [
+    'sem exigir o autor OWNER',
+    "      github.event.review.author_association == 'OWNER' &&\n",
+    '',
+  ],
+  [
+    'sem exigir o PR de branch deste repositório',
+    ' &&\n      github.event.pull_request.head.repo.full_name == github.repository',
+    '',
+  ],
+  [
+    'com uma alternativa no if',
+    "github.event.review.state == 'approved' &&",
+    "github.event.review.state == 'approved' || true &&",
+  ],
+];
+
+const BY_APP_CASES: Case[] = [
+  [
+    'com o gatilho de outro workflow',
+    "['Merge na aprovação']",
+    "['Outro workflow']",
+  ],
+  ['com types diferente de completed', '[completed]', '[requested]'],
+  [
+    'com o gatilho pull_request_review no lugar',
+    "  workflow_run:\n    workflows: ['Merge na aprovação']\n    types: [completed]\n",
+    '  pull_request_review:\n    types: [submitted]\n',
+  ],
+  [
+    'com permissão de escrita no topo',
+    'permissions: {}\n\njobs:',
+    'permissions:\n  contents: write\n\njobs:',
+  ],
+  [
+    'com permissão no job (o GITHUB_TOKEN deve ficar sem)',
+    '    permissions: {}\n',
+    '    permissions:\n      contents: write\n',
+  ],
+  ['sem permissions: {} no job', '    permissions: {}\n', ''],
+  ['sem o ambiente merge', '    environment: merge\n', ''],
+  ['com outro ambiente', 'environment: merge', 'environment: production'],
+  [
+    'com checkout',
+    '    steps:\n',
+    `    steps:\n      - uses: actions/checkout@${'a'.repeat(40)}\n`,
+  ],
+  [
+    'com a action por tag',
+    APP_TOKEN_ACTION,
+    'actions/create-github-app-token@v3.1.1',
+  ],
+  [
+    'com a action em outro SHA',
+    APP_TOKEN_ACTION,
+    `actions/create-github-app-token@${'a'.repeat(40)}`,
+  ],
+  [
+    'com o client-id fixo no arquivo',
+    '${{ vars.MERGE_APP_CLIENT_ID }}',
+    'Iv23liXXXXXXXXXXXXXX',
+  ],
+  [
+    'com o client-id de outra variável',
+    'vars.MERGE_APP_CLIENT_ID',
+    'vars.OUTRA_VARIAVEL',
+  ],
+  [
+    'com a chave de outro secret',
+    'secrets.MERGE_APP_PRIVATE_KEY }}\n          permission',
+    'secrets.OUTRO_SECRET }}\n          permission',
+  ],
+  [
+    'sem permission-contents no token',
+    '          permission-contents: write\n',
+    '',
+  ],
+  [
+    'sem permission-pull-requests no token',
+    '          permission-pull-requests: write\n',
+    '',
+  ],
+  [
+    'com uma permissão a mais no token',
+    '          permission-pull-requests: write\n',
+    '          permission-pull-requests: write\n          permission-actions: write\n',
+  ],
+  [
+    'sem exigir a conclusão success',
+    "      github.event.workflow_run.conclusion == 'success' &&\n",
+    '',
+  ],
+  [
+    'sem exigir o evento pull_request_review',
+    "      github.event.workflow_run.event == 'pull_request_review' &&\n",
+    '',
+  ],
+  [
+    'sem exigir o PR de branch deste repositório',
+    ' &&\n      github.event.workflow_run.head_repository.full_name == github.repository',
+    '',
+  ],
+  [
+    'com uma alternativa no if',
+    "conclusion == 'success' &&",
+    "conclusion == 'success' || true &&",
+  ],
+  ['sem a conferência da aprovação', CHECK_LINES, ''],
+  ['sem conferir a revisão APPROVED', '.state == "APPROVED" and ', ''],
+  ['sem conferir o autor OWNER', ' and .author_association == "OWNER"', ''],
+  [
+    'com a conferência depois do gh pr merge',
+    `${CHECK_LINES}${MERGE_LINE}`,
+    `${MERGE_LINE}${CHECK_LINES}`,
+  ],
+  ['sem --auto', ' --auto --merge', ' --merge'],
+  ['sem --merge (squash)', '--auto --merge', '--auto --squash'],
+  [
+    'com a expressão do evento direto no run',
+    '"$PR_NUMBER" --auto',
+    '${{ github.event.workflow_run.pull_requests[0].number }} --auto',
+  ],
+];
+
+const approvalNameOf = (workflow: CiWorkflow | undefined): string | undefined =>
+  workflow?.name;
+
+describe('AI-10 as conferências do merge enxergam o que procuram (controle negativo)', () => {
+  const approval = parseYaml<CiWorkflow>(APPROVAL_GOOD);
+  const byApp = parseYaml<CiWorkflow>(BY_APP_GOOD);
+  const edited = (base: string, from: string, to: string): CiWorkflow =>
+    parseYaml<CiWorkflow>(mutated(base, from, to));
+
+  it('AI-10 as linhas de base passam em todas as conferências (controle positivo)', () => {
+    expect(approvalViolations(approval)).toEqual([]);
+    expect(byAppViolations(byApp, approvalNameOf(approval))).toEqual([]);
+    expect(zizmorViolations(parseYaml(ZIZMOR_GOOD))).toEqual([]);
   });
 
-  it('AI-10 o job só age para revisão approved de autor OWNER', () => {
-    const workflow = loadWorkflow();
+  it.each(APPROVAL_CASES)(
+    'AI-10 o merge-on-approval.yml %s reprova',
+    (_label, from, to) => {
+      expect(approvalViolations(edited(APPROVAL_GOOD, from, to))).not.toEqual(
+        [],
+      );
+    },
+  );
 
-    expect(jobsRequireOwnerApproval(workflow)).toBe(true);
-    expect(
-      jobsRequireOwnerApproval({
-        jobs: { merge: { if: "github.event.review.state == 'approved'" } },
-      }),
-    ).toBe(false);
-    expect(
-      jobsRequireOwnerApproval({
-        jobs: {
-          merge: { if: "github.event.review.author_association == 'OWNER'" },
+  it.each(BY_APP_CASES)(
+    'AI-10 o merge-by-app.yml %s reprova',
+    (_label, from, to) => {
+      expect(
+        byAppViolations(
+          edited(BY_APP_GOOD, from, to),
+          approvalNameOf(approval),
+        ),
+      ).not.toEqual([]);
+    },
+  );
+
+  it('AI-10 o merge-by-app.yml que espera um workflow sem nome reprova', () => {
+    expect(byAppViolations(byApp, undefined)).not.toEqual([]);
+  });
+
+  it.each([
+    ['sem o arquivo', undefined],
+    ['sem a regra', {}],
+    [
+      'com outro arquivo na lista',
+      { rules: { 'dangerous-triggers': { ignore: ['ci.yml'] } } },
+    ],
+    [
+      'com um arquivo a mais na lista',
+      {
+        rules: {
+          'dangerous-triggers': { ignore: ['merge-by-app.yml', 'ci.yml'] },
         },
-      }),
-    ).toBe(false);
-    expect(jobsRequireOwnerApproval({ jobs: { merge: {} } })).toBe(false);
+      },
+    ],
+    [
+      'com um curinga na lista',
+      { rules: { 'dangerous-triggers': { ignore: ['*.yml'] } } },
+    ],
+    [
+      'com outra auditoria dispensada',
+      { rules: { 'excessive-permissions': { ignore: ['merge-by-app.yml'] } } },
+    ],
+  ])('AI-10 o zizmor.yml %s reprova', (_label, config) => {
+    expect(zizmorViolations(config)).not.toEqual([]);
+  });
+});
+
+describe('AI-10 o merge do repositório', () => {
+  const approval = readWorkflowFile(APPROVAL_FILE);
+  const byApp = readWorkflowFile(BY_APP_FILE);
+
+  it('AI-10 o merge-on-approval.yml roda em revisão enviada, sem secret, sem permissão e sem merge, e só passa para a aprovação do dono num PR deste repositório', () => {
+    expect(approvalViolations(approval ?? {})).toEqual([]);
+    expect(approval).toBeDefined();
   });
 
-  it('AI-10 tem exatamente as permissões contents: write e pull-requests: write, só no job', () => {
-    const workflow = loadWorkflow();
-    const job = { permissions: { ...EXPECTED_PERMISSIONS } };
-
-    expect(permissionsAreExact(workflow)).toBe(true);
-    expect(permissionsAreExact({ permissions: { contents: 'write' } })).toBe(
-      false,
-    );
-    expect(permissionsAreExact({ permissions: {}, jobs: { merge: job } })).toBe(
-      true,
-    );
-    expect(
-      permissionsAreExact({
-        permissions: { ...EXPECTED_PERMISSIONS },
-        jobs: { merge: job },
-      }),
-    ).toBe(false);
-    expect(
-      permissionsAreExact({
-        jobs: {
-          merge: { permissions: { ...EXPECTED_PERMISSIONS, actions: 'write' } },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      permissionsAreExact({
-        jobs: {
-          merge: {
-            permissions: { contents: 'write', 'pull-requests': 'read' },
-          },
-        },
-      }),
-    ).toBe(false);
+  it('AI-10 o merge-by-app.yml existe', () => {
+    expect(existsSync(join(workflowsDir, BY_APP_FILE))).toBe(true);
   });
 
-  it('AI-10 um passo liga o auto-merge com merge commit (gh pr merge --auto --merge)', () => {
-    const workflow = loadWorkflow();
-
-    expect(mergesWithAutoMergeCommit(workflow)).toBe(true);
-    expect(
-      mergesWithAutoMergeCommit({
-        jobs: { merge: { steps: [{ run: 'gh pr merge 1 --merge' }] } },
-      }),
-    ).toBe(false);
-    expect(
-      mergesWithAutoMergeCommit({
-        jobs: { merge: { steps: [{ run: 'gh pr merge 1 --auto --squash' }] } },
-      }),
-    ).toBe(false);
+  it('AI-10 o merge-by-app.yml roda no workflow_run do Merge na aprovação, no ambiente merge, com o token do App, e confere a aprovação do dono antes do auto-merge', () => {
+    expect(byAppViolations(byApp ?? {}, approvalNameOf(approval))).toEqual([]);
   });
 
-  it('AI-10 nenhum passo faz checkout do código do PR', () => {
-    const workflow = loadWorkflow();
-
-    expect(checksOutCode(workflow)).toBe(false);
-    expect(
-      checksOutCode({
-        jobs: { merge: { steps: [{ uses: 'actions/checkout@v4' }] } },
-      }),
-    ).toBe(true);
-    expect(
-      checksOutCode({
-        jobs: { merge: { steps: [{ run: 'gh pr checkout 1' }] } },
-      }),
-    ).toBe(true);
+  it('AI-10 o .github/zizmor.yml dispensa o dangerous-triggers só para o merge-by-app.yml', () => {
+    expect(zizmorViolations(readRepoYaml('.github', 'zizmor.yml'))).toEqual([]);
+    expect(existsSync(join(repoRoot, '.github', 'zizmor.yml'))).toBe(true);
   });
 });

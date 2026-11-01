@@ -13,13 +13,11 @@ const DEPENDABOT_SIGNATURE =
 // Uma linha de corpo bem acima dos 100 caracteres, sem URL (o commitlint ignora linhas com link).
 const LONG_LINE = `Notas da versão: ${'uma frase longa de notas de versão '.repeat(5)}`;
 
-function commitMessage(signature: string | null): string {
-  const lines = [
-    'build(deps): bump x from 1.0.0 to 1.0.1',
-    '',
-    'Bumps x from 1.0.0 to 1.0.1.',
-    LONG_LINE,
-  ];
+function commitMessage(
+  signature: string | null,
+  header = 'build(deps): bump x from 1.0.0 to 1.0.1',
+): string {
+  const lines = [header, '', 'Bumps x from 1.0.0 to 1.0.1.', LONG_LINE];
   if (signature !== null) lines.push('', signature);
   return `${lines.join('\n')}\n`;
 }
@@ -49,6 +47,31 @@ describe('AI-45 o commitlint ignora só os commits assinados pelo dependabot[bot
     expect(result.out).not.toContain('body-max-line-length');
     expect(result.status).toBe(0);
   }, 90_000);
+
+  it('AI-45 o commit das actions, com cabeçalho ci(deps) e a assinatura do dependabot[bot], passa', () => {
+    const result = lintMessage(
+      commitMessage(
+        DEPENDABOT_SIGNATURE,
+        'ci(deps): bump y from 1.0.0 to 1.1.0',
+      ),
+    );
+
+    expect(result.out).not.toContain('body-max-line-length');
+    expect(result.status).toBe(0);
+  }, 90_000);
+
+  // A assinatura sozinha não basta: o commit de um agente com o cabeçalho de outro tipo, ou de um escopo que não é
+  // `deps`, não escapa do commitlint por copiar a linha de assinatura.
+  it.each(['feat: algo', 'chore(deps): x'])(
+    'AI-45 o commit com a assinatura do dependabot[bot] e o cabeçalho "%s" continua reprovando',
+    (header) => {
+      const result = lintMessage(commitMessage(DEPENDABOT_SIGNATURE, header));
+
+      expect(result.status).toBeGreaterThan(0);
+      expect(result.out).toContain('body-max-line-length');
+    },
+    90_000,
+  );
 
   it('AI-45 o commit assinado por outro autor continua reprovando', () => {
     const result = lintMessage(commitMessage('Signed-off-by: alguem <a@b.c>'));
