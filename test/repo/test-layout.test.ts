@@ -55,22 +55,22 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
 
   it('AI-02 um arquivo com só it(...) passa no lint', () => {
     const code = lintExitCode(
-      `it('faz algo', () => {\n  expect(1).toBe(1);\n});`,
+      `it('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`,
     );
 
     expect(code).toBe(0);
   }, 60_000);
 
   it.each([
-    ['it.only', `it.only('faz algo', () => {\n  expect(1).toBe(1);\n});`],
-    ['it.skip', `it.skip('faz algo', () => {\n  expect(1).toBe(1);\n});`],
+    ['it.only', `it.only('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`],
+    ['it.skip', `it.skip('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`],
     [
       'describe.only',
-      `describe.only('grupo', () => {\n  it('faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
+      `describe.only('AI-02 grupo', () => {\n  it('AI-02 faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
     ],
     [
       'describe.skip',
-      `describe.skip('grupo', () => {\n  it('faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
+      `describe.skip('AI-02 grupo', () => {\n  it('AI-02 faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
     ],
   ])(
     'AI-02 %s reprova o lint com código diferente de zero',
