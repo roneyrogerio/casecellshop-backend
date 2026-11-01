@@ -11,27 +11,47 @@ const REGISTRY = 'https://registry.npmjs.org/';
 interface LockEntry {
   resolved?: unknown;
   integrity?: unknown;
+  link?: unknown;
 }
 
 export function lockfileViolations(lockText: string): string[] {
   const lock = JSON.parse(lockText) as {
-    packages?: Record<string, LockEntry>;
+    lockfileVersion?: unknown;
+    packages?: unknown;
   };
+  // Sem `packages` (o formato 1, ou um arquivo vazio), não há o que conferir, e
+  // aprovar seria deixar passar qualquer origem.
+  if (typeof lock.lockfileVersion !== 'number' || lock.lockfileVersion < 2)
+    return [
+      `lockfileVersion ${String(lock.lockfileVersion)}: precisa ser 2 ou mais`,
+    ];
+  if (
+    lock.packages === null ||
+    typeof lock.packages !== 'object' ||
+    Array.isArray(lock.packages)
+  )
+    return ['packages ausente ou não é um objeto'];
   const violations: string[] = [];
-  for (const [name, entry] of Object.entries(lock.packages ?? {})) {
-    // A raiz ("") e um link de workspace não têm pacote baixado.
-    if (entry.resolved === undefined) continue;
+  for (const [name, raw] of Object.entries(lock.packages)) {
+    const entry = (raw ?? {}) as LockEntry;
+    // A raiz (""), um link de workspace e a pasta de um workspace (chave fora de
+    // node_modules/) não são pacotes baixados do registro.
+    if (name === '' || entry.link === true || !name.startsWith('node_modules/'))
+      continue;
     const resolved =
       typeof entry.resolved === 'string'
         ? entry.resolved
-        : JSON.stringify(entry.resolved);
+        : (JSON.stringify(entry.resolved) ?? 'ausente');
+    // Uma linha por pacote, com todos os motivos.
+    const reasons: string[] = [];
     if (!resolved.startsWith(REGISTRY))
-      violations.push(`${name}: resolved fora de ${REGISTRY} (${resolved})`);
+      reasons.push(`resolved fora de ${REGISTRY} (${resolved})`);
     if (
       typeof entry.integrity !== 'string' ||
       !entry.integrity.startsWith('sha512-')
     )
-      violations.push(`${name}: integrity ausente ou não é sha512`);
+      reasons.push('integrity ausente ou não é sha512');
+    if (reasons.length > 0) violations.push(`${name}: ${reasons.join('; ')}`);
   }
   return violations;
 }

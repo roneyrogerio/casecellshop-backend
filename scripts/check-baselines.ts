@@ -83,8 +83,25 @@ function fromHead(file: string): string | undefined {
   return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
 }
 
+function refExists(ref: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `origin/${ref}`], {
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const ref = process.env.BASE_REF ?? 'main';
+  // Sem a ref, não há com o que comparar; passar seria aprovar sem conferir. Só
+  // a falta do arquivo na base (o PR que o cria) passa.
+  if (!refExists(ref)) {
+    console.error(`a ref origin/${ref} não existe; não há base para comparar`);
+    process.exit(1);
+  }
   const violations: string[] = [];
   const checks: [string, (base: string, head: string) => string[]][] = [
     ['vitest.config.ts', coverageFloorViolations],
