@@ -212,6 +212,16 @@ function textRelative(root, absolute) {
   return isOutside(rel) ? null : rel;
 }
 
+// O caminho com o .. resolvido pelo texto e depois seguido pelas pastas reais,
+// com e sem o último componente: um link depois do .. (lnk → scripts em
+// src/deep/../../lnk/x) ou um pedido absoluto por outro prefixo da raiz não
+// escapam da leitura pelo texto (A16 da fatia 2 do #30).
+function textThenReal(root, absolute) {
+  const resolved = path.resolve(absolute);
+  const real = relativeTo(root, resolved);
+  return [isOutside(real) ? null : real, requestedRelative(root, resolved)];
+}
+
 // A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
 // para deixar passar. O main só lê a entrada e escreve a resposta do hook.
 // root é a raiz das regras de papel (a worktree do agente isolado, AI-26);
@@ -233,11 +243,13 @@ export function decide(input, root, projectDir = root) {
   const requested = [
     requestedRelative(root, target),
     textRelative(root, absolute),
+    ...textThenReal(root, absolute),
   ].filter(Boolean);
   const requestedFromProject = projectDir
     ? [
         requestedRelative(projectDir, absolute),
         textRelative(projectDir, absolute),
+        ...textThenReal(projectDir, absolute),
       ].filter(Boolean)
     : [];
   // Pelo caminho real e pelo pedido: um link dentro das pastas dos hooks para
