@@ -18,7 +18,9 @@ interface HookInput {
 }
 
 // O motivo da recusa, ou null quando a edição passa.
-let decide: (input: HookInput, projectRoot: string) => string | null;
+// O terceiro parâmetro é a pasta principal (CLAUDE_PROJECT_DIR): as pastas dos hooks são conferidas contra ela
+// mesmo quando a raiz das regras de papel é a worktree do agente (A1 da Revisão 1).
+let decide: (input: HookInput, projectRoot: string, projectDir?: string) => string | null;
 // A raiz contra a qual o caminho é decidido (AI-26): a da worktree do agente, ou a do projeto.
 let rootFor: (input: { cwd?: string }, projectDir: string) => string;
 
@@ -669,5 +671,66 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
 
     expectProcessAllowed(runHook(JSON.stringify(code), project, inside));
     expectProcessDenied(runHook(JSON.stringify(test), project, inside));
+  });
+});
+
+// A1 da Revisão 1 (AI-15, AI-26): a raiz das regras de papel é a da worktree, mas as pastas gravadas pelos hooks
+// ficam na pasta principal; uma sessão sem papel com o cwd numa worktree não pode escrevê-las.
+describe('AI-15 as pastas dos hooks são conferidas contra a pasta principal mesmo com o cwd numa worktree', () => {
+  let project: string;
+  let worktree: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai15-proj-');
+    initRepo(project);
+    worktree = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt-ai15');
+  });
+
+  afterAll(cleanupTempDirs);
+
+  function fromWorktree(agentType: string | undefined, filePath: string, toolName = 'Write'): HookInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      cwd: worktree,
+      ...(agentType ? { agent_type: agentType } : {}),
+      tool_input: { file_path: filePath, content: 'x' },
+    };
+  }
+
+  function decideInWorktree(input: HookInput): string | null {
+    return decide(input, rootFor(input, project), project);
+  }
+
+  it.each(['.claude/reviews/forjado.md', '.claude/state/x.log'])(
+    'AI-15 a sessão principal com o cwd na worktree não escreve %s da pasta principal',
+    (relative) => {
+      for (const tool of ['Write', 'Edit']) {
+        const reason = decideInWorktree(fromWorktree(undefined, join(project, relative), tool));
+
+        expectDenied(reason);
+        expect(reason).toContain('gravados só pelos hooks');
+      }
+    },
+  );
+
+  it('AI-15 o hook como processo, com o cwd da entrada na worktree, nega Write em .claude/reviews/ da pasta principal', () => {
+    const input = fromWorktree(undefined, join(project, '.claude', 'reviews', 'x.md'));
+
+    const denial = expectProcessDenied(runHook(JSON.stringify(input), project, worktree));
+
+    expect(denial.hookSpecificOutput.permissionDecisionReason).toContain('gravados só pelos hooks');
+  });
+
+  // Controles negativos: o resto da worktree segue liberado, e o implementer segue com as regras do papel.
+  it('AI-15 controle: a mesma sessão, na worktree, ainda escreve o código da worktree', () => {
+    expectAllowed(decideInWorktree(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))));
+    expectProcessAllowed(runHook(JSON.stringify(fromWorktree(undefined, join(worktree, 'src', 'x.ts'))), project, worktree));
+  });
+
+  it('AI-26 controle: o implementer na worktree escreve em src/ e não escreve teste', () => {
+    expectAllowed(decideInWorktree(fromWorktree('implementer', join(worktree, 'src', 'x.ts'))));
+    expectDenied(decideInWorktree(fromWorktree('implementer', join(worktree, 'src', 'x.test.ts'))));
   });
 });
