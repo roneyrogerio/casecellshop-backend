@@ -3,7 +3,7 @@
 // próprio agente); o retrato tirado no início e comparado na parada prova o que
 // mudou sem depender de como o comando foi escrito.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -35,6 +35,7 @@ export function takeSnapshot(projectDir) {
       status: '',
       foreignBranches: [],
       worktreeBranches: {},
+      worktreeHeads: {},
     };
   const commonDir = resolve(
     projectDir,
@@ -53,7 +54,35 @@ export function takeSnapshot(projectDir) {
     status: statusWithHashes(projectDir),
     foreignBranches: foreignBranches(projectDir),
     worktreeBranches: worktreeBranches(projectDir),
+    worktreeHeads: worktreeHeads(projectDir),
   };
+}
+
+// O caminho pelo realpath, para o /private do macOS e um link simbólico não
+// separarem a mesma pasta; um caminho que não existe fica como está.
+export function realPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+// O HEAD de cada worktree, pelo caminho real: um commit do agente isolado na
+// própria worktree move só a branch dela, que fica fora dos refs (AI-33), e
+// apareceria só aqui (A3 do #19).
+function worktreeHeads(projectDir) {
+  const map = {};
+  let current = null;
+  for (const line of git(projectDir, 'worktree', 'list', '--porcelain').split(
+    '\n',
+  )) {
+    if (line.startsWith('worktree '))
+      current = realPath(line.slice('worktree '.length));
+    else if (line.startsWith('HEAD ') && current)
+      map[current] = line.slice('HEAD '.length);
+  }
+  return map;
 }
 
 // A branch em uso em cada worktree, pelo caminho: identifica a do agente isolado.
@@ -88,43 +117,66 @@ function foreignBranches(projectDir) {
   return branches;
 }
 
-// Caminho de uma linha do git status (porcelain v1): no rename, o destino; sem
-// as aspas que o git põe em nomes com espaço.
+// As entradas do git status pelo formato -z: o nome vem como está, sem aspas nem
+// octal para acento e espaço (A5 do #19). No rename, o destino; a origem vem na
+// entrada seguinte e é pulada. O hook de parada usa o mesmo parser (A9 do #19).
+export function statusEntries(projectDir) {
+  const parts = git(
+    projectDir,
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+  ).split('\0');
+  const entries = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!part) continue;
+    const code = part.slice(0, 2);
+    entries.push({ code, path: part.slice(3) });
+    if (code[0] === 'R' || code[0] === 'C') index += 1;
+  }
+  return entries;
+}
+
+// Caminho de uma linha do status gravado no retrato: `XY caminho\thash`.
 function statusPath(line) {
-  const file = line.slice(3).split('\t')[0];
-  const target = file.includes(' -> ')
-    ? file.slice(file.indexOf(' -> ') + 4)
-    : file;
-  return target.replace(/^"|"$/g, '');
+  return line.slice(3).split('\t')[0];
+}
+
+function isFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 // O status sozinho não pega a segunda edição de um arquivo que já estava sujo
 // (a linha " M x" fica igual), então cada linha leva o hash do conteúdo atual.
+// Uma falha do hash-object lança: um status sem hash esconderia a edição.
 function statusWithHashes(projectDir) {
-  const lines = git(
-    projectDir,
-    'status',
-    '--porcelain=v1',
-    '--untracked-files=all',
-  )
-    .split('\n')
-    .filter(Boolean);
-  if (lines.length === 0) return '';
-  const paths = lines.map(statusPath);
-  const present = paths.filter((file) => existsSync(join(projectDir, file)));
-  const hashed = spawnSync(
-    'git',
-    ['-C', projectDir, 'hash-object', '--stdin-paths'],
-    { input: present.join('\n'), encoding: 'utf8' },
-  );
-  const hashes = new Map(
-    present.map((file, index) => [
-      file,
-      hashed.stdout.split('\n')[index] ?? '?',
-    ]),
-  );
-  return lines
-    .map((line, index) => `${line}\t${hashes.get(paths[index]) ?? '-'}`)
+  const entries = statusEntries(projectDir);
+  if (entries.length === 0) return '';
+  const present = entries
+    .map((entry) => entry.path)
+    .filter((file) => isFile(join(projectDir, file)));
+  const hashes = new Map();
+  if (present.length > 0) {
+    const hashed = spawnSync(
+      'git',
+      ['-C', projectDir, 'hash-object', '--stdin-paths'],
+      { input: present.join('\n'), encoding: 'utf8' },
+    );
+    if (hashed.status !== 0)
+      throw new Error(
+        `git hash-object falhou (${present.join(', ')}): ${hashed.stderr.trim()}`,
+      );
+    const lines = hashed.stdout.split('\n');
+    present.forEach((file, index) => hashes.set(file, lines[index] ?? ''));
+  }
+  return entries
+    .map(({ code, path }) => `${code} ${path}\t${hashes.get(path) ?? '-'}`)
     .join('\n');
 }
 
@@ -173,6 +225,18 @@ export function compareSnapshots(before, after, { agentRoot } = {}) {
   const changes = [];
   if (before.head !== after.head)
     changes.push(`HEAD passou de ${before.head} para ${after.head}`);
+  // A3 do #19: a branch do agente fica fora dos refs, mas um commit na worktree
+  // que já existia no início muda o HEAD dela. Uma worktree criada durante a
+  // execução não tem HEAD no início para comparar.
+  if (agentRoot) {
+    const key = realPath(agentRoot);
+    const start = before.worktreeHeads?.[key];
+    const stop = after.worktreeHeads?.[key];
+    if (start && stop && start !== stop)
+      changes.push(
+        `commit na worktree do agente (${agentRoot}): HEAD passou de ${start} para ${stop}`,
+      );
+  }
   const own = agentRoot ? resolve(agentRoot) : null;
   // Do início, a branch da worktree do agente; da parada, só uma branch que nem
   // existia no início (criada durante a execução), nunca uma que já existia e

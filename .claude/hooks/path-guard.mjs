@@ -3,7 +3,7 @@
 // O agent_type só vem nas chamadas de subagente (ou com --agent); a sessão
 // principal só encontra aqui a regra das pastas gravadas pelos hooks.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -175,13 +175,23 @@ export function decide(input, root, projectDir = root) {
 export function rootFor(input, projectDir) {
   if (!input?.cwd || !projectDir) return projectDir;
   const top = gitOut(input.cwd, 'rev-parse', '--show-toplevel');
-  if (!top || path.resolve(top) === path.resolve(projectDir)) return projectDir;
+  // Pelo caminho real: o /private do macOS ou um link simbólico no projectDir
+  // não podem fazer a mesma pasta parecer outra (A4 do #19).
+  if (!top || real(top) === real(projectDir)) return projectDir;
   const common = (dir) => {
     const value = gitOut(dir, 'rev-parse', '--git-common-dir');
-    return value ? path.resolve(dir, value) : null;
+    return value ? real(path.resolve(dir, value)) : null;
   };
   const own = common(input.cwd);
   return own && own === common(projectDir) ? top : projectDir;
+}
+
+function real(dir) {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
 }
 
 function gitOut(dir, ...args) {
