@@ -17,13 +17,14 @@ import {
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
 
-// AI-42: o CI tem três jobs, e o ruleset exige só o último. `checks` roda uma vez o que não depende do Node,
-// `test` é a matriz do FND-12 e `ci-ok` agrega os dois. Cada conferência devolve as violações; a lista vazia é o que
-// o ci.yml deve ter, e os controles negativos montam um YAML de propósito errado para provar que ela enxerga o erro.
+// AI-42: o CI tem quatro jobs, e o ruleset exige só o `ci-ok`. `checks` roda uma vez o que não depende do Node,
+// `test` é a matriz do FND-12, `workflows` confere os workflows (AI-43) e `ci-ok` agrega os outros três. Cada
+// conferência devolve as violações; a lista vazia é o que o ci.yml deve ter, e os controles negativos montam um YAML
+// de propósito errado para provar que ela enxerga o erro.
 
 afterAll(cleanupTempDirs);
 
-const JOB_IDS = ['checks', 'ci-ok', 'test'];
+const JOB_IDS = ['checks', 'ci-ok', 'test', 'workflows'];
 const PULL_REQUEST_ONLY = /github\.event_name\s*==\s*'pull_request'/;
 const NVMRC_ONLY = /matrix\.node\s*==\s*'nvmrc'/;
 
@@ -332,9 +333,9 @@ function ciOkBehaviorViolations(workflow: CiWorkflow): string[] {
 
 // --- linhas de base em memória ----------------------------------------------------------------------------------
 
-const CI_OK_JOB = `  ci-ok:
+const ciOkJob = (needs: string): string => `  ci-ok:
     name: ci-ok
-    needs: [checks, test]
+    needs: [${needs}]
     if: always()
     steps:
       - env:
@@ -354,7 +355,7 @@ jobs:
   test:
     steps:
       - run: npm test
-${CI_OK_JOB}`;
+${ciOkJob('checks, test')}`;
 
 function variant(edit: (text: string) => string): CiWorkflow {
   const text = edit(GOOD_CI_OK);
@@ -547,7 +548,12 @@ jobs:
         run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
       - if: matrix.node == 'nvmrc'
         run: node scripts/check-db-types.ts
-${CI_OK_JOB}`;
+  workflows:
+    name: Workflows
+    steps:
+      - uses: actions/checkout@${SHA}
+        with: { persist-credentials: false }
+${ciOkJob('checks, test, workflows')}`;
 
 describe('AI-42 a estrutura completa do critério passa em todas as conferências (controle positivo)', () => {
   const good = parseWorkflow(GOOD_STRUCTURE);
@@ -597,11 +603,19 @@ describe('AI-42 a estrutura completa do critério passa em todas as conferência
   });
 });
 
-describe('AI-42 o ci.yml tem os jobs checks, test e ci-ok', () => {
+describe('AI-42 o ci.yml tem os jobs checks, test, workflows e ci-ok', () => {
   const ci = readCi();
 
-  it('AI-42 o workflow tem exatamente os jobs checks, test e ci-ok, e o job commits deixou de existir', () => {
+  it('AI-42 o workflow tem exatamente os jobs checks, test, workflows e ci-ok, e o job commits deixou de existir', () => {
     expect(Object.keys(ci.jobs ?? {}).sort()).toEqual(JOB_IDS);
+  });
+
+  it('AI-42 o ci-ok depende dos três jobs checks, test e workflows', () => {
+    expect(needsOf(jobOf(ci, 'ci-ok') ?? {}).sort()).toEqual([
+      'checks',
+      'test',
+      'workflows',
+    ]);
   });
 
   it('AI-42 o job checks se chama Checagens, não tem matriz e roda no Node do .nvmrc', () => {

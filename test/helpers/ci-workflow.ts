@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { expect } from 'vitest';
 import { parse } from 'yaml';
 
-// Leitura do .github/workflows/ci.yml para os testes de test/repo/ que conferem os passos do CI.
+// Leitura dos workflows (.github/workflows/) e do dependabot.yml para os testes de test/repo/ que conferem os
+// passos do CI e a configuração do GitHub.
 export interface CiStep {
   name?: string;
   if?: string;
@@ -17,6 +19,7 @@ export interface CiJob {
   name?: string;
   needs?: string | string[];
   if?: string;
+  permissions?: unknown;
   strategy?: {
     'fail-fast'?: unknown;
     matrix?: { node?: string[] };
@@ -25,13 +28,73 @@ export interface CiJob {
 }
 
 export interface CiWorkflow {
+  on?: Record<string, unknown>;
+  permissions?: unknown;
   jobs?: Record<string, CiJob>;
 }
 
 export const repoRoot = join(import.meta.dirname, '..', '..');
+export const workflowsDir = join(repoRoot, '.github', 'workflows');
+
+export function parseYaml<T>(text: string): T {
+  return parse(text) as T;
+}
 
 export function parseWorkflow(text: string): CiWorkflow {
-  return parse(text) as CiWorkflow;
+  return parseYaml<CiWorkflow>(text);
+}
+
+// Devolve `undefined` quando o arquivo ainda não existe, para o teste reprovar por asserção, e não por exceção.
+export function readRepoYaml<T>(...segments: string[]): T | undefined {
+  const path = join(repoRoot, ...segments);
+  return existsSync(path)
+    ? parseYaml<T>(readFileSync(path, 'utf8'))
+    : undefined;
+}
+
+export function readWorkflowFile(name: string): CiWorkflow | undefined {
+  return readRepoYaml<CiWorkflow>('.github', 'workflows', name);
+}
+
+export function workflowFileNames(): string[] {
+  return readdirSync(workflowsDir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .sort();
+}
+
+// Controle negativo: o YAML de propósito errado nasce de uma linha de base com uma edição só, e a edição tem de mudar
+// o texto, senão o controle passaria no vazio.
+export function mutated(base: string, from: string, to: string): string {
+  expect(base, `a linha de base não contém: ${from}`).toContain(from);
+  return base.replace(from, to);
+}
+
+// Toda action fixada por SHA de 40 caracteres; tag, ramo e SHA curto não valem. O comentário `# vX.Y.Z` some no parse.
+export function unpinnedUses(steps: CiStep[]): string[] {
+  return steps
+    .map((step) => step.uses)
+    .filter(
+      (uses): uses is string =>
+        uses !== undefined && !/^[^@\s]+@[0-9a-f]{40}$/.test(uses),
+    );
+}
+
+// AI-05: no topo só vale `{}`, `read-all` ou permissões `read`; a de escrita fica no job.
+export function writeGrants(permissions: unknown): string[] {
+  if (typeof permissions === 'string')
+    return permissions.includes('write') ? [permissions] : [];
+  if (permissions === null || typeof permissions !== 'object') return [];
+  return Object.entries(permissions)
+    .filter(([, level]) => level === 'write')
+    .map(([scope]) => `${scope}: write`);
+}
+
+export function topPermissionViolations(workflow: CiWorkflow): string[] {
+  const { permissions } = workflow;
+  if (permissions === undefined) return ['não declara permissions no topo'];
+  if (typeof permissions === 'string' && permissions !== 'read-all')
+    return [`permissions: ${permissions} no topo`];
+  return writeGrants(permissions).map((grant) => `${grant} no topo`);
 }
 
 export function jobOf(workflow: CiWorkflow, id: string): CiJob | undefined {
@@ -43,9 +106,7 @@ export function stepsOfJob(workflow: CiWorkflow, id: string): CiStep[] {
 }
 
 export function readCi(): CiWorkflow {
-  return parseWorkflow(
-    readFileSync(join(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8'),
-  );
+  return parseWorkflow(readFileSync(join(workflowsDir, 'ci.yml'), 'utf8'));
 }
 
 export function stepsOfWorkflow(workflow: CiWorkflow): CiStep[] {
