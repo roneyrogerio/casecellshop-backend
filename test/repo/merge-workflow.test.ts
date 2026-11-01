@@ -162,6 +162,79 @@ function mergeStepViolations(steps: CiStep[]): string[] {
   return violations;
 }
 
+const allRuns = (steps: CiStep[]): string => runsOf(steps).join('\n');
+
+// O `gh` lê como número de PR uma branch de nome numérico e, sem PR, sai com erro: o `set -e` deixaria o job vermelho
+// em vez de cair no aviso. O PR vem de `gh pr list --head`, aberto e de branch deste repositório, e o `gh pr view`
+// só aceita o número já achado.
+function prLookupViolations(steps: CiStep[]): string[] {
+  const run = allRuns(steps);
+  const violations: string[] = [];
+  for (const [, target = ''] of run.matchAll(/gh pr view\s+(\S+)/g))
+    if (!/^["']?\$\{?(?:pr|PR_NUMBER)\}?["']?$/.test(target))
+      violations.push(`gh pr view busca por ${target}, e não pelo número`);
+  const list = /gh pr list(?:[^\n\\]|\\\n)*/.exec(run)?.[0];
+  if (list === undefined) {
+    violations.push('o PR não vem de gh pr list');
+    return violations;
+  }
+  if (!/--head[ =]["']?\$\{?HEAD_BRANCH\}?["']?(?:\s|$)/.test(list))
+    violations.push('o gh pr list não filtra por --head "$HEAD_BRANCH"');
+  if (!/(?:--state[ =]|-s )open\b/.test(list))
+    violations.push('o gh pr list não pede --state open');
+  if (
+    !/--json[ =]["']?[\w,]*\bisCrossRepository\b/.test(list) ||
+    !/select\(\s*(?:\.isCrossRepository\s*==\s*false|\.isCrossRepository\s*\|\s*not|not\s+\.isCrossRepository|!\.isCrossRepository)\s*\)/.test(
+      list,
+    )
+  )
+    violations.push('o gh pr list não descarta o PR de outro repositório');
+  const variable = /(\w+)=\$\(\s*gh pr list/.exec(run)?.[1];
+  const empty =
+    variable === undefined
+      ? undefined
+      : new RegExp(
+          `if \\[ -z "\\$\\{?${variable}\\}?" \\]; then([\\s\\S]*?)\\bfi\\b`,
+        ).exec(run)?.[1];
+  if (empty === undefined)
+    violations.push('falta o if que trata a falta de PR');
+  else {
+    if (!empty.includes('::warning::'))
+      violations.push('a falta de PR não deixa um ::warning::');
+    if (!/\bexit 0\b/.test(empty))
+      violations.push('a falta de PR não termina com exit 0');
+  }
+  return violations;
+}
+
+// A revisão APPROVED de OWNER só vale no commit atual do PR: o commit_id dela é comparado com o headRefOid, lido na hora.
+function approvalCommitViolations(steps: CiStep[]): string[] {
+  const run = allRuns(steps);
+  const violations: string[] = [];
+  const head = /(\w+)=\$\(\s*gh pr view[^)\n]*--json headRefOid/.exec(run)?.[1];
+  if (head === undefined)
+    violations.push('o commit atual do PR (headRefOid) não é lido');
+  const filter = /select\(([^\n]*)\)\s*\|/.exec(
+    run.slice(run.indexOf('/reviews')),
+  )?.[1];
+  if (filter === undefined) return [...violations, 'falta o select da revisão'];
+  for (const part of ['.state == "APPROVED"', '.author_association == "OWNER"'])
+    if (!filter.includes(part))
+      violations.push(`o select da revisão não confere ${part}`);
+  if (/\bor\b|\|\|/.test(filter))
+    violations.push('o select da revisão tem uma alternativa (or)');
+  // O jq do `gh api --jq` não tem --arg: a variável chega pelo ambiente do comando (`HEAD="$head" gh api ...`).
+  const variable = /\.commit_id\s*==\s*env\.(\w+)/.exec(filter)?.[1];
+  if (variable === undefined) {
+    violations.push('o select não compara o commit_id com env.<variável>');
+    return violations;
+  }
+  const holder = String.raw`["']?\$\{?${head ?? 'head'}\}?["']?`;
+  if (head === undefined || !new RegExp(`\\b${variable}=${holder}`).test(run))
+    violations.push('o commit_id não é comparado com o headRefOid do PR');
+  return violations;
+}
+
 function byAppViolations(
   workflow: CiWorkflow,
   approvalName: string | undefined,
@@ -237,10 +310,27 @@ jobs:
 
 const APPROVER_JOB = '    runs-on: ubuntu-latest\n    steps:\n';
 
-const CHECK_LINES = `          approved=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" --jq '.[] | select(.state == "APPROVED" and .author_association == "OWNER") | .commit_id')
-          echo "$approved" | grep -qx "$HEAD_SHA" || exit 1
+const LOOKUP_COMMAND = `gh pr list --head "$HEAD_BRANCH" --state open --json number,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | .number'`;
+const NO_PR_WARNING =
+  'echo "::warning::Nenhum PR aberto da branch $HEAD_BRANCH."';
+const LOOKUP_LINES = `          set -euo pipefail
+          pr=$(${LOOKUP_COMMAND})
+          if [ -z "$pr" ]; then
+            ${NO_PR_WARNING}
+            exit 0
+          fi
 `;
-const MERGE_LINE = '          gh pr merge "$PR_NUMBER" --auto --merge\n';
+const HEAD_COMMAND = `gh pr view "$pr" --json headRefOid --jq '.headRefOid'`;
+const REVIEW_FILTER = `.state == "APPROVED" and .author_association == "OWNER" and .commit_id == env.HEAD`;
+const CHECK_LINES = `          head=$(${HEAD_COMMAND})
+          approved=$(HEAD="$head" gh api "repos/$GH_REPO/pulls/$pr/reviews" --paginate \\
+            --jq '.[] | select(${REVIEW_FILTER}) | .id')
+          if [ -z "$approved" ]; then
+            echo "::warning::O PR #$pr não tem aprovação do dono no commit $head."
+            exit 0
+          fi
+`;
+const MERGE_LINE = '          gh pr merge "$pr" --auto --merge\n';
 
 const BY_APP_GOOD = `
 name: Merge pelo App
@@ -273,10 +363,9 @@ jobs:
         env:
           GH_TOKEN: \${{ steps.app-token.outputs.token }}
           GH_REPO: \${{ github.repository }}
-          PR_NUMBER: \${{ github.event.workflow_run.pull_requests[0].number }}
-          HEAD_SHA: \${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: \${{ github.event.workflow_run.head_branch }}
         run: |
-${CHECK_LINES}${MERGE_LINE}`;
+${LOOKUP_LINES}${CHECK_LINES}${MERGE_LINE}`;
 
 const ZIZMOR_GOOD = `
 rules:
@@ -445,8 +534,105 @@ const BY_APP_CASES: Case[] = [
   ['sem --merge (squash)', '--auto --merge', '--auto --squash'],
   [
     'com a expressão do evento direto no run',
-    '"$PR_NUMBER" --auto',
+    '"$pr" --auto',
     '${{ github.event.workflow_run.pull_requests[0].number }} --auto',
+  ],
+];
+
+// A1: a revisão só vale no commit atual do PR.
+const COMMIT_CASES: Case[] = [
+  ['sem comparar o commit_id da revisão', ' and .commit_id == env.HEAD', ''],
+  [
+    'com o commit_id como alternativa (or) na conferência',
+    ' and .commit_id == env.HEAD',
+    ' or .commit_id == env.HEAD',
+  ],
+  [
+    'comparando o commit_id com uma variável que ninguém preenche',
+    'env.HEAD',
+    'env.OUTRO',
+  ],
+  [
+    'comparando o commit_id com um commit fixo',
+    'env.HEAD',
+    '"0123456789abcdef"',
+  ],
+  [
+    'sem passar o headRefOid para a comparação',
+    'HEAD="$head" gh api',
+    'gh api',
+  ],
+  [
+    'passando à comparação outro commit que não o headRefOid',
+    'HEAD="$head" gh api',
+    'HEAD="$GITHUB_SHA" gh api',
+  ],
+  [
+    'sem ler o headRefOid do PR',
+    "--json headRefOid --jq '.headRefOid'",
+    "--json number --jq '.number'",
+  ],
+];
+
+// A2: o PR vem de `gh pr list --head`, aberto e de branch deste repositório, e a falta de PR vira aviso com exit 0.
+const LOOKUP_CASES: Case[] = [
+  [
+    'que busca o PR por gh pr view com a branch',
+    LOOKUP_COMMAND,
+    `gh pr view "$HEAD_BRANCH" --json number,state --jq 'select(.state == "OPEN") | .number'`,
+  ],
+  [
+    'que busca o PR por gh pr view com a branch sem aspas',
+    LOOKUP_COMMAND,
+    `gh pr view $HEAD_BRANCH --json number --jq '.number'`,
+  ],
+  [
+    'que lê o commit por gh pr view com a branch',
+    HEAD_COMMAND,
+    `gh pr view "\${HEAD_BRANCH}" --json headRefOid --jq '.headRefOid'`,
+  ],
+  [
+    'que lê o commit por gh pr view sem o número',
+    HEAD_COMMAND,
+    `gh pr view --json headRefOid --jq '.headRefOid'`,
+  ],
+  ['com gh pr list sem --state open', ' --state open', ''],
+  [
+    'com gh pr list em qualquer estado (--state all)',
+    '--state open',
+    '--state all',
+  ],
+  [
+    'com gh pr list sem filtrar o PR de outro repositório',
+    'select(.isCrossRepository == false)',
+    'select(.number > 0)',
+  ],
+  [
+    'com gh pr list que fica com o PR de outro repositório',
+    '.isCrossRepository == false',
+    '.isCrossRepository == true',
+  ],
+  [
+    'com gh pr list sem pedir isCrossRepository no --json',
+    '--json number,isCrossRepository',
+    '--json number',
+  ],
+  ['com gh pr list de outra branch', '--head "$HEAD_BRANCH"', '--head main'],
+  ['sem o aviso quando falta o PR', NO_PR_WARNING, 'echo "Nenhum PR aberto"'],
+  [
+    'com erro no lugar do aviso quando falta o PR',
+    NO_PR_WARNING,
+    'echo "::error::Nenhum PR aberto"',
+  ],
+  [
+    'sem exit 0 quando falta o PR',
+    `${NO_PR_WARNING}\n            exit 0`,
+    `${NO_PR_WARNING}\n            exit 1`,
+  ],
+  [
+    'sem tratar a falta de PR',
+    `if [ -z "$pr" ]; then`,
+    `if [ -z "$approved" ]; then`,
   ],
 ];
 
@@ -482,6 +668,32 @@ describe('AI-10 as conferências do merge enxergam o que procuram (controle nega
           edited(BY_APP_GOOD, from, to),
           approvalNameOf(approval),
         ),
+      ).not.toEqual([]);
+    },
+  );
+
+  it('AI-10 as linhas de base passam na busca do PR por gh pr list e na comparação do commit_id (controle positivo)', () => {
+    const steps = stepsOfWorkflow(byApp);
+    expect(prLookupViolations(steps)).toEqual([]);
+    expect(approvalCommitViolations(steps)).toEqual([]);
+  });
+
+  it.each(COMMIT_CASES)(
+    'AI-10 o merge-by-app.yml %s reprova (o commit_id da revisão é o do PR)',
+    (_label, from, to) => {
+      expect(
+        approvalCommitViolations(
+          stepsOfWorkflow(edited(BY_APP_GOOD, from, to)),
+        ),
+      ).not.toEqual([]);
+    },
+  );
+
+  it.each(LOOKUP_CASES)(
+    'AI-10 o merge-by-app.yml %s reprova (o PR vem de gh pr list)',
+    (_label, from, to) => {
+      expect(
+        prLookupViolations(stepsOfWorkflow(edited(BY_APP_GOOD, from, to))),
       ).not.toEqual([]);
     },
   );
@@ -533,6 +745,16 @@ describe('AI-10 o merge do repositório', () => {
 
   it('AI-10 o merge-by-app.yml roda no workflow_run do Merge na aprovação, no ambiente merge, com o token do App, e confere a aprovação do dono antes do auto-merge', () => {
     expect(byAppViolations(byApp ?? {}, approvalNameOf(approval))).toEqual([]);
+  });
+
+  it('AI-10 o merge-by-app.yml compara o commit_id da revisão APPROVED de OWNER com o headRefOid do PR', () => {
+    expect(byApp).toBeDefined();
+    expect(approvalCommitViolations(stepsOfWorkflow(byApp ?? {}))).toEqual([]);
+  });
+
+  it('AI-10 o merge-by-app.yml acha o PR por gh pr list --head, aberto e de branch deste repositório, nunca por gh pr view com a branch, e a falta de PR vira aviso com exit 0', () => {
+    expect(byApp).toBeDefined();
+    expect(prLookupViolations(stepsOfWorkflow(byApp ?? {}))).toEqual([]);
   });
 
   it('AI-10 o .github/zizmor.yml dispensa o dangerous-triggers só para o merge-by-app.yml', () => {
