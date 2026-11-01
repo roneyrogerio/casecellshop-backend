@@ -117,7 +117,6 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
   it.each([
     ['uma branch adicionada', ['branch', 'nova'], 'refs/heads/nova'],
     ['uma tag adicionada', ['tag', 'v9'], 'refs/tags/v9'],
-    ['um ref de remoto adicionado', ['update-ref', 'refs/remotes/origin/y', 'HEAD'], 'refs/remotes/origin/y'],
     ['um stash adicionado', ['update-ref', 'refs/stash', 'HEAD'], 'refs/stash'],
   ])('AI-12 %s aparece em refs, com o nome do ref na mensagem', (_label, args, name) => {
     const dir = repo();
@@ -243,6 +242,14 @@ describe('AI-33 o retrato não atribui ao agente o que outra sessão faz no mesm
     const text = mod.compareSnapshots(before, mod.takeSnapshot(dir)).join('\n');
 
     expect(text).not.toContain('refs/remotes');
+  });
+
+  it('AI-33 um ref remoto novo (adicionado, não só movido) não aparece na comparação', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'update-ref', 'refs/remotes/origin/y', 'HEAD');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
   });
 
   it('AI-33 controle negativo: uma branch nova que nenhuma worktree usa continua aparecendo em refs', () => {
