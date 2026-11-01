@@ -203,6 +203,98 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
   });
 });
 
+// AI-33: o retrato não atribui ao agente o que outra sessão faz no mesmo repositório. A outra worktree nasce antes do
+// primeiro retrato, para a lista de worktrees não mudar entre os dois (essa mudança é coberta pelo teste AI-12).
+describe('AI-33 o retrato não atribui ao agente o que outra sessão faz no mesmo repositório', () => {
+  function repoWithOtherWorktree(): { dir: string; other: string } {
+    const dir = repo();
+    const other = join(makeTempDir('wt-'), 'outra');
+    git(dir, 'worktree', 'add', '-q', other, '-b', 'outra');
+    return { dir, other };
+  }
+
+  it('AI-33 um commit na worktree de outra branch não aparece na comparação', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+
+    expect(git(dir, 'rev-parse', 'outra').trim()).not.toBe(git(dir, 'rev-parse', 'main').trim());
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
+  });
+
+  it('AI-33 a branch criada na outra worktree antes do retrato do início e movida até a parada também não aparece', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    commitEmpty(other, 'antes do início');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'depois do início');
+    commitEmpty(other, 'mais um');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
+  });
+
+  it('AI-33 um ref remoto que muda entre os retratos não aparece na comparação', () => {
+    const { dir } = repoWithOtherWorktree();
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(dir, 'outro commit');
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git(dir, 'update-ref', 'refs/remotes/origin/nova', 'HEAD');
+
+    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir)).join('\n');
+
+    expect(text).not.toContain('refs/remotes');
+  });
+
+  it('AI-33 controle negativo: uma branch nova que nenhuma worktree usa continua aparecendo em refs', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'branch', 'solta');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.startsWith('refs')).toBe(true);
+    expect(changes[0]).toContain('refs/heads/solta');
+  });
+
+  it('AI-33 controle negativo: um commit na branch da própria pasta do retrato continua aparecendo (HEAD e ref)', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(dir, 'do agente');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes.filter((line) => line.startsWith('HEAD'))).toHaveLength(1);
+    const refsLines = changes.filter((line) => line.startsWith('refs'));
+    expect(refsLines).toHaveLength(1);
+    expect(refsLines[0]).toContain('refs/heads/main');
+  });
+
+  it('AI-33 controle negativo: uma tag nova continua aparecendo em refs', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'tag', 'v33');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.startsWith('refs')).toBe(true);
+    expect(changes[0]).toContain('refs/tags/v33');
+  });
+
+  it('AI-33 controle negativo: mudar a branch da outra worktree junto com uma branch solta só atribui a solta', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+    git(dir, 'branch', 'solta2');
+
+    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir)).join('\n');
+
+    expect(text).toContain('refs/heads/solta2');
+    expect(text).not.toContain('refs/heads/outra');
+  });
+});
+
 function sorted(paths: string[]): string[] {
   return [...paths].sort();
 }

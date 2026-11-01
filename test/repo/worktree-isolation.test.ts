@@ -56,6 +56,16 @@ describe('AI-24 a worktree sai do HEAD da branch da sessão principal', () => {
   });
 });
 
+describe('AI-24 a worktree usa o node_modules da pasta principal', () => {
+  it('AI-24 o settings.json liga o node_modules por link simbólico em worktree.symlinkDirectories', () => {
+    const settings = JSON.parse(readFileSync(path.join(root, '.claude', 'settings.json'), 'utf8')) as {
+      worktree?: { symlinkDirectories?: unknown };
+    };
+
+    expect(settings.worktree?.symlinkDirectories).toContain('node_modules');
+  });
+});
+
 describe('AI-24 a pasta .claude/worktrees/ fica fora do git', () => {
   // Sem node_modules, .env nem *.log na amostra: o .gitignore já os ignora em qualquer pasta, e isso esconderia a
   // falta da regra da pasta.
