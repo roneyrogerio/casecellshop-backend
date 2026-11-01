@@ -1,11 +1,21 @@
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  apiFuzzJobViolations,
+  FUZZ_STEP,
+  FUZZ_UPLOAD_IF,
+  SHARED_FUZZ_CASES,
+  type FuzzCase,
+  type FuzzJob,
+} from '../helpers/api-fuzz-job.ts';
+import {
   jobOf,
+  mutated,
   parseWorkflow,
   readCi,
   stepsOfJob,
   stepsOfWorkflow,
+  writeGrants,
   type CiJob,
   type CiStep,
   type CiWorkflow,
@@ -20,11 +30,14 @@ import { runCommand } from '../helpers/run-node.ts';
 // AI-42: o CI tem quatro jobs, e o ruleset exige só o `ci-ok`. `checks` roda uma vez o que não depende do Node,
 // `test` é a matriz do FND-12, `workflows` confere os workflows (AI-43) e `ci-ok` agrega os outros três. Cada
 // conferência devolve as violações; a lista vazia é o que o ci.yml deve ter, e os controles negativos montam um YAML
-// de propósito errado para provar que ela enxerga o erro.
+// de propósito errado para provar que ela enxerga o erro. FND-16: um quinto job, `api-fuzz`, roda a versão leve do
+// fuzzing em paralelo, e o `ci-ok` espera por ele.
 
 afterAll(cleanupTempDirs);
 
 const JOB_IDS = ['checks', 'ci-ok', 'test', 'workflows'];
+// FND-16: o fuzzing leve do PR é um quinto job, em paralelo aos outros, e o ci-ok espera por ele.
+const CI_JOB_IDS = ['api-fuzz', ...JOB_IDS].sort();
 const PULL_REQUEST_ONLY = /github\.event_name\s*==\s*'pull_request'/;
 const NVMRC_ONLY = /matrix\.node\s*==\s*'nvmrc'/;
 
@@ -628,12 +641,13 @@ describe('AI-42 a estrutura completa do critério passa em todas as conferência
 describe('AI-42 o ci.yml tem os jobs checks, test, workflows e ci-ok', () => {
   const ci = readCi();
 
-  it('AI-42 o workflow tem exatamente os jobs checks, test, workflows e ci-ok, e o job commits deixou de existir', () => {
-    expect(Object.keys(ci.jobs ?? {}).sort()).toEqual(JOB_IDS);
+  it('AI-42 o workflow tem exatamente os jobs checks, test, workflows, api-fuzz (FND-16) e ci-ok, e o job commits deixou de existir', () => {
+    expect(Object.keys(ci.jobs ?? {}).sort()).toEqual(CI_JOB_IDS);
   });
 
-  it('AI-42 o ci-ok depende dos três jobs checks, test e workflows', () => {
+  it('AI-42 o ci-ok depende dos quatro jobs checks, test, workflows e api-fuzz', () => {
     expect(needsOf(jobOf(ci, 'ci-ok') ?? {}).sort()).toEqual([
+      'api-fuzz',
       'checks',
       'test',
       'workflows',
@@ -774,5 +788,296 @@ describe('AI-05 os jobs checks e test conferem o PR pelo binário ou por node, e
 
   it('AI-05 migrações, scripts, knip, jscpd, prettier, tipos do banco e a tabela não rodam por npm run, npm exec nem npx', () => {
     expect(prChecksThroughNpm(ci)).toEqual([]);
+  });
+});
+
+// --- api-fuzz no CI do PR (FND-16) -------------------------------------------------------------------------------
+
+interface FuzzWorkflow extends CiWorkflow {
+  env?: Record<string, unknown>;
+}
+
+// O PR roda a versão leve: o job é a mesma conferência do agendado, mas sem semente nem número de exemplos no
+// ambiente (valem os padrões fixos do compose, para a execução ser repetível), em paralelo (sem needs), sem
+// condição (um job pulado conta como verde no ci-ok) e com o down pelo perfil fuzz.
+function ciFuzzViolations(workflow: FuzzWorkflow): string[] {
+  const job = jobOf(workflow, 'api-fuzz');
+  const violations = apiFuzzJobViolations(job, 'default');
+  if (job === undefined) return violations;
+  if (job.name !== 'Fuzzing da API')
+    violations.push(`nome ${String(job.name)}`);
+  if (job.needs !== undefined)
+    violations.push('tem needs: o fuzzing deve rodar em paralelo');
+  if (job.if !== undefined)
+    violations.push('tem if: um job pulado conta como verde no ci-ok');
+  if (
+    !/^docker compose --profile fuzz down\b/.test(
+      (job.steps?.at(-1)?.run ?? '').trim(),
+    )
+  )
+    violations.push('o último passo não é docker compose --profile fuzz down');
+  for (const name of Object.keys(workflow.env ?? {}))
+    if (/FUZZ_/.test(name)) violations.push(`o env do workflow define ${name}`);
+  return violations;
+}
+
+// failure e cancelled do api-fuzz reprovam o ci-ok (o passo de shell, rodado como o GitHub o roda).
+function ciOkRejectsFuzzViolations(workflow: CiWorkflow): string[] {
+  const step = ciOkStep(workflow);
+  if (!otherJobIds(workflow).includes('api-fuzz'))
+    return ['falta o job api-fuzz'];
+  if (step === undefined) return ['não tem um único passo run'];
+  const allSuccess = Object.fromEntries(
+    otherJobIds(workflow).map((id) => [id, 'success']),
+  );
+  const violations: string[] = [];
+  for (const [result, passes] of [
+    ['success', true],
+    ['failure', false],
+    ['cancelled', false],
+  ] as const) {
+    const env = envOfCiOk(step, { ...allSuccess, 'api-fuzz': result });
+    if (env === null) return ['o passo não recebe o contexto needs pelo env'];
+    if ((runStep(step, env) === 0) !== passes)
+      violations.push(`api-fuzz ${result}: o ci-ok não decidiu certo`);
+  }
+  return violations;
+}
+
+const CI_FUZZ_JOB = `  api-fuzz:
+    name: Fuzzing da API
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@${SHA}
+        with:
+          persist-credentials: false
+      - name: Fuzzing com o Schemathesis
+        run: docker compose --profile fuzz run --rm schemathesis
+      - uses: actions/upload-artifact@${SHA}
+        if: \${{ !cancelled() }}
+        with:
+          name: schemathesis-report
+          path: schemathesis-report
+          retention-days: 7
+      - name: Derruba o compose e os volumes
+        if: always()
+        run: docker compose --profile fuzz down -v
+`;
+
+const GOOD_WITH_FUZZ = GOOD_STRUCTURE.replace(
+  ciOkJob('checks, test, workflows'),
+  () => CI_FUZZ_JOB + ciOkJob('checks, test, workflows, api-fuzz'),
+);
+
+// A edição atinge só o job api-fuzz, e não a primeira ocorrência do texto no arquivo.
+function fuzzEdited(from: string, to: string): FuzzWorkflow {
+  return parseWorkflow(
+    GOOD_WITH_FUZZ.replace(CI_FUZZ_JOB, () => mutated(CI_FUZZ_JOB, from, to)),
+  );
+}
+
+const FUZZ_DOWN = '        run: docker compose --profile fuzz down -v\n';
+
+// Os controles que valem também no agendado estão em test/helpers/api-fuzz-job.ts; aqui ficam os do CI do PR: o
+// nome, o paralelismo, a ausência de semente e de número de exemplos, e o `down` pelo perfil fuzz.
+const CI_FUZZ_CASES: FuzzCase[] = [
+  ...SHARED_FUZZ_CASES,
+  ['com outro nome', 'name: Fuzzing da API', 'name: Fuzz'],
+  [
+    'com needs (não roda em paralelo)',
+    '    runs-on: ubuntu-latest\n',
+    '    needs: [checks]\n    runs-on: ubuntu-latest\n',
+  ],
+  [
+    'com if no job (pode ser pulado)',
+    '    runs-on: ubuntu-latest\n',
+    "    if: github.event_name == 'pull_request'\n    runs-on: ubuntu-latest\n",
+  ],
+  [
+    'sem o checkout',
+    `      - uses: actions/checkout@${SHA}\n        with:\n          persist-credentials: false\n`,
+    '',
+  ],
+  [
+    'com FUZZ_SEED no env do passo',
+    FUZZ_STEP,
+    `${FUZZ_STEP}        env:\n          FUZZ_SEED: \${{ github.run_id }}\n`,
+  ],
+  [
+    'com FUZZ_SEED fixa no env do passo',
+    FUZZ_STEP,
+    `${FUZZ_STEP}        env:\n          FUZZ_SEED: '20261101'\n`,
+  ],
+  [
+    'com FUZZ_MAX_EXAMPLES no env do passo',
+    FUZZ_STEP,
+    `${FUZZ_STEP}        env:\n          FUZZ_MAX_EXAMPLES: 500\n`,
+  ],
+  [
+    'com FUZZ_SEED no env do job',
+    '    timeout-minutes: 30\n',
+    '    timeout-minutes: 30\n    env:\n      FUZZ_SEED: 1\n',
+  ],
+  [
+    'com FUZZ_MAX_EXAMPLES no env do job',
+    '    timeout-minutes: 30\n',
+    '    timeout-minutes: 30\n    env:\n      FUZZ_MAX_EXAMPLES: 500\n',
+  ],
+  [
+    'com a semente exportada no run',
+    'run: docker compose --profile fuzz run --rm schemathesis',
+    'run: |\n          export FUZZ_SEED=1\n          docker compose --profile fuzz run --rm schemathesis',
+  ],
+  [
+    'com --seed no run',
+    'run --rm schemathesis',
+    'run --rm schemathesis --seed 1',
+  ],
+  [
+    'com --max-examples no run',
+    'run --rm schemathesis',
+    'run --rm schemathesis --max-examples 500',
+  ],
+  [
+    'sem o upload do relatório',
+    `      - uses: actions/upload-artifact@${SHA}\n${FUZZ_UPLOAD_IF}        with:\n          name: schemathesis-report\n          path: schemathesis-report\n          retention-days: 7\n`,
+    '',
+  ],
+  [
+    'sem o docker compose down no fim',
+    `      - name: Derruba o compose e os volumes\n        if: always()\n${FUZZ_DOWN}`,
+    '',
+  ],
+  [
+    'com o down sem o perfil fuzz',
+    'docker compose --profile fuzz down -v',
+    'docker compose down -v',
+  ],
+  [
+    'com o down sem remover os volumes',
+    'docker compose --profile fuzz down -v',
+    'docker compose --profile fuzz down',
+  ],
+  ['com o down sem if', `        if: always()\n${FUZZ_DOWN}`, FUZZ_DOWN],
+];
+
+describe('FND-16 as conferências do api-fuzz do CI enxergam o que procuram (controle negativo)', () => {
+  it('FND-16 a estrutura correta, com o ci-ok esperando o api-fuzz, passa em todas as conferências (controle positivo)', () => {
+    const good = parseWorkflow(GOOD_WITH_FUZZ);
+
+    expect(Object.keys(good.jobs ?? {}).sort()).toEqual(CI_JOB_IDS);
+    expect(ciFuzzViolations(good)).toEqual([]);
+    expect(ciOkViolations(good)).toEqual([]);
+    expect(ciOkBehaviorViolations(good)).toEqual([]);
+    expect(ciOkRejectsFuzzViolations(good)).toEqual([]);
+    expect(retryViolations(good)).toEqual([]);
+  });
+
+  it('FND-16 sem o job api-fuzz, reprova', () => {
+    const without = parseWorkflow(
+      GOOD_WITH_FUZZ.replace(CI_FUZZ_JOB, () => '').replace(
+        'checks, test, workflows, api-fuzz',
+        () => 'checks, test, workflows',
+      ),
+    );
+
+    expect(ciFuzzViolations(without)).toEqual(['falta o job api-fuzz']);
+    expect(ciOkRejectsFuzzViolations(without)).toEqual([
+      'falta o job api-fuzz',
+    ]);
+  });
+
+  it.each(CI_FUZZ_CASES)(
+    'FND-16 o api-fuzz do CI %s reprova',
+    (_l, from, to) => {
+      expect(ciFuzzViolations(fuzzEdited(from, to))).not.toEqual([]);
+    },
+  );
+
+  it('FND-16 o env do workflow com FUZZ_SEED reprova', () => {
+    const withEnv = parseWorkflow(
+      mutated(GOOD_WITH_FUZZ, '\njobs:\n', '\nenv:\n  FUZZ_SEED: 1\njobs:\n'),
+    ) as FuzzWorkflow;
+
+    expect(ciFuzzViolations(withEnv)).not.toEqual([]);
+  });
+
+  it('FND-16 o api-fuzz com permissão de escrita reprova nas permissões do arquivo (AI-05)', () => {
+    const write = fuzzEdited(
+      '      contents: read\n',
+      '      contents: write\n',
+    );
+
+    expect(
+      Object.values(write.jobs ?? {}).flatMap((job) =>
+        writeGrants(job.permissions),
+      ),
+    ).toEqual(['contents: write']);
+  });
+
+  it('FND-16 o ci-ok sem api-fuzz em needs reprova', () => {
+    const missing = parseWorkflow(
+      mutated(
+        GOOD_WITH_FUZZ,
+        'checks, test, workflows, api-fuzz',
+        'checks, test, workflows',
+      ),
+    );
+
+    expect(ciOkViolations(missing)).toEqual(['needs não tem api-fuzz']);
+  });
+
+  it('FND-16 o ci-ok que não reprova quando o api-fuzz falha ou é cancelado reprova no comportamento', () => {
+    const lenient = parseWorkflow(
+      mutated(
+        GOOD_WITH_FUZZ,
+        `if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then`,
+        `if false; then`,
+      ),
+    );
+
+    expect(ciOkRejectsFuzzViolations(lenient)).toEqual([
+      'api-fuzz failure: o ci-ok não decidiu certo',
+      'api-fuzz cancelled: o ci-ok não decidiu certo',
+    ]);
+  });
+});
+
+describe('FND-16 o ci.yml roda a versão leve do fuzzing num job próprio, em paralelo, e o ci-ok espera por ele', () => {
+  const ci = readCi();
+
+  it('FND-16 o job api-fuzz (Fuzzing da API) sobe o serviço schemathesis do perfil fuzz, guarda o relatório e derruba o compose com os volumes em qualquer resultado', () => {
+    expect(ciFuzzViolations(ci)).toEqual([]);
+  });
+
+  it('FND-16 o job api-fuzz roda em paralelo aos outros: não depende de nenhum job e nenhum job depende dele além do ci-ok', () => {
+    const others = Object.entries(ci.jobs ?? {}).filter(
+      ([id]) => id !== 'api-fuzz' && id !== 'ci-ok',
+    );
+
+    expect(jobOf(ci, 'api-fuzz')).toBeDefined();
+    expect(jobOf(ci, 'api-fuzz')?.needs).toBeUndefined();
+    for (const [id, job] of others)
+      expect(needsOf(job), id).not.toContain('api-fuzz');
+  });
+
+  it('FND-16 o PR não passa semente nem número de exemplos: vale o padrão fixo do compose, e a execução é repetível', () => {
+    const job: FuzzJob | undefined = jobOf(ci, 'api-fuzz');
+    const knobs = [
+      ...Object.keys((ci as FuzzWorkflow).env ?? {}),
+      ...Object.keys(job?.env ?? {}),
+      ...(job?.steps ?? []).flatMap((step) => Object.keys(step.env ?? {})),
+    ].filter((name) => /FUZZ_/.test(name));
+
+    expect(job).toBeDefined();
+    expect(knobs).toEqual([]);
+  });
+
+  it('FND-16 o ci-ok espera o api-fuzz e reprova quando ele termina em failure ou cancelled', () => {
+    expect(needsOf(jobOf(ci, 'ci-ok') ?? {})).toContain('api-fuzz');
+    expect(ciOkRejectsFuzzViolations(ci)).toEqual([]);
   });
 });

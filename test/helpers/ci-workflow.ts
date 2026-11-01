@@ -201,6 +201,19 @@ export function same(value: unknown, expected: unknown): boolean {
   return JSON.stringify(value) === JSON.stringify(expected);
 }
 
+// `if` de um passo que roda mesmo depois de uma falha, mas não depois do cancelamento (o upload do relatório).
+export const NOT_CANCELLED = /^(?:\$\{\{\s*)?!cancelled\(\)(?:\s*\}\})?$/;
+
+// Valor de env ou with como texto; um objeto aninhado vira JSON e nunca casa com o esperado.
+export function text(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+export function tokensOf(run: string): string[] {
+  return run.split(/\s+/);
+}
+
 const SEMVER = /^\d+\.\d+\.\d+$/;
 const JOB_TOKEN = /^\$\{\{\s*(?:github\.token|secrets\.GITHUB_TOKEN)\s*\}\}$/;
 
