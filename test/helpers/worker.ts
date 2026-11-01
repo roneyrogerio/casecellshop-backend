@@ -351,7 +351,7 @@ export interface WorkerSuite {
   // Pool do worker como em produção: 10 conexões, lock_timeout de 2 s e statement_timeout de 5 s.
   pool: pg.Pool;
   telemetry: Telemetry;
-  // Um ElasticMQ por arquivo de teste; cada teste cria as filas dele (createWorld).
+  // O ElasticMQ da rodada (FND-14); cada teste cria as filas dele (createWorld), com o prefixo do arquivo.
   emq: TestElasticMq;
   // Fecha o que cada teste abriu (os clientes do SQS): chamado no afterEach.
   releaseWorlds(): void;
@@ -361,7 +361,7 @@ export interface WorkerSuite {
 // Quem fecha as filas de cada mundo; fora da interface pública da suíte.
 const cleanupsOf = new WeakMap<WorkerSuite, (() => void)[]>();
 
-// PostgreSQL real, o app do checkout (pedidos nascem como em produção), o pool do worker e o ElasticMQ.
+// Banco clonado do modelo da rodada, o app do checkout (pedidos nascem como em produção), o pool do worker e o cliente do ElasticMQ.
 export async function startWorkerSuite(): Promise<WorkerSuite> {
   const [database, emq] = await Promise.all([
     startMigratedDatabase(),

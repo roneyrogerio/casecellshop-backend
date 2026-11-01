@@ -7,12 +7,7 @@ import {
   SendMessageCommand,
   SQSClient,
 } from '@aws-sdk/client-sqs';
-import {
-  GenericContainer,
-  Wait,
-  type StartedTestContainer,
-} from 'testcontainers';
-import { assert } from 'vitest';
+import { assert, inject } from 'vitest';
 import {
   createQueue,
   createSqsClient,
@@ -22,9 +17,6 @@ import {
   type ReceivedMessage,
 } from '../../src/queue/sqs.ts';
 
-// A mesma imagem do compose (STATE.md, "Escolhas de ferramenta"): o teste fala com o emulador que roda em produção local.
-export const ELASTICMQ_IMAGE = 'softwaremill/elasticmq-native:1.7.1';
-export const ELASTICMQ_PORT = 9324;
 export const TEST_REGION = 'elasticmq';
 
 // O ElasticMQ ignora as credenciais, mas a cadeia padrão do SDK (usada pelo createSqsClient de
@@ -38,35 +30,33 @@ export interface TestElasticMq {
   stop(): Promise<void>;
 }
 
-// Um contêiner por arquivo de teste; as filas têm nome único por teste (createBillingQueues).
-export async function startElasticMq(): Promise<TestElasticMq> {
+// Prefixo único por arquivo de teste (cada arquivo carrega o próprio módulo): o ElasticMQ é da rodada
+// (FND-14), e sem o prefixo duas filas de mesmo nome em arquivos diferentes seriam a mesma fila.
+export function newQueuePrefix(): string {
+  return `f${randomUUID().replaceAll('-', '').slice(0, 12)}-`;
+}
+
+const FILE_QUEUE_PREFIX = newQueuePrefix();
+
+// O ElasticMQ é o da rodada (globalSetup); este cliente só se conecta a ele. As filas levam o prefixo do
+// arquivo e um sufixo único por teste (createBillingQueues).
+export function startElasticMq(): Promise<TestElasticMq> {
   process.env['AWS_ACCESS_KEY_ID'] ??= FAKE_CREDENTIALS.accessKeyId;
   process.env['AWS_SECRET_ACCESS_KEY'] ??= FAKE_CREDENTIALS.secretAccessKey;
-  // A espera é HTTP, de fora: a imagem nativa não tem shell para a checagem interna de porta do Testcontainers.
-  const container: StartedTestContainer = await new GenericContainer(
-    ELASTICMQ_IMAGE,
-  )
-    .withExposedPorts(ELASTICMQ_PORT)
-    .withWaitStrategy(
-      Wait.forHttp('/?Action=ListQueues', ELASTICMQ_PORT).forStatusCodeMatching(
-        (status) => status < 500,
-      ),
-    )
-    .start();
-  const endpoint = `http://${container.getHost()}:${container.getMappedPort(ELASTICMQ_PORT)}`;
+  const endpoint = inject('elasticMqEndpoint');
   const client = new SQSClient({
     endpoint,
     region: TEST_REGION,
     credentials: FAKE_CREDENTIALS,
   });
-  return {
+  return Promise.resolve({
     endpoint,
     client,
-    async stop() {
+    stop() {
       client.destroy();
-      await container.stop();
+      return Promise.resolve();
     },
-  };
+  });
 }
 
 export interface BillingQueues {
@@ -79,6 +69,8 @@ export interface QueueOptions {
   maxReceiveCount?: number;
   // Padrão 60, o da fila `billing`; 0 deixa a mensagem recebível na hora, quando o teste quer a visibilidade da fila sem esperar.
   visibilitySeconds?: number;
+  // Padrão: o prefixo do arquivo de teste. Só o teste do FND-14 passa outro, para simular dois arquivos no mesmo processo.
+  queuePrefix?: string;
 }
 
 // O QueueUrl que o ElasticMQ devolve cita a porta interna (9324); o que vale é o caminho.
@@ -96,9 +88,10 @@ export async function createBillingQueues(
   emq: TestElasticMq,
   options: QueueOptions = {},
 ): Promise<BillingQueues> {
+  const prefix = options.queuePrefix ?? FILE_QUEUE_PREFIX;
   const suffix = randomUUID().slice(0, 8);
   const dlq = await emq.client.send(
-    new CreateQueueCommand({ QueueName: `billing-dlq-${suffix}` }),
+    new CreateQueueCommand({ QueueName: `${prefix}billing-dlq-${suffix}` }),
   );
   const dlqUrl = reachableUrl(emq, dlq.QueueUrl);
   const attributes = await emq.client.send(
@@ -112,7 +105,7 @@ export async function createBillingQueues(
     throw new Error('o ElasticMQ não devolveu o ARN da DLQ');
   const source = await emq.client.send(
     new CreateQueueCommand({
-      QueueName: `billing-${suffix}`,
+      QueueName: `${prefix}billing-${suffix}`,
       Attributes: {
         VisibilityTimeout: String(options.visibilitySeconds ?? 60),
         RedrivePolicy: JSON.stringify({
