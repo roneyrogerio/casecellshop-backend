@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   apiFuzzJobViolations,
   FUZZ_UPLOAD_IF,
+  REPORT_DIR_STEP,
+  reportDirAfterFuzz,
   SHARED_FUZZ_CASES,
 } from '../helpers/api-fuzz-job.ts';
 import {
@@ -479,7 +481,7 @@ const API_FUZZ_JOB = `  api-fuzz:
         with:
           ref: main
           persist-credentials: false
-      - name: Fuzzing com o Schemathesis
+${REPORT_DIR_STEP}      - name: Fuzzing com o Schemathesis
         env:
           FUZZ_SEED: \${{ github.run_id }}
         run: |
@@ -1078,6 +1080,16 @@ describe('FND-16 as conferências do job api-fuzz enxergam o que procuram (contr
         editedFuzz('    permissions:\n      contents: read\n', ''),
       ),
     ).toEqual([]);
+  });
+
+  it('FND-16 o api-fuzz que cria o schemathesis-report depois do fuzzing reprova', () => {
+    const late = parseYaml<NightlyWorkflow>(
+      GOOD.replace(API_FUZZ_JOB, () => reportDirAfterFuzz(API_FUZZ_JOB)),
+    );
+
+    expect(apiFuzzViolations(late)).toEqual([
+      'o diretório do relatório é criado depois do fuzzing',
+    ]);
   });
 
   it.each(API_FUZZ_CASES)(

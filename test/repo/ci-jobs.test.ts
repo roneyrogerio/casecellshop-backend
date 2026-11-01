@@ -4,6 +4,8 @@ import {
   apiFuzzJobViolations,
   FUZZ_STEP,
   FUZZ_UPLOAD_IF,
+  REPORT_DIR_STEP,
+  reportDirAfterFuzz,
   SHARED_FUZZ_CASES,
   type FuzzCase,
   type FuzzJob,
@@ -854,7 +856,7 @@ const CI_FUZZ_JOB = `  api-fuzz:
       - uses: actions/checkout@${SHA}
         with:
           persist-credentials: false
-      - name: Fuzzing com o Schemathesis
+${REPORT_DIR_STEP}      - name: Fuzzing com o Schemathesis
         run: docker compose --profile fuzz run --rm schemathesis
       - uses: actions/upload-artifact@${SHA}
         if: \${{ !cancelled() }}
@@ -987,6 +989,18 @@ describe('FND-16 as conferências do api-fuzz do CI enxergam o que procuram (con
     expect(ciFuzzViolations(without)).toEqual(['falta o job api-fuzz']);
     expect(ciOkRejectsFuzzViolations(without)).toEqual([
       'falta o job api-fuzz',
+    ]);
+  });
+
+  it('FND-16 o api-fuzz do CI que cria o schemathesis-report depois do fuzzing reprova', () => {
+    const late = parseWorkflow(
+      GOOD_WITH_FUZZ.replace(CI_FUZZ_JOB, () =>
+        reportDirAfterFuzz(CI_FUZZ_JOB),
+      ),
+    );
+
+    expect(ciFuzzViolations(late)).toEqual([
+      'o diretório do relatório é criado depois do fuzzing',
     ]);
   });
 

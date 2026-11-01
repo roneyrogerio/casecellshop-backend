@@ -22,7 +22,44 @@ export type FuzzCase = readonly [label: string, from: string, to: string];
 export const FUZZ_STEP = '      - name: Fuzzing com o Schemathesis\n';
 export const FUZZ_UPLOAD_IF = '        if: ${{ !cancelled() }}\n';
 
+// A imagem do Schemathesis roda como uid 1000, e o diretório montado em ./schemathesis-report nasce com dono root e
+// modo 755 no runner Linux (sem o diretório no checkout, o Docker o cria assim): o Schemathesis não grava o JUnit e
+// sai com código 2, antes do fuzzing. O passo cria o diretório gravável por qualquer uid, depois do checkout (que
+// limpa a pasta) e antes do fuzzing.
+export const REPORT_DIR_RUN = 'install -d -m 0777 schemathesis-report';
+export const REPORT_DIR_STEP = `      - name: Cria o diretório do relatório\n        run: ${REPORT_DIR_RUN}\n`;
+
+// Move o passo do diretório para depois do fuzzing (antes do upload), para o controle de ordem: o texto do job é o
+// de cada workflow, por isso a edição é uma função e não um par `from`/`to`.
+export function reportDirAfterFuzz(jobText: string): string {
+  const upload = '      - uses: actions/upload-artifact@';
+  return jobText
+    .replace(REPORT_DIR_STEP, () => '')
+    .replace(upload, () => `${REPORT_DIR_STEP}${upload}`);
+}
+
 export const SHARED_FUZZ_CASES: FuzzCase[] = [
+  ['sem o passo que cria o schemathesis-report', REPORT_DIR_STEP, ''],
+  [
+    'criando o schemathesis-report com mkdir sem modo',
+    `run: ${REPORT_DIR_RUN}`,
+    'run: mkdir schemathesis-report',
+  ],
+  [
+    'criando o schemathesis-report com modo 0755',
+    'install -d -m 0777',
+    'install -d -m 0755',
+  ],
+  [
+    'criando o schemathesis-report com mkdir -m 0755',
+    `run: ${REPORT_DIR_RUN}`,
+    'run: mkdir -m 0755 schemathesis-report',
+  ],
+  [
+    'criando outro diretório que não o schemathesis-report',
+    `run: ${REPORT_DIR_RUN}`,
+    'run: install -d -m 0777 reports',
+  ],
   ['sem timeout-minutes', '    timeout-minutes: 30\n', ''],
   [
     'com timeout-minutes por expressão',
@@ -150,6 +187,17 @@ export function apiFuzzJobViolations(
       else if (!seed.includes('github.run_id'))
         violations.push('FUZZ_SEED não depende da execução (github.run_id)');
     }
+  }
+  const dirAt = steps.findIndex(
+    (step) => (step.run ?? '').trim() === REPORT_DIR_RUN,
+  );
+  if (dirAt < 0)
+    violations.push(`sem o passo que cria o relatório (${REPORT_DIR_RUN})`);
+  else {
+    if (dirAt < checkoutAt)
+      violations.push('o diretório do relatório é criado antes do checkout');
+    if (runAt >= 0 && dirAt > runAt)
+      violations.push('o diretório do relatório é criado depois do fuzzing');
   }
   if (seedMode === 'default') violations.push(...defaultsViolations(job));
 

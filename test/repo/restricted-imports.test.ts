@@ -43,11 +43,13 @@ const SPECS: Spec[] = [
     globs: ['test/integration/**/*.ts', 'test/helpers/**/*.ts'],
     roots: ['test/integration', 'test/helpers'],
     // O globalSetup da rodada, o banco de migração (FND-11), o ElasticMQ reiniciado, o compose e o teste que para o
-    // contêiner.
+    // contêiner e o controle negativo de execução do fuzzing (FND-16), que roda a imagem do Schemathesis contra
+    // servidores do próprio teste.
     allowed: [
       'test/helpers/compose.ts',
       'test/helpers/elasticmq-container.ts',
       'test/helpers/migration-database.ts',
+      'test/integration/foundation/api-fuzz-negative-control.test.ts',
       'test/integration/foundation/container-shutdown.test.ts',
       'test/integration/global-setup.ts',
     ],
