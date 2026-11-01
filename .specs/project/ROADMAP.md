@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): o PR #17 (pastas e regras do código, AD-025 e AD-026) está pronto para a aprovação; a seguir, o PR das guardas da fábrica, que registra o F2 aqui, e depois o M4. O M3 terminou nos PRs #13 e #15
+**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; o PR #20 (B1, formatador) está pronto para a aprovação; a seguir, o B2 (checagens de código, com as pendências do #20 na descrição dele), o B3, e os PRs C, D e E, depois o M4. O M3 terminou nos PRs #13 e #15
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
