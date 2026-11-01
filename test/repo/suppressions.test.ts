@@ -54,11 +54,12 @@ function describeOccurrences(found: Occurrence[]): string[] {
 
 const SCANNED_DIRS = ['src', 'migrations', 'scripts', '.claude/hooks'];
 
-// As extensões que o oxlint confere; os testes (`*.test.<ext>`) ficam de fora, porque são eles que citam as marcas.
+// As extensões que o oxlint confere; só os `*.test.ts` ficam de fora (como no isTestFile da guarda de caminho e no
+// `include` do vitest.config.ts), porque são eles que citam as marcas. Um `*.test.mts` não é teste para o Vitest nem
+// para a guarda, então é varrido.
 function isScannedSource(file: string): boolean {
   return (
-    /\.(?:ts|mts|cts|tsx|js|mjs|cjs)$/.test(file) &&
-    !/\.test\.(?:ts|mts|cts|tsx|js|mjs|cjs)$/.test(file)
+    /\.(?:ts|mts|cts|tsx|js|mjs|cjs)$/.test(file) && !file.endsWith('.test.ts')
   );
 }
 
@@ -81,9 +82,7 @@ describe('AI-47 nenhum comentário de supressão fora dos testes', () => {
         files.some((file) => file.startsWith(dir)),
         `a varredura leu arquivos de ${dir}`,
       ).toBe(true);
-    expect(files.some((file) => /\.test\.[cm]?[jt]sx?$/.test(file))).toBe(
-      false,
-    );
+    expect(files.some((file) => file.endsWith('.test.ts'))).toBe(false);
 
     const found = files.flatMap((file) =>
       findSuppressions(file, readFileSync(join(repoRoot, file), 'utf8')),
@@ -143,6 +142,13 @@ describe('AI-47 nenhum comentário de supressão fora dos testes', () => {
     '.claude/hooks/a.mjs',
     'migrations/store/20260101000000_a.cjs',
     'migrations/store/20260101000000_a.ts',
+    // Só o `*.test.ts` é teste (guarda de caminho e Vitest); as outras extensões de teste entram na varredura.
+    'src/x.test.mts',
+    'src/x.test.tsx',
+    'src/x.test.cts',
+    'src/x.test.js',
+    'scripts/x.test.mjs',
+    '.claude/hooks/x.test.cjs',
   ])('AI-47 o filtro da varredura inclui %s', (path) => {
     expect(isScannedSource(path)).toBe(true);
   });
@@ -152,8 +158,8 @@ describe('AI-47 nenhum comentário de supressão fora dos testes', () => {
     'migrations/README.md',
     'src/a.test.ts',
     'scripts/a.test.ts',
-    'src/a.test.mts',
-    'src/a.test.tsx',
+    'src/x.test.ts',
+    '.claude/hooks/x.test.ts',
     'test/repo/a.ts.snap',
   ])('AI-47 o filtro da varredura não inclui %s', (path) => {
     expect(isScannedSource(path)).toBe(false);

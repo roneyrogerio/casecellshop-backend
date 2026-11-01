@@ -56,21 +56,31 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
     expect(lockfileViolations(text)).toEqual([]);
   });
 
-  it('AI-05 a raiz e o link do workspace, sem resolved, ficam de fora', () => {
+  it('AI-05 só a raiz "", sem resolved nem integrity, fica de fora', () => {
     const text = lock({
       ...ROOT,
       'node_modules/zod': GOOD_ENTRY,
-      'node_modules/local': { link: true },
-      'packages/local': { name: 'local', version: '1.0.0' },
     });
 
     expect(lockfileViolations(text)).toEqual([]);
   });
 
-  it('AI-05 o pacote ruim ao lado da raiz e do link continua reprovando (a exceção não vira passe livre)', () => {
+  it('AI-05 uma dependência aninhada em qualquer nível, com registro e integrity sha512, passa (controle)', () => {
     const text = lock({
       ...ROOT,
-      'node_modules/local': { link: true },
+      'node_modules/zod': GOOD_ENTRY,
+      'packages/a/node_modules/lodash': {
+        resolved: 'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+        integrity: 'sha512-CCCC',
+      },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 o pacote ruim ao lado da raiz continua reprovando (a exceção não vira passe livre)', () => {
+    const text = lock({
+      ...ROOT,
       'node_modules/zod': {
         resolved: 'file:../zod',
         integrity: GOOD_INTEGRITY,
@@ -135,15 +145,44 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
     expect(violations.join('\n')).not.toContain('node_modules/good');
   });
 
-  it('AI-05 a entrada de link real do workspace ({ resolved: "packages/x", link: true }) passa', () => {
+  // O projeto não usa workspaces: o link trocaria um pacote baixado por código local com o mesmo nome.
+  it.each([
+    [
+      'o link para uma pasta local',
+      'node_modules/vitest',
+      { link: true, resolved: 'src/vitest' },
+    ],
+    [
+      'o link do workspace',
+      'node_modules/x',
+      { resolved: 'packages/x', link: true },
+    ],
+    ['o link sem resolved', 'node_modules/local', { link: true }],
+    [
+      'a pasta sem resolved',
+      'packages/local',
+      { name: 'local', version: '1.0.0' },
+    ],
+    ['a pasta com registro e integrity', 'packages/a', GOOD_ENTRY],
+    [
+      'o pacote fora do registro e sem integrity, sob outra pasta com node_modules/',
+      'tools/x/node_modules/evil',
+      { resolved: 'https://evil.example/evil.tgz' },
+    ],
+    [
+      'o pacote aninhado com resolved fora do registro',
+      'packages/a/node_modules/lodash',
+      { resolved: 'file:../lodash', integrity: GOOD_INTEGRITY },
+    ],
+  ])('AI-05 %s reprova, e cita a entrada', (_label, key, entry) => {
+    // Uma violação por entrada, citando a chave dela.
     const text = lock({
       ...ROOT,
       'node_modules/zod': GOOD_ENTRY,
-      'node_modules/x': { resolved: 'packages/x', link: true },
-      'packages/x': { name: 'x', version: '1.0.0' },
+      [key]: entry,
     });
 
-    expect(lockfileViolations(text)).toEqual([]);
+    expect(lockfileViolations(text)).toEqual([expect.stringContaining(key)]);
   });
 
   it('AI-05 um lockfile com lockfileVersion 1 (pacotes em dependencies, sem packages) reprova, e cita lockfileVersion', () => {
