@@ -192,7 +192,7 @@ Exemplos de erros da IA que o fluxo pegou antes do merge, com o relatório de re
 
 ## Contribuir
 
-O passo a passo para preparar a máquina, rodar as checagens e abrir um PR está no [`CONTRIBUTING.md`](CONTRIBUTING.md).
+O passo a passo para preparar a máquina, rodar as checagens e abrir um PR está no [`CONTRIBUTING.md`](CONTRIBUTING.md). A sessão do Claude Code na nuvem (claude.ai/code) se prepara sozinha; o que ela faz e o script opcional do painel estão em [Sessão do Claude Code na nuvem](CONTRIBUTING.md#sessão-do-claude-code-na-nuvem).
 
 ## Licença
 

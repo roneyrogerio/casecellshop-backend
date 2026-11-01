@@ -178,6 +178,26 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     ).toBe(true);
   });
 
+  // Os hooks de um mesmo evento rodam em paralelo: o preparo da nuvem e o
+  // diagnóstico ficam no mesmo comando, em ordem, para o relatório ver o
+  // ambiente já preparado. O hash -r faz o shell procurar o node de novo,
+  // depois de o preparo pôr o link do Node do .nvmrc no PATH.
+  it('AI-51 o SessionStart roda o scripts/cloud-setup.ts antes do check-env, no mesmo comando', () => {
+    const command = commandsOf(settings.hooks?.SessionStart ?? []).find(
+      (candidate) => candidate.includes('scripts/check-env.ts'),
+    );
+
+    expect(command).toBeDefined();
+    const setup = command?.indexOf('scripts/cloud-setup.ts') ?? -1;
+    const rehash = command?.indexOf('hash -r') ?? -1;
+    const check = command?.indexOf('scripts/check-env.ts') ?? -1;
+    expect(setup).toBeGreaterThanOrEqual(0);
+    expect(rehash).toBeGreaterThan(setup);
+    expect(check).toBeGreaterThan(rehash);
+    // Com ;, e não &&: uma falha do preparo não cala o diagnóstico.
+    expect(command).not.toContain('&&');
+  });
+
   it('AI-06 o SessionStart só roda no início e na retomada da sessão (matcher startup|resume)', () => {
     const entry = (settings.hooks?.SessionStart ?? []).find((candidate) =>
       commandsOf([candidate]).some((command) =>

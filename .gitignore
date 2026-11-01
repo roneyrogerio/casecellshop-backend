@@ -11,3 +11,6 @@ dist/
 .claude/settings.local.json
 # Worktrees dos agentes isolados (AI-24), criadas e apagadas pelo Claude Code.
 .claude/worktrees/
+
+# Certificado do proxy para o build da imagem, gravado pelo scripts/cloud-setup.ts (AI-51).
+.build-ca.pem

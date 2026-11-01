@@ -787,6 +787,33 @@ O princípio adotado é a verificação determinística e independente de quem i
 - [Anthropic, *Hooks reference*](https://code.claude.com/docs/en/hooks), consultado em 31/10/2026: o `onFailure`, que não vale para `Stop` e `SubagentStop`.
 - [Anthropic, *Settings reference*](https://code.claude.com/docs/en/settings-reference), consultado em 31/10/2026: `worktree.symlinkDirectories`.
 
+### AD-028 · A sessão na nuvem se prepara por um script do repositório, chamado pelo painel e pelo hook
+
+**Status:** aceita (01/11/2026)
+
+**Contexto.** A VM da sessão do Claude Code na nuvem traz o Node 22 no PATH (o projeto pede o 26), sem `node_modules` e com o Docker parado. Lá, o `docker build` falhava no `npm ci`: o proxy da sessão reabre o TLS, e a imagem não confia no certificado dele. Dois testes de compose reprovavam por isso. O preparo pode ir para o script do painel de claude.ai/code, mas o painel fica fora do git, e a nuvem guarda uma cópia do disco e só roda o script de novo quando ele muda ou a cada ~7 dias: o que o repositório mudasse depois (o `.nvmrc`, o lockfile) não chegaria às sessões.
+
+**Decisão.**
+
+- O preparo inteiro vive no `scripts/cloud-setup.ts` (AI-51). O painel só o chama com `--setup-script`, num texto que não muda; o hook `SessionStart` o chama de novo em toda sessão na nuvem, antes do `check-env` e no mesmo comando, porque os hooks de um evento rodam em paralelo. Cada etapa é idempotente e termina em cerca de 1 s quando já está feita.
+- O Node do `.nvmrc` vem do nvm da imagem. Os comandos da sessão o recebem pelo `CLAUDE_ENV_FILE`, e os hooks, que herdam o PATH do processo do Claude Code, por links em `~/.local/bin`, que lá vem antes do Node da imagem.
+- O certificado do proxy chega ao build como arquivo: o script grava em `.build-ca.pem`, fora do git, os certificados do pacote da sessão que o Node não traz, e o `Dockerfile` os copia num estágio de dependências só quando o arquivo existe. A imagem final leva apenas o `node_modules`.
+
+**Alternativas consideradas:**
+
+- **Tudo no script do painel:** cada mudança do projeto pediria editar o painel, e a cópia do disco atrasaria a mudança por até 7 dias.
+- **Secret do BuildKit apontando para o pacote da sessão:** o compose 5 pede `--allow=fs.read` para ler arquivo fora do projeto (até `/dev/null`), e o Testcontainers não passa essa flag. Pela variável de ambiente, o pacote inteiro (184 KB) passa do limite de uma variável, e os hooks não a receberiam.
+- **Mudar o `/etc/profile.d` da imagem:** vale só para os shells de login, e não para os hooks.
+
+**Trade-off.** O hook da sessão fica mais lento quando o lockfile muda (um `npm ci`), e o Docker sobe em cerca de 2 s a cada sessão. O `hash -r` entre os dois comandos do hook existe só porque o shell guardaria o Node da imagem, achado antes de o link existir. O Docker Hub limita o pull anônimo (429), e um build na nuvem ainda pode falhar por isso, fora do alcance do script.
+
+**Rever quando:** a imagem da nuvem trouxer o Node 26, ou o Claude Code deixar o hook mudar o PATH dos outros hooks.
+
+**Referências:**
+
+- [Anthropic, *Configure cloud environments*](https://code.claude.com/docs/en/cloud-environments), consultado em 01/11/2026: o script de preparo, a cópia do disco e o preparo por hook `SessionStart` com `CLAUDE_CODE_REMOTE`.
+- [Anthropic, *Hooks reference*](https://code.claude.com/docs/en/hooks), consultado em 01/11/2026: o `CLAUDE_ENV_FILE` e os hooks de um evento em paralelo.
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |

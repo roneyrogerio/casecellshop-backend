@@ -54,8 +54,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR}/scripts/check-env.ts\"",
-            "timeout": 30
+            "command": "node \"${CLAUDE_PROJECT_DIR}/scripts/cloud-setup.ts\"; hash -r; node \"${CLAUDE_PROJECT_DIR}/scripts/check-env.ts\"",
+            "timeout": 300
           }
         ],
         "matcher": "startup|resume"
