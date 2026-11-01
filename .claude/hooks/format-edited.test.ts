@@ -1,11 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTempDirs,
+  git,
+  initRepo,
   makeTempDir,
+  writeFileIn,
 } from '../../test/helpers/git-sandbox.ts';
 
 const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
@@ -152,5 +155,56 @@ describe('AI-34 o hook como processo (stdin, arquivo, código de saída)', () =>
 
     expect(readFileSync(broken, 'utf8')).toBe('const = ;;{\n');
     expect(readFileSync(good, 'utf8')).toBe(FORMATTED);
+  });
+});
+
+// A pasta principal ignora `.claude/worktrees/` (as worktrees dos agentes moram lá dentro). O Prettier
+// lê o .prettierignore a partir do cwd, então o hook precisa olhar a raiz da worktree, não a principal.
+function sandboxWithAgentWorktree(): { main: string; worktree: string } {
+  const main = makeTempDir('ai34-main-');
+  initRepo(main);
+  writeFileIn(main, '.prettierignore', '.claude/worktrees/\n');
+  git(main, 'add', '-A');
+  git(main, 'commit', '-q', '-m', 'prettierignore');
+  const worktree = join(main, '.claude', 'worktrees', 'agente');
+  git(main, 'worktree', 'add', '-q', '-b', 'agente', worktree);
+  // Como o worktree.symlinkDirectories: o Prettier fica acessível nas duas raízes.
+  symlinkSync(join(root, 'node_modules'), join(main, 'node_modules'));
+  symlinkSync(join(root, 'node_modules'), join(worktree, 'node_modules'));
+  // Só a worktree ignora essa pasta: prova que o .prettierignore usado é o dela.
+  writeFileIn(worktree, '.prettierignore', '.claude/worktrees/\nisolado/\n');
+  return { main, worktree };
+}
+
+describe('AI-34 o hook formata também na worktree do agente, com o .prettierignore da raiz dela', () => {
+  it('AI-34 arquivo editado na worktree do agente sai formatado, com CLAUDE_PROJECT_DIR na pasta principal', () => {
+    const { main, worktree } = sandboxWithAgentWorktree();
+    const file = join(worktree, 'src', 'amostra.ts');
+    writeFileIn(worktree, 'src/amostra.ts', MESSY);
+
+    expect(runHook(edited('Edit', file), main).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
+  });
+
+  it('AI-34 controle negativo: arquivo que o .prettierignore da worktree ignora continua fora do formato', () => {
+    const { main, worktree } = sandboxWithAgentWorktree();
+    const ignored = join(worktree, 'isolado', 'amostra.ts');
+    writeFileIn(worktree, 'isolado/amostra.ts', MESSY);
+
+    // O mesmo cenário do primeiro teste prova que o Prettier roda na worktree; aqui só a pasta ignorada.
+    expect(runHook(edited('Write', ignored), main).code).toBe(0);
+
+    expect(readFileSync(ignored, 'utf8')).toBe(MESSY);
+  });
+
+  it('AI-34 controle: arquivo editado na própria pasta principal continua formatado', () => {
+    const { main } = sandboxWithAgentWorktree();
+    const file = join(main, 'src', 'amostra.ts');
+    writeFileIn(main, 'src/amostra.ts', MESSY);
+
+    expect(runHook(edited('Edit', file), main).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
   });
 });
