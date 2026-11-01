@@ -19,6 +19,10 @@ The task map in your prompt lists the criteria, the spec sections, the ADs and t
 - The `design.md` sections and the `### AD-NNN` blocks of `STATE.md` the map names, and the slice criteria in `spec.md`.
 - The contract in `src/contract/` and the slice tests.
 
+## Workspace
+
+You run in your own git worktree (`isolation: worktree`), branched from the main session's `HEAD`: edit only inside it. `node_modules` is a link to the main checkout's, so never run `npm install` or `npm ci`; to add a dependency, change `package.json` as the map says and report it, and the main session installs it. The main session brings your changes back to its branch after you stop.
+
 ## Write
 
 - Production code and infrastructure: `src/`, migrations, `compose.yaml`, the `Dockerfile`, and `package.json` and `package-lock.json` only to add a dependency whose `STATE.md` decision the map cites, at an exact version (never the `scripts` block).
@@ -27,7 +31,8 @@ The task map in your prompt lists the criteria, the spec sections, the ADs and t
 - Read files with the Read tool (`offset` and `limit` for a section), not `cat`, `head` or `sed -n`. These two rules override any general note that allows shell reads or edits.
 - Never run a package through `npx` that is not in `package.json`: it downloads an unpinned version.
 - Follow `design.md` and the ADs. Without a `STATE.md` decision for a dependency, report it instead of adding it.
-- Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings. Avoid scratch files; if you created one with Write, delete it with `rm` before finishing, the only file change allowed through Bash.
+- When the lint flags size or complexity, split by responsibility; never raise a limit, disable a rule or add a lint-disable comment (`.claude/rules/architecture.md`, AD-026).
+- Make the smallest change that makes the criteria pass; nothing beyond the plan or the findings. To move or delete a file of your role, use `mv` or `rm` in the worktree, the only file changes allowed through Bash; delete any scratch file before finishing.
 
 ## Run
 
