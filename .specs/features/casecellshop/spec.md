@@ -58,6 +58,12 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
   - **Paralelismo:** o projeto `integration` roda no máximo 4 arquivos por vez (`maxWorkers`), porque cada arquivo sobe o próprio PostgreSQL e ElasticMQ e o Docker da máquina de desenvolvimento tem 4 CPUs; o limite é revisto quando o `FND-14` trocar isso por um contêiner por rodada.
   - **Encerramento:** parar o contêiner de um banco de teste não deixa escapar erro de conexão sem tratamento (o 57P01, "terminating connection due to administrator command"): todo pool aberto pelos testes, inclusive o do gerador de tipos (`FND-09`) e o do migrador sem o adaptador, termina antes do contêiner ou tem ouvinte de erro.
   - **Controle negativo:** o mesmo cenário do worker, com o relógio avançado por passo fixo enquanto a chamada ao ERP está parada, perde a chamada por timeout; com o avanço até a próxima espera, ela termina. Um pool aberto e não encerrado antes do `stop()` do contêiner faz o erro escapar.
+- **FND-14** Os testes de integração sobem um PostgreSQL e um ElasticMQ por rodada, e não por arquivo (PR C do F2):
+  - um `globalSetup` do projeto `integration` sobe os dois contêineres, aplica as migrações uma vez num banco modelo e passa as conexões aos testes pelo `provide`/`inject` do Vitest; o `teardown` os para no fim da rodada;
+  - cada arquivo cria o próprio banco com `CREATE DATABASE … TEMPLATE` a partir do modelo, sem ninguém conectado ao modelo durante a cópia, e as próprias filas com um prefixo único; nenhum arquivo vê o banco nem as filas de outro;
+  - ficam de fora, com contêiner próprio: os testes de migração (`FND-11`), que precisam de banco vazio; os que param ou reiniciam um contêiner (o `compose`, o ElasticMQ reiniciado); e os do gerador de tipos (`FND-09`);
+  - o limite de paralelismo do `FND-13` é revisto pela medição: a rodada passa a subir 2 contêineres, e não um ou dois por arquivo;
+  - controle negativo: dois arquivos que gravam no mesmo SKU, cada um no seu banco clonado, não se veem; o mesmo nome de fila nos dois arquivos, sem o prefixo, faz um receber a mensagem do outro.
 
 ## Fábrica agêntica
 
