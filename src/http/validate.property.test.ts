@@ -95,17 +95,19 @@ const invalidBodyArb = fc
   .oneof(fc.jsonValue(), nearBodyArb, nearBodyArb)
   .filter((body) => !CheckoutRequest.safeParse(body).success);
 
-// Um erro por violação do schema do contrato, na ordem; a chave desconhecida conta uma a uma, com o nome no caminho.
+// Um erro por campo, na ordem do primeiro problema: o zod pode apontar dois problemas no mesmo caminho e só o primeiro vale.
+// A chave desconhecida conta uma a uma, com o nome no caminho.
 function expectedPaths(body: unknown): string[] {
   const parsed = CheckoutRequest.safeParse(body);
   if (parsed.success) return [];
-  return parsed.error.issues.flatMap((issue) =>
+  const paths = parsed.error.issues.flatMap((issue) =>
     issue.code === 'unrecognized_keys'
       ? issue.keys.map((key) =>
           ['body', ...issue.path.map(String), key].join('.'),
         )
       : [['body', ...issue.path.map(String)].join('.')],
   );
+  return [...new Set(paths)];
 }
 
 function rejectsWithOneErrorPerField(validator: Validator) {
