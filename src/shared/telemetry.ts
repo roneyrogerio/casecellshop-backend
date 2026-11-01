@@ -152,6 +152,16 @@ type Instruments = Pick<
 
 function createInstruments(meter: Meter): Instruments {
   return {
+    ...createHttpInstruments(meter),
+    ...createOutboxInstruments(meter),
+    ...createErpInstruments(meter),
+  };
+}
+
+function createHttpInstruments(
+  meter: Meter,
+): Pick<Instruments, 'httpRequestDuration' | 'checkoutOutcome'> {
+  return {
     // O exportador Prometheus não acrescenta o sufixo da unidade: o nome já a carrega.
     httpRequestDuration: meter.createHistogram(
       'http_server_request_duration_seconds',
@@ -165,6 +175,19 @@ function createInstruments(meter: Meter): Instruments {
       description:
         'Checkouts por desfecho: accepted, replay, out_of_stock, price_changed, invalid ou unavailable.',
     }),
+  };
+}
+
+function createOutboxInstruments(
+  meter: Meter,
+): Pick<
+  Instruments,
+  | 'outboxAttemptOutcome'
+  | 'outboxConclusionNoRow'
+  | 'outboxPublished'
+  | 'orderAcceptToInvoice'
+> {
+  return {
     outboxAttemptOutcome: meter.createCounter('outbox_attempt_outcome_total', {
       description:
         'Tentativas da outbox por desfecho: invoiced, failed, retry, dead, closed ou lease_short.',
@@ -187,6 +210,20 @@ function createInstruments(meter: Meter): Instruments {
         advice: { explicitBucketBoundaries: ACCEPT_TO_INVOICE_BUCKETS_SECONDS },
       },
     ),
+  };
+}
+
+function createErpInstruments(
+  meter: Meter,
+): Pick<
+  Instruments,
+  | 'erpRequestDuration'
+  | 'erpRequestTotal'
+  | 'erpRequestsInFlight'
+  | 'erpConfigError'
+  | 'erpOutOfStockRejection'
+> {
+  return {
     erpRequestDuration: meter.createHistogram('erp_request_duration_seconds', {
       unit: 's',
       description: 'Duração das chamadas ao ERP, por operação e desfecho.',

@@ -40,29 +40,13 @@ export async function concludeOrder(
   });
 }
 
-// Pedido e estoque, para quem já travou a linha da outbox na própria transação (o cancelamento do runbook).
-export async function applyConclusion(
+// Aplica ao estoque o desfecho do pedido (baixa da venda ou só liberação da reserva), um UPDATE por SKU
+// em ordem de SKU, e só depois de o compare-and-set do pedido afetar uma linha.
+async function applyStockOutcome(
   trx: Kysely<StoreDb>,
   orderId: string,
   conclusion: OrderConclusion,
-): Promise<ConclusionResult> {
-  const order = await trx
-    .updateTable('orders')
-    .set(
-      conclusion.kind === 'invoiced'
-        ? { status: 'invoiced', outcome_at: sql<Date>`now()` }
-        : {
-            status: 'failed',
-            failure_reason: conclusion.reason,
-            outcome_at: sql<Date>`now()`,
-          },
-    )
-    .where('id', '=', orderId)
-    .where('status', '=', 'pending')
-    .returning(['accepted_at', 'outcome_at'])
-    .executeTakeFirst();
-  if (!order) return { orderChanged: false };
-
+): Promise<void> {
   const items = await trx
     .selectFrom('order_items')
     .select(['sku', 'quantity'])
@@ -88,6 +72,32 @@ export async function applyConclusion(
       .where('sku', '=', sku)
       .execute();
   }
+}
+
+// Pedido e estoque, para quem já travou a linha da outbox na própria transação (o cancelamento do runbook).
+export async function applyConclusion(
+  trx: Kysely<StoreDb>,
+  orderId: string,
+  conclusion: OrderConclusion,
+): Promise<ConclusionResult> {
+  const order = await trx
+    .updateTable('orders')
+    .set(
+      conclusion.kind === 'invoiced'
+        ? { status: 'invoiced', outcome_at: sql<Date>`now()` }
+        : {
+            status: 'failed',
+            failure_reason: conclusion.reason,
+            outcome_at: sql<Date>`now()`,
+          },
+    )
+    .where('id', '=', orderId)
+    .where('status', '=', 'pending')
+    .returning(['accepted_at', 'outcome_at'])
+    .executeTakeFirst();
+  if (!order) return { orderChanged: false };
+
+  await applyStockOutcome(trx, orderId, conclusion);
   const acceptToOutcomeSeconds = order.outcome_at
     ? (order.outcome_at.getTime() - order.accepted_at.getTime()) / 1000
     : undefined;
