@@ -1,5 +1,6 @@
-// Confere a origem de cada pacote do package-lock.json (AI-05): todo pacote com
-// `resolved` vem do registro oficial do npm, por HTTPS, e traz o hash sha512.
+// Confere a origem de cada pacote do package-lock.json (AI-05): toda entrada, fora
+// a raiz, fica sob node_modules/, vem do registro oficial do npm, por HTTPS, e traz
+// o hash sha512; link e pasta local reprovam.
 // Um `resolved` de outro host, de git ou de arquivo trocaria uma ferramenta da
 // verificação sem mudar o nome dela, e o `npm audit` não vê isso.
 import { readFileSync } from 'node:fs';
