@@ -67,6 +67,15 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
   - a rodada passa a subir 2 contêineres, e não um ou dois por arquivo; o limite de paralelismo do `FND-13` segue o que está escrito lá;
   - o `no-restricted-imports` do oxlint reprova o `PostgreSqlContainer`, o `GenericContainer` e o `DockerComposeEnvironment` (por nome, pelo import padrão ou pelo de namespace) em `test/integration/` e `test/helpers/`, salvo no `global-setup.ts`, nos helpers do banco de migração, do ElasticMQ e do compose e no teste do encerramento, para um arquivo novo não voltar ao contêiner próprio;
   - controle negativo: dois arquivos que gravam no mesmo SKU, cada um no seu banco clonado, não se veem; o mesmo nome de fila nos dois arquivos, sem o prefixo, faz um receber a mensagem do outro.
+- **FND-15** As funções puras que decidem prazos, classificam respostas e validam entradas têm propriedades testadas com o fast-check, no projeto `unit` (PR C do F2), cada uma pela API pública do módulo:
+  - **Novo prazo do faturamento** (`retrySeconds`, `src/billing/erp-call.ts`): é inteiro, nunca menor que o atraso mínimo nem maior que o atraso mínimo mais o teto do backoff, em segundos arredondados para cima, para qualquer tentativa ≥ 1 e qualquer valor do sorteio em [0, 1).
+  - **Catálogo do ERP** (`createErpClient`, com transporte falso): qualquer corpo devolvido pelo ERP vira uma página válida ou o resultado de erro da lista fechada, sem lançar; preço e estoque só passam como inteiro seguro ≥ 0.
+  - **Classificação do ERP** (`createErpClient`, com transporte falso): qualquer status e corpo dão um resultado da lista fechada do contrato do `ErpClient`; o 404 da criação do pedido é sempre `config_error`.
+  - **Mensagem da fila** (`parseBillingMessage`): qualquer texto vira uma mensagem válida ou o resultado de mensagem inválida, sem lançar.
+  - **Validação da requisição** (`validateRequest`): qualquer corpo fora do contrato dá `400` em problem+json com um erro por campo e mensagens só da lista do módulo, sem lançar.
+  - **Contexto da requisição** (o middleware de `src/http/request-context.ts`): qualquer `X-Request-Id` recebido vira um `correlationId` válido pelo contrato, e qualquer status vira uma das classes `1xx` a `5xx` no label da métrica.
+  - **Semente:** o PR roda com uma semente fixa e o número padrão de casos; o agendado roda com a semente da execução e mais casos; a semente e o caminho do contraexemplo de uma falha saem no log, para reproduzir.
+  - **Controle negativo:** para cada propriedade, uma versão da função com a invariante quebrada (no próprio teste) é reprovada pela mesma propriedade.
 
 ## Fábrica agêntica
 
