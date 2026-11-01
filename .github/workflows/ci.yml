@@ -181,12 +181,35 @@ jobs:
           advanced-security: false
           token: ${{ github.token }}
 
+  # FND-16: a versão leve do fuzzing, em paralelo aos outros jobs, com a semente e o
+  # número de exemplos fixos do compose.yaml, para o resultado do PR ser repetível; o
+  # agendado roda o mesmo serviço com a semente da execução.
+  api-fuzz:
+    name: Fuzzing da API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fuzzing com o Schemathesis
+        run: docker compose --profile fuzz run --rm schemathesis
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: schemathesis-report
+          path: schemathesis-report
+          retention-days: 7
+      - name: Derruba o compose
+        if: always()
+        run: docker compose --profile fuzz down -v
+
   # AI-42: o único check que o ruleset exige. Um job pulado conta como verde, e um
   # job que depende de outro que falhou é pulado; por isso este roda sempre e olha
   # o resultado de cada um. Mudar os jobs acima não mexe no ruleset.
   ci-ok:
     name: ci-ok
-    needs: [checks, test, workflows]
+    needs: [checks, test, workflows, api-fuzz]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
