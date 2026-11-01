@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,6 +10,7 @@ import {
   writeFileIn,
 } from '../../test/helpers/git-sandbox.ts';
 import { repoRoot as root } from '../../test/helpers/repo-root.ts';
+import { runHook as runHookProcess } from '../../test/helpers/run-node.ts';
 
 const hook = join(root, '.claude', 'hooks', 'format-edited.mjs');
 
@@ -83,13 +83,8 @@ interface Run {
 
 // O processo roda na raiz do repositório, de onde vem o Prettier instalado (`node_modules/.bin/prettier`).
 function runHook(raw: string, projectDir: string = root): Run {
-  const result = spawnSync(process.execPath, [hook], {
-    input: raw,
-    encoding: 'utf8',
-    cwd: projectDir,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
-  });
-  return { code: result.status, stdout: result.stdout };
+  const result = runHookProcess(hook, projectDir, raw);
+  return { code: result.code, stdout: result.stdout };
 }
 
 function edited(toolName: string, filePath: string): string {

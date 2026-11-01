@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -19,6 +18,7 @@ import {
   makeTempDir,
 } from '../../test/helpers/git-sandbox.ts';
 import { repoRoot as root } from '../../test/helpers/repo-root.ts';
+import { runNode } from '../../test/helpers/run-node.ts';
 
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
 
@@ -91,11 +91,10 @@ function runHook(
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (projectDir === undefined) delete env.CLAUDE_PROJECT_DIR;
   else env.CLAUDE_PROJECT_DIR = projectDir;
-  const result = spawnSync(process.execPath, [hook], {
-    input: rawInput,
-    encoding: 'utf8',
+  const result = runNode(hook, [], {
+    cwd: cwd ?? process.cwd(),
     env,
-    ...(cwd ? { cwd } : {}),
+    input: rawInput,
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }

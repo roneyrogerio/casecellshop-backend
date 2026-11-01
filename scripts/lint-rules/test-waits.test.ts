@@ -632,8 +632,108 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
         'server.listen(0);',
       ].join('\n'),
     ),
+    // A16: porta fixa é um número literal maior que 0, como primeiro argumento ou como `port` de um objeto.
+    ok(
+      'um listen(8080) com porta fixa, num arquivo com compose',
+      [UP, 'server.listen(8080);'].join('\n'),
+    ),
+    ok(
+      "um listen(8080, '127.0.0.1') com porta fixa e host, num arquivo com compose",
+      [UP, "server.listen(8080, '127.0.0.1');"].join('\n'),
+    ),
+    ok(
+      'um listen(8080, host, callback) com porta fixa, num arquivo com compose',
+      [UP, "server.listen(8080, '127.0.0.1', resolve);"].join('\n'),
+    ),
+    ok(
+      "um listen({ port: 8080, host: '127.0.0.1' }) com porta fixa e host, num arquivo com compose",
+      [UP, "server.listen({ port: 8080, host: '127.0.0.1' });"].join('\n'),
+    ),
+    ok(
+      'um listen({ host, port: 8080 }) com a porta depois do host, num arquivo com compose',
+      [UP, "server.listen({ host: '127.0.0.1', port: 8080 }, resolve);"].join(
+        '\n',
+      ),
+    ),
+    ok(
+      'um listen(handler) num arquivo sem compose (controle: a regra só vale com o compose)',
+      'server.listen(handler);',
+    ),
+    ok(
+      'um listen({ host }) sem port num arquivo sem compose (controle)',
+      "server.listen({ host: '127.0.0.1' });",
+    ),
+    ok(
+      'um listen(port) numa variável num arquivo sem compose (controle)',
+      'server.listen(port);',
+    ),
+    ok(
+      'um listen(0) e um listen(undefined) num arquivo sem compose (controle)',
+      'server.listen(0);\nserver.listen(undefined);',
+    ),
   ],
   invalid: [
+    // A16: qualquer forma que não seja porta fixa literal escolhe a porta antes do up.
+    bad(
+      'um listen(() => {}) com função no lugar da porta, num arquivo com compose',
+      [UP, 'server.listen(() => {});'].join('\n'),
+    ),
+    bad(
+      'um listen(function () {}) com função anônima, num arquivo com compose',
+      [UP, 'server.listen(function () {});'].join('\n'),
+    ),
+    bad(
+      'um listen(handler) com função por referência, num arquivo com compose',
+      [UP, 'server.listen(handler);'].join('\n'),
+    ),
+    bad(
+      "um listen({ host: '127.0.0.1' }) com objeto sem port, num arquivo com compose",
+      [UP, "server.listen({ host: '127.0.0.1' });"].join('\n'),
+    ),
+    bad(
+      'um listen({}) com objeto vazio, num arquivo com compose',
+      [UP, 'server.listen({});'].join('\n'),
+    ),
+    bad(
+      'um listen(undefined), num arquivo com compose',
+      [UP, 'server.listen(undefined);'].join('\n'),
+    ),
+    bad(
+      'um listen({ port: undefined }), num arquivo com compose',
+      [UP, 'server.listen({ port: undefined });'].join('\n'),
+    ),
+    bad(
+      'um listen(port) com variável, num arquivo com compose',
+      [UP, 'const port = 0;', 'server.listen(port);'].join('\n'),
+    ),
+    bad(
+      'um listen({ port }) com variável abreviada, num arquivo com compose',
+      [UP, 'const port = 0;', 'server.listen({ port });'].join('\n'),
+    ),
+    bad(
+      'um listen({ port: p }) com variável, num arquivo com compose',
+      [UP, 'const p = 0;', 'server.listen({ port: p });'].join('\n'),
+    ),
+    bad(
+      "um listen('8080') com texto no lugar da porta, num arquivo com compose",
+      [UP, "server.listen('8080');"].join('\n'),
+    ),
+    bad(
+      'um listen(-1) com número negativo, num arquivo com compose',
+      [UP, 'server.listen(-1);'].join('\n'),
+    ),
+    bad(
+      'um listen({ port: -1 }) com número negativo, num arquivo com compose',
+      [UP, 'server.listen({ port: -1 });'].join('\n'),
+    ),
+    bad(
+      'um listen(handler, 8080) com a porta fora da primeira posição, num arquivo com compose',
+      [UP, 'server.listen(handler, 8080);'].join('\n'),
+    ),
+    bad(
+      'um listen(() => {}) antes da chamada do upComposeProject',
+      ['server.listen(() => {});', UP].join('\n'),
+    ),
     bad(
       'um freePort declarado, num arquivo com compose',
       [

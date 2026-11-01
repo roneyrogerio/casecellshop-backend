@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +8,7 @@ import {
   initRepo,
   makeTempDir,
 } from '../../test/helpers/git-sandbox.ts';
+import { runNode } from '../../test/helpers/run-node.ts';
 
 interface Snapshot {
   head: string;
@@ -67,11 +67,10 @@ function run(
   const projectDir =
     env.projectDir === undefined ? sandbox.project : env.projectDir;
   if (projectDir !== null) base.CLAUDE_PROJECT_DIR = projectDir;
-  const result = spawnSync(process.execPath, [hook], {
-    input: raw,
-    encoding: 'utf8',
+  const result = runNode(hook, [], {
     cwd: makeTempDir('start-cwd-'),
     env: base,
+    input: raw,
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
