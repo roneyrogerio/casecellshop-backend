@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { CONFIG_KEYS_OUTSIDE_DEPENDENCIES } from '../test/helpers/package-json-config.ts';
 
 let scriptsDiffer: (base: string, head: string) => boolean;
 let packageJsonDiffers: (base: string, head: string) => boolean;
@@ -122,7 +123,6 @@ describe('AI-05 scriptsDiffer compara o bloco scripts do package.json com a base
   });
 });
 
-// O Prettier, o knip e o jscpd leem configuração de chaves do package.json: tudo fora dos blocos de dependências é do oráculo.
 const BASE_DEPENDENCIES = {
   dependencies: { zod: '4.6.7', kysely: '0.28.0' },
   devDependencies: { vitest: '4.0.0' },
@@ -145,10 +145,7 @@ describe('AI-05 packageJsonDiffers compara tudo fora dos blocos de dependências
   });
 
   it.each([
-    ['prettier', { prettier: { semi: false } }],
-    ['knip', { knip: { ignore: ['src/**'] } }],
-    ['jscpd', { jscpd: { threshold: 100 } }],
-    ['engines', { engines: { node: '>=1' } }],
+    ...CONFIG_KEYS_OUTSIDE_DEPENDENCIES,
     ['type', { type: 'commonjs' }],
     ['name', { name: 'outro' }],
   ])('AI-05 acrescentar ou mudar a chave %s difere', (_key, extra) => {

@@ -381,7 +381,7 @@ export interface WorldOptions extends QueueOptions {
 }
 
 // ERP simulado no relógio manual e filas novas no ElasticMQ, com a mesma redrive policy do
-// elasticmq.conf (o limite de recebimentos pode ser menor no teste).
+// docker/elasticmq/elasticmq.conf (o limite de recebimentos pode ser menor no teste).
 export async function createWorld(
   suite: WorkerSuite,
   options: WorldOptions = {},

@@ -111,10 +111,11 @@ describe('AI-34 o hook como processo (stdin, arquivo, código de saída)', () =>
   it.each(['Edit', 'Write'])(
     'AI-34 depois do %s o arquivo editado sai formatado e o hook termina com 0',
     (toolName) => {
-      const file = join(makeTempDir('ai34-hook-'), 'amostra.ts');
+      const project = makeProject();
+      const file = join(project, 'amostra.ts');
       writeFileSync(file, MESSY);
 
-      const result = runHook(edited(toolName, file));
+      const result = runHook(edited(toolName, file), project);
 
       expect(result.code).toBe(0);
       expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
@@ -122,41 +123,44 @@ describe('AI-34 o hook como processo (stdin, arquivo, código de saída)', () =>
   );
 
   it('AI-34 outra ferramenta não formata nada', () => {
-    const file = join(makeTempDir('ai34-hook-'), 'amostra.ts');
+    const project = makeProject();
+    const file = join(project, 'amostra.ts');
     writeFileSync(file, MESSY);
 
-    const result = runHook(edited('Bash', file));
+    const result = runHook(edited('Bash', file), project);
 
     expect(result.code).toBe(0);
     expect(readFileSync(file, 'utf8')).toBe(MESSY);
   });
 
   it('AI-34 uma extensão que o Prettier não conhece fica como está (--ignore-unknown)', () => {
-    const dir = makeTempDir('ai34-hook-');
-    const unknown = join(dir, 'amostra.desconhecida');
-    const known = join(dir, 'amostra.ts');
+    const project = makeProject();
+    const unknown = join(project, 'amostra.desconhecida');
+    const known = join(project, 'amostra.ts');
     writeFileSync(unknown, MESSY);
     writeFileSync(known, MESSY);
 
-    expect(runHook(edited('Write', unknown)).code).toBe(0);
+    expect(runHook(edited('Write', unknown), project).code).toBe(0);
     expect(readFileSync(unknown, 'utf8')).toBe(MESSY);
     // Prova de que o Prettier de fato rodou no mesmo cenário: a extensão conhecida muda.
-    expect(runHook(edited('Write', known)).code).toBe(0);
+    expect(runHook(edited('Write', known), project).code).toBe(0);
     expect(readFileSync(known, 'utf8')).toBe(FORMATTED);
   });
 
   // Formatar é conveniência: a garantia é o --check do pre-push e do CI. O hook nunca falha a ferramenta.
   it('AI-34 se o Prettier falha (sintaxe inválida, arquivo ausente, entrada sem JSON) o hook ainda sai com 0 e o próximo arquivo é formatado', () => {
-    const dir = makeTempDir('ai34-hook-');
-    const broken = join(dir, 'quebrado.ts');
-    const good = join(dir, 'bom.ts');
+    const project = makeProject();
+    const broken = join(project, 'quebrado.ts');
+    const good = join(project, 'bom.ts');
     writeFileSync(broken, 'const = ;;{\n');
     writeFileSync(good, MESSY);
 
-    expect(runHook(edited('Edit', broken)).code).toBe(0);
-    expect(runHook(edited('Edit', join(dir, 'nao-existe.ts'))).code).toBe(0);
-    expect(runHook('isto não é JSON').code).toBe(0);
-    expect(runHook(edited('Edit', good)).code).toBe(0);
+    expect(runHook(edited('Edit', broken), project).code).toBe(0);
+    expect(
+      runHook(edited('Edit', join(project, 'nao-existe.ts')), project).code,
+    ).toBe(0);
+    expect(runHook('isto não é JSON', project).code).toBe(0);
+    expect(runHook(edited('Edit', good), project).code).toBe(0);
 
     expect(readFileSync(broken, 'utf8')).toBe('const = ;;{\n');
     expect(readFileSync(good, 'utf8')).toBe(FORMATTED);

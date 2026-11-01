@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { CONFIG_KEYS_OUTSIDE_DEPENDENCIES } from '../../test/helpers/package-json-config.ts';
 
 interface CheckResult {
   ok: boolean;
@@ -1042,6 +1043,10 @@ function writeIn(sandbox: Sandbox, relative: string, content: string): void {
   writeFileSync(file, content);
 }
 
+function writePackageJson(sandbox: Sandbox, content: object): void {
+  writeIn(sandbox, 'package.json', JSON.stringify(content, null, 2));
+}
+
 const IMPLEMENTER_STOP = {
   agent_type: 'implementer',
   agent_id: 'a1',
@@ -1132,15 +1137,11 @@ describe('AI-03 o hook de parada como processo', () => {
   it('AI-03 o implementer que mudou o bloco scripts do package.json sai com código 2', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
-    writeIn(
-      sandbox,
-      'package.json',
-      JSON.stringify(
-        { name: 'x', scripts: { lint: 'true' }, dependencies: {} },
-        null,
-        2,
-      ),
-    );
+    writePackageJson(sandbox, {
+      name: 'x',
+      scripts: { lint: 'true' },
+      dependencies: {},
+    });
 
     const result = runHook(sandbox, IMPLEMENTER_STOP);
 
@@ -1148,31 +1149,17 @@ describe('AI-03 o hook de parada como processo', () => {
     expect(result.stderr).toContain('scripts');
   });
 
-  // O Prettier, o knip e o jscpd leem configuração de chaves do package.json: qualquer chave fora dos blocos de dependências é do oráculo.
-  it.each([
-    ['prettier', { prettier: { semi: false } }],
-    ['knip', { knip: { ignore: ['src/**'] } }],
-    ['jscpd', { jscpd: { threshold: 100 } }],
-    ['engines', { engines: { node: '>=1' } }],
-  ])(
+  it.each(CONFIG_KEYS_OUTSIDE_DEPENDENCIES)(
     'AI-03 o implementer que acrescentou a chave %s ao package.json sai com código 2',
     (_key, extra) => {
       const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
       makeRepo(sandbox);
-      writeIn(
-        sandbox,
-        'package.json',
-        JSON.stringify(
-          {
-            name: 'x',
-            scripts: { lint: 'oxlint' },
-            dependencies: {},
-            ...extra,
-          },
-          null,
-          2,
-        ),
-      );
+      writePackageJson(sandbox, {
+        name: 'x',
+        scripts: { lint: 'oxlint' },
+        dependencies: {},
+        ...extra,
+      });
 
       const result = runHook(sandbox, IMPLEMENTER_STOP);
 
@@ -1184,19 +1171,11 @@ describe('AI-03 o hook de parada como processo', () => {
   it('AI-03 o implementer que mudou só as dependências do package.json sai com código 0', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
-    writeIn(
-      sandbox,
-      'package.json',
-      JSON.stringify(
-        {
-          name: 'x',
-          scripts: { lint: 'oxlint' },
-          dependencies: { zod: '4.6.7' },
-        },
-        null,
-        2,
-      ),
-    );
+    writePackageJson(sandbox, {
+      name: 'x',
+      scripts: { lint: 'oxlint' },
+      dependencies: { zod: '4.6.7' },
+    });
 
     expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
   });

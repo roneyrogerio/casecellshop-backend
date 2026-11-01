@@ -10,13 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   let tree: string;
