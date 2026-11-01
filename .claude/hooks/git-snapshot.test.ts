@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,6 +31,8 @@ interface SnapshotModule {
     options?: { agentRoot?: string },
   ): string[];
   snapshotFile(sessionId: string, agentId: string): string;
+  // As entradas do `git status --porcelain=v1 -z`: um registro do git, uma entrada, com o caminho do arquivo.
+  statusEntries(projectDir: string): { path: string }[];
 }
 
 let mod: SnapshotModule;
@@ -647,6 +649,10 @@ describe('AI-12 um commit do agente isolado na própria worktree conta como muda
   });
 });
 
+function renameFile(dir: string, from: string, to: string): void {
+  renameSync(join(dir, from), join(dir, to));
+}
+
 function sorted(paths: string[]): string[] {
   return [...paths].sort();
 }
@@ -897,6 +903,117 @@ describe('AI-12 uma falha do git hash-object não vira status vazio', () => {
     writeFileIn(dir, 'src/ilegivel.ts', 'export {};\n');
 
     expect(mod.takeSnapshot(dir).status).toContain('src/ilegivel.ts');
+  });
+});
+
+// A16 da Revisão 4 (AI-12): no `-z`, um rename traz o destino e, depois do NUL seguinte, a origem. O `R` costuma estar na
+// coluna X (rename no índice), mas um rename feito na worktree e registrado só com `git add -N` põe o `R` na coluna Y,
+// e a origem vem do mesmo jeito. Quem lê o `-z` só pela coluna X trata a origem como um arquivo com código próprio.
+describe('AI-12 o rename lido do status -z não vira uma entrada com a origem', () => {
+  // Cada caso renomeia um arquivo rastreado: o destino e a origem, e como o git registra o rename.
+  const CASES: [string, string, string, (dir: string) => void][] = [
+    [
+      'o R na coluna Y (mv e git add -N)',
+      'src/app.ts',
+      'src/novo.ts',
+      (dir) => {
+        renameFile(dir, 'src/app.ts', 'src/novo.ts');
+        git(dir, 'add', '-N', 'src/novo.ts');
+      },
+    ],
+    [
+      'o R na coluna Y, com espaço e acento nos nomes',
+      'src/app.ts',
+      'src/ação nova.ts',
+      (dir) => {
+        renameFile(dir, 'src/app.ts', 'src/ação nova.ts');
+        git(dir, 'add', '-N', 'src/ação nova.ts');
+      },
+    ],
+    [
+      'o R na coluna X (git mv)',
+      'src/app.ts',
+      'src/movido.ts',
+      (dir) => git(dir, 'mv', 'src/app.ts', 'src/movido.ts'),
+    ],
+  ];
+
+  function pathsOf(dir: string): string[] {
+    return mod.statusEntries(dir).map((entry) => entry.path);
+  }
+
+  it('AI-12 o git de teste põe o R na coluna Y com o add -N (premissa dos casos)', () => {
+    const dir = repo();
+    renameFile(dir, 'src/app.ts', 'src/novo.ts');
+    git(dir, 'add', '-N', 'src/novo.ts');
+
+    expect(git(dir, 'status', '--porcelain=v1')).toBe(
+      ' R src/app.ts -> src/novo.ts\n',
+    );
+    expect(
+      git(dir, 'status', '--porcelain=v1', '-z', '--untracked-files=all'),
+    ).toBe(' R src/novo.ts\0src/app.ts\0');
+  });
+
+  it.each(CASES)(
+    'AI-12 com %s o destino é uma entrada e a origem não é',
+    (_label, origin, destination, act) => {
+      const dir = repo();
+      act(dir);
+
+      const paths = pathsOf(dir);
+
+      expect(paths.filter((path) => path === destination)).toHaveLength(1);
+      expect(paths).not.toContain(origin);
+    },
+  );
+
+  // Um registro do git, uma entrada: o rename sozinho dá exatamente uma, a do destino, sem sobra com o caminho da origem
+  // cortado ou lido como se tivesse código.
+  it.each(CASES)(
+    'AI-12 com %s o status tem exatamente uma entrada, a do destino',
+    (_label, _origin, destination, act) => {
+      const dir = repo();
+      act(dir);
+
+      expect(pathsOf(dir)).toEqual([destination]);
+    },
+  );
+
+  // Controle: um arquivo comum sujo ao lado do rename segue como entrada própria, na ordem do git.
+  it('AI-12 controle: um arquivo alterado e outro criado junto do rename seguem como entradas próprias', () => {
+    const dir = repo();
+    writeFileIn(dir, 'src/outro.ts', 'export {};\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'outro');
+    renameFile(dir, 'src/app.ts', 'src/novo.ts');
+    git(dir, 'add', '-N', 'src/novo.ts');
+    writeFileIn(dir, 'src/outro.ts', 'export const v = 1;\n');
+    writeFileIn(dir, 'src/criado.ts', 'export {};\n');
+
+    const paths = pathsOf(dir);
+
+    expect(sorted(paths)).toEqual([
+      'src/criado.ts',
+      'src/novo.ts',
+      'src/outro.ts',
+    ]);
+  });
+
+  // O retrato e a comparação não atribuem a origem como arquivo à parte: um rename feito durante o agente atribui o destino.
+  it('AI-12 o rename na coluna Y feito durante o agente atribui o destino e não a origem como arquivo à parte', () => {
+    const dir = repo();
+    const before = mod.takeSnapshot(dir);
+    renameFile(dir, 'src/app.ts', 'src/novo.ts');
+    git(dir, 'add', '-N', 'src/novo.ts');
+
+    const changed = mod.changesDuring(
+      before.status,
+      mod.takeSnapshot(dir).status,
+    );
+
+    expect(changed).toContain('src/novo.ts');
+    expect(changed.filter((path) => path !== 'src/novo.ts')).toEqual([]);
   });
 });
 
