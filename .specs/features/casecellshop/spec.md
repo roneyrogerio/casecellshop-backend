@@ -101,8 +101,8 @@ Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de 
   - a descrição do PR de um marco abre com um "Resumo de decisão" de até ~300 palavras: o que o PR entrega, o que precisa do julgamento do mantenedor (ou "nada"), a evidência de máquina uma linha cada e as áreas de risco tocadas; o mantenedor lê só esse bloco, em 2 a 5 minutos;
   - um teste confere o esqueleto do relatório nas instruções do `reviewer` e o resumo e o alvo de tempo na skill `/marco`, com controle negativo para cada um.
 
-- **AI-24** O `implementer` e o `test-writer` rodam cada um numa worktree própria (`isolation: worktree` no arquivo do agente), criada a partir do `HEAD` da branch da sessão principal (`worktree.baseRef: "head"` no `.claude/settings.json`), e a pasta `.claude/worktrees/` fica fora do git (F2).
-- **AI-25** Quando um agente em worktree começa sem `node_modules`, o hook de início instala as dependências na worktree com `npm ci`.
+- **AI-24** O `implementer` e o `test-writer` rodam cada um numa worktree própria (`isolation: worktree` no arquivo do agente), criada a partir do `HEAD` da branch da sessão principal (`worktree.baseRef: "head"` no `.claude/settings.json`), com o `node_modules` da pasta principal ligado por link simbólico (`worktree.symlinkDirectories`), e a pasta `.claude/worktrees/` fica fora do git (F2).
+- **AI-25** Quando um agente em worktree começa sem `node_modules` (o link simbólico do `AI-24` não existe), o hook de início instala as dependências na worktree com `npm ci`.
 - **AI-26** A guarda de caminho decide pelo caminho relativo à raiz da worktree do agente, tirada do `cwd` da entrada do hook: um arquivo de código dentro da worktree é permitido ao `implementer`, e um teste dentro dela é negado a ele. Controle negativo: a decisão pelo caminho relativo à pasta principal nega ao `implementer` o arquivo de código da worktree.
 - **AI-27** Na parada de um agente em worktree, o hook roda as checagens do papel dentro da worktree e confere os arquivos mudados nela contra os arquivos do papel.
 - **AI-28** O hook de parada atribui ao agente só o que mudou na pasta principal durante a execução dele: o estado dos arquivos no início é gravado com o retrato do git e comparado na parada. Uma mudança feita antes do início não é atribuída ao agente; uma feita durante a execução é. Controle negativo: a comparação contra o `HEAD`, sem o retrato do início, atribui ao agente a mudança anterior.
@@ -110,6 +110,7 @@ Estes critérios provam os trilhos determinísticos do fluxo de IA. O motivo de 
 - **AI-30** Se uma guarda de ferramenta (guarda de caminho, do Bash ou do GitHub) não roda ou quebra, a ferramenta é bloqueada (`"onFailure": "block"`); se o hook de parada lança um erro interno, o agente volta ao trabalho com a mensagem do erro, em vez de parar sem a checagem.
 - **AI-31** Todo comando de shell de um bloco de código das skills de `.claude/skills/` passa pelas regras `deny` do `.claude/settings.json` e pela guarda do Bash da sessão principal; um comando de skill que a guarda recusaria reprova o teste. Controle negativo: um bloco com `curl` reprova.
 - **AI-32** As regras de cada tipo de arquivo carregam só quando um arquivo desse tipo é lido ou escrito: `.claude/rules/architecture.md` declara `paths:` para `src/**`, e `.claude/rules/docs.md`, para `**/*.md` e `.specs/**`; as duas ficam nos limites do `FND-06`.
+- **AI-33** O retrato do git não atribui ao agente o que outra sessão faz no mesmo repositório: o ref de uma branch em uso por outra worktree e os refs remotos ficam fora da comparação. Controle negativo: uma branch que nenhuma outra worktree usa, criada durante o agente, continua atribuída a ele.
 
 ## Checkout
 

@@ -25,6 +25,10 @@ As consultas e as migrações usam o Kysely com os tipos gerados do banco migrad
 
 Cada marco segue a skill [`/marco`](.claude/skills/marco/SKILL.md): plano aprovado, testes antes do código, implementação, revisão independente e PR. As regras de todo agente estão no [`AGENTS.md`](AGENTS.md). A `main` só muda por PR, com o CI verde e a aprovação do mantenedor, impostos por um ruleset do GitHub.
 
+## Sessões em paralelo
+
+Cada sessão do Claude Code que muda arquivos trabalha na própria worktree, numa branch própria, para as edições não colidirem: `claude --worktree <nome>` (ou `claude -w <nome>`) cria a worktree em `.claude/worktrees/<nome>/` e abre a sessão nela. Dentro de uma sessão, o `implementer` e o `test-writer` já rodam cada um na própria worktree (AI-24). As sessões dividem o histórico do git, então nenhuma delas usa `git stash` sem uma marca própria, e o hook de parada não atribui a um agente o que outra sessão faz nas branches dela (AI-33).
+
 ## Preparar a máquina para os agentes
 
 Os agentes agem no GitHub com a identidade escolhida em cada clone, pelo servidor MCP oficial, restrito às ferramentas do fluxo: sem merge, sem aprovação, sem escrita de arquivo (AD-013, AD-014).
