@@ -201,6 +201,17 @@ function requestedRelative(root, target) {
   return isOutside(rel) ? null : rel;
 }
 
+// O caminho pedido só pelo texto, sem seguir link nenhum. Fora da raiz, não
+// conta.
+function textRelative(root, absolute) {
+  const rel = path
+    .relative(path.resolve(root), path.resolve(absolute))
+    .split(path.sep)
+    .join('/')
+    .toLowerCase();
+  return isOutside(rel) ? null : rel;
+}
+
 // A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
 // para deixar passar. O main só lê a entrada e escreve a resposta do hook.
 // root é a raiz das regras de papel (a worktree do agente isolado, AI-26);
@@ -213,15 +224,25 @@ export function decide(input, root, projectDir = root) {
     return rule ? `${rule.reason} Caminho não informado.` : null;
 
   const rel = relativeTo(root, target);
-  const requested = requestedRelative(root, target);
   const absolute = joinedTarget(root, target);
   const fromProject = projectDir ? relativeTo(projectDir, absolute) : rel;
+  // O caminho pedido em duas leituras: pelas pastas reais e pelo texto, com o
+  // .. resolvido antes de qualquer link, como o path.resolve faz. Não se sabe
+  // qual delas a ferramenta usa para gravar, então as duas são conferidas
+  // (A3 da fatia 2 do #30).
+  const requested = [
+    requestedRelative(root, target),
+    textRelative(root, absolute),
+  ].filter(Boolean);
   const requestedFromProject = projectDir
-    ? requestedRelative(projectDir, absolute)
-    : requested;
+    ? [
+        requestedRelative(projectDir, absolute),
+        textRelative(projectDir, absolute),
+      ].filter(Boolean)
+    : [];
   // Pelo caminho real e pelo pedido: um link dentro das pastas dos hooks para
   // um arquivo editável gravaria o relatório que o github-guard lê (A14 do #27).
-  const owned = [rel, fromProject, requested, requestedFromProject].find(
+  const owned = [rel, fromProject, ...requested, ...requestedFromProject].find(
     (candidate) => candidate && hookOwned(candidate),
   );
   if (owned) return `${HOOK_OWNED_REASON} Caminho: ${owned}`;
@@ -230,9 +251,8 @@ export function decide(input, root, projectDir = root) {
     return `${rule.reason} O caminho está fora do repositório.`;
   }
   if (!rule.allows(rel)) return `${rule.reason} Caminho: ${rel}`;
-  return requested && !rule.allows(requested)
-    ? `${rule.reason} Caminho pedido: ${requested}`
-    : null;
+  const denied = requested.find((candidate) => !rule.allows(candidate));
+  return denied ? `${rule.reason} Caminho pedido: ${denied}` : null;
 }
 
 // AI-26: a raiz contra a qual o caminho é decidido. Para um agente isolado, é a
