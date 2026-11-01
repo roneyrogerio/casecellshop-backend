@@ -1193,7 +1193,8 @@ describe('AI-12 o hook de parada como processo compara o retrato do git', () => 
   it.each([
     ['uma branch nova', ['branch', 'nova'], 'refs/heads/nova'],
     ['uma tag', ['tag', 'v1'], 'refs/tags/v1'],
-    ['um ref de remoto', ['update-ref', 'refs/remotes/origin/x', 'HEAD'], 'refs/remotes/origin/x'],
+    // Um ref local que nenhuma outra worktree usa continua atribuído ao agente (AI-33); o ref remoto saiu da comparação.
+    ['um ref local solto (refs/heads/solta)', ['update-ref', 'refs/heads/solta', 'HEAD'], 'refs/heads/solta'],
     ['uma worktree', ['worktree', 'add', '-q', '../wt-ai12', '-b', 'wt-branch'], 'worktrees'],
     ['uma alteração no .git/config', ['config', 'alias.p', 'push'], 'config'],
   ])('AI-12 o test-writer que criou %s termina com código 0 e a exceção cita o que mudou', (_label, args, expected) => {
