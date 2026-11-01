@@ -3,9 +3,10 @@
 // O agent_type só vem nas chamadas de subagente (ou com --agent); a sessão
 // principal só encontra aqui a regra das pastas gravadas pelos hooks.
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { realPath } from './git-snapshot.mjs';
 
 // O implementer não toca no que decide se o trabalho dele está certo (AI-04): os
 // testes, a spec, o contrato e tudo que configura a verificação ou instrui os
@@ -136,9 +137,11 @@ const HOOK_OWNED_REASON =
 
 // Em minúsculas porque o sistema de arquivos padrão do macOS não diferencia
 // maiúsculas: "Test/x.ts" e "test/x.ts" são o mesmo arquivo.
+// Pelo caminho real dos dois lados (AI-26): a raiz e o alvo podem vir um pelo
+// link simbólico e o outro pela pasta de verdade, como o /private do macOS.
 function relativeTo(root, target) {
   return path
-    .relative(root, path.resolve(root, target))
+    .relative(realPath(root), realPath(path.resolve(root, target)))
     .split(path.sep)
     .join('/')
     .toLowerCase();
@@ -177,21 +180,13 @@ export function rootFor(input, projectDir) {
   const top = gitOut(input.cwd, 'rev-parse', '--show-toplevel');
   // Pelo caminho real: o /private do macOS ou um link simbólico no projectDir
   // não podem fazer a mesma pasta parecer outra (A4 do #19).
-  if (!top || real(top) === real(projectDir)) return projectDir;
+  if (!top || realPath(top) === realPath(projectDir)) return projectDir;
   const common = (dir) => {
     const value = gitOut(dir, 'rev-parse', '--git-common-dir');
-    return value ? real(path.resolve(dir, value)) : null;
+    return value ? realPath(path.resolve(dir, value)) : null;
   };
   const own = common(input.cwd);
   return own && own === common(projectDir) ? top : projectDir;
-}
-
-function real(dir) {
-  try {
-    return realpathSync(dir);
-  } catch {
-    return path.resolve(dir);
-  }
 }
 
 function gitOut(dir, ...args) {

@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 function git(projectDir, ...args) {
   const result = spawnSync('git', ['-C', projectDir, ...args], {
@@ -59,12 +59,19 @@ export function takeSnapshot(projectDir) {
 }
 
 // O caminho pelo realpath, para o /private do macOS e um link simbólico não
-// separarem a mesma pasta; um caminho que não existe fica como está.
+// separarem a mesma pasta. Um caminho que ainda não existe (o arquivo novo de um
+// Write) sai pelo realpath do maior ancestral que existe, mais o resto.
 export function realPath(path) {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
+  const absolute = resolve(path);
+  let base = absolute;
+  for (;;) {
+    try {
+      return join(realpathSync(base), relative(base, absolute));
+    } catch {
+      const parent = dirname(base);
+      if (parent === base) return absolute;
+      base = parent;
+    }
   }
 }
 
@@ -134,7 +141,9 @@ export function statusEntries(projectDir) {
     if (!part) continue;
     const code = part.slice(0, 2);
     entries.push({ code, path: part.slice(3) });
-    if (code[0] === 'R' || code[0] === 'C') index += 1;
+    // O rename ou a cópia, no índice (X) ou na worktree (Y), traz a origem em
+    // seguida.
+    if (/[RC]/.test(code)) index += 1;
   }
   return entries;
 }
