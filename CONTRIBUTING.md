@@ -12,8 +12,10 @@ Como preparar a máquina, rodar as checagens e abrir um PR. O que o projeto é e
 | Comando | O que roda | Quando |
 | --- | --- | --- |
 | `npm run verify:fast` | lint, tipos e os testes ligados aos arquivos mudados | durante o trabalho; é o que o hook de parada dos agentes roda |
-| `npm run verify` | lint, tipos, testes unitários, OpenAPI e as conferências do repositório | no `pre-push` do repositório |
+| `npm run verify` | lint, formato, tipos, testes unitários, OpenAPI e as conferências do repositório | no `pre-push` do repositório |
 | `npm run verify:full` | o `verify` mais os testes de integração, com Docker | antes de um PR sair do rascunho |
+
+O formato do código é o do Prettier (`AI-34`): `npm run format` formata o repositório e `npm run format:check` só confere. Os commits que só reformataram estão no [`.git-blame-ignore-revs`](.git-blame-ignore-revs), que o GitHub já usa; para o `git blame` local pular esses commits também, rode uma vez `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 
 Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda tudo no Node do `.nvmrc` e de novo na 24.12, menos os testes que sobem o `docker compose`, cuja imagem já fixa o Node 26.
 

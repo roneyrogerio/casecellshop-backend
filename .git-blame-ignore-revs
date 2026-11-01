@@ -1,0 +1,8 @@
+# Commits que só mudaram o formato do código (AI-34). O git blame pula estas
+# linhas com blame.ignoreRevsFile, e o GitHub lê este arquivo sozinho.
+
+# style: formata o repositório com o Prettier
+2eb71f0a4c8e3c97ee920b06978b099270ddb3df
+
+# style: completa a formatação de problem.ts numa segunda passada
+e4a049ce74926a6b0eb3faa803555ce6105d3fef
