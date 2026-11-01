@@ -56,14 +56,19 @@ function calleeName(call: Node): string | undefined {
   return nameOf(callee);
 }
 
-function isViWaitFor(call: Node): boolean {
+// As esperas do Vitest que repetem uma conferência até um prazo: a conferência no
+// primeiro argumento e o { timeout } no segundo.
+const WAITS: Record<string, Set<string>> = {
+  vi: new Set(['waitFor', 'waitUntil']),
+  expect: new Set(['poll']),
+};
+
+function isVitestWait(call: Node): boolean {
   const callee = child(call, 'callee');
-  return (
-    callee?.type === 'MemberExpression' &&
-    !callee['computed'] &&
-    nameOf(child(callee, 'object')) === 'vi' &&
-    nameOf(child(callee, 'property')) === 'waitFor'
-  );
+  if (callee?.type !== 'MemberExpression' || callee['computed']) return false;
+  const object = nameOf(child(callee, 'object')) ?? '';
+  const method = nameOf(child(callee, 'property')) ?? '';
+  return WAITS[object]?.has(method) ?? false;
 }
 
 const isCall = (node: Node | undefined): node is Node =>
@@ -116,7 +121,7 @@ function insideWait(node: Node): boolean {
     if (!isCall(parent)) continue;
     const position = args(parent).indexOf(current);
     if (position < 0) continue;
-    if (isViWaitFor(parent) && position === 0) return true;
+    if (isVitestWait(parent) && position === 0) return true;
     if (calleeName(parent) === 'waitAdvancing') return true;
   }
   return false;
@@ -157,8 +162,25 @@ const noFixedStep = {
 
 const GUARD = 'WAIT_GUARD_MS';
 
-const citesGuard = (node: Node): boolean =>
-  some(node, (inner) => nameOf(inner) === GUARD);
+const isGuard = (node: Node | undefined): boolean => nameOf(node) === GUARD;
+
+const isFactor = (node: Node | undefined): boolean =>
+  node?.type === 'Literal' &&
+  typeof node['value'] === 'number' &&
+  node['value'] >= 1;
+
+// O prazo é o próprio WAIT_GUARD_MS ou ele vezes um literal ≥ 1: uma divisão, uma
+// subtração ou um Math.min o encurtariam por baixo do nome (A11 da Revisão 3).
+function isGuardExpression(node: Node | undefined): boolean {
+  if (isGuard(node)) return true;
+  if (node?.type !== 'BinaryExpression' || node['operator'] !== '*')
+    return false;
+  const left = child(node, 'left');
+  const right = child(node, 'right');
+  return (
+    (isGuard(left) && isFactor(right)) || (isFactor(left) && isGuard(right))
+  );
+}
 
 // O nome declarado por um parâmetro e o padrão dele, se houver: x, x = v,
 // { x = v } e { x = v } = {}.
@@ -189,14 +211,14 @@ function parameterDefault(
 // como o controle negativo do stop() do banco de migração.
 function guarded(node: Node | undefined): boolean {
   if (!node) return false;
-  if (citesGuard(node)) return true;
+  if (isGuardExpression(node)) return true;
   const name = nameOf(node);
   if (!name) return false;
   for (let current = node.parent; current; current = current.parent) {
     if (!FUNCTION_TYPES.has(current.type)) continue;
     for (const parameter of (current['params'] ?? []) as Node[]) {
       const { found, fallback } = parameterDefault(parameter, name);
-      if (found) return fallback !== undefined && citesGuard(fallback);
+      if (found) return isGuardExpression(fallback);
     }
   }
   return false;
@@ -224,7 +246,7 @@ const waitGuard = {
       });
     return visit({
       CallExpression(node) {
-        if (isViWaitFor(node)) {
+        if (isVitestWait(node)) {
           if (!guarded(timeoutOf(args(node)[1]))) report(node);
         } else if (nameOf(child(node, 'callee')) === 'observe') {
           if (!guarded(args(node)[1])) report(node);
@@ -237,6 +259,18 @@ const waitGuard = {
 // ---------------------------------------------------------------- no-port-before-up
 
 const COMPOSE_UP = 'upComposeProject';
+
+const isZero = (node: Node | undefined): boolean =>
+  node?.type === 'Literal' && node['value'] === 0;
+
+// O port de um listen({ port, host }).
+function portOf(options: Node): Node | undefined {
+  if (options.type !== 'ObjectExpression') return undefined;
+  for (const property of (options['properties'] ?? []) as Node[])
+    if (nameOf(child(property, 'key')) === 'port')
+      return child(property, 'value');
+  return undefined;
+}
 
 // Num arquivo que sobe o compose, a porta do host vem do Docker (porta 0) e é lida
 // depois do up; escolhê-la antes deixa outro processo ocupá-la até o up.
@@ -262,13 +296,10 @@ const noPortBeforeUp = {
         if (node['name'] === 'freePort') report(node, 'um freePort');
       },
       CallExpression(node) {
+        if (calleeName(node) !== 'listen') return;
         const [first] = args(node);
-        if (
-          calleeName(node) === 'listen' &&
-          first?.type === 'Literal' &&
-          first['value'] === 0
-        )
-          report(node, 'um listen(0)');
+        if (!first || isZero(first) || isZero(portOf(first)))
+          report(node, 'um listen sem porta fixa');
       },
       ImportDeclaration(node) {
         if (child(node, 'source')?.['value'] !== 'node:net') return;

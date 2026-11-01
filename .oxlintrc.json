@@ -38,7 +38,11 @@
     "typescript/unbound-method": "error",
     "typescript/ban-ts-comment": [
       "error",
-      { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }
+      {
+        "ts-expect-error": true,
+        "ts-ignore": true,
+        "ts-nocheck": true
+      }
     ],
     "typescript/no-array-constructor": "error",
     "typescript/no-duplicate-enum-values": "error",
@@ -441,6 +445,124 @@
         "test-waits/no-fixed-step": "error",
         "test-waits/wait-guard": "error",
         "test-waits/no-port-before-up": "error"
+      }
+    },
+    {
+      "files": ["test/integration/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/helpers/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              },
+              {
+                "name": "node:child_process",
+                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/repo/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "test/helpers/compose.ts",
+        "test/helpers/elasticmq-container.ts",
+        "test/helpers/migration-database.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/helpers/run-node.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "test/integration/global-setup.ts",
+        "test/integration/foundation/container-shutdown.test.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     }
   ]
