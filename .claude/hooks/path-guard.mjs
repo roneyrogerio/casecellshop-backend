@@ -41,6 +41,10 @@ const PROTECTED_NAMES = [
   /^redocly\.yaml$/,
   // O kysely-codegen lê esta configuração; ela mudaria os tipos gerados (FND-09).
   /^\.kysely-codegenrc(\..+)?$/,
+  // O Prettier acha a configuração subindo a partir do arquivo (AI-34).
+  /^\.prettierrc(\..+)?$/,
+  /^prettier\.config\./,
+  /^\.prettierignore$/,
   /^\.npmrc$/,
   /^\.nvmrc$/,
   /^\.gitignore$/,
