@@ -543,9 +543,9 @@ jobs:
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: actions/setup-node@${SHA}
       - run: npm ci
-      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json
+      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json"
       - if: \${{ !cancelled() && matrix.node == 'nvmrc' }}
-        run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
+        run: node scripts/criteria-report.ts "$RUNNER_TEMP/vitest-report.json" >> "$GITHUB_STEP_SUMMARY"
       - if: matrix.node == 'nvmrc'
         run: node scripts/check-db-types.ts
   workflows:

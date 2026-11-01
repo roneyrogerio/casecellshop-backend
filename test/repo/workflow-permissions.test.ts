@@ -9,7 +9,7 @@ import {
 } from '../helpers/ci-workflow.ts';
 
 // AI-05 (permissões): todo workflow declara no topo só permissão de leitura, e a de escrita fica no job que precisa
-// dela (o analyze do codeql.yml, AI-44, e o auto-merge do merge-on-approval.yml, AI-10).
+// dela (o analyze do codeql.yml, AI-44, o auto-merge do merge-on-approval.yml, AI-10, e o report do nightly.yml, AI-46).
 
 describe('AI-05 a conferência das permissões do topo enxerga o que procura (controle negativo)', () => {
   const top = (permissions: string): string[] =>
@@ -50,9 +50,14 @@ describe('AI-05 a conferência das permissões do topo enxerga o que procura (co
 });
 
 describe('AI-05 todo workflow do repositório declara no topo só permissão de leitura', () => {
-  it('AI-05 a pasta tem o ci.yml, o codeql.yml e o merge-on-approval.yml', () => {
+  it('AI-05 a pasta tem o ci.yml, o codeql.yml, o merge-on-approval.yml e o nightly.yml', () => {
     expect(workflowFileNames()).toEqual(
-      expect.arrayContaining(['ci.yml', 'codeql.yml', 'merge-on-approval.yml']),
+      expect.arrayContaining([
+        'ci.yml',
+        'codeql.yml',
+        'merge-on-approval.yml',
+        'nightly.yml',
+      ]),
     );
   });
 
@@ -75,7 +80,7 @@ describe('AI-05 todo workflow do repositório declara no topo só permissão de 
     });
   });
 
-  it('AI-05 só os jobs auto-merge e analyze escrevem; o ci.yml não escreve em nenhum job', () => {
+  it('AI-05 só os jobs auto-merge, analyze e report escrevem; o ci.yml não escreve em nenhum job', () => {
     const writers = workflowFileNames().flatMap((name) =>
       Object.entries(readWorkflowFile(name)?.jobs ?? {})
         .filter(([, job]) => writeGrants(job.permissions).length > 0)
@@ -86,8 +91,12 @@ describe('AI-05 todo workflow do repositório declara no topo só permissão de 
       expect.arrayContaining([
         'codeql.yml:analyze',
         'merge-on-approval.yml:auto-merge',
+        'nightly.yml:report',
       ]),
     );
     expect(writers.filter((id) => id.startsWith('ci.yml:'))).toEqual([]);
+    expect(writers.filter((id) => id.startsWith('nightly.yml:'))).toEqual([
+      'nightly.yml:report',
+    ]);
   });
 });

@@ -194,7 +194,8 @@ const REPORTER_ARGS = [
   '--reporter=default',
   '--reporter=github-actions',
   '--reporter=json',
-  '--outputFile.json=$RUNNER_TEMP/vitest-report.json',
+  // Entre aspas: o shellcheck do actionlint (AI-43) reprova a variável sem aspas (SC2086).
+  '--outputFile.json="$RUNNER_TEMP/vitest-report.json"',
 ];
 
 // Tira `--exclude=<arquivo>` e o par `--exclude <arquivo>`; o que sobra é o resto do comando.
@@ -284,7 +285,7 @@ const BASE_PKG: Pkg = {
 };
 
 const REPORTER =
-  '--reporter=default --reporter=github-actions --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json';
+  '--reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json"';
 
 // Forma 1: um passo, com o argumento condicionado pela matriz.
 const ONE_STEP = `
@@ -579,6 +580,25 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
       ),
     );
     expect(ciViolations(noSeparator, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
+  });
+
+  it('FND-12 controle negativo: o caminho do relatório sem aspas reprova nas duas formas e em cada perna', () => {
+    for (const base of [ONE_STEP, TWO_STEPS]) {
+      expect(
+        ciViolations(
+          variant(base, (t) => t),
+          BASE_PKG,
+          BASE_COMPOSE,
+        ),
+      ).toEqual([]);
+      const unquoted = variant(base, (t) =>
+        t.replaceAll(
+          '"$RUNNER_TEMP/vitest-report.json"',
+          '$RUNNER_TEMP/vitest-report.json',
+        ),
+      );
+      expect(ciViolations(unquoted, BASE_PKG, BASE_COMPOSE)).not.toEqual([]);
+    }
   });
 
   it('FND-12 controle negativo: o passo de teste sem os argumentos de relatório, ou rodando duas vezes numa perna, reprova', () => {

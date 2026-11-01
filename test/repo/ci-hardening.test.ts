@@ -337,6 +337,14 @@ function summaryReadsTheTestReport(workflow: Workflow): boolean {
   return run.includes(`node ${REPORT_SCRIPT} ${file}`);
 }
 
+// O shellcheck do actionlint (AI-43) reprova a variável do shell sem aspas (SC2086): o caminho com `$` vai entre aspas
+// duplas, no npm test e no passo do resumo.
+function reportPathIsQuoted(workflow: Workflow): boolean {
+  const file = reportFileOf(workflow);
+  if (file === null) return false;
+  return !file.includes('$') || /^"[^"]+"$/.test(file);
+}
+
 function appendsToStepSummary(step: Step | undefined): boolean {
   return />>\s*"?\$\{?GITHUB_STEP_SUMMARY\}?"?/.test(step?.run ?? '');
 }
@@ -446,6 +454,29 @@ jobs:
     ).toBeUndefined();
   });
 
+  it('AI-18 o caminho do relatório com $RUNNER_TEMP exige aspas duplas, e a forma sem aspas reprova', () => {
+    const withPath = (path: string): Workflow =>
+      parse(`
+jobs:
+  test:
+    steps:
+      - run: npm test -- --reporter=json --outputFile.json=${path}
+      - run: node scripts/criteria-report.ts ${path} >> "$GITHUB_STEP_SUMMARY"
+`) as Workflow;
+
+    expect(reportPathIsQuoted(GOOD_SUMMARY)).toBe(true);
+    expect(
+      reportPathIsQuoted(withPath('"$RUNNER_TEMP/vitest-report.json"')),
+    ).toBe(true);
+    expect(summaryReadsTheTestReport(withPath('"$RUNNER_TEMP/r.json"'))).toBe(
+      true,
+    );
+    expect(
+      reportPathIsQuoted(withPath('$RUNNER_TEMP/vitest-report.json')),
+    ).toBe(false);
+    expect(reportPathIsQuoted(BAD_SUMMARY)).toBe(false);
+  });
+
   it('AI-18 anexar ao resumo exige >> $GITHUB_STEP_SUMMARY', () => {
     expect(appendsToStepSummary(summaryStep(GOOD_SUMMARY))).toBe(true);
     expect(appendsToStepSummary(summaryStep(BAD_SUMMARY))).toBe(false);
@@ -491,6 +522,14 @@ describe('AI-18 o ci.yml publica a tabela critério × teste no resumo da execu�
   it('AI-18 há um passo node scripts/criteria-report.ts sobre o mesmo arquivo do relatório', () => {
     expect(summaryStep(ci)).toBeDefined();
     expect(summaryReadsTheTestReport(ci)).toBe(true);
+  });
+
+  it('AI-18 o caminho do relatório vai entre aspas duplas no npm test e no passo do resumo', () => {
+    expect(reportFileOf(ci)).toBe('"$RUNNER_TEMP/vitest-report.json"');
+    expect(reportPathIsQuoted(ci)).toBe(true);
+    expect(summaryStep(ci)?.run).toContain(
+      'node scripts/criteria-report.ts "$RUNNER_TEMP/vitest-report.json"',
+    );
   });
 
   it('AI-18 o passo roda depois do npm test e anexa a saída ao $GITHUB_STEP_SUMMARY', () => {
