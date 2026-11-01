@@ -1893,3 +1893,116 @@ describe('AI-12 uma falha do git hash-object vira exceção na parada, e não um
     expect(log).toBeUndefined();
   });
 });
+
+// A17 do #27 (AI-12): um agente que começou antes da atualização do hook tem um retrato no formato anterior, com o
+// status em texto do `git status --porcelain`. A parada não pode devolvê-lo a cada vez: ela o deixa terminar e registra
+// a exceção para a sessão principal, dizendo que o retrato está no formato anterior.
+describe('AI-12 o retrato no formato anterior (status em texto) vira exceção, e não devolução a cada parada', () => {
+  const OLD_STATUS = ' M src/app.ts\n?? src/novo.ts\n';
+  const TEST_WRITER_STOP = {
+    agent_type: 'test-writer',
+    agent_id: 'tw1',
+    session_id: 's1',
+  };
+
+  // Grava o retrato do início como o hook anterior o gravava: o `status` é o texto do porcelain, e não a lista JSON.
+  async function oldFormatSnapshot(
+    sandbox: Sandbox,
+    input: { agent_id: string; session_id: string },
+  ): Promise<void> {
+    const file = await snapshotPath(sandbox, input.session_id, input.agent_id);
+    const snapshot = JSON.parse(readFileSync(file, 'utf8')) as {
+      status: unknown;
+    };
+    snapshot.status = OLD_STATUS;
+    writeFileSync(file, JSON.stringify(snapshot));
+  }
+
+  it.each([
+    ['implementer', IMPLEMENTER_STOP],
+    ['reviewer', REVIEWER],
+    ['test-writer', TEST_WRITER_STOP],
+  ])(
+    'AI-12 o %s com o retrato no formato anterior termina com código 0 e a exceção registrada cita o formato anterior',
+    async (_agentType, input) => {
+      const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+      makeRepo(sandbox);
+      runStart(sandbox, { ...input, cwd: sandbox.project });
+      await oldFormatSnapshot(sandbox, input);
+
+      const result = runStopOnly(sandbox, input);
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(exceptionLog(sandbox)).toContain('formato anterior');
+      expect(systemMessageOf(result.stdout)).toContain('formato anterior');
+    },
+  );
+
+  it('AI-12 o implementer com o retrato no formato anterior não é devolvido em nenhuma de várias paradas seguidas', async () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    makeRepo(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
+    await oldFormatSnapshot(sandbox, IMPLEMENTER_STOP);
+
+    const codes = [1, 2, 3, 4].map(
+      () => runStopOnly(sandbox, IMPLEMENTER_STOP).code,
+    );
+
+    expect(codes).toEqual([0, 0, 0, 0]);
+  });
+
+  // Controle negativo: o retrato no formato atual, sem mudança, não registra exceção.
+  it.each([
+    ['implementer', IMPLEMENTER_STOP],
+    ['reviewer', REVIEWER],
+  ])(
+    'AI-12 controle: o %s com o retrato no formato atual e sem mudança termina sem exceção',
+    (_agentType, input) => {
+      const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+      makeRepo(sandbox);
+      writeIn(sandbox, 'src/app.ts', 'export const antes = 1;\n');
+      runStart(sandbox, { ...input, cwd: sandbox.project });
+
+      const result = runStopOnly(sandbox, input);
+
+      expect(result.code, result.stderr).toBe(0);
+      expect(exceptionLog(sandbox)).toBeUndefined();
+    },
+  );
+});
+
+// A18 do #27 (AI-03): o agente sem worktree responde pelo que mudou na pasta principal durante a execução, e num rename
+// a origem passa pela conferência do papel junto com o destino (o `originsOf` soma a origem ao destino).
+describe('AI-03 o implementer sem worktree é devolvido quando renomeia um teste para fora de test/', () => {
+  function repoWithTest(sandbox: Sandbox): void {
+    makeRepo(sandbox);
+    writeIn(sandbox, 'test/algo.test.ts', 'export {};\n');
+    git(sandbox, 'add', '-A');
+    git(sandbox, 'commit', '-q', '-m', 'teste de base');
+  }
+
+  it('AI-03 o git mv de test/algo.test.ts para src/algo.ts sai com código 2 e o stderr cita a origem do rename', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    repoWithTest(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
+    git(sandbox, 'mv', 'test/algo.test.ts', 'src/algo.ts');
+
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('test/algo.test.ts');
+    expect(exceptionLog(sandbox)).toBeUndefined();
+  });
+
+  // Controle negativo: o rename dentro de src/ não tem origem fora do papel do implementer.
+  it('AI-03 controle: o git mv de src/app.ts para src/movido.ts sai com código 0', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+    repoWithTest(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
+    git(sandbox, 'mv', 'src/app.ts', 'src/movido.ts');
+
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
+
+    expect(result.code, result.stderr).toBe(0);
+  });
+});
