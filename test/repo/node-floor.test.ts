@@ -88,9 +88,12 @@ function devEnginesViolations(pkg: Pkg): string[] {
 // --- testes que sobem o docker compose --------------------------------------------------------------------------
 
 // Achados pelo código-fonte, e não por uma lista fixa, para um teste de compose novo entrar sozinho: o ambiente do
-// Testcontainers ou o comando `docker compose` rodado como processo. Uma menção em comentário não conta.
+// Testcontainers, o helper `upComposeProject` (test/helpers/compose.ts, que embrulha o ambiente) ou o comando
+// `docker compose` rodado como processo. Uma menção em comentário não conta, e importar o helper sem chamar
+// `upComposeProject(` também não: só quem sobe o projeto precisa da imagem do Dockerfile.
 const COMPOSE_USAGE = [
   /\bDockerComposeEnvironment\b/,
+  /\bupComposeProject\s*\(/,
   /['"`]docker['"`]\s*,\s*\[\s*['"`]compose['"`]/,
   /\b(?:exec|execFile|execSync|execFileSync|spawn|spawnSync)\w*\(\s*['"`]docker compose\b/,
 ];
@@ -438,6 +441,19 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
         'test/integration/d/plain.test.ts',
         "import { PostgreSqlContainer } from '@testcontainers/postgresql';\n",
       );
+      // O helper de compose: chamar `upComposeProject(` conta; importá-lo (ou só o `runCompose`) sem subir não conta.
+      write(
+        'test/integration/e/helper.test.ts',
+        "import { upComposeProject } from '../../helpers/compose.ts';\nawait upComposeProject('p', 'logs', async () => '');\n",
+      );
+      write(
+        'test/integration/f/import-only.test.ts',
+        "import { runCompose, upComposeProject } from '../../helpers/compose.ts';\nexport const unused = [runCompose, upComposeProject];\n",
+      );
+      write(
+        'test/integration/g/helper-comment.test.ts',
+        '// chama upComposeProject( para subir\nexport {};\n',
+      );
       write(
         'test/repo/outside.test.ts',
         "import { DockerComposeEnvironment } from 'testcontainers';\n",
@@ -445,6 +461,7 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
       expect(composeTestsUnder(dir)).toEqual([
         'test/integration/a/env.test.ts',
         'test/integration/b/cli.test.ts',
+        'test/integration/e/helper.test.ts',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
