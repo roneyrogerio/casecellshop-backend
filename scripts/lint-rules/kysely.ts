@@ -112,6 +112,80 @@ function isKyselyDynamicImport(node: Node | undefined): boolean {
   return source?.['value'] === 'kysely';
 }
 
+// Pais em que o identificador, onde quer que esteja, é nome e não valor:
+// declarar uma variável sql local não leva o do Kysely adiante.
+const NAME_ONLY_PARENTS = new Set([
+  'RestElement',
+  'ArrayPattern',
+  'BreakStatement',
+  'ContinueStatement',
+  'ImportSpecifier',
+  'ImportDefaultSpecifier',
+  'ImportNamespaceSpecifier',
+]);
+
+// Pais em que o identificador é nome só nestas chaves; em outra (o corpo de
+// uma seta, a classe estendida) é o valor.
+const NAME_KEYS: Record<string, string[]> = {
+  FunctionDeclaration: ['id', 'params'],
+  FunctionExpression: ['id', 'params'],
+  ArrowFunctionExpression: ['params'],
+  ClassDeclaration: ['id'],
+  ClassExpression: ['id'],
+  CatchClause: ['param'],
+  LabeledStatement: ['label'],
+  VariableDeclarator: ['id'],
+  AssignmentPattern: ['left'],
+};
+
+// Asserções de tipo levam o valor adiante: (sql as any).raw escaparia do
+// no-restricted-properties, que olha o objeto sql.
+const TS_VALUE_WRAPPERS = new Set([
+  'TSAsExpression',
+  'TSSatisfiesExpression',
+  'TSNonNullExpression',
+  'TSTypeAssertion',
+  'TSInstantiationExpression',
+]);
+
+function holds(parent: Node, key: string, node: Node): boolean {
+  const value = parent[key];
+  return Array.isArray(value) ? value.includes(node) : value === node;
+}
+
+// O sql só passa como tag de um fragmento, como objeto de um membro não
+// computado (as propriedades proibidas ficam no no-restricted-properties) ou
+// onde o identificador é nome, e não valor.
+function sqlUseAllowed(node: Node, parent: Node): boolean {
+  const is = (key: string) => holds(parent, key, node);
+  const nameKeys = NAME_KEYS[parent.type];
+  if (nameKeys) return nameKeys.some(is);
+  if (NAME_ONLY_PARENTS.has(parent.type)) return true;
+  if (TS_VALUE_WRAPPERS.has(parent.type)) return false;
+  switch (parent.type) {
+    case 'TaggedTemplateExpression':
+      return is('tag');
+    case 'MemberExpression':
+      return !(parent['computed'] && is('object'));
+    case 'Property':
+      // Na desestruturação o valor é declaração; num objeto literal, o valor
+      // leva o sql adiante (o { sql } abreviado também) e a chave é nome.
+      if (parent.parent?.type === 'ObjectPattern') return true;
+      if (is('value')) return false;
+      return is('key') && !parent['computed'];
+    case 'MethodDefinition':
+    case 'PropertyDefinition':
+    case 'TSPropertySignature':
+    case 'TSMethodSignature':
+      return is('key') && !parent['computed'];
+    case 'ExportSpecifier':
+      return !is('local');
+    default:
+      // Posições de tipo (typeof sql, nomes qualificados) não levam o valor.
+      return parent.type.startsWith('TS');
+  }
+}
+
 const noSqlAlias = {
   meta: { type: 'problem' as const },
   create(context: Context): Visitor {
@@ -157,22 +231,13 @@ const noSqlAlias = {
         )
           report(node);
       },
+      // Lista do que passa, e não do que reprova: qualquer outro lugar onde o
+      // valor sql vai (atribuição, parâmetro padrão, objeto, retorno,
+      // reexportação) o guarda com outro nome (A1 do #21).
       Identifier(node) {
         if (node['name'] !== 'sql') return;
         const parent = node.parent;
-        if (!parent) return;
-        const assigned =
-          parent.type === 'VariableDeclarator' &&
-          child(parent, 'init') === node;
-        const argument =
-          (parent.type === 'CallExpression' ||
-            parent.type === 'NewExpression') &&
-          (parent['arguments'] as Node[]).includes(node);
-        const bracket =
-          parent.type === 'MemberExpression' &&
-          parent['computed'] === true &&
-          child(parent, 'object') === node;
-        if (assigned || argument || bracket) report(node);
+        if (parent && !sqlUseAllowed(node, parent)) report(node);
       },
     });
   },
