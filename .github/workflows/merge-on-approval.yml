@@ -30,4 +30,6 @@ jobs:
       - name: Registra a aprovação
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: echo "Aprovação do dono no PR #$PR_NUMBER; o merge-by-app.yml liga o auto-merge."
+        # Bloco literal: num escalar simples do YAML, o " #" começaria um comentário.
+        run: |
+          echo "Aprovação do dono no PR #$PR_NUMBER; o merge-by-app.yml liga o auto-merge."
