@@ -4,6 +4,16 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // para que as pastas rodem isoladas e em qualquer ordem.
 export default defineConfig({
   test: {
+    // AI-37: só vale com --coverage, que o CI passa na perna do .nvmrc. Os
+    // processos de src/main/ rodam em outro processo ou no compose, fora da
+    // medição em processo. O piso é o medido ao criar a checagem, arredondado
+    // para baixo, e só sobe.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/db/types/**', 'src/main/**'],
+      thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 },
+    },
     projects: [
       {
         test: {
@@ -14,7 +24,13 @@ export default defineConfig({
           // A varredura com ** não entra em pastas que começam com ponto, então os
           // testes dos hooks e das permissões, em .claude/, entram pelo próprio padrão.
           include: ['**/*.test.ts', '.claude/**/*.test.ts'],
-          exclude: [...configDefaults.exclude, 'test/integration/**'],
+          // As worktrees dos agentes isolados ficam em .claude/worktrees/ e
+          // repetiriam a suíte inteira, com o código de outra versão.
+          exclude: [
+            ...configDefaults.exclude,
+            'test/integration/**',
+            '.claude/worktrees/**',
+          ],
         },
       },
       {

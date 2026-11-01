@@ -150,39 +150,38 @@ describe('reject e status', () => {
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
-  it.each([
-    {
-      status: 400,
-      expected: { kind: 'config_error', status: 400 },
-      id: 'ORD-10',
-    },
-    {
-      status: 401,
-      expected: { kind: 'config_error', status: 401 },
-      id: 'ORD-10',
-    },
-    {
-      status: 403,
-      expected: { kind: 'config_error', status: 403 },
-      id: 'ORD-10',
-    },
-    {
-      status: 404,
-      expected: { kind: 'config_error', status: 404 },
-      id: 'ORD-21',
-    },
-    { status: 429, expected: { kind: 'transient' }, id: 'ORD-21' },
-    { status: 503, expected: { kind: 'transient' }, id: 'ORD-21' },
-    { status: 500, expected: { kind: 'ambiguous' }, id: 'ORD-21' },
-    { status: 504, expected: { kind: 'ambiguous' }, id: 'ORD-21' },
-  ])(
-    '$id status $status na criação é classificado e não processa: nenhuma fatura',
-    async ({ status, expected }) => {
-      const { client, sim, order, reference } = await newScenario();
-      sim.script.enqueue({ mode: 'status', status });
+  async function expectCreationClassified(
+    status: number,
+    expected: Record<string, unknown>,
+  ) {
+    const { client, sim, order, reference } = await newScenario();
+    sim.script.enqueue({ mode: 'status', status });
 
-      expect(await client.createOrder(order)).toMatchObject(expected);
-      expect(await countInvoices(database.pool, reference)).toBe(0);
+    expect(await client.createOrder(order)).toMatchObject(expected);
+    expect(await countInvoices(database.pool, reference)).toBe(0);
+  }
+
+  it.each([
+    { status: 400, expected: { kind: 'config_error', status: 400 } },
+    { status: 401, expected: { kind: 'config_error', status: 401 } },
+    { status: 403, expected: { kind: 'config_error', status: 403 } },
+  ])(
+    'ORD-10 status $status na criação é classificado e não processa: nenhuma fatura',
+    async ({ status, expected }) => {
+      await expectCreationClassified(status, expected);
+    },
+  );
+
+  it.each([
+    { status: 404, expected: { kind: 'config_error', status: 404 } },
+    { status: 429, expected: { kind: 'transient' } },
+    { status: 503, expected: { kind: 'transient' } },
+    { status: 500, expected: { kind: 'ambiguous' } },
+    { status: 504, expected: { kind: 'ambiguous' } },
+  ])(
+    'ORD-21 status $status na criação é classificado e não processa: nenhuma fatura',
+    async ({ status, expected }) => {
+      await expectCreationClassified(status, expected);
     },
   );
 

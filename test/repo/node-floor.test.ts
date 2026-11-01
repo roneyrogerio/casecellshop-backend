@@ -208,12 +208,15 @@ function withoutExcludes(all: string[]): string[] {
 }
 
 // O comando tem de ser, token a token, `npm test --` mais os argumentos de relatório, em qualquer ordem.
-function closedArgsViolation(rest: string[]): string | null {
+// AI-37: só a perna nvmrc acrescenta `--coverage`; a do piso não mede cobertura.
+function closedArgsViolation(rest: string[], leg: string): string | null {
   const prefix = ['npm', 'test', '--'];
   if (JSON.stringify(rest.slice(0, prefix.length)) !== JSON.stringify(prefix))
     return 'não começa por `npm test --`';
   const args = rest.slice(prefix.length);
-  const expected = [...REPORTER_ARGS].sort();
+  const allowed =
+    leg === 'nvmrc' ? [...REPORTER_ARGS, '--coverage'] : REPORTER_ARGS;
+  const expected = [...allowed].sort();
   if (JSON.stringify([...args].sort()) !== JSON.stringify(expected)) {
     return `argumentos ${JSON.stringify(args)} fora da lista fechada ${JSON.stringify(expected)}`;
   }
@@ -248,7 +251,7 @@ function ciViolations(
     }
     // Lista fechada: depois de tirar os pares --exclude (que a perna do piso pode ter), sobra `npm test --` e os
     // argumentos de relatório, nada mais. Um `--project`, um filtro posicional ou um `-t` deixaria de rodar testes.
-    const closed = closedArgsViolation(withoutExcludes(tokens(command)));
+    const closed = closedArgsViolation(withoutExcludes(tokens(command)), leg);
     if (closed !== null) violations.push(`perna ${leg}: ${closed}: ${command}`);
     const excludes = excludesOf(command);
     if (leg === 'nvmrc') {
@@ -293,7 +296,7 @@ jobs:
       - run: npm ci
       - run: >-
           npm test -- \${{ matrix.node == '24.12.0' && '--exclude ${COMPOSE_A} --exclude ${COMPOSE_B}' || '' }}
-          ${REPORTER}
+          ${REPORTER} \${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
 `;
 
 // Forma 2: dois passos, cada um com o seu `if`.
@@ -306,7 +309,7 @@ jobs:
     steps:
       - run: npm ci
       - if: matrix.node == 'nvmrc'
-        run: npm test -- ${REPORTER}
+        run: npm test -- ${REPORTER} --coverage
       - if: \${{ matrix.node != 'nvmrc' }}
         run: npm test -- --exclude=${COMPOSE_A} --exclude=${COMPOSE_B} ${REPORTER}
 `;

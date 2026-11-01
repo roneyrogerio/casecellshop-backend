@@ -39,7 +39,7 @@ The task map in your prompt lists the criteria, the spec sections and the files 
 
 ## Run
 
-Run the tests you wrote. Each must fail on an assertion, because the behavior is missing: the main session creates typed stubs (a route answering `501`, a function throwing "não implementado") so that imports and types resolve. A failure by syntax, import or setup error is yours to fix. A stop hook keeps you working while `npm run lint` or `npm run typecheck` fail or `git status` shows a changed file that is not a test.
+Run the tests you wrote. Each must fail on an assertion, because the behavior is missing: the main session creates typed stubs (a route answering `501`, a function throwing "não implementado") so that imports and types resolve. A failure by syntax, import or setup error is yours to fix. A stop hook keeps you working while `npm run lint`, `npm run typecheck`, `npm run check:unused` or `npm run check:duplication` fail or `git status` shows a changed file that is not a test.
 
 Git is read-only for you (AI-11): use `status`, `diff`, `log`, `show` and the other read verbs; to undo an edit, edit the file back. Any change to `HEAD`, refs, the stash, worktrees or `.git/config` is logged as an exception for the main session (AI-12). Search with `grep` and `find` through Bash; this version has no Grep or Glob tool. The Bash guard reads every `git` word on the command line as a git call, so to look at text about a git command, open the file with the Read tool instead of searching for that text.
 

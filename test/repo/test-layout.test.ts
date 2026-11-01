@@ -1,20 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 describe('AI-02 oxlint reprova teste focado ou desligado', () => {
   let tree: string;
@@ -55,22 +52,22 @@ describe('AI-02 oxlint reprova teste focado ou desligado', () => {
 
   it('AI-02 um arquivo com só it(...) passa no lint', () => {
     const code = lintExitCode(
-      `it('faz algo', () => {\n  expect(1).toBe(1);\n});`,
+      `it('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`,
     );
 
     expect(code).toBe(0);
   }, 60_000);
 
   it.each([
-    ['it.only', `it.only('faz algo', () => {\n  expect(1).toBe(1);\n});`],
-    ['it.skip', `it.skip('faz algo', () => {\n  expect(1).toBe(1);\n});`],
+    ['it.only', `it.only('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`],
+    ['it.skip', `it.skip('AI-02 faz algo', () => {\n  expect(1).toBe(1);\n});`],
     [
       'describe.only',
-      `describe.only('grupo', () => {\n  it('faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
+      `describe.only('AI-02 grupo', () => {\n  it('AI-02 faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
     ],
     [
       'describe.skip',
-      `describe.skip('grupo', () => {\n  it('faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
+      `describe.skip('AI-02 grupo', () => {\n  it('AI-02 faz algo', () => {\n    expect(1).toBe(1);\n  });\n});`,
     ],
   ])(
     'AI-02 %s reprova o lint com código diferente de zero',
@@ -134,6 +131,53 @@ describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', 
     expect(vitestFiles('integration')).toEqual(
       all.filter((file) => file.startsWith('test/integration/')),
     );
+  }, 60_000);
+
+  // As worktrees dos agentes ficam em .claude/worktrees/ e repetiriam a suíte inteira no projeto da pasta principal.
+  it('AI-02 o vitest.config.ts do projeto unit exclui .claude/worktrees/**', () => {
+    const config = readFileSync(path.join(root, 'vitest.config.ts'), 'utf8');
+
+    expect(config).toContain('.claude/worktrees/**');
+  });
+
+  // O Vitest decide, e não a leitura do arquivo: uma árvore temporária com a mesma configuração e três testes.
+  it('AI-02 um *.test.ts sob .claude/worktrees/ não entra no projeto unit, e os de src/ e .claude/hooks/ entram', () => {
+    const tree = mkdtempSync(path.join(tmpdir(), 'ai02-worktrees-'));
+    try {
+      symlinkSync(
+        path.join(root, 'node_modules'),
+        path.join(tree, 'node_modules'),
+        'dir',
+      );
+      writeFileSync(
+        path.join(tree, 'vitest.config.ts'),
+        readFileSync(path.join(root, 'vitest.config.ts')),
+      );
+      for (const file of [
+        'src/a.test.ts',
+        '.claude/hooks/b.test.ts',
+        '.claude/worktrees/x/src/c.test.ts',
+        '.claude/worktrees/x/.claude/hooks/d.test.ts',
+      ]) {
+        mkdirSync(path.dirname(path.join(tree, file)), { recursive: true });
+        writeFileSync(path.join(tree, file), '');
+      }
+
+      const result = spawnSync(
+        path.join(root, 'node_modules', '.bin', 'vitest'),
+        ['list', '--project', 'unit', '--filesOnly'],
+        { cwd: tree, encoding: 'utf8' },
+      );
+      const listed = result.stdout
+        .split('\n')
+        .map((line) => line.replace(/^\[[^\]]+\]\s*/, '').trim())
+        .filter((line) => line !== '')
+        .sort();
+
+      expect(listed).toEqual(['.claude/hooks/b.test.ts', 'src/a.test.ts']);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
   }, 60_000);
 
   // O arquivo de scripts/ do controle é um teste que fica ao lado do script que testa; este próprio

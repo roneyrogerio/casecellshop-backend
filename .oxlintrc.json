@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "oxc", "unicorn", "vitest", "import", "node"],
+  "jsPlugins": ["./scripts/lint-rules/kysely.ts"],
   "categories": {
     "correctness": "error"
   },
@@ -76,7 +77,16 @@
     "unicorn/prefer-structured-clone": "error",
     "unicorn/prefer-at": "error",
     "eslint/no-var": "error",
-    "eslint/prefer-const": "error"
+    "eslint/prefer-const": "error",
+    "vitest/valid-title": [
+      "error",
+      {
+        "mustMatch": {
+          "it": "^[A-Z]+(-[A-Z]+)*-\\d+( |$)",
+          "test": "^[A-Z]+(-[A-Z]+)*-\\d+( |$)"
+        }
+      }
+    ]
   },
   "overrides": [
     {
@@ -169,6 +179,61 @@
         ],
         "import/no-cycle": "error",
         "node/no-process-env": "error"
+      }
+    },
+    {
+      "files": ["src/**/*.ts"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "sql",
+            "property": "raw",
+            "message": "sql.raw põe texto cru no SQL, fora da conferência do tsc (AI-19)"
+          },
+          {
+            "object": "sql",
+            "property": "lit",
+            "message": "sql.lit põe texto cru no SQL, fora da conferência do tsc (AI-19)"
+          },
+          {
+            "object": "sql",
+            "property": "ref",
+            "message": "sql.ref põe texto cru no SQL, fora da conferência do tsc (AI-19)"
+          },
+          {
+            "object": "sql",
+            "property": "id",
+            "message": "sql.id põe texto cru no SQL, fora da conferência do tsc (AI-19)"
+          },
+          {
+            "object": "sql",
+            "property": "table",
+            "message": "sql.table põe texto cru no SQL, fora da conferência do tsc (AI-19)"
+          },
+          {
+            "object": "CompiledQuery",
+            "property": "raw",
+            "message": "o CompiledQuery.raw executa SQL montado fora do builder (AI-19)"
+          },
+          {
+            "property": "dynamic",
+            "message": "o db.dynamic aceita nome de coluna em tempo de execução (AI-19)"
+          },
+          {
+            "property": "executeQuery",
+            "message": "o executeQuery executa SQL montado fora do builder (AI-19)"
+          },
+          {
+            "property": "getExecutor",
+            "message": "o getExecutor executa SQL montado fora do builder (AI-19)"
+          }
+        ],
+        "kysely/no-callback-values": "error",
+        "kysely/no-sql-alias": "error",
+        "kysely/no-sql-command": "error",
+        "kysely/no-sql-column": "error",
+        "kysely/no-direct-query": "error"
       }
     },
     {
@@ -345,6 +410,23 @@
             ]
           }
         ]
+      }
+    },
+    {
+      "files": ["src/db/**/*.ts"],
+      "rules": {
+        "kysely/no-direct-query": "off"
+      }
+    },
+    {
+      "files": ["src/db/types/*.ts", "src/**/*.test.ts"],
+      "rules": {
+        "no-restricted-properties": "off",
+        "kysely/no-callback-values": "off",
+        "kysely/no-sql-alias": "off",
+        "kysely/no-sql-command": "off",
+        "kysely/no-sql-column": "off",
+        "kysely/no-direct-query": "off"
       }
     }
   ]

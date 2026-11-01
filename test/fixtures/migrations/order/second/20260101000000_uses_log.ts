@@ -6,5 +6,8 @@ export async function up(db: Kysely<any>): Promise<void> {
 }
 
 export async function down(db: Kysely<any>): Promise<void> {
-  await db.deleteFrom('fnd11_order_log').where('who', '=', 'second-1').execute();
+  await db
+    .deleteFrom('fnd11_order_log')
+    .where('who', '=', 'second-1')
+    .execute();
 }

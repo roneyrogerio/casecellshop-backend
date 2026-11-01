@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { CONFIG_KEYS_OUTSIDE_DEPENDENCIES } from '../../test/helpers/package-json-config.ts';
 
 interface CheckResult {
   ok: boolean;
@@ -117,21 +118,60 @@ function stop(
 const KEY = 'sess-1:ag-1';
 
 describe('AI-03 hook de parada devolve o agente ao trabalho enquanto a verificação falhar', () => {
-  it('AI-03 o implementer roda lint, typecheck e test:changed', async () => {
+  it('AI-03 o implementer roda lint, typecheck, check:unused, check:duplication e test:changed', async () => {
     const { deps, ran } = makeDeps();
 
     await decide(stop('implementer'), deps);
 
-    expect([...ran].sort()).toEqual(['lint', 'test:changed', 'typecheck']);
+    expect([...ran].sort()).toEqual([
+      'check:duplication',
+      'check:unused',
+      'lint',
+      'test:changed',
+      'typecheck',
+    ]);
   });
 
-  it('AI-03 o test-writer roda só lint e typecheck', async () => {
+  it('AI-03 o test-writer roda lint, typecheck, check:unused e check:duplication, e não os testes', async () => {
     const { deps, ran } = makeDeps();
 
     await decide(stop('test-writer'), deps);
 
-    expect([...ran].sort()).toEqual(['lint', 'typecheck']);
+    expect([...ran].sort()).toEqual([
+      'check:duplication',
+      'check:unused',
+      'lint',
+      'typecheck',
+    ]);
   });
+
+  it.each(['implementer', 'test-writer'])(
+    'AI-03 o %s é devolvido, com o nome e a saída, quando só o check:unused falha',
+    async (agentType) => {
+      const { deps } = makeDeps({ 'check:unused': 'knip: export sem uso' });
+
+      const decision = await decide(stop(agentType), deps);
+
+      expect(decision.action).toBe('block');
+      expect(decision.message).toContain('check:unused');
+      expect(decision.message).toContain('knip: export sem uso');
+    },
+  );
+
+  it.each(['implementer', 'test-writer'])(
+    'AI-03 o %s é devolvido, com o nome e a saída, quando só o check:duplication falha',
+    async (agentType) => {
+      const { deps } = makeDeps({
+        'check:duplication': 'jscpd: clone novo em src/a.ts',
+      });
+
+      const decision = await decide(stop(agentType), deps);
+
+      expect(decision.action).toBe('block');
+      expect(decision.message).toContain('check:duplication');
+      expect(decision.message).toContain('jscpd: clone novo em src/a.ts');
+    },
+  );
 
   it.each(['reviewer', 'general-purpose', 'Explore'])(
     'AI-03 o agente %s não roda checagem e é liberado',
@@ -323,7 +363,7 @@ describe('AI-03 hook de parada devolve o agente ao trabalho enquanto a verifica�
     );
 
     expect(decision.action).toBe('allow');
-    expect(ran).toHaveLength(3);
+    expect(ran).toHaveLength(5);
   });
 });
 
@@ -668,8 +708,17 @@ const WORKTREE = '/tmp/worktrees/agent-1';
 
 describe('AI-27 na parada de um agente em worktree, as checagens rodam dentro dela', () => {
   it.each([
-    ['implementer', ['lint', 'test:changed', 'typecheck']],
-    ['test-writer', ['lint', 'typecheck']],
+    [
+      'implementer',
+      [
+        'check:duplication',
+        'check:unused',
+        'lint',
+        'test:changed',
+        'typecheck',
+      ],
+    ],
+    ['test-writer', ['check:duplication', 'check:unused', 'lint', 'typecheck']],
   ])(
     'AI-27 o %s roda cada checagem no cwd da worktree',
     async (agentType, expected) => {
@@ -689,10 +738,10 @@ describe('AI-27 na parada de um agente em worktree, as checagens rodam dentro de
     await decide(stop('implementer', { cwd: '/wt/um', agent_id: 'a' }), deps);
     await decide(stop('implementer', { cwd: '/wt/dois', agent_id: 'b' }), deps);
 
-    expect(new Set(ranIn.slice(0, 3).map(([, cwd]) => cwd))).toEqual(
+    expect(new Set(ranIn.slice(0, 5).map(([, cwd]) => cwd))).toEqual(
       new Set(['/wt/um']),
     );
-    expect(new Set(ranIn.slice(3).map(([, cwd]) => cwd))).toEqual(
+    expect(new Set(ranIn.slice(5).map(([, cwd]) => cwd))).toEqual(
       new Set(['/wt/dois']),
     );
   });
@@ -994,6 +1043,10 @@ function writeIn(sandbox: Sandbox, relative: string, content: string): void {
   writeFileSync(file, content);
 }
 
+function writePackageJson(sandbox: Sandbox, content: object): void {
+  writeIn(sandbox, 'package.json', JSON.stringify(content, null, 2));
+}
+
 const IMPLEMENTER_STOP = {
   agent_type: 'implementer',
   agent_id: 'a1',
@@ -1084,15 +1137,11 @@ describe('AI-03 o hook de parada como processo', () => {
   it('AI-03 o implementer que mudou o bloco scripts do package.json sai com código 2', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
-    writeIn(
-      sandbox,
-      'package.json',
-      JSON.stringify(
-        { name: 'x', scripts: { lint: 'true' }, dependencies: {} },
-        null,
-        2,
-      ),
-    );
+    writePackageJson(sandbox, {
+      name: 'x',
+      scripts: { lint: 'true' },
+      dependencies: {},
+    });
 
     const result = runHook(sandbox, IMPLEMENTER_STOP);
 
@@ -1100,22 +1149,33 @@ describe('AI-03 o hook de parada como processo', () => {
     expect(result.stderr).toContain('scripts');
   });
 
+  it.each(CONFIG_KEYS_OUTSIDE_DEPENDENCIES)(
+    'AI-03 o implementer que acrescentou a chave %s ao package.json sai com código 2',
+    (_key, extra) => {
+      const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
+      makeRepo(sandbox);
+      writePackageJson(sandbox, {
+        name: 'x',
+        scripts: { lint: 'oxlint' },
+        dependencies: {},
+        ...extra,
+      });
+
+      const result = runHook(sandbox, IMPLEMENTER_STOP);
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain('package.json');
+    },
+  );
+
   it('AI-03 o implementer que mudou só as dependências do package.json sai com código 0', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
-    writeIn(
-      sandbox,
-      'package.json',
-      JSON.stringify(
-        {
-          name: 'x',
-          scripts: { lint: 'oxlint' },
-          dependencies: { zod: '4.6.7' },
-        },
-        null,
-        2,
-      ),
-    );
+    writePackageJson(sandbox, {
+      name: 'x',
+      scripts: { lint: 'oxlint' },
+      dependencies: { zod: '4.6.7' },
+    });
 
     expect(runHook(sandbox, IMPLEMENTER_STOP).code).toBe(0);
   });

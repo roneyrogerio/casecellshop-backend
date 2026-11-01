@@ -6,3 +6,6 @@
 
 # style: completa a formatação de problem.ts numa segunda passada
 e4a049ce74926a6b0eb3faa803555ce6105d3fef
+
+# style: formata as fixtures de migração dos testes
+9c88ff581801c4e2d82ca1eb919886f60d657415

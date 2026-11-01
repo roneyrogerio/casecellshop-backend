@@ -6,32 +6,17 @@ import { checkoutRoute } from './checkout.ts';
 import { healthRoute } from './health.ts';
 import { orderStatusRoute } from './orders.ts';
 
+// Só o que outro módulo importa daqui; o resto fica no arquivo de cada schema (AI-35).
 export {
-  AcceptedHeaders,
   CheckoutAccepted,
-  CheckoutHeaders,
-  CheckoutItem,
   CheckoutRequest,
   checkoutRoute,
   MAX_BODY_BYTES,
-  MAX_ITEMS,
-  MAX_QUANTITY,
 } from './checkout.ts';
 export { BillingMessage, TRACEPARENT_ATTRIBUTE } from './billing-message.ts';
-export { HealthQuery, HealthStatus, healthRoute } from './health.ts';
-export {
-  FailureReason,
-  OrderId,
-  OrderStatus,
-  OrderStatusValue,
-  orderStatusRoute,
-} from './orders.ts';
-export {
-  RequestHeaders,
-  ResponseHeaders,
-  RetryAfterHeaders,
-} from './headers.ts';
-export { CorrelationId, Problem, ProblemType } from './problem.ts';
+export { HealthStatus, healthRoute } from './health.ts';
+export { OrderStatus, orderStatusRoute } from './orders.ts';
+export { CorrelationId, Problem } from './problem.ts';
 export { PROBLEM_MEDIA_TYPE } from './responses.ts';
 
 // A validação e os testes percorrem esta lista; o OpenAPI é gerado dela.

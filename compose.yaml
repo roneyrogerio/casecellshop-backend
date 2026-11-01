@@ -90,12 +90,12 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # Emulador do SQS (AD-021). As filas vêm do elasticmq.conf; mensagens e filas ficam no volume,
+  # Emulador do SQS (AD-021). As filas vêm do docker/elasticmq/elasticmq.conf; mensagens e filas ficam no volume,
   # para sobreviver ao reinício. A porta 9324 fica só na rede do compose.
   elasticmq:
     image: softwaremill/elasticmq-native:1.7.1
     volumes:
-      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+      - ./docker/elasticmq/elasticmq.conf:/opt/elasticmq.conf:ro
       - elasticmq-data:/data
     restart: unless-stopped
 

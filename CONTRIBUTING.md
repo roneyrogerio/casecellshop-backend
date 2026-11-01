@@ -11,13 +11,17 @@ Como preparar a máquina, rodar as checagens e abrir um PR. O que o projeto é e
 
 | Comando | O que roda | Quando |
 | --- | --- | --- |
-| `npm run verify:fast` | lint, tipos e os testes ligados aos arquivos mudados | durante o trabalho; é o que o hook de parada dos agentes roda |
-| `npm run verify` | lint, formato, tipos, testes unitários, OpenAPI e as conferências do repositório | no `pre-push` do repositório |
+| `npm run verify:fast` | lint, tipos, código sem uso, código repetido e os testes ligados aos arquivos mudados | durante o trabalho; é o que o hook de parada dos agentes roda |
+| `npm run verify` | lint, formato, tipos, testes unitários, OpenAPI, código sem uso, código repetido e as conferências do repositório | no `pre-push` do repositório |
 | `npm run verify:full` | o `verify` mais os testes de integração, com Docker | antes de um PR sair do rascunho |
 
 O formato do código é o do Prettier (`AI-34`): `npm run format` formata o repositório e `npm run format:check` só confere. Os commits que só reformataram estão no [`.git-blame-ignore-revs`](.git-blame-ignore-revs), que o GitHub já usa; para o `git blame` local pular esses commits também, rode uma vez `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
 
-Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda tudo no Node do `.nvmrc` e de novo na 24.12, menos os testes que sobem o `docker compose`, cuja imagem já fixa o Node 26.
+Outros comandos: `npm run lint`, `npm run typecheck`, `npm run check:unused` (knip), `npm run check:duplication` (jscpd), `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda os testes no Node do `.nvmrc` e de novo na 24.12, menos os que sobem o `docker compose`, cuja imagem já fixa o Node 26; a cobertura, o código sem uso, o código repetido e o `npm audit` rodam só na perna do `.nvmrc`. Onde e por que cada checagem roda está na linha "Momento de cada checagem" do [`STATE.md`](.specs/project/STATE.md).
+
+No VS Code, instale as extensões que o projeto recomenda (`.vscode/extensions.json`): o Prettier e o oxlint mostram o formato e o lint enquanto você escreve, com a configuração do repositório. Com outro editor, o pre-push e o CI conferem o mesmo.
+
+Repetição de código já existente fica na linha de base `.jscpd-baseline.json`; quando você tira uma, atualize a base com `node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline`. O piso de cobertura fica no `vitest.config.ts` e só sobe.
 
 Os volumes do compose guardam o banco e as mensagens do ElasticMQ entre execuções. Se o histórico de migrações deixar de bater com o banco local, como na troca de migrador da AD-017, recrie os volumes uma vez com `docker compose down -v`.
 

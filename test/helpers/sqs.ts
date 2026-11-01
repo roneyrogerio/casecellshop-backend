@@ -91,7 +91,7 @@ function reachableUrl(
   return `${emq.endpoint}${new URL(queueUrl).pathname}`;
 }
 
-// A DLQ e depois a fila de origem com a mesma redrive policy do elasticmq.conf (design.md, "Fila no SQS").
+// A DLQ e depois a fila de origem com a mesma redrive policy do docker/elasticmq/elasticmq.conf (design.md, "Fila no SQS").
 export async function createBillingQueues(
   emq: TestElasticMq,
   options: QueueOptions = {},

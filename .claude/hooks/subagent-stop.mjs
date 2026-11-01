@@ -28,8 +28,14 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const CHECKS = {
-  implementer: ['lint', 'typecheck', 'test:changed'],
-  'test-writer': ['lint', 'typecheck'],
+  implementer: [
+    'lint',
+    'typecheck',
+    'check:unused',
+    'check:duplication',
+    'test:changed',
+  ],
+  'test-writer': ['lint', 'typecheck', 'check:unused', 'check:duplication'],
 };
 
 const MAX_BLOCKS = 3;
@@ -99,9 +105,9 @@ async function decideChecked(input, deps) {
   }
   if (input.agent_type === 'implementer' && deps.scriptsChanged()) {
     failures.push({
-      name: 'scripts do package.json',
+      name: 'configuração do package.json',
       output:
-        'O bloco "scripts" mudou: ele define o que o CI e este hook rodam, e é da sessão principal.',
+        'O package.json mudou fora dos blocos de dependências: os scripts e as chaves de configuração definem o que o CI e este hook rodam, e são da sessão principal.',
     });
   }
   // Em sequência, e todas: a devolução cita cada checagem que falhou (AI-03). Rodar
@@ -171,8 +177,9 @@ async function scriptsChanged(projectDir) {
   );
   if (head.status !== 0) return false;
   try {
-    const { scriptsDiffer } = await import('../../scripts/check-scripts.ts');
-    return scriptsDiffer(
+    const { packageJsonDiffers } =
+      await import('../../scripts/check-scripts.ts');
+    return packageJsonDiffers(
       head.stdout,
       readFileSync(join(projectDir, 'package.json'), 'utf8'),
     );
