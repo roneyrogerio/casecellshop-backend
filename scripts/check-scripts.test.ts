@@ -1,22 +1,43 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  cleanupTempDirs,
+  git,
+  writeFileIn,
+} from '../test/helpers/git-sandbox.ts';
 import { CONFIG_KEYS_OUTSIDE_DEPENDENCIES } from '../test/helpers/package-json-config.ts';
+import { repoRoot } from '../test/helpers/repo-root.ts';
+import {
+  exportedFn,
+  loadScript,
+  runScript,
+  sandboxWithScript,
+  type ScriptModule,
+} from '../test/helpers/script-module.ts';
 
-let scriptsDiffer: (base: string, head: string) => boolean;
 let packageJsonDiffers: (base: string, head: string) => boolean;
+let scriptModule: ScriptModule;
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
   const mod = (await import(
     pathToFileURL(join(import.meta.dirname, 'check-scripts.ts')).href
   )) as {
-    scriptsDiffer: typeof scriptsDiffer;
     packageJsonDiffers: typeof packageJsonDiffers;
   };
-  scriptsDiffer = mod.scriptsDiffer;
   packageJsonDiffers = mod.packageJsonDiffers;
+  scriptModule = await loadScript('check-scripts.ts');
 });
+afterAll(cleanupTempDirs);
+
+const dependencyVersionViolations = (packageJson: string): string[] =>
+  exportedFn<(packageJson: string) => string[]>(
+    scriptModule,
+    'check-scripts.ts',
+    'dependencyVersionViolations',
+  )(packageJson);
 
 function pkg(
   scripts: Record<string, string> | undefined,
@@ -34,94 +55,6 @@ const BASE_SCRIPTS = {
   lint: 'oxlint',
   typecheck: 'tsc --noEmit',
 };
-
-describe('AI-05 scriptsDiffer compara o bloco scripts do package.json com a base', () => {
-  it('AI-05 blocos idênticos não diferem (controle)', () => {
-    expect(scriptsDiffer(pkg(BASE_SCRIPTS), pkg(BASE_SCRIPTS))).toBe(false);
-  });
-
-  it('AI-05 um comando alterado difere', () => {
-    expect(
-      scriptsDiffer(pkg(BASE_SCRIPTS), pkg({ ...BASE_SCRIPTS, lint: 'true' })),
-    ).toBe(true);
-  });
-
-  it('AI-05 um script acrescentado difere', () => {
-    expect(
-      scriptsDiffer(
-        pkg(BASE_SCRIPTS),
-        pkg({ ...BASE_SCRIPTS, extra: 'echo oi' }),
-      ),
-    ).toBe(true);
-  });
-
-  it('AI-05 um script removido difere', () => {
-    expect(
-      scriptsDiffer(
-        pkg(BASE_SCRIPTS),
-        pkg({ test: 'vitest run', lint: 'oxlint' }),
-      ),
-    ).toBe(true);
-  });
-
-  it('AI-05 um script renomeado difere', () => {
-    expect(
-      scriptsDiffer(
-        pkg(BASE_SCRIPTS),
-        pkg({ test: 'vitest run', lint: 'oxlint', check: 'tsc --noEmit' }),
-      ),
-    ).toBe(true);
-  });
-
-  it('AI-05 outra ordem das chaves não difere', () => {
-    const reordered = {
-      typecheck: 'tsc --noEmit',
-      test: 'vitest run',
-      lint: 'oxlint',
-    };
-
-    expect(scriptsDiffer(pkg(BASE_SCRIPTS), pkg(reordered))).toBe(false);
-    expect(scriptsDiffer(pkg(reordered), pkg(BASE_SCRIPTS))).toBe(false);
-  });
-
-  it('AI-05 outra formatação do JSON não difere', () => {
-    expect(
-      scriptsDiffer(
-        pkg(BASE_SCRIPTS),
-        JSON.stringify({ name: 'x', scripts: BASE_SCRIPTS }),
-      ),
-    ).toBe(false);
-  });
-
-  it('AI-05 mudar dependências, versão ou outros campos sem tocar nos scripts não difere', () => {
-    const head = pkg(BASE_SCRIPTS, {
-      dependencies: { zod: '4.6.7' },
-      engines: { node: '>=24.12.0' },
-    });
-
-    expect(scriptsDiffer(pkg(BASE_SCRIPTS), head)).toBe(false);
-  });
-
-  it('AI-05 o bloco que aparece onde não havia difere, e o que some também', () => {
-    expect(scriptsDiffer(pkg(undefined), pkg(BASE_SCRIPTS))).toBe(true);
-    expect(scriptsDiffer(pkg(BASE_SCRIPTS), pkg(undefined))).toBe(true);
-  });
-
-  it('AI-05 sem bloco scripts nos dois lados não difere', () => {
-    expect(
-      scriptsDiffer(
-        pkg(undefined),
-        pkg(undefined, { dependencies: { zod: '4.6.7' } }),
-      ),
-    ).toBe(false);
-  });
-
-  it('AI-05 um espaço a mais dentro do comando difere (o comando é o que executa)', () => {
-    expect(
-      scriptsDiffer(pkg({ lint: 'oxlint' }), pkg({ lint: 'oxlint ' })),
-    ).toBe(true);
-  });
-});
 
 const BASE_DEPENDENCIES = {
   dependencies: { zod: '4.6.7', kysely: '0.28.0' },
@@ -267,5 +200,151 @@ describe('AI-05 packageJsonDiffers compara tudo fora dos blocos de dependências
         }),
       ),
     ).toBe(true);
+  });
+});
+
+const DEPENDENCY_BLOCKS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+];
+
+function withDependency(version: string, block = 'dependencies'): string {
+  return pkg(BASE_SCRIPTS, {
+    [block]: { good: '1.0.0', pkg: version },
+  });
+}
+
+describe('AI-05 dependencyVersionViolations só aceita versão semver exata nos blocos de dependências', () => {
+  it.each(['1.2.3', '1.2.3-rc.1', '0.0.0', '10.20.30-beta.2', '4.0.0-alpha'])(
+    'AI-05 a versão exata %s passa (controle)',
+    (version) => {
+      expect(dependencyVersionViolations(withDependency(version))).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['npm:', 'npm:outro@1.2.3'],
+    ['file:', 'file:../pacote'],
+    ['link:', 'link:../pacote'],
+    ['git+https', 'git+https://github.com/a/b.git#abc123'],
+    ['git+ssh', 'git+ssh://git@github.com/a/b.git'],
+    ['git://', 'git://github.com/a/b.git'],
+    ['atalho do GitHub', 'github:a/b'],
+    ['URL https', 'https://example.com/pacote.tgz'],
+    ['URL http', 'http://example.com/pacote.tgz'],
+    ['circunflexo', '^1.2.3'],
+    ['til', '~1.2.3'],
+    ['faixa com maior ou igual', '>=1.2.3'],
+    ['faixa com dois limites', '>=1.2.3 <2.0.0'],
+    ['faixa com hífen', '1.2.3 - 2.0.0'],
+    ['curinga x', '1.2.x'],
+    ['curinga *', '*'],
+    ['versão incompleta', '1.2'],
+    ['só o maior', '1'],
+    ['prefixo v', 'v1.2.3'],
+    ['tag latest', 'latest'],
+    ['tag next', 'next'],
+    ['vazia', ''],
+  ])('AI-05 a forma %s (%s) reprova, e cita a dependência', (_label, value) => {
+    expect(dependencyVersionViolations(withDependency(value))).toEqual([
+      expect.stringContaining('pkg'),
+    ]);
+  });
+
+  it.each(DEPENDENCY_BLOCKS)(
+    'AI-05 o circunflexo reprova no bloco %s, e a versão exata passa nele',
+    (block) => {
+      expect(
+        dependencyVersionViolations(withDependency('^1.2.3', block)),
+      ).toEqual([expect.stringContaining('pkg')]);
+      expect(
+        dependencyVersionViolations(withDependency('1.2.3', block)),
+      ).toEqual([]);
+    },
+  );
+
+  it('AI-05 cada dependência fora do padrão gera a própria violação, e as exatas não aparecem', () => {
+    const text = pkg(BASE_SCRIPTS, {
+      dependencies: { steady: '1.0.0', caret: '^1.0.0' },
+      devDependencies: { tagged: 'latest', steadyDev: '2.0.0-rc.1' },
+    });
+    const violations = dependencyVersionViolations(text);
+
+    expect(violations).toHaveLength(2);
+    expect(violations.join('\n')).toContain('caret');
+    expect(violations.join('\n')).toContain('tagged');
+    expect(violations.join('\n')).not.toContain('steady');
+  });
+
+  it('AI-05 um package.json sem blocos de dependências passa, e versão fora desses blocos não conta', () => {
+    expect(dependencyVersionViolations(pkg(BASE_SCRIPTS))).toEqual([]);
+    expect(
+      dependencyVersionViolations(
+        pkg(BASE_SCRIPTS, {
+          version: '^1.0.0',
+          engines: { node: '>=24.12.0' },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('AI-05 o package.json do repositório passa', () => {
+    const text = readFileSync(join(repoRoot, 'package.json'), 'utf8');
+
+    expect(dependencyVersionViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 o package.json do repositório com uma dependência em faixa reprova', () => {
+    const text = readFileSync(join(repoRoot, 'package.json'), 'utf8');
+    const ranged = text.replace(/("zod": ")(\d)/, '$1^$2');
+
+    expect(ranged).not.toBe(text);
+    expect(dependencyVersionViolations(ranged)).toEqual([
+      expect.stringContaining('zod'),
+    ]);
+  });
+});
+
+// O CLI vê o package.json do PR: a base é a origin/BASE_REF, simulada por uma ref em refs/remotes, sem rede.
+function prWithDependency(version: string): ReturnType<typeof runScript> {
+  const dir = sandboxWithScript('check-scripts.ts');
+  const manifest = (value: string): string =>
+    JSON.stringify({
+      name: 'x',
+      type: 'module',
+      scripts: BASE_SCRIPTS,
+      dependencies: { zod: value },
+    });
+  writeFileIn(dir, 'package.json', manifest('4.6.7'));
+  git(dir, 'init', '-q');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'base');
+  git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  writeFileIn(dir, 'package.json', manifest(version));
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'build(deps): muda a versão do zod');
+  return runScript(dir, 'check-scripts.ts', { BASE_REF: 'main' });
+}
+
+describe('AI-05 o CLI do check-scripts também reprova a versão fora do padrão', () => {
+  it('AI-05 trocar a dependência por uma versão exata sai com 0', () => {
+    const result = prWithDependency('4.7.0');
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('AI-05 trocar a dependência por uma faixa sai com 1, citando a dependência, mesmo num commit build:', () => {
+    const result = prWithDependency('^4.7.0');
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain('zod');
+  });
+
+  it('AI-05 trocar a dependência por npm: sai com 1', () => {
+    const result = prWithDependency('npm:outro@1.0.0');
+
+    expect(result.status).toBe(1);
   });
 });

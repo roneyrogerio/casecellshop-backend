@@ -32,7 +32,8 @@ interface Check {
   label: string;
   job: 'checks' | 'test';
   pattern: RegExp;
-  only?: 'pull_request' | 'nvmrc';
+  // `any`: o critério deixa rodar sempre ou só no pull_request (a conferência do lockfile não depende da base).
+  only?: 'pull_request' | 'nvmrc' | 'any';
 }
 
 // Cada passo que o critério distribui entre os jobs. `pattern` reconhece o `run:` inteiro do passo.
@@ -77,6 +78,18 @@ const CHECKS: Check[] = [
     label: 'scripts do package.json',
     job: 'checks',
     pattern: /^node scripts\/check-scripts\.ts$/,
+    only: 'pull_request',
+  },
+  {
+    label: 'origem e integridade do lockfile',
+    job: 'checks',
+    pattern: /^node scripts\/check-lockfile\.ts$/,
+    only: 'any',
+  },
+  {
+    label: 'pisos e linha de base',
+    job: 'checks',
+    pattern: /^node scripts\/check-baselines\.ts$/,
     only: 'pull_request',
   },
   {
@@ -199,7 +212,7 @@ function retryViolations(workflow: CiWorkflow): string[] {
 // AI-05: o que confere algo do PR roda o binário ou o arquivo de scripts/, nunca por npm run, npm exec ou npx,
 // porque o package.json do PR poderia redefinir o script que o confere.
 const PR_CHECK_TOOLS =
-  /check[-:](?:migrations|scripts|db-types|unused|duplication)|criteria-report|format:check|\b(?:knip|jscpd|prettier)\b/;
+  /check[-:](?:migrations|scripts|lockfile|baselines|db-types|unused|duplication)|criteria-report|format:check|\b(?:knip|jscpd|prettier)\b/;
 const THROUGH_PACKAGE_MANAGER = /\b(?:npm\s+(?:run|run-script|exec|x)|npx)\b/;
 
 function prChecksThroughNpm(workflow: CiWorkflow): string[] {
@@ -462,6 +475,8 @@ describe('AI-42 as conferências de retry e de npm run enxergam o que procuram (
       'npm run format:check',
       'npm run check:migrations',
       'npm run check:scripts',
+      'npm run check:lockfile',
+      'npm run check:baselines',
       'npm run check:db-types',
       'npx knip',
       'npm exec -- jscpd',
@@ -475,6 +490,8 @@ describe('AI-42 as conferências de retry e de npm run enxergam o que procuram (
       'npm run openapi -- --check',
       'node_modules/.bin/knip --no-progress',
       'node scripts/check-migrations.ts',
+      'node scripts/check-lockfile.ts',
+      'node scripts/check-baselines.ts',
       'node scripts/criteria-report.ts r.json >> "$GITHUB_STEP_SUMMARY"',
     ])
       expect(prChecksThroughNpm(build(run)), run).toEqual([]);
@@ -530,6 +547,11 @@ jobs:
         env:
           BASE_REF: \${{ github.base_ref }}
         run: node scripts/check-scripts.ts
+      - run: node scripts/check-lockfile.ts
+      - if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: \${{ github.base_ref }}
+        run: node scripts/check-baselines.ts
       - if: github.event_name == 'pull_request'
         run: npx commitlint --from \${{ github.event.pull_request.base.sha }} --to \${{ github.event.pull_request.head.sha }} --verbose
   test:
@@ -648,16 +670,76 @@ describe('AI-42 o ci.yml tem os jobs checks, test, workflows e ci-ok', () => {
     expect(signatures).toBeGreaterThan(install);
   });
 
-  it('AI-42 as conferências de migrações e de scripts recebem a base pelo env, e não interpolada no run', () => {
+  it('AI-42 as conferências de migrações, de scripts e de pisos recebem a base pelo env, e não interpolada no run', () => {
     const steps = stepsOfJob(ci, 'checks').filter((step) =>
-      /^node scripts\/check-(?:migrations|scripts)\.ts$/.test(
+      /^node scripts\/check-(?:migrations|scripts|baselines)\.ts$/.test(
         (step.run ?? '').trim(),
       ),
     );
 
-    expect(steps).toHaveLength(2);
+    expect(steps).toHaveLength(3);
     for (const step of steps)
       expect(step.env?.BASE_REF).toBe('${{ github.base_ref }}');
+  });
+
+  it('AI-49 o check-baselines roda no job checks só em pull_request, com a base pelo env, pelo node e sem github.base_ref no run', () => {
+    const steps = stepsOfJob(ci, 'checks').filter((step) =>
+      /check-baselines/.test(step.run ?? ''),
+    );
+
+    expect(steps).toHaveLength(1);
+    expect((steps[0]?.run ?? '').trim()).toBe(
+      'node scripts/check-baselines.ts',
+    );
+    expect(steps[0]?.if ?? '').toMatch(PULL_REQUEST_ONLY);
+    expect(steps[0]?.env?.BASE_REF).toBe('${{ github.base_ref }}');
+    expect(steps[0]?.run ?? '').not.toContain('base_ref');
+    expect(
+      stepsOfJob(ci, 'test').some((s) => /check-baselines/.test(s.run ?? '')),
+    ).toBe(false);
+  });
+
+  it('AI-05 o check-lockfile roda no job checks pelo node, uma vez só, e não por npm run', () => {
+    const steps = stepsOfJob(ci, 'checks').filter((step) =>
+      /check-lockfile/.test(step.run ?? ''),
+    );
+
+    expect(steps).toHaveLength(1);
+    expect((steps[0]?.run ?? '').trim()).toBe('node scripts/check-lockfile.ts');
+    expect(prChecksThroughNpm(ci)).toEqual([]);
+  });
+
+  it('AI-05 as conferências do lockfile e dos pisos rodam depois do checkout e do npm ci (o job abre com eles)', () => {
+    const steps = stepsOfJob(ci, 'checks');
+    const install = steps.findIndex((step) => step.run === 'npm ci');
+    const positions = ['check-lockfile', 'check-baselines'].map((name) =>
+      steps.findIndex((step) => (step.run ?? '').includes(name)),
+    );
+
+    expect(install).toBeGreaterThanOrEqual(0);
+    for (const position of positions) expect(position).toBeGreaterThan(install);
+  });
+
+  it('AI-49 a conferência de posição reprova o check-baselines sem o if de pull_request, e o check-lockfile ausente', () => {
+    const withoutIf = parseWorkflow(
+      GOOD_STRUCTURE.replace(
+        "      - if: github.event_name == 'pull_request'\n        env:\n          BASE_REF: ${{ github.base_ref }}\n        run: node scripts/check-baselines.ts",
+        '      - env:\n          BASE_REF: ${{ github.base_ref }}\n        run: node scripts/check-baselines.ts',
+      ),
+    );
+    const withoutLockfile = parseWorkflow(
+      GOOD_STRUCTURE.replace(
+        '      - run: node scripts/check-lockfile.ts\n',
+        '',
+      ),
+    );
+
+    expect(placementViolations(withoutIf)).toEqual([
+      'pisos e linha de base: não é restrito ao pull_request',
+    ]);
+    expect(placementViolations(withoutLockfile)).toEqual([
+      'origem e integridade do lockfile: 0 passos no job checks, esperado 1',
+    ]);
   });
 
   it('AI-42 o commitlint confere os commits do PR, da base ao topo, com --verbose', () => {
