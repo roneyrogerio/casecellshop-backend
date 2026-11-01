@@ -5,7 +5,6 @@ import {
   SpanKind,
   SpanStatusCode,
   type Attributes,
-  type Histogram,
   type Meter,
   type Span,
   type Tracer,
@@ -25,9 +24,7 @@ import {
 } from '@opentelemetry/sdk-trace';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { optionalEnv } from './config.ts';
-import { HTTP_SERVER_METRICS } from './http-metrics.ts';
 import type { LogEventSpec } from './telemetry-catalog.ts';
-import { createHistogramFor } from './telemetry-instruments.ts';
 import { logContext } from './logging.ts';
 import { resolveServiceIdentity } from './service-identity.ts';
 
@@ -39,8 +36,6 @@ export interface TelemetryOptions {
 
 export interface Telemetry {
   tracer: Tracer;
-  // Duração HTTP em segundos, pelos atributos da convenção (src/shared/http-metrics.ts).
-  httpRequestDuration: Pick<Histogram, 'record'>;
   // Cada pasta obtém o Meter do próprio escopo e cria os instrumentos da própria declaração (metricsOf); o
   // MeterProvider fica aqui para cada teste ter o seu e as séries não se misturarem.
   meter(scope: string): Meter;
@@ -114,12 +109,6 @@ export function runConsumerSpan<T>(
   );
 }
 
-function createHttpDuration(meter: Meter): Telemetry['httpRequestDuration'] {
-  const [name, spec] = Object.entries(HTTP_SERVER_METRICS)[0] ?? [];
-  if (!name || !spec) throw new Error('duração HTTP sem declaração');
-  return createHistogramFor(meter, name, spec);
-}
-
 function createWithSpan(tracer: Tracer): Telemetry['withSpan'] {
   return (name, spanOptions, fn) =>
     tracer.startActiveSpan(name, spanOptions, async (span) => {
@@ -160,9 +149,6 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
 
   return {
     tracer,
-    httpRequestDuration: createHttpDuration(
-      meterProvider.getMeter('casecellshop.http'),
-    ),
     meter: (scope) => meterProvider.getMeter(scope),
     withSpan: createWithSpan(tracer),
     metricsHandler: (request, response) => {

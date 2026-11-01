@@ -14,11 +14,12 @@ import {
   ATTR_HTTP_RESPONSE_STATUS_CODE,
   ATTR_HTTP_ROUTE,
   ATTR_URL_SCHEME,
+  METRIC_HTTP_SERVER_REQUEST_DURATION,
 } from '@opentelemetry/semantic-conventions';
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
-import { HTTP_METHODS } from '../shared/http-metrics.ts';
+import { HTTP_METHODS, httpMetrics } from './telemetry.ts';
 import { logContext } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
 
@@ -32,9 +33,9 @@ function correlationIdFrom(header: string | string[] | undefined): string {
 }
 
 // Cardinalidade limitada: um método fora da lista da convenção vira `_OTHER`.
-function methodAttribute(method: string): string {
-  const known: readonly string[] = HTTP_METHODS;
-  return known.includes(method) ? method : '_OTHER';
+function methodAttribute(method: string): (typeof HTTP_METHODS)[number] {
+  // O find devolve o item da lista já tipado, sem asserção.
+  return HTTP_METHODS.find((known) => known === method) ?? '_OTHER';
 }
 
 interface ConcludedRequest {
@@ -73,12 +74,15 @@ function concludeRequest({
   span.end();
 
   // Atributos da convenção do OpenTelemetry; o `error.type` só na resposta 5xx, como pede a convenção.
-  telemetry.httpRequestDuration.record(seconds, {
+  // O tipo anotado faz o texto do status valer como `${number}`, o que a declaração do atributo aceita.
+  const errorType: { [ATTR_ERROR_TYPE]?: `${number}` } =
+    status >= 500 ? { [ATTR_ERROR_TYPE]: `${status}` } : {};
+  httpMetrics(telemetry).record(METRIC_HTTP_SERVER_REQUEST_DURATION, seconds, {
     [ATTR_HTTP_REQUEST_METHOD]: methodAttribute(req.method),
     [ATTR_HTTP_ROUTE]: route,
     [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
     [ATTR_URL_SCHEME]: req.secure ? 'https' : 'http',
-    ...(status >= 500 ? { [ATTR_ERROR_TYPE]: String(status) } : {}),
+    ...errorType,
   });
   // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
   // O orderId entra só quando o handler o gravou (pedido existente).

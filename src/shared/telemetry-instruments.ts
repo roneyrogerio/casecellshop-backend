@@ -20,12 +20,28 @@ type ValueOf<V> = V extends { kind: 'enum'; values: readonly (infer U)[] }
     ? number | `${number}`
     : string;
 
-export type AttributesOf<M extends MetricSpec> = {
-  -readonly [K in keyof M['attributes']]: M['attributes'][K] extends {
-    values: infer V;
+type Attribute<
+  M extends MetricSpec,
+  K extends keyof M['attributes'],
+> = M['attributes'][K] extends { values: infer V } ? ValueOf<V> : never;
+
+type RequiredKeys<M extends MetricSpec> = {
+  [K in keyof M['attributes']]: M['attributes'][K] extends {
+    requirement: 'required';
   }
-    ? ValueOf<V>
+    ? K
     : never;
+}[keyof M['attributes']];
+
+// O `required` é obrigatório na gravação; o `conditionally_required` é opcional, porque só vale quando a condição
+// da descrição ocorre (o `error.type` só no 5xx).
+export type AttributesOf<M extends MetricSpec> = {
+  -readonly [K in RequiredKeys<M>]: Attribute<M, K>;
+} & {
+  -readonly [K in Exclude<keyof M['attributes'], RequiredKeys<M>>]?: Attribute<
+    M,
+    K
+  >;
 };
 
 type NamesOf<S extends Specs, I extends string> = {
@@ -73,18 +89,6 @@ function createInstrument(
           : {}),
       });
   }
-}
-
-// Um instrumento solto, para quem grava com atributos que o tipo da declaração não descreve por inteiro
-// (a duração HTTP, cujo `error.type` só existe no 5xx).
-export function createHistogramFor(
-  meter: Meter,
-  name: string,
-  spec: MetricSpec,
-): Pick<Histogram, 'record'> {
-  const instrument = createInstrument(meter, name, spec);
-  if (!('record' in instrument)) throw new Error(`${name} não é um histograma`);
-  return instrument;
 }
 
 export function createInstruments<S extends Specs>(

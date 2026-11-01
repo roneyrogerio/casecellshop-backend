@@ -100,6 +100,12 @@ function attributeViolations(metric: string, spec: MetricSpec): string[] {
       violations.push(
         `o atributo ${name} da métrica ${metric} não tem descrição`,
       );
+    // O tipo já exige o campo, mas o catálogo também vem de JSON e de cast: a conferência vale em tempo de execução.
+    const requirement: unknown = attribute.requirement;
+    if (requirement !== 'required' && requirement !== 'conditionally_required')
+      violations.push(
+        `o atributo ${name} da métrica ${metric} não declara o nível de exigência (required ou conditionally_required)`,
+      );
     if (attribute.values.kind === 'enum')
       violations.push(...enumViolations(metric, name, attribute.values.values));
   }
