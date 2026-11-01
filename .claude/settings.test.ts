@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 interface HookEntry {
   matcher?: string;
-  hooks: { type: string; command?: string }[];
+  hooks: { type: string; command?: string; onFailure?: string }[];
 }
 
 interface Settings {
@@ -256,6 +256,43 @@ describe('AI-06 hooks do .claude/settings.json', () => {
     expect(commandsOf(entry ? [entry] : []).some((command) => command.includes('.claude/hooks/path-guard.mjs'))).toBe(
       true,
     );
+  });
+});
+
+// AI-30: uma guarda de ferramenta que não roda ou quebra deixa a ferramenta passar, a menos que o hook peça o
+// bloqueio. A conferência devolve os comandos dos hooks de PreToolUse sem `"onFailure": "block"`.
+function preToolUseWithoutBlock(entries: HookEntry[] | undefined): string[] {
+  return (entries ?? []).flatMap((entry) =>
+    entry.hooks.filter((hook) => hook.onFailure !== 'block').map((hook) => hook.command ?? '(sem comando)'),
+  );
+}
+
+describe('AI-30 toda guarda de ferramenta bloqueia a ferramenta quando falha', () => {
+  it('AI-30 todo hook de PreToolUse declara onFailure block', () => {
+    const entries = settings.hooks?.PreToolUse ?? [];
+
+    expect(entries.length).toBeGreaterThan(0);
+    expect(preToolUseWithoutBlock(entries)).toEqual([]);
+  });
+
+  it('AI-30 as três guardas (caminho, GitHub e Bash) estão entre os hooks de PreToolUse conferidos', () => {
+    const commands = commandsOf(settings.hooks?.PreToolUse ?? []);
+
+    for (const guard of ['path-guard.mjs', 'github-guard.mjs', 'bash-guard.mjs']) {
+      expect(commands.some((command) => command.includes(guard))).toBe(true);
+    }
+  });
+
+  // Controles negativos: a conferência reprova o hook sem o campo e com outro valor.
+  it('AI-30 a conferência reprova um hook sem onFailure e um com outro valor', () => {
+    const entries: HookEntry[] = [
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'sem-campo' }] },
+      { matcher: 'Edit', hooks: [{ type: 'command', command: 'continua', onFailure: 'continue' }] },
+      { matcher: 'Write', hooks: [{ type: 'command', command: 'ok', onFailure: 'block' }] },
+    ];
+
+    expect(preToolUseWithoutBlock(entries)).toEqual(['sem-campo', 'continua']);
+    expect(preToolUseWithoutBlock(undefined)).toEqual([]);
   });
 });
 

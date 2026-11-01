@@ -8,10 +8,10 @@
 // Não sai cedo com stop_hook_active: isso soltaria o agente logo depois do
 // primeiro bloqueio. O teto é um contador por agente: na quarta parada vermelha
 // ele deixa terminar e a falha vira exceção para a sessão principal decidir.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { compareSnapshots, snapshotFile, takeSnapshot } from './git-snapshot.mjs';
-import { allows } from './path-guard.mjs';
+import { changesDuring, compareSnapshots, snapshotFile, takeSnapshot } from './git-snapshot.mjs';
+import { allows, rootFor } from './path-guard.mjs';
 import { saveReview, takeHandback } from './records.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,7 +30,21 @@ const GIT_WATCHED = new Set(['implementer', 'test-writer', 'reviewer']);
 // um teste custaria contexto a cada devolução.
 const MAX_OUTPUT_CHARS = 4000;
 
+// AI-30: o evento de parada não aceita onFailure: "block" (documentação do
+// Claude Code), então a falha fechada fica aqui: um erro interno devolve o agente
+// com a mensagem, em vez de deixá-lo parar sem a checagem.
 export async function decide(input, deps) {
+  try {
+    return await decideChecked(input, deps);
+  } catch (error) {
+    return {
+      action: 'block',
+      message: `O hook de parada falhou por um erro interno, e a checagem não rodou: ${error instanceof Error ? error.message : String(error)}. Termine de novo; se o erro se repetir, ele vira exceção para a sessão principal.`,
+    };
+  }
+}
+
+async function decideChecked(input, deps) {
   // Uma mudança no git (AI-12) não volta ao agente: ele não pode desfazê-la,
   // porque o bash-guard lhe nega reset e restore. Vira exceção já na primeira
   // parada, para a sessão principal desfazer antes de qualquer outra coisa.
@@ -40,6 +54,18 @@ export async function decide(input, deps) {
       return {
         action: 'exception',
         message: `${input.agent_type} mudou o estado do git, o que só a sessão principal faz (AI-11, AI-12). Desfaça antes de seguir:\n${gitChanges.map((change) => `- ${change}`).join('\n')}`,
+      };
+    }
+  }
+
+  // AI-28, AI-29: o que mudou na pasta principal durante a execução não é do
+  // agente isolado nem do reviewer; ele não tem como desfazer, então vira exceção.
+  if (GIT_WATCHED.has(input.agent_type)) {
+    const outsideWorktree = deps.mainChanges();
+    if (outsideWorktree.length > 0) {
+      return {
+        action: 'exception',
+        message: `${input.agent_type} mudou arquivos da pasta principal durante a execução, fora do que o papel dele permite (AI-28, AI-29). Confira e desfaça antes de seguir:\n${outsideWorktree.map((file) => `- ${file}`).join('\n')}`,
       };
     }
   }
@@ -62,8 +88,11 @@ export async function decide(input, deps) {
       output: 'O bloco "scripts" mudou: ele define o que o CI e este hook rodam, e é da sessão principal.',
     });
   }
+  // Em sequência, e todas: a devolução cita cada checagem que falhou (AI-03). Rodar
+  // em paralelo não reduziu o tempo (medido no PR #19: 25 s em sequência, 28 s em
+  // paralelo, com os testes ligados à mudança em 21 s); o ganho vem do PR de testes.
   for (const name of checks) {
-    const result = await deps.runCheck(name);
+    const result = await deps.runCheck(name, input.cwd);
     if (!result.ok) failures.push({ name, output: result.output });
   }
 
@@ -118,20 +147,37 @@ async function scriptsChanged(projectDir) {
   }
 }
 
+function readSnapshot(input) {
+  try {
+    return JSON.parse(readFileSync(snapshotFile(input.session_id, input.agent_id), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 // Sem retrato não há como provar que o git ficou igual: falha fechada, como
 // mudança.
-function gitChanges(projectDir, input) {
-  let before;
-  try {
-    before = JSON.parse(readFileSync(snapshotFile(input.session_id, input.agent_id), 'utf8'));
-  } catch {
-    return ['retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual'];
-  }
-  try {
-    return compareSnapshots(before, takeSnapshot(projectDir));
-  } catch (error) {
-    return [`estado do git ilegível na parada (${error.message})`];
-  }
+function gitChanges(before, after, agentRoot) {
+  if (!before) return ['retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual'];
+  if (after instanceof Error) return [`estado do git ilegível na parada (${after.message})`];
+  return compareSnapshots(before, after, { agentRoot });
+}
+
+// Um retrato antigo, sem o status, não tem como separar o que já estava sujo.
+function mainChanges(before, after) {
+  if (!before || after instanceof Error || typeof before.status !== 'string') return [];
+  return changesDuring(before.status, after.status);
+}
+
+function runNpm(name, cwd) {
+  return new Promise((resolvePromise) => {
+    const child = spawn('npm', ['run', '--silent', name], { cwd });
+    let output = '';
+    child.stdout.on('data', (chunk) => (output += chunk));
+    child.stderr.on('data', (chunk) => (output += chunk));
+    child.on('error', (error) => resolvePromise({ ok: false, output: String(error) }));
+    child.on('close', (code) => resolvePromise({ ok: code === 0, output: output.slice(-MAX_OUTPUT_CHARS) }));
+  });
 }
 
 function recordException(projectDir, message) {
@@ -160,15 +206,22 @@ async function main() {
     process.exit(2);
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+  // AI-27: o agente isolado trabalha na worktree dele; a pasta principal só
+  // entra na conferência do que mudou fora dela.
+  const root = rootFor(input, projectDir);
+  const isolated = root !== projectDir;
   if (input.agent_type === 'reviewer') recordReview(projectDir, input);
-  const changedScripts = input.agent_type === 'implementer' ? await scriptsChanged(projectDir) : false;
+  const changedScripts = input.agent_type === 'implementer' ? await scriptsChanged(root) : false;
+  const before = readSnapshot(input);
+  let after;
+  try {
+    after = takeSnapshot(projectDir);
+  } catch (error) {
+    after = error instanceof Error ? error : new Error(String(error));
+  }
 
   const decision = await decide(input, {
-    runCheck: (name) => {
-      const run = spawnSync('npm', ['run', '--silent', name], { cwd: projectDir, encoding: 'utf8' });
-      const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.slice(-MAX_OUTPUT_CHARS);
-      return Promise.resolve({ ok: run.status === 0, output });
-    },
+    runCheck: (name, cwd) => runNpm(name, cwd ? rootFor({ cwd }, projectDir) : projectDir),
     readCount: (key) => {
       try {
         return Number(readFileSync(counterFile(key), 'utf8')) || 0;
@@ -177,9 +230,14 @@ async function main() {
       }
     },
     writeCount: (key, n) => writeFileSync(counterFile(key), String(n)),
-    changedFiles: () => changedFiles(projectDir),
+    // Isolado, o agente responde pela worktree inteira, e o que mudou na pasta
+    // principal não é dele. Sem worktree, ele responde só pelo que mudou na pasta
+    // principal durante a execução, e não pelo que a sessão principal já tinha
+    // deixado sem commit (AI-28). O reviewer não responde por arquivo nenhum.
+    changedFiles: () => (isolated ? changedFiles(root) : mainChanges(before, after)),
     scriptsChanged: () => changedScripts,
-    gitChanges: () => gitChanges(projectDir, input),
+    gitChanges: () => gitChanges(before, after, isolated ? root : undefined),
+    mainChanges: () => (isolated || input.agent_type === 'reviewer' ? mainChanges(before, after) : []),
   });
 
   if (decision.action === 'block') {

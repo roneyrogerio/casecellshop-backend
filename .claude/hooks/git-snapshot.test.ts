@@ -1,20 +1,31 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, commitEmpty, git, initRepo, makeTempDir } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  commitEmpty,
+  git,
+  initRepo,
+  makeTempDir,
+  writeFileIn,
+} from '../../test/helpers/git-sandbox.ts';
 
 interface Snapshot {
   head: string;
   refs: string;
   worktrees: string;
   config: string;
+  // AI-28: o `git status --porcelain=v1 --untracked-files=all` do início, com o hash do conteúdo de cada arquivo
+  // sujo no fim da linha (separado por TAB), para uma segunda edição do mesmo arquivo aparecer.
+  status: string;
 }
 
 interface SnapshotModule {
   takeSnapshot(projectDir: string): Snapshot;
-  compareSnapshots(before: Snapshot, after: Snapshot): string[];
+  changesDuring(beforeStatus: string, afterStatus: string): string[];
+  compareSnapshots(before: Snapshot, after: Snapshot, options?: { agentRoot?: string }): string[];
   snapshotFile(sessionId: string, agentId: string): string;
 }
 
@@ -106,7 +117,6 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
   it.each([
     ['uma branch adicionada', ['branch', 'nova'], 'refs/heads/nova'],
     ['uma tag adicionada', ['tag', 'v9'], 'refs/tags/v9'],
-    ['um ref de remoto adicionado', ['update-ref', 'refs/remotes/origin/y', 'HEAD'], 'refs/remotes/origin/y'],
     ['um stash adicionado', ['update-ref', 'refs/stash', 'HEAD'], 'refs/stash'],
   ])('AI-12 %s aparece em refs, com o nome do ref na mensagem', (_label, args, name) => {
     const dir = repo();
@@ -189,6 +199,362 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
       expect(line).not.toMatch(/^[{[]/);
       expect(line.length).toBeGreaterThan('HEAD'.length + 5);
     }
+  });
+});
+
+// AI-33: o retrato não atribui ao agente o que outra sessão faz no mesmo repositório. A outra worktree nasce antes do
+// primeiro retrato, para a lista de worktrees não mudar entre os dois (essa mudança é coberta pelo teste AI-12).
+describe('AI-33 o retrato não atribui ao agente o que outra sessão faz no mesmo repositório', () => {
+  function repoWithOtherWorktree(): { dir: string; other: string } {
+    const dir = repo();
+    const other = join(makeTempDir('wt-'), 'outra');
+    git(dir, 'worktree', 'add', '-q', other, '-b', 'outra');
+    return { dir, other };
+  }
+
+  it('AI-33 um commit na worktree de outra branch não aparece na comparação', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+
+    expect(git(dir, 'rev-parse', 'outra').trim()).not.toBe(git(dir, 'rev-parse', 'main').trim());
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
+  });
+
+  it('AI-33 a branch criada na outra worktree antes do retrato do início e movida até a parada também não aparece', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    commitEmpty(other, 'antes do início');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'depois do início');
+    commitEmpty(other, 'mais um');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
+  });
+
+  it('AI-33 um ref remoto que muda entre os retratos não aparece na comparação', () => {
+    const { dir } = repoWithOtherWorktree();
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(dir, 'outro commit');
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git(dir, 'update-ref', 'refs/remotes/origin/nova', 'HEAD');
+
+    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir)).join('\n');
+
+    expect(text).not.toContain('refs/remotes');
+  });
+
+  it('AI-33 um ref remoto novo (adicionado, não só movido) não aparece na comparação', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'update-ref', 'refs/remotes/origin/y', 'HEAD');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir))).toEqual([]);
+  });
+
+  it('AI-33 controle negativo: uma branch nova que nenhuma worktree usa continua aparecendo em refs', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'branch', 'solta');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.startsWith('refs')).toBe(true);
+    expect(changes[0]).toContain('refs/heads/solta');
+  });
+
+  it('AI-33 controle negativo: um commit na branch da própria pasta do retrato continua aparecendo (HEAD e ref)', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(dir, 'do agente');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes.filter((line) => line.startsWith('HEAD'))).toHaveLength(1);
+    const refsLines = changes.filter((line) => line.startsWith('refs'));
+    expect(refsLines).toHaveLength(1);
+    expect(refsLines[0]).toContain('refs/heads/main');
+  });
+
+  it('AI-33 controle negativo: uma tag nova continua aparecendo em refs', () => {
+    const { dir } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'tag', 'v33');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.startsWith('refs')).toBe(true);
+    expect(changes[0]).toContain('refs/tags/v33');
+  });
+
+  it('AI-33 controle negativo: mudar a branch da outra worktree junto com uma branch solta só atribui a solta', () => {
+    const { dir, other } = repoWithOtherWorktree();
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+    git(dir, 'branch', 'solta2');
+
+    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir)).join('\n');
+
+    expect(text).toContain('refs/heads/solta2');
+    expect(text).not.toContain('refs/heads/outra');
+  });
+});
+
+// A1/A2 da Revisão 1 (AI-12, AI-33): só fica fora da comparação de refs a branch que outra worktree já usava no início,
+// a da worktree do próprio agente (`agentRoot`, pelo caminho exato) e os refs remotos. Nome de branch e pasta de
+// worktree parecidos com os do Claude Code não escondem nada.
+describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou uma worktree', () => {
+  it('AI-33 uma branch que existia fora de qualquer worktree, presa numa worktree nova e movida, aparece em refs e em worktrees', () => {
+    const dir = repo();
+    git(dir, 'branch', 'alvo');
+    const before = mod.takeSnapshot(dir);
+    const wt = join(makeTempDir('wt-'), 'nova');
+    git(dir, 'worktree', 'add', '-q', wt, 'alvo');
+    commitEmpty(wt, 'move a alvo');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
+    expect(changes.join('\n')).toContain('refs/heads/alvo');
+    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+  });
+
+  it('AI-33 a main solta (HEAD da pasta principal destacado), presa numa worktree nova e movida, aparece em refs', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '--detach');
+    const before = mod.takeSnapshot(dir);
+    const wt = join(makeTempDir('wt-'), 'nova');
+    git(dir, 'worktree', 'add', '-q', wt, 'main');
+    commitEmpty(wt, 'move a main');
+
+    const text = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot: join(makeTempDir('wt-'), 'outra') }).join('\n');
+
+    expect(text).toContain('refs/heads/main');
+  });
+
+  it('AI-33 uma worktree nova sob .claude/worktrees/ da pasta do retrato, que não é o agentRoot, aparece em worktrees', () => {
+    const dir = repo();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'worktree', 'add', '-q', join(dir, '.claude', 'worktrees', 'x'), '-b', 'x');
+
+    const semOpcao = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+    const comOutraRaiz = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot: join(dir, '.claude', 'worktrees', 'y') });
+
+    expect(semOpcao.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(comOutraRaiz.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+  });
+
+  it('AI-33 uma branch worktree-agent-x criada na pasta principal aparece em refs', () => {
+    const dir = repo();
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'branch', 'worktree-agent-x');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir));
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.startsWith('refs')).toBe(true);
+    expect(changes[0]).toContain('refs/heads/worktree-agent-x');
+  });
+
+  // Controle negativo 1: a worktree do próprio agente (agentRoot) e a branch dela ficam fora da comparação.
+  it('AI-33 controle: com agentRoot, um commit na branch da worktree do agente que existia no início não aparece', () => {
+    const dir = repo();
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(agentRoot, 'do agente');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+  });
+
+  it('AI-33 controle: com agentRoot, a worktree e a branch criadas durante a execução também não aparecem', () => {
+    const dir = repo();
+    const before = mod.takeSnapshot(dir);
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente-novo');
+    commitEmpty(agentRoot, 'do agente');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+  });
+
+  it('AI-33 controle: o agentRoot só poupa o caminho exato; outra worktree nova junto com ele continua aparecendo', () => {
+    const dir = repo();
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    git(dir, 'worktree', 'add', '-q', join(dir, '.claude', 'worktrees', 'intrusa'), '-b', 'intrusa');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot });
+
+    expect(changes.filter((line) => line.startsWith('worktrees'))).toHaveLength(1);
+    expect(changes.join('\n')).toContain('refs/heads/intrusa');
+  });
+
+  // Controle negativo 2: com o agentRoot dado, o que outra sessão faz continua fora da comparação.
+  it('AI-33 controle: com agentRoot, um commit em outra worktree do início e um ref remoto não aparecem', () => {
+    const dir = repo();
+    const other = join(makeTempDir('wt-'), 'outra');
+    git(dir, 'worktree', 'add', '-q', other, '-b', 'outra');
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+    git(dir, 'update-ref', 'refs/remotes/origin/z', 'HEAD');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+  });
+
+  // A2 da Revisão 2: só a branch presa à worktree do agente no retrato do início fica fora da comparação. Se o agente
+  // troca a própria worktree para a main (livre no início) e a move, a main mudou e a comparação precisa dizer.
+  it('AI-33 o agente que troca a própria worktree para a main e faz um commit nela faz a main aparecer em refs', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '-b', 'outra');
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    git(agentRoot, 'checkout', '-q', 'main');
+    commitEmpty(agentRoot, 'move a main pela worktree do agente');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot });
+
+    expect(changes.join('\n')).toContain('refs/heads/main');
+    expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
+  });
+
+  it('AI-33 controle: o mesmo cenário sem o checkout da main, com o commit na branch agente, não aparece', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '-b', 'outra');
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(agentRoot, 'commit na branch do agente');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+  });
+});
+
+function sorted(paths: string[]): string[] {
+  return [...paths].sort();
+}
+
+// O texto cru do `git status --porcelain=v1`: o contrato de entrada de changesDuring.
+describe('AI-28 changesDuring compara duas saídas do git status', () => {
+  const BEFORE = [' M src/antes.ts', '?? src/novo-antes.ts', 'D  src/some-antes.ts'].join('\n');
+
+  it('AI-28 saídas iguais não atribuem nada', () => {
+    expect(mod.changesDuring(BEFORE, BEFORE)).toEqual([]);
+    expect(mod.changesDuring('', '')).toEqual([]);
+  });
+
+  it('AI-28 uma linha que aparece é atribuída', () => {
+    expect(mod.changesDuring(BEFORE, `${BEFORE}\n M src/durante.ts\n?? src/criado.ts`).sort()).toEqual([
+      'src/criado.ts',
+      'src/durante.ts',
+    ]);
+  });
+
+  it('AI-28 uma linha que some é atribuída (o arquivo voltou ao estado do HEAD)', () => {
+    expect(mod.changesDuring(BEFORE, ' M src/antes.ts\n?? src/novo-antes.ts')).toEqual(['src/some-antes.ts']);
+  });
+
+  it('AI-28 uma linha que muda é atribuída (o arquivo foi para o índice, ou foi apagado)', () => {
+    expect(sorted(mod.changesDuring(BEFORE, 'M  src/antes.ts\n?? src/novo-antes.ts\nD  src/some-antes.ts'))).toEqual([
+      'src/antes.ts',
+    ]);
+    expect(mod.changesDuring(' M src/a.ts', ' D src/a.ts')).toEqual(['src/a.ts']);
+  });
+
+  it('AI-28 a mesma linha com outro hash de conteúdo é atribuída', () => {
+    expect(mod.changesDuring(' M src/a.ts\thash1\n M src/b.ts\thash2', ' M src/a.ts\thash9\n M src/b.ts\thash2')).toEqual([
+      'src/a.ts',
+    ]);
+  });
+
+  // Controle negativo: sem o retrato do início (a comparação contra o HEAD, que é só o status da parada), a mudança
+  // anterior ao agente é atribuída a ele.
+  it('AI-28 controle: contra o HEAD, sem o início, a mudança anterior é atribuída; com o início, não', () => {
+    const duringOnly = ' M src/antes.ts\n M src/durante.ts';
+
+    expect(sorted(mod.changesDuring('', duringOnly))).toEqual(['src/antes.ts', 'src/durante.ts']);
+    expect(mod.changesDuring(' M src/antes.ts', duringOnly)).toEqual(['src/durante.ts']);
+  });
+});
+
+// Repositório de verdade: a mudança é feita no disco, e o retrato do início e o da parada são tirados com
+// takeSnapshot, como os hooks fazem.
+describe('AI-28 changesDuring com o retrato do git de um repositório real', () => {
+  function seeded(): string {
+    const dir = repo();
+    writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 1;\n');
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 1;\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'mais arquivos');
+    return dir;
+  }
+
+  function changes(dir: string, act: () => void): string[] {
+    const before = mod.takeSnapshot(dir);
+    act();
+    return sorted(mod.changesDuring(before.status, mod.takeSnapshot(dir).status));
+  }
+
+  it('AI-28 sem nenhuma mudança entre o início e a parada, nada é atribuído', () => {
+    const dir = seeded();
+
+    expect(changes(dir, () => undefined)).toEqual([]);
+  });
+
+  it('AI-28 uma mudança feita antes do início não é atribuída ao agente', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    writeFileIn(dir, 'src/criado-antes.ts', 'export {};\n');
+
+    expect(changes(dir, () => undefined)).toEqual([]);
+  });
+
+  it('AI-28 um arquivo alterado ou criado entre o início e a parada é atribuído, em pasta nova também', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+
+    const result = changes(dir, () => {
+      writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
+      writeFileIn(dir, 'src/pasta/nova/criado.ts', 'export {};\n');
+    });
+
+    expect(result).toEqual(['src/limpo.ts', 'src/pasta/nova/criado.ts']);
+  });
+
+  it('AI-28 um arquivo rastreado apagado durante a execução é atribuído', () => {
+    const dir = seeded();
+
+    expect(changes(dir, () => rmSync(join(dir, 'src/limpo.ts')))).toEqual(['src/limpo.ts']);
+  });
+
+  it('AI-28 um arquivo já sujo no início e alterado de novo é atribuído, mesmo com a linha do status igual', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    writeFileIn(dir, 'src/criado-antes.ts', 'export const a = 1;\n');
+
+    const result = changes(dir, () => {
+      writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 3;\n');
+      writeFileIn(dir, 'src/criado-antes.ts', 'export const a = 2;\n');
+    });
+
+    expect(result).toEqual(['src/criado-antes.ts', 'src/sujo-antes.ts']);
+  });
+
+  // Controle negativo: o status da parada sozinho (contra o HEAD) atribui ao agente o que já estava sujo.
+  it('AI-28 controle: contra o HEAD, sem o retrato do início, a mudança anterior seria atribuída', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    const before = mod.takeSnapshot(dir);
+    writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
+    const after = mod.takeSnapshot(dir);
+
+    expect(sorted(mod.changesDuring('', after.status))).toEqual(['src/limpo.ts', 'src/sujo-antes.ts']);
+    expect(mod.changesDuring(before.status, after.status)).toEqual(['src/limpo.ts']);
   });
 });
 
