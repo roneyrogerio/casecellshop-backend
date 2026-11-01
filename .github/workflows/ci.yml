@@ -44,6 +44,8 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+      # AI-34: o código no formato do Prettier. Roda pelo binário, e não por npm run (AI-05).
+      - run: node_modules/.bin/prettier --check .
       - run: npm run typecheck
       # Os testes de integração usam o Docker do runner (Testcontainers e compose).
       # O relatório JSON alimenta a tabela critério × teste do resumo (AI-18).

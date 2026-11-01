@@ -1,0 +1,13 @@
+# Gerados e conferidos por outra checagem: o formato deles é o do gerador.
+openapi.yaml
+src/db/types/
+package-lock.json
+# Migrações já aplicadas não mudam (AI-01).
+migrations/
+# O Markdown fica com o markdownlint (PR E do F2).
+*.md
+# Gravados pelos hooks e pelo Claude Code.
+.claude/reviews/
+.claude/state/
+.claude/worktrees/
+coverage/
