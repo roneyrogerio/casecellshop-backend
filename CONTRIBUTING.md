@@ -55,7 +55,18 @@ O `.mcp.json` liga o MCP do GitHub, e o início de cada sessão ajusta o push à
 
 O setup diz o que falta em cada caso: o pacote a instalar, ou que não há chaveiro e quais são as saídas.
 
-Na sessão do Claude Code na nuvem, o GitHub é a conta conectada ao ambiente (GitHub App do Claude ou `/web-setup`), e o `setup:local` não se aplica. O ambiente se prepara pelo `scripts/cloud-setup.ts` (AD-028): o Node do `.nvmrc`, as dependências, o certificado do proxy para o build da imagem e o Docker. O hook de início de sessão o roda em toda sessão na nuvem; para a sessão já começar pronta, cole uma vez no script de preparo do ambiente (em claude.ai/code, o menu do ambiente no título da sessão, **Edit cloud environment**, **Setup script**):
+## Sessão do Claude Code na nuvem
+
+A sessão em claude.ai/code roda numa VM que traz o Node 22 (o projeto pede o 26), sem `node_modules` e com o Docker parado. O `scripts/cloud-setup.ts` prepara tudo isso (AI-51, AD-028):
+
+- instala pelo nvm o Node do `.nvmrc` e o põe na frente do PATH, nos comandos da sessão e nos hooks;
+- roda o `npm ci` quando o lockfile ou a versão do Node muda;
+- grava em `.build-ca.pem`, fora do git, o certificado do proxy da sessão, que o `Dockerfile` usa para o `npm ci` do build da imagem;
+- sobe o Docker.
+
+**Automático, sem configurar nada.** O hook de início de sessão (`.claude/settings.json`) roda o script em toda sessão na nuvem, antes do diagnóstico do ambiente. Na máquina, ele não faz nada. Sem o painel, uma sessão nova espera de 1 a 2 minutos no início, para baixar o Node e instalar as dependências; depois, cerca de 1 s.
+
+**Opcional: o script de preparo do painel.** Para a sessão já começar pronta, cole uma vez em claude.ai/code, no menu do ambiente no título da sessão, **Edit cloud environment**, **Setup script**:
 
 ```bash
 #!/bin/bash
@@ -68,4 +79,6 @@ done
 exit 0
 ```
 
-O texto não muda: o que o projeto precisa muda no `scripts/cloud-setup.ts`, por commit. O servidor MCP do GitHub do `.mcp.json` não está na lista de rede padrão nem tem como receber o token lá (AD-013); na nuvem, o GitHub vem pelas ferramentas da própria sessão.
+A nuvem roda esse script uma vez e guarda o disco (Node, dependências e imagens do Docker) para as sessões seguintes; ela só o roda de novo quando o texto muda ou a cada ~7 dias. O texto não precisa mudar: o que o projeto precisa muda no `scripts/cloud-setup.ts`, por commit, e o hook aplica a mudança na sessão seguinte.
+
+**GitHub.** Na nuvem, o GitHub é a conta conectada ao ambiente (GitHub App do Claude ou `/web-setup`), e o `setup:local` não se aplica. O push precisa do GitHub App do Claude instalado no repositório pela conta dona dele. O servidor MCP do GitHub do `.mcp.json` não está na lista de rede padrão nem tem como receber o token lá (AD-013); na nuvem, o GitHub vem pelas ferramentas da própria sessão.
