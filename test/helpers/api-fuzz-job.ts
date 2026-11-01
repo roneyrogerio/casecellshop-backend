@@ -38,6 +38,14 @@ export function reportDirAfterFuzz(jobText: string): string {
     .replace(upload, () => `${REPORT_DIR_STEP}${upload}`);
 }
 
+// Move o passo do diretório para antes do checkout, que limpa a pasta e apagaria o diretório criado.
+export function reportDirBeforeCheckout(jobText: string): string {
+  const checkout = '      - uses: actions/checkout@';
+  return jobText
+    .replace(REPORT_DIR_STEP, () => '')
+    .replace(checkout, () => `${REPORT_DIR_STEP}${checkout}`);
+}
+
 export const SHARED_FUZZ_CASES: FuzzCase[] = [
   ['sem o passo que cria o schemathesis-report', REPORT_DIR_STEP, ''],
   [

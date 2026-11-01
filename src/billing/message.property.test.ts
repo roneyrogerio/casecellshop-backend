@@ -71,24 +71,60 @@ function parsesWithoutThrowing(candidate: Parser) {
   });
 }
 
+const wellFormedArb = fc.record({
+  orderId: fc.uuid(),
+  correlationId: correlationIdArb,
+});
+
+function acceptsWellFormed(candidate: Parser) {
+  return fc.property(wellFormedArb, (message) => {
+    expect(candidate(JSON.stringify(message))).toEqual({
+      valid: true,
+      message,
+    });
+  });
+}
+
 describe('FND-15 parseBillingMessage', () => {
   it('FND-15 qualquer texto vira mensagem válida ou o resultado de inválida, sem lançar', () => {
     expectProperty(parsesWithoutThrowing(parseBillingMessage));
   });
 
   it('FND-15 toda mensagem bem formada é aceita e devolvida como veio', () => {
-    expectProperty(
-      fc.property(
-        fc.record({ orderId: fc.uuid(), correlationId: correlationIdArb }),
-        (message) => {
-          expect(parseBillingMessage(JSON.stringify(message))).toEqual({
-            valid: true,
-            message,
-          });
-        },
-      ),
-    );
+    expectProperty(acceptsWellFormed(parseBillingMessage));
   });
+
+  it.each([
+    {
+      defect: 'que recusa uma mensagem bem formada',
+      broken: (body: string): ParsedBillingMessage => {
+        const parsed = BillingMessage.safeParse(readJson(body));
+        return parsed.success && !/\d/.test(parsed.data.correlationId)
+          ? { valid: true, message: parsed.data }
+          : { valid: false, orderId: undefined };
+      },
+    },
+    {
+      defect: 'que devolve a mensagem alterada',
+      broken: (body: string): ParsedBillingMessage => {
+        const parsed = BillingMessage.safeParse(readJson(body));
+        return parsed.success
+          ? {
+              valid: true,
+              message: {
+                ...parsed.data,
+                correlationId: parsed.data.correlationId.toLowerCase(),
+              },
+            }
+          : { valid: false, orderId: undefined };
+      },
+    },
+  ])(
+    'FND-15 controle negativo: a propriedade da mensagem bem formada reprova o parser $defect',
+    ({ broken }) => {
+      expectFalsified(acceptsWellFormed(broken));
+    },
+  );
 
   it.each([
     {

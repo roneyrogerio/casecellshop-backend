@@ -21,7 +21,7 @@ Outros comandos: `npm run lint`, `npm run typecheck`, `npm run check:unused` (kn
 
 No VS Code, instale as extensões que o projeto recomenda (`.vscode/extensions.json`): o Prettier e o oxlint mostram o formato e o lint enquanto você escreve, com a configuração do repositório. Com outro editor, o pre-push e o CI conferem o mesmo.
 
-Repetição de código já existente fica na linha de base `.jscpd-baseline.json`; quando você tira uma, atualize a base com `node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline`. O piso de cobertura fica no `vitest.config.ts` e só sobe.
+Repetição de código já existente fica na linha de base `.jscpd-baseline.json`; quando você tira uma, atualize a base com `node_modules/.bin/jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline`. O piso de cobertura fica no `coverage-floor.json`, que o `vitest.config.ts` importa, e só sobe: no PR, o `scripts/check-baselines.ts` o compara com o da `main` e confere a cobertura medida contra o piso da `main` (`AI-49`).
 
 O fuzzing da API (FND-16) roda pelo mesmo serviço do CI: `install -d -m 0777 schemathesis-report && docker compose --profile fuzz run --rm schemathesis`, com `FUZZ_SEED` e `FUZZ_MAX_EXAMPLES` opcionais; o relatório JUnit fica em `schemathesis-report/`. O `install -d` cria o diretório com escrita para a imagem, que roda como uid 1000; no Linux, sem ele, o diretório montado nasce do root e o Schemathesis sai sem rodar.
 

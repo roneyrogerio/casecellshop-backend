@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig } from 'vitest/config';
+import floor from './coverage-floor.json' with { type: 'json' };
 
 // O projeto integration sobe um PostgreSQL e um ElasticMQ por rodada, no
 // globalSetup; cada arquivo clona o próprio banco do modelo migrado e usa
@@ -8,13 +9,14 @@ export default defineConfig({
   test: {
     // AI-37: só vale com --coverage, que o CI passa na perna do .nvmrc. Os
     // processos de src/main/ rodam em outro processo ou no compose, fora da
-    // medição em processo. O piso é o medido ao criar a checagem, arredondado
-    // para baixo, e só sobe.
+    // medição em processo. O piso é um dado, no coverage-floor.json, que o
+    // check-baselines.ts confere contra a base e contra a cobertura medida
+    // (AI-49); só sobe.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.test.ts', 'src/db/types/**', 'src/main/**'],
-      thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 },
+      thresholds: floor,
     },
     projects: [
       {

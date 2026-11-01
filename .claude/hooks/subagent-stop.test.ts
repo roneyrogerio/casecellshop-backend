@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   cpSync,
@@ -17,6 +16,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CONFIG_KEYS_OUTSIDE_DEPENDENCIES } from '../../test/helpers/package-json-config.ts';
+import { runCommand, runNode } from '../../test/helpers/run-node.ts';
 
 interface CheckResult {
   ok: boolean;
@@ -386,6 +386,7 @@ const IMPLEMENTER_FORBIDDEN_CHANGES = [
   'src/tsconfig.json',
   '.oxlintrc.json',
   'vitest.config.ts',
+  'coverage-floor.json',
   'commitlint.config.mjs',
   '.npmrc',
   '.gitignore',
@@ -987,11 +988,10 @@ function hookEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
 
 // Só a parada, sem o retrato do início do agente (AI-12): o caso do retrato ausente.
 function runStopOnly(sandbox: Sandbox, input: unknown, raw?: string) {
-  const result = spawnSync(process.execPath, [hookFile], {
-    input: raw ?? JSON.stringify(input),
-    encoding: 'utf8',
+  const result = runNode(hookFile, [], {
     cwd: sandbox.project,
     env: hookEnv(sandbox),
+    input: raw ?? JSON.stringify(input),
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -1001,11 +1001,10 @@ const startFile = join(import.meta.dirname, 'subagent-start.mjs');
 // O Claude Code dispara o SubagentStart antes do agente trabalhar e o SubagentStop depois: os testes de processo
 // fazem o mesmo, para que o retrato do git (AI-12) exista e o resultado dependa só do que o teste mudou.
 function runStart(sandbox: Sandbox, input: unknown) {
-  const result = spawnSync(process.execPath, [startFile], {
-    input: JSON.stringify(input),
-    encoding: 'utf8',
+  const result = runNode(startFile, [], {
     cwd: sandbox.project,
     env: hookEnv(sandbox),
+    input: JSON.stringify(input),
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -1017,7 +1016,7 @@ function runHook(sandbox: Sandbox, input: unknown, raw?: string) {
 }
 
 function gitIn(cwd: string, ...args: string[]): void {
-  const result = spawnSync(
+  const result = runCommand(
     'git',
     [
       '-c',
@@ -1030,7 +1029,7 @@ function gitIn(cwd: string, ...args: string[]): void {
       'core.hooksPath=/dev/null',
       ...args,
     ],
-    { cwd, encoding: 'utf8' },
+    { cwd },
   );
   expect(result.status, result.stderr).toBe(0);
 }
@@ -1299,7 +1298,9 @@ const postToolFile = join(import.meta.dirname, 'post-tool.mjs');
 // O revisor em segundo plano entrega o relatório pela ferramenta SubagentHandback; o PostToolUse grava e,
 // depois, a parada dele traz só o texto de encerramento (AI-15).
 function runHandback(sandbox: Sandbox, agentId: string, message: string) {
-  const result = spawnSync(process.execPath, [postToolFile], {
+  const result = runNode(postToolFile, [], {
+    cwd: sandbox.project,
+    env: hookEnv(sandbox),
     input: JSON.stringify({
       hook_event_name: 'PostToolUse',
       session_id: 's1',
@@ -1309,9 +1310,6 @@ function runHandback(sandbox: Sandbox, agentId: string, message: string) {
       tool_name: 'SubagentHandback',
       tool_input: { message },
     }),
-    encoding: 'utf8',
-    cwd: sandbox.project,
-    env: hookEnv(sandbox),
   });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }

@@ -140,10 +140,14 @@ describe('AI-02 todo *.test.ts fora de test/integration/ roda no projeto unit', 
         path.join(tree, 'node_modules'),
         'dir',
       );
-      writeFileSync(
-        path.join(tree, 'vitest.config.ts'),
-        readFileSync(path.join(root, 'vitest.config.ts')),
-      );
+      // O config importa o coverage-floor.json (AI-49), e sem ele não carrega.
+      for (const name of ['vitest.config.ts', 'coverage-floor.json']) {
+        expect(existsSync(path.join(root, name)), name).toBe(true);
+        writeFileSync(
+          path.join(tree, name),
+          readFileSync(path.join(root, name)),
+        );
+      }
       for (const file of [
         'src/a.test.ts',
         '.claude/hooks/b.test.ts',

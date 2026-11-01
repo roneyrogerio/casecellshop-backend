@@ -1,4 +1,4 @@
-import { cpSync, existsSync } from 'node:fs';
+import { cpSync, existsSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect } from 'vitest';
@@ -38,14 +38,21 @@ export function sandboxWithScript(file: string): string {
   const lib = join(repoRoot, 'scripts', 'lib');
   if (existsSync(lib))
     cpSync(lib, join(dir, 'scripts', 'lib'), { recursive: true });
+  // O script copiado pode importar dependências do projeto (como o zod); sem um node_modules ao lado dele o Node não as
+  // resolve. O link para o node_modules do repositório faz o script resolver os pacotes como no repositório, sem
+  // instalar nada na pasta temporária.
+  symlinkSync(join(repoRoot, 'node_modules'), join(dir, 'node_modules'), 'dir');
+  // O link é do ambiente, não do repositório de teste: um `git add -A` na pasta não pode versioná-lo.
+  writeFileIn(dir, '.gitignore', 'node_modules\n');
   return dir;
 }
 
-// Roda `node scripts/<file>` na pasta, com o ambiente do processo sem as variáveis do git da máquina, mais `env`.
+// Roda `node scripts/<file> <args>` na pasta, com o ambiente do processo sem as variáveis do git da máquina, mais `env`.
 export function runScript(
   dir: string,
   file: string,
   env: Record<string, string> = {},
+  args: string[] = [],
 ): NodeRun {
   const clean = Object.fromEntries(
     Object.entries(process.env).filter(
@@ -53,7 +60,7 @@ export function runScript(
         entry[1] !== undefined && !entry[0].startsWith('GIT_'),
     ),
   );
-  return runNode(join('scripts', file), [], {
+  return runNode(join('scripts', file), args, {
     cwd: dir,
     env: { ...clean, ...env },
   });

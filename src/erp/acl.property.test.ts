@@ -303,28 +303,88 @@ function leaksUnknownKind(options: ErpClientOptions): ErpClient {
   };
 }
 
+// Preço e estoque só passam como inteiro seguro maior ou igual a zero; o item com outro valor vira `transient`.
+function countsAreSafeIntegers(make: Factory) {
+  return fc.asyncProperty(nearItemArb, async (item) => {
+    const result = await clientOver(make, {
+      how: 'respond',
+      response: { status: 200, body: { items: [item], hasNext: false } },
+    }).listCatalog(1);
+
+    const acceptable =
+      typeof item.sku === 'string' &&
+      typeof item.name === 'string' &&
+      isSafeCount(item.priceCents) &&
+      isSafeCount(item.onHand);
+    expect(result.kind).toBe(acceptable ? 'ok' : 'transient');
+  });
+}
+
+// Cliente quebrado: confere preço e estoque com uma regra mais frouxa que a do módulo (`accepts`) e devolve a página
+// como veio quando passa; quando não passa, entrega ao cliente real, que recusa.
+function lenientCounts(accepts: (value: unknown) => boolean): Factory {
+  return (options) => {
+    const real = createErpClient(options);
+    return {
+      ...real,
+      async listCatalog(page) {
+        const response = await options.transport.send(
+          { op: 'listCatalog', page },
+          new AbortController().signal,
+        );
+        const body = response.body as { items?: unknown; hasNext?: unknown };
+        const items = Array.isArray(body?.items)
+          ? (body.items as Record<string, unknown>[])
+          : undefined;
+        const passes =
+          response.status === 200 &&
+          items !== undefined &&
+          typeof body.hasNext === 'boolean' &&
+          items.every(
+            (item) =>
+              typeof item['sku'] === 'string' &&
+              typeof item['name'] === 'string' &&
+              accepts(item['priceCents']) &&
+              accepts(item['onHand']),
+          );
+        return passes
+          ? { kind: 'ok', page: body as never }
+          : real.listCatalog(page);
+      },
+    };
+  };
+}
+
 describe('FND-15 createErpClient: catálogo', () => {
   it('FND-15 qualquer corpo do catálogo vira página válida ou erro da lista fechada, sem lançar', async () => {
     await expectAsyncProperty(catalogIsValidOrClosedError(createErpClient));
   });
 
   it('FND-15 preço e estoque só passam como inteiro seguro maior ou igual a zero', async () => {
-    await expectAsyncProperty(
-      fc.asyncProperty(nearItemArb, async (item) => {
-        const result = await clientOver(createErpClient, {
-          how: 'respond',
-          response: { status: 200, body: { items: [item], hasNext: false } },
-        }).listCatalog(1);
-
-        const acceptable =
-          typeof item.sku === 'string' &&
-          typeof item.name === 'string' &&
-          isSafeCount(item.priceCents) &&
-          isSafeCount(item.onHand);
-        expect(result.kind).toBe(acceptable ? 'ok' : 'transient');
-      }),
-    );
+    await expectAsyncProperty(countsAreSafeIntegers(createErpClient));
   });
+
+  it.each([
+    {
+      defect: 'aceita inteiro não seguro',
+      accepts: (v: unknown) =>
+        typeof v === 'number' && Number.isInteger(v) && v >= 0,
+    },
+    {
+      defect: 'aceita decimal',
+      accepts: (v: unknown) =>
+        typeof v === 'number' && Number.isFinite(v) && v >= 0,
+    },
+    {
+      defect: 'aceita número negativo',
+      accepts: (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v),
+    },
+  ])(
+    'FND-15 controle negativo: a propriedade de preço e estoque reprova o cliente que $defect',
+    async ({ accepts }) => {
+      await expectFalsifiedAsync(countsAreSafeIntegers(lenientCounts(accepts)));
+    },
+  );
 
   it.each([
     { defect: 'confia no corpo sem conferir', broken: passThroughCatalog },
