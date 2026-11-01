@@ -64,6 +64,14 @@ export default defineConfig({
 `;
 }
 
+// O mesmo `thresholds`, quebrado em várias linhas como o Prettier quebraria um objeto longo.
+function multilineConfig(floor: Floor): string {
+  return config(floor).replace(
+    /thresholds: \{[^}]*\},/,
+    `thresholds: {\n        lines: ${String(floor.lines)},\n        functions: ${String(floor.functions)},\n        branches: ${String(floor.branches)},\n        statements: ${String(floor.statements)},\n      },`,
+  );
+}
+
 describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em relação à base', () => {
   it('AI-49 o mesmo piso passa (controle)', () => {
     expect(coverageFloorViolations(config(FLOOR), config(FLOOR))).toEqual([]);
@@ -145,28 +153,19 @@ describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em 
     );
   });
 
-  it('AI-49 lê os thresholds também quando o Prettier os quebra em várias linhas', () => {
-    const multiline = (floor: Floor): string =>
-      config(FLOOR).replace(
-        /thresholds: \{[^}]*\},/,
-        `thresholds: {\n        lines: ${String(floor.lines)},\n        functions: ${String(floor.functions)},\n        branches: ${String(floor.branches)},\n        statements: ${String(floor.statements)},\n      },`,
-      );
-
-    expect(coverageFloorViolations(multiline(FLOOR), multiline(FLOOR))).toEqual(
-      [],
-    );
+  // O piso tem forma fixa (AI-49): o objeto de uma linha só. O que antes passava, o objeto quebrado em várias linhas,
+  // agora reprova nos dois lados da comparação, porque uma forma fora do padrão esconde um piso menor.
+  it('AI-49 o thresholds em várias linhas reprova, no PR e na base, mesmo com o mesmo piso', () => {
     expect(
-      coverageFloorViolations(
-        multiline(FLOOR),
-        multiline({ ...FLOOR, statements: 90 }),
-      ),
-    ).toEqual([expect.stringContaining('statements')]);
+      coverageFloorViolations(config(FLOOR), multilineConfig(FLOOR)).length,
+    ).toBeGreaterThan(0);
     expect(
-      coverageFloorViolations(
-        config(FLOOR),
-        multiline({ ...FLOOR, statements: 90 }),
-      ),
-    ).toEqual([expect.stringContaining('statements')]);
+      coverageFloorViolations(multilineConfig(FLOOR), config(FLOOR)).length,
+    ).toBeGreaterThan(0);
+    expect(
+      coverageFloorViolations(multilineConfig(FLOOR), multilineConfig(FLOOR))
+        .length,
+    ).toBeGreaterThan(0);
   });
 
   it('AI-49 o vitest.config.ts do repositório contra ele mesmo passa', () => {
@@ -186,6 +185,138 @@ describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em 
     expect(coverageFloorViolations(text, lower)).toEqual([
       expect.stringContaining('lines'),
     ]);
+  });
+});
+
+// A forma fixa do piso (AI-49): `thresholds` citado uma vez só, num objeto de uma linha com exatamente as quatro chaves,
+// cada uma com um número literal. Cada caso mantém o mesmo piso da base, para o único defeito ser a forma.
+describe('AI-49 coverageFloorViolations só aceita o piso na forma fixa, nos dois lados da comparação', () => {
+  const BLOCK =
+    'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 }';
+  const LOW_BLOCK =
+    'thresholds: { lines: 1, functions: 1, branches: 1, statements: 1 }';
+
+  function withBlock(block: string): string {
+    const text = config(FLOOR).replace(BLOCK, block);
+    expect(text).not.toBe(config(FLOOR));
+    return text;
+  }
+
+  const BAD_SHAPES: [string, string][] = [
+    [
+      'um segundo thresholds no código',
+      config(FLOOR).replace(
+        'projects: [],',
+        `projects: [{ test: { coverage: { ${LOW_BLOCK} } } }],`,
+      ),
+    ],
+    [
+      'um segundo thresholds num comentário',
+      config(FLOOR).replace(
+        '    projects: [],',
+        `    // ${LOW_BLOCK}\n    projects: [],`,
+      ),
+    ],
+    [
+      'uma chave a mais',
+      withBlock(
+        'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91, perFile: true }',
+      ),
+    ],
+    [
+      'uma chave a menos',
+      withBlock('thresholds: { lines: 92, functions: 92, branches: 83 }'),
+    ],
+    [
+      'um ...spread no começo',
+      withBlock(
+        'thresholds: { ...OUTRO, lines: 92, functions: 92, branches: 83, statements: 91 }',
+      ),
+    ],
+    [
+      'um ...spread no fim',
+      withBlock(
+        'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91, ...OUTRO }',
+      ),
+    ],
+    [
+      'um valor que é uma conta',
+      withBlock(
+        'thresholds: { lines: 92 - 90, functions: 92, branches: 83, statements: 91 }',
+      ),
+    ],
+    [
+      'um valor com uma conversão',
+      withBlock(
+        'thresholds: { lines: 92 as number, functions: 92, branches: 83, statements: 91 }',
+      ),
+    ],
+    [
+      'um valor que é texto',
+      withBlock(
+        "thresholds: { lines: '92', functions: 92, branches: 83, statements: 91 }",
+      ),
+    ],
+    ['o objeto em mais de uma linha', multilineConfig(FLOOR)],
+  ];
+
+  it.each(BAD_SHAPES)(
+    'AI-49 %s no PR reprova, mesmo com o piso igual ao da base',
+    (_label, head) => {
+      expect(
+        coverageFloorViolations(config(FLOOR), head).length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(BAD_SHAPES)(
+    'AI-49 %s na base reprova, mesmo com o PR na forma certa',
+    (_label, base) => {
+      expect(
+        coverageFloorViolations(base, config(FLOOR)).length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
+  // O comentário com o piso antigo na frente do bloco de verdade, que caiu: lido pelo primeiro `thresholds`, o piso
+  // menor passaria escondido.
+  it('AI-49 um comentário com o piso da base antes do bloco que caiu não esconde a queda', () => {
+    const head = config({ ...FLOOR, branches: 82 }).replace(
+      '      thresholds:',
+      `      // ${BLOCK}\n      thresholds:`,
+    );
+
+    expect(head).toContain(`// ${BLOCK}`);
+    expect(coverageFloorViolations(config(FLOOR), head).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  // Controles negativos: a forma fixa, com outra ordem das chaves ou com um comentário que não cita `thresholds`, passa,
+  // e o vitest.config.ts do repositório (de uma linha) continua passando.
+  it('AI-49 controle: as quatro chaves em outra ordem, numa linha, passam', () => {
+    const reordered = withBlock(
+      'thresholds: { statements: 91, branches: 83, functions: 92, lines: 92 }',
+    );
+
+    expect(coverageFloorViolations(config(FLOOR), reordered)).toEqual([]);
+    expect(coverageFloorViolations(reordered, config(FLOOR))).toEqual([]);
+  });
+
+  it('AI-49 controle: um comentário que não cita thresholds não reprova', () => {
+    const commented = config(FLOOR).replace(
+      '    projects: [],',
+      '    // o piso só sobe\n    projects: [],',
+    );
+
+    expect(coverageFloorViolations(config(FLOOR), commented)).toEqual([]);
+  });
+
+  it('AI-49 controle: o vitest.config.ts do repositório cita thresholds uma vez só, numa linha com as quatro chaves', () => {
+    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
+
+    expect(text.match(/thresholds/g)).toHaveLength(1);
+    expect(coverageFloorViolations(text, text)).toEqual([]);
   });
 });
 

@@ -40,6 +40,10 @@ function lock(packages: Record<string, Record<string, unknown>>): string {
 
 const ROOT = { '': { name: 'x', version: '0.0.0' } };
 const GOOD_ENTRY = { resolved: GOOD_RESOLVED, integrity: GOOD_INTEGRITY };
+const VITEST_ENTRY = {
+  resolved: 'https://registry.npmjs.org/vitest/-/vitest-5.0.5.tgz',
+  integrity: GOOD_INTEGRITY,
+};
 
 describe('AI-05 lockfileViolations confere a origem e a integridade de cada pacote do lockfile', () => {
   it('AI-05 um lockfile só com pacotes do registro e integrity sha512 passa (controle)', () => {
@@ -130,7 +134,10 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
   it('AI-05 cada pacote ruim gera a própria violação, e os bons não aparecem', () => {
     const text = lock({
       ...ROOT,
-      'node_modules/good': GOOD_ENTRY,
+      'node_modules/good': {
+        resolved: 'https://registry.npmjs.org/good/-/good-1.0.0.tgz',
+        integrity: GOOD_INTEGRITY,
+      },
       'node_modules/bad-host': {
         resolved: 'https://evil.example/x.tgz',
         integrity: GOOD_INTEGRITY,
@@ -184,6 +191,142 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
 
     expect(lockfileViolations(text)).toEqual([expect.stringContaining(key)]);
   });
+
+  // O npm lê `link` como valor verdadeiro: qualquer um dos abaixo troca o pacote por código local.
+  it.each([
+    ['o número 1', 1],
+    ['o texto "true"', 'true'],
+    ['um objeto vazio', {}],
+  ])('AI-05 link com %s reprova, e cita a entrada', (_label, link) => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/vitest': { ...VITEST_ENTRY, link },
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining('node_modules/vitest'),
+    ]);
+  });
+
+  // Controle negativo: o mesmo pacote, com `link: false`, é um pacote baixado como outro qualquer.
+  it('AI-05 controle: link false num pacote do registro passa', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/vitest': { ...VITEST_ENTRY, link: false },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  // O `resolved` precisa ser igual à própria forma normalizada pelo `new URL`: um `..`, uma barra dupla ou um escape que
+  // o normalize levaria o download a outro pacote do registro, mesmo com o host certo.
+  it.each([
+    ['um ..', 'https://registry.npmjs.org/vitest/../evil/-/evil-1.0.0.tgz'],
+    [
+      'um .. depois do nome',
+      'https://registry.npmjs.org/vitest/-/../../evil/-/evil-1.0.0.tgz',
+    ],
+    [
+      'uma barra dupla',
+      'https://registry.npmjs.org//vitest/-/vitest-5.0.5.tgz',
+    ],
+    [
+      'uma barra dupla no meio',
+      'https://registry.npmjs.org/vitest//-/vitest-5.0.5.tgz',
+    ],
+    [
+      'um %2e%2e',
+      'https://registry.npmjs.org/vitest/%2e%2e/evil/-/evil-1.0.0.tgz',
+    ],
+    ['um ./', 'https://registry.npmjs.org/vitest/./-/vitest-5.0.5.tgz'],
+  ])(
+    'AI-05 resolved com %s, que o new URL normaliza, reprova, e cita o pacote',
+    (_label, resolved) => {
+      const text = lock({
+        ...ROOT,
+        'node_modules/vitest': { resolved, integrity: GOOD_INTEGRITY },
+      });
+
+      expect(lockfileViolations(text)).toEqual([
+        expect.stringContaining('node_modules/vitest'),
+      ]);
+    },
+  );
+
+  // O caminho do tarball começa por `/<nome do pacote>/-/`, com o nome tirado da chave depois do último node_modules/.
+  it.each([
+    [
+      'o tarball de outro pacote',
+      'node_modules/vitest',
+      'https://registry.npmjs.org/evil/-/evil-1.0.0.tgz',
+    ],
+    [
+      'um nome que só começa igual',
+      'node_modules/vitest',
+      'https://registry.npmjs.org/vitest-evil/-/vitest-evil-1.0.0.tgz',
+    ],
+    [
+      'um pacote escopado sem o escopo no caminho',
+      'node_modules/@scope/pkg',
+      'https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz',
+    ],
+    [
+      'um pacote escopado de outro escopo',
+      'node_modules/@scope/pkg',
+      'https://registry.npmjs.org/@outro/pkg/-/pkg-1.0.0.tgz',
+    ],
+    [
+      'um aninhado com o nome do pacote de fora',
+      'node_modules/a/node_modules/b',
+      'https://registry.npmjs.org/a/-/a-1.0.0.tgz',
+    ],
+    [
+      'um caminho sem o /-/ depois do nome',
+      'node_modules/vitest',
+      'https://registry.npmjs.org/vitest/vitest-5.0.5.tgz',
+    ],
+  ])('AI-05 %s reprova, e cita a entrada', (_label, key, resolved) => {
+    const text = lock({
+      ...ROOT,
+      [key]: { resolved, integrity: GOOD_INTEGRITY },
+    });
+
+    expect(lockfileViolations(text)).toEqual([expect.stringContaining(key)]);
+  });
+
+  // Controles negativos: o pacote comum, o escopado e o aninhado (também escopado) passam.
+  it.each([
+    [
+      'o pacote comum',
+      'node_modules/vitest',
+      'https://registry.npmjs.org/vitest/-/vitest-5.0.5.tgz',
+    ],
+    [
+      'o pacote escopado',
+      'node_modules/@scope/pkg',
+      'https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz',
+    ],
+    [
+      'o pacote aninhado',
+      'node_modules/a/node_modules/b',
+      'https://registry.npmjs.org/b/-/b-1.0.0.tgz',
+    ],
+    [
+      'o pacote escopado aninhado',
+      'node_modules/a/node_modules/@scope/pkg',
+      'https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz',
+    ],
+  ])(
+    'AI-05 controle: %s com o tarball do próprio nome passa',
+    (_label, key, resolved) => {
+      const text = lock({
+        ...ROOT,
+        [key]: { resolved, integrity: GOOD_INTEGRITY },
+      });
+
+      expect(lockfileViolations(text)).toEqual([]);
+    },
+  );
 
   it('AI-05 um lockfile com lockfileVersion 1 (pacotes em dependencies, sem packages) reprova, e cita lockfileVersion', () => {
     const text = JSON.stringify({

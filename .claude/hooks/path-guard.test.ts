@@ -1,7 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -1317,5 +1325,134 @@ describe('AI-15 as pastas dos hooks são conferidas contra a pasta principal mes
         fromWorktree('implementer', join(worktree, 'src', 'x.test.ts')),
       ),
     );
+  });
+});
+
+// O que o `realpath` sozinho não resolve (AI-26): o `..` depois de um link, o link quebrado no último componente, a
+// caixa do caminho num sistema de arquivos que não distingue caixa e o link cujo próprio nome é protegido.
+// O sistema de arquivos é uma condição de ambiente (o padrão do macOS não distingue caixa; o do Linux distingue).
+const caseInsensitive = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), 'ai26-probe-'));
+  try {
+    return existsSync(probe.toUpperCase());
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+describe('AI-26 a guarda decide pelo caminho real: .. depois de link, link quebrado, caixa e nome protegido', () => {
+  let project: string;
+  let elsewhere: string;
+
+  function link(target: string, name: string): void {
+    mkdirSync(dirname(join(project, name)), { recursive: true });
+    symlinkSync(target, join(project, name));
+  }
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-real-');
+    elsewhere = join(makeTempDir('ai26-fora-'), 'pasta');
+    mkdirSync(elsewhere);
+    mkdirSync(join(project, 'src', 'sub'), { recursive: true });
+    mkdirSync(join(project, 'test', 'helpers'), { recursive: true });
+    // O `..` depois de um link: para fora do repositório, para dentro de test/ e para uma pasta de src/.
+    link(elsewhere, 'src/l');
+    link('../test/helpers', 'src/lt');
+    link('sub', 'src/lc');
+    // O link quebrado no último componente: o destino ainda não existe.
+    link('../test/a.test.ts', 'src/novo.ts');
+    link('../src/b.ts', 'src/novo2.ts');
+    // O nome pedido protegido, e o destino protegido com nome comum.
+    writeFileSync(join(project, 'src', 'x.json'), 'x\n');
+    link('x.json', 'src/.oxlintrc.json');
+    link('x.json', 'src/alias.json');
+    mkdirSync(join(project, '.claude', 'reviews'), { recursive: true });
+    writeFileSync(join(project, '.claude', 'reviews', 'r.md'), 'x\n');
+    link('../.claude/reviews/r.md', 'src/rev.ts');
+  });
+
+  afterAll(cleanupTempDirs);
+
+  function decideFor(
+    agentType: string | undefined,
+    filePath: string,
+  ): string | null {
+    const input: HookInput = {
+      ...editInput(agentType, filePath),
+      cwd: project,
+    };
+    return decide(input, project, project);
+  }
+
+  // O texto, e não o `join`: o `join` já resolveria o `..` antes da guarda.
+  it.each([
+    ['absoluto', () => `${project}/src/l/../x.ts`],
+    ['relativo', () => 'src/l/../x.ts'],
+  ])(
+    'AI-26 o .. depois de um link para fora do repositório é decidido pelo caminho real e negado (%s)',
+    (_label, filePath) => {
+      expectDenied(decideFor('implementer', filePath()));
+    },
+  );
+
+  it('AI-26 o .. depois de um link para test/ é decidido pelo caminho real e negado ao implementer', () => {
+    expectDenied(decideFor('implementer', `${project}/src/lt/../x.ts`));
+  });
+
+  // Controles negativos: sem o link, ou com um link que fica dentro de src/, o mesmo texto continua liberado.
+  it('AI-26 controle: o .. depois de um link para uma pasta de src/ e o src/y.ts comum seguem liberados', () => {
+    expectAllowed(decideFor('implementer', `${project}/src/lc/../y.ts`));
+    expectAllowed(decideFor('implementer', `${project}/src/sub/../y.ts`));
+    expectAllowed(decideFor('implementer', 'src/y.ts'));
+  });
+
+  it('AI-26 controle: o arquivo dentro do link para fora do repositório é negado, como o .. depois dele', () => {
+    expectDenied(decideFor('implementer', `${project}/src/l/x.ts`));
+  });
+
+  it('AI-26 o link quebrado no último componente é decidido pelo destino: o implementer não edita um teste por ele', () => {
+    expect(existsSync(join(project, 'test', 'a.test.ts'))).toBe(false);
+
+    expectDenied(decideFor('implementer', `${project}/src/novo.ts`));
+    expectDenied(decideFor('implementer', 'src/novo.ts'));
+  });
+
+  it('AI-26 controle: o link quebrado cujo destino é código de src/ segue liberado ao implementer', () => {
+    expect(existsSync(join(project, 'src', 'b.ts'))).toBe(false);
+
+    expectAllowed(decideFor('implementer', `${project}/src/novo2.ts`));
+  });
+
+  it.skipIf(!caseInsensitive)(
+    'AI-26 num sistema de arquivos sem distinção de caixa, o caminho absoluto em outra caixa decide igual ao da caixa certa',
+    () => {
+      const upper = (relative: string): string =>
+        `${project.toUpperCase()}/${relative.toUpperCase()}`;
+
+      // A sessão principal não escreve em .claude/reviews/ (AI-15), em nenhuma caixa.
+      expectDenied(decideFor(undefined, `${project}/.claude/reviews/x.md`));
+      expectDenied(decideFor(undefined, upper('.claude/reviews/x.md')));
+      // O implementer edita src/y.ts e não edita teste, em nenhuma caixa.
+      expectAllowed(decideFor('implementer', `${project}/src/y.ts`));
+      expectAllowed(decideFor('implementer', upper('src/y.ts')));
+      expectDenied(decideFor('implementer', `${project}/test/y.test.ts`));
+      expectDenied(decideFor('implementer', upper('test/y.test.ts')));
+    },
+  );
+
+  it('AI-26 o nome pedido protegido nega o link, mesmo que ele aponte para um arquivo que o implementer edita', () => {
+    expectAllowed(decideFor('implementer', `${project}/src/x.json`));
+
+    expectDenied(decideFor('implementer', `${project}/src/.oxlintrc.json`));
+    expectDenied(decideFor('implementer', 'src/.oxlintrc.json'));
+  });
+
+  it('AI-26 controle: um link de nome comum para o mesmo arquivo segue liberado', () => {
+    expectAllowed(decideFor('implementer', `${project}/src/alias.json`));
+  });
+
+  it('AI-26 controle: o link de nome comum para um destino protegido segue negado (pelo caminho real)', () => {
+    expectDenied(decideFor('implementer', `${project}/src/rev.ts`));
+    expectDenied(decideFor('implementer', 'src/rev.ts'));
   });
 });

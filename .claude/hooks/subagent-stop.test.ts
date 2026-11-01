@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -1790,6 +1791,67 @@ describe('AI-03 e AI-12 o agente isolado: o nome fora do ASCII ou com espaço ch
     expect(result.code, result.stdout + result.stderr).toBe(2);
     expect(result.stderr).toContain('src/app2.ts');
   });
+
+  // AI-03 e AI-12: num rename ou numa cópia, a origem e o destino passam pela conferência. Sem a origem, um
+  // `git mv test/helpers/clock.ts src/clock.ts` do implementer deixaria à vista só `src/clock.ts`, que é do papel dele.
+  function stopAfter(
+    agent: typeof TEST_WRITER,
+    act: (cwd: string) => void,
+  ): ReturnType<typeof runStopOnly> {
+    const { sandbox, cwd } = isolatedAgent();
+    runStart(sandbox, { ...agent, cwd });
+    act(cwd);
+    return runStopOnly(sandbox, { ...agent, cwd });
+  }
+
+  // O mesmo rename, registrado de dois jeitos: `git mv` (R na coluna X) e `mv` com `git add -N` (R na coluna Y).
+  const RENAMES: [string, (cwd: string, from: string, to: string) => void][] = [
+    ['git mv', (cwd, from, to) => gitIn(cwd, 'mv', from, to)],
+    [
+      'mv e git add -N',
+      (cwd, from, to) => {
+        renameSync(join(cwd, from), join(cwd, to));
+        gitIn(cwd, 'add', '-N', to);
+      },
+    ],
+  ];
+
+  it.each(RENAMES)(
+    'AI-03 o implementer isolado que move um teste para src/ com %s é devolvido, citando a origem em test/',
+    (_label, rename) => {
+      const result = stopAfter(IMPLEMENTER, (cwd) =>
+        rename(cwd, 'test/helpers/clock.ts', 'src/clock.ts'),
+      );
+
+      expect(result.code, result.stdout + result.stderr).toBe(2);
+      expect(result.stderr).toContain('test/helpers/clock.ts');
+    },
+  );
+
+  it.each(RENAMES)(
+    'AI-03 o test-writer isolado que renomeia código para *.test.ts com %s é devolvido, citando a origem',
+    (_label, rename) => {
+      const result = stopAfter(TEST_WRITER, (cwd) =>
+        rename(cwd, 'src/app.ts', 'src/app.test.ts'),
+      );
+
+      expect(result.code, result.stdout + result.stderr).toBe(2);
+      expect(result.stderr).toContain('src/app.ts');
+    },
+  );
+
+  // Controle negativo: um rename dentro de src/ só tem caminhos do papel do implementer, e ele é liberado.
+  it.each(RENAMES)(
+    'AI-03 controle: o implementer isolado que move src/app.ts para src/app2.ts com %s é liberado',
+    (_label, rename) => {
+      const result = stopAfter(IMPLEMENTER, (cwd) =>
+        rename(cwd, 'src/app.ts', 'src/app2.ts'),
+      );
+
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+      expect(result.stderr).toBe('');
+    },
+  );
 });
 
 // A5 da Revisão do #19 (AI-12): se o `git hash-object` falha (aqui, um arquivo sujo sem permissão de leitura), o

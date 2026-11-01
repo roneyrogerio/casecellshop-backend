@@ -17,9 +17,19 @@ interface Snapshot {
   refs: string;
   worktrees: string;
   config: string;
-  // AI-28: o `git status --porcelain=v1 --untracked-files=all` do início, com o hash do conteúdo de cada arquivo
-  // sujo no fim da linha (separado por TAB), para uma segunda edição do mesmo arquivo aparecer.
+  // AI-28 e AI-12: o `git status --porcelain=v1 -z --untracked-files=all` do início, gravado como texto JSON de uma
+  // lista de entradas (StatusRecord), com o hash do conteúdo de cada arquivo sujo, para uma segunda edição do mesmo
+  // arquivo aparecer e para um nome com quebra de linha, tab ou aspas não quebrar a leitura.
   status: string;
+}
+
+// Uma entrada da lista JSON do status. `origin` é a origem de um rename ou de uma cópia e é null fora deles; `hash` é o
+// `git hash-object` do arquivo no disco, e null quando ele não existe (apagado).
+interface StatusRecord {
+  code: string;
+  path: string;
+  origin: string | null;
+  hash: string | null;
 }
 
 interface SnapshotModule {
@@ -31,8 +41,30 @@ interface SnapshotModule {
     options?: { agentRoot?: string },
   ): string[];
   snapshotFile(sessionId: string, agentId: string): string;
-  // As entradas do `git status --porcelain=v1 -z`: um registro do git, uma entrada, com o caminho do arquivo.
-  statusEntries(projectDir: string): { path: string }[];
+  // As entradas do `git status --porcelain=v1 -z`: um registro do git, uma entrada, com o caminho do arquivo e, num
+  // rename ou numa cópia, a origem em `origin`.
+  statusEntries(projectDir: string): {
+    code: string;
+    path: string;
+    origin?: string | null;
+  }[];
+}
+
+// O status do retrato como lista. Aceita o texto JSON (o formato do critério) ou a lista já pronta.
+function statusList(status: unknown): StatusRecord[] {
+  return (
+    typeof status === 'string' ? JSON.parse(status) : status
+  ) as StatusRecord[];
+}
+
+// Monta o status gravado a partir das linhas `XY caminho\thash` que as comparações abaixo descrevem.
+function statusOf(...lines: string[]): string {
+  return JSON.stringify(
+    lines.map((line): StatusRecord => {
+      const [path = '', hash = null] = line.slice(3).split('\t');
+      return { code: line.slice(0, 2), path, origin: null, hash };
+    }),
+  );
 }
 
 let mod: SnapshotModule;
@@ -657,30 +689,38 @@ function sorted(paths: string[]): string[] {
   return [...paths].sort();
 }
 
-// O texto cru do `git status --porcelain=v1`: o contrato de entrada de changesDuring.
+// O status gravado (AI-12): uma lista JSON de entradas. O `statusOf` monta o texto a partir de linhas `XY caminho\thash`.
 describe('AI-28 changesDuring compara duas saídas do git status', () => {
   const BEFORE = [
     ' M src/antes.ts',
     '?? src/novo-antes.ts',
     'D  src/some-antes.ts',
-  ].join('\n');
+  ];
 
   it('AI-28 saídas iguais não atribuem nada', () => {
-    expect(mod.changesDuring(BEFORE, BEFORE)).toEqual([]);
-    expect(mod.changesDuring('', '')).toEqual([]);
+    expect(mod.changesDuring(statusOf(...BEFORE), statusOf(...BEFORE))).toEqual(
+      [],
+    );
+    expect(mod.changesDuring(statusOf(), statusOf())).toEqual([]);
   });
 
   it('AI-28 uma linha que aparece é atribuída', () => {
     expect(
       mod
-        .changesDuring(BEFORE, `${BEFORE}\n M src/durante.ts\n?? src/criado.ts`)
+        .changesDuring(
+          statusOf(...BEFORE),
+          statusOf(...BEFORE, ' M src/durante.ts', '?? src/criado.ts'),
+        )
         .sort(),
     ).toEqual(['src/criado.ts', 'src/durante.ts']);
   });
 
   it('AI-28 uma linha que some é atribuída (o arquivo voltou ao estado do HEAD)', () => {
     expect(
-      mod.changesDuring(BEFORE, ' M src/antes.ts\n?? src/novo-antes.ts'),
+      mod.changesDuring(
+        statusOf(...BEFORE),
+        statusOf(' M src/antes.ts', '?? src/novo-antes.ts'),
+      ),
     ).toEqual(['src/some-antes.ts']);
   });
 
@@ -688,21 +728,25 @@ describe('AI-28 changesDuring compara duas saídas do git status', () => {
     expect(
       sorted(
         mod.changesDuring(
-          BEFORE,
-          'M  src/antes.ts\n?? src/novo-antes.ts\nD  src/some-antes.ts',
+          statusOf(...BEFORE),
+          statusOf(
+            'M  src/antes.ts',
+            '?? src/novo-antes.ts',
+            'D  src/some-antes.ts',
+          ),
         ),
       ),
     ).toEqual(['src/antes.ts']);
-    expect(mod.changesDuring(' M src/a.ts', ' D src/a.ts')).toEqual([
-      'src/a.ts',
-    ]);
+    expect(
+      mod.changesDuring(statusOf(' M src/a.ts'), statusOf(' D src/a.ts')),
+    ).toEqual(['src/a.ts']);
   });
 
   it('AI-28 a mesma linha com outro hash de conteúdo é atribuída', () => {
     expect(
       mod.changesDuring(
-        ' M src/a.ts\thash1\n M src/b.ts\thash2',
-        ' M src/a.ts\thash9\n M src/b.ts\thash2',
+        statusOf(' M src/a.ts\thash1', ' M src/b.ts\thash2'),
+        statusOf(' M src/a.ts\thash9', ' M src/b.ts\thash2'),
       ),
     ).toEqual(['src/a.ts']);
   });
@@ -710,13 +754,13 @@ describe('AI-28 changesDuring compara duas saídas do git status', () => {
   // Controle negativo: sem o retrato do início (a comparação contra o HEAD, que é só o status da parada), a mudança
   // anterior ao agente é atribuída a ele.
   it('AI-28 controle: contra o HEAD, sem o início, a mudança anterior é atribuída; com o início, não', () => {
-    const duringOnly = ' M src/antes.ts\n M src/durante.ts';
+    const duringOnly = statusOf(' M src/antes.ts', ' M src/durante.ts');
 
-    expect(sorted(mod.changesDuring('', duringOnly))).toEqual([
+    expect(sorted(mod.changesDuring(statusOf(), duringOnly))).toEqual([
       'src/antes.ts',
       'src/durante.ts',
     ]);
-    expect(mod.changesDuring(' M src/antes.ts', duringOnly)).toEqual([
+    expect(mod.changesDuring(statusOf(' M src/antes.ts'), duringOnly)).toEqual([
       'src/durante.ts',
     ]);
   });
@@ -797,7 +841,7 @@ describe('AI-28 changesDuring com o retrato do git de um repositório real', () 
     writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
     const after = mod.takeSnapshot(dir);
 
-    expect(sorted(mod.changesDuring('', after.status))).toEqual([
+    expect(sorted(mod.changesDuring(statusOf(), after.status))).toEqual([
       'src/limpo.ts',
       'src/sujo-antes.ts',
     ]);
@@ -848,9 +892,10 @@ describe('AI-12 o status lido com -z não escapa nome fora do ASCII nem com espa
 
     const { status } = mod.takeSnapshot(dir);
 
-    for (const name of NAMES) expect(status).toContain(name);
+    expect(sorted(statusList(status).map((entry) => entry.path))).toEqual(
+      sorted(NAMES),
+    );
     expect(status).not.toContain('\\303');
-    expect(status).not.toContain('"');
   });
 
   // Controle negativo: sem a segunda edição, nada é atribuído, mesmo com os nomes difíceis já sujos no início.
@@ -1014,6 +1059,145 @@ describe('AI-12 o rename lido do status -z não vira uma entrada com a origem', 
 
     expect(changed).toContain('src/novo.ts');
     expect(changed.filter((path) => path !== 'src/novo.ts')).toEqual([]);
+  });
+});
+
+// AI-12: o status é gravado como lista JSON de entradas (código, caminho, origem, hash) e o `git hash-object` recebe os
+// caminhos como argumentos. Com um caminho por linha na entrada padrão, um nome com quebra de linha virava dois caminhos,
+// um com aspas no começo era lido como escapado, e o retrato lançava ou perdia a segunda edição.
+describe('AI-12 o status em JSON aguenta nome com quebra de linha, tab e aspas no começo', () => {
+  const HARD_NAMES: [string, string][] = [
+    ['quebra de linha', 'src/a\nb.ts'],
+    ['tab', 'src/a\tb.ts'],
+    ['aspas no começo', '"aspas.ts'],
+  ];
+  const HARD = HARD_NAMES.map(([, name]) => name);
+
+  function dirtyRepo(content: string): string {
+    const dir = repo();
+    for (const name of [...HARD, 'src/comum.ts'])
+      writeFileIn(dir, name, content);
+    return dir;
+  }
+
+  it.each(HARD_NAMES)(
+    'AI-12 o takeSnapshot não lança com um arquivo sujo com %s no nome',
+    (_label, name) => {
+      const dir = repo();
+      writeFileIn(dir, name, 'export {};\n');
+
+      expect(() => mod.takeSnapshot(dir)).not.toThrow();
+    },
+  );
+
+  it('AI-12 o status do retrato é uma lista JSON de entradas com código, caminho, origem nula e o hash do arquivo', () => {
+    const dir = dirtyRepo('export const v = 1;\n');
+
+    const entries = statusList(mod.takeSnapshot(dir).status);
+
+    expect(sorted(entries.map((entry) => entry.path))).toEqual(
+      sorted([...HARD, 'src/comum.ts']),
+    );
+    for (const entry of entries) {
+      expect(entry.code).toBe('??');
+      expect(entry.origin).toBeNull();
+      expect(entry.hash).toBe(git(dir, 'hash-object', '--', entry.path).trim());
+    }
+  });
+
+  it.each(HARD_NAMES)(
+    'AI-12 o arquivo com %s no nome, sujo no início e editado de novo, é atribuído pelo nome exato',
+    (_label, name) => {
+      const dir = dirtyRepo('export const v = 1;\n');
+      const before = mod.takeSnapshot(dir);
+      writeFileIn(dir, name, 'export const v = 2;\n');
+
+      expect(
+        mod.changesDuring(before.status, mod.takeSnapshot(dir).status),
+      ).toEqual([name]);
+    },
+  );
+
+  // Controle negativo: sem nova edição nada é atribuído, e o nome comum ao lado segue como uma entrada igual.
+  it('AI-12 controle: sem nova edição, os nomes difíceis e o nome comum não são atribuídos', () => {
+    const dir = dirtyRepo('export const v = 1;\n');
+    const before = mod.takeSnapshot(dir);
+
+    const after = mod.takeSnapshot(dir);
+
+    expect(mod.changesDuring(before.status, after.status)).toEqual([]);
+    expect(statusList(after.status)).toEqual(statusList(before.status));
+  });
+
+  it('AI-12 controle: o nome comum editado de novo continua sendo atribuído, sozinho', () => {
+    const dir = dirtyRepo('export const v = 1;\n');
+    const before = mod.takeSnapshot(dir);
+    writeFileIn(dir, 'src/comum.ts', 'export const v = 2;\n');
+
+    expect(
+      mod.changesDuring(before.status, mod.takeSnapshot(dir).status),
+    ).toEqual(['src/comum.ts']);
+  });
+});
+
+// AI-03 e AI-12: o status guarda a origem de um rename ou de uma cópia. O hook de parada confere a origem junto com o
+// destino, porque um `git mv test/a.test.ts src/a.ts` deixaria só `src/a.ts` à vista e tiraria o teste do lugar.
+describe('AI-03 e AI-12 o status guarda a origem de um rename', () => {
+  const CASES: [string, (dir: string) => void][] = [
+    [
+      'git mv (R na coluna X)',
+      (dir) => git(dir, 'mv', 'src/app.ts', 'src/movido.ts'),
+    ],
+    [
+      'mv e git add -N (R na coluna Y)',
+      (dir) => {
+        renameFile(dir, 'src/app.ts', 'src/movido.ts');
+        git(dir, 'add', '-N', 'src/movido.ts');
+      },
+    ],
+  ];
+
+  it.each(CASES)(
+    'AI-03 o statusEntries guarda a origem do rename feito com %s',
+    (_label, act) => {
+      const dir = repo();
+      act(dir);
+
+      const entries = mod.statusEntries(dir);
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.path).toBe('src/movido.ts');
+      expect(entries[0]?.origin).toBe('src/app.ts');
+    },
+  );
+
+  it.each(CASES)(
+    'AI-12 o retrato grava a origem do rename feito com %s e o destino como caminho',
+    (_label, act) => {
+      const dir = repo();
+      act(dir);
+
+      const entries = statusList(mod.takeSnapshot(dir).status);
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.path).toBe('src/movido.ts');
+      expect(entries[0]?.origin).toBe('src/app.ts');
+    },
+  );
+
+  // Controle negativo: fora de um rename a origem é nula, e o arquivo comum não ganha uma origem.
+  it('AI-12 controle: um arquivo alterado e outro criado não têm origem', () => {
+    const dir = repo();
+    writeFileIn(dir, 'src/app.ts', 'export const v = 1;\n');
+    writeFileIn(dir, 'src/criado.ts', 'export {};\n');
+
+    const entries = mod.statusEntries(dir);
+
+    expect(sorted(entries.map((entry) => entry.path))).toEqual([
+      'src/app.ts',
+      'src/criado.ts',
+    ]);
+    for (const entry of entries) expect(entry.origin ?? null).toBeNull();
   });
 });
 
