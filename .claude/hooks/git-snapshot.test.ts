@@ -405,6 +405,34 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
 
     expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
   });
+
+  // A2 da Revisão 2: só a branch presa à worktree do agente no retrato do início fica fora da comparação. Se o agente
+  // troca a própria worktree para a main (livre no início) e a move, a main mudou e a comparação precisa dizer.
+  it('AI-33 o agente que troca a própria worktree para a main e faz um commit nela faz a main aparecer em refs', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '-b', 'outra');
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    git(agentRoot, 'checkout', '-q', 'main');
+    commitEmpty(agentRoot, 'move a main pela worktree do agente');
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot });
+
+    expect(changes.join('\n')).toContain('refs/heads/main');
+    expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
+  });
+
+  it('AI-33 controle: o mesmo cenário sem o checkout da main, com o commit na branch agente, não aparece', () => {
+    const dir = repo();
+    git(dir, 'checkout', '-q', '-b', 'outra');
+    const agentRoot = join(makeTempDir('wt-'), 'agente');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(agentRoot, 'commit na branch do agente');
+
+    expect(mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })).toEqual([]);
+  });
 });
 
 function sorted(paths: string[]): string[] {
