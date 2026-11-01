@@ -1,19 +1,30 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, commitEmpty, git, initRepo, makeTempDir } from '../../test/helpers/git-sandbox.ts';
+import {
+  cleanupTempDirs,
+  commitEmpty,
+  git,
+  initRepo,
+  makeTempDir,
+  writeFileIn,
+} from '../../test/helpers/git-sandbox.ts';
 
 interface Snapshot {
   head: string;
   refs: string;
   worktrees: string;
   config: string;
+  // AI-28: o `git status --porcelain=v1 --untracked-files=all` do início, com o hash do conteúdo de cada arquivo
+  // sujo no fim da linha (separado por TAB), para uma segunda edição do mesmo arquivo aparecer.
+  status: string;
 }
 
 interface SnapshotModule {
   takeSnapshot(projectDir: string): Snapshot;
+  changesDuring(beforeStatus: string, afterStatus: string): string[];
   compareSnapshots(before: Snapshot, after: Snapshot): string[];
   snapshotFile(sessionId: string, agentId: string): string;
 }
@@ -189,6 +200,129 @@ describe('AI-12 compareSnapshots devolve uma linha em português por diferença'
       expect(line).not.toMatch(/^[{[]/);
       expect(line.length).toBeGreaterThan('HEAD'.length + 5);
     }
+  });
+});
+
+function sorted(paths: string[]): string[] {
+  return [...paths].sort();
+}
+
+// O texto cru do `git status --porcelain=v1`: o contrato de entrada de changesDuring.
+describe('AI-28 changesDuring compara duas saídas do git status', () => {
+  const BEFORE = [' M src/antes.ts', '?? src/novo-antes.ts', 'D  src/some-antes.ts'].join('\n');
+
+  it('AI-28 saídas iguais não atribuem nada', () => {
+    expect(mod.changesDuring(BEFORE, BEFORE)).toEqual([]);
+    expect(mod.changesDuring('', '')).toEqual([]);
+  });
+
+  it('AI-28 uma linha que aparece é atribuída', () => {
+    expect(mod.changesDuring(BEFORE, `${BEFORE}\n M src/durante.ts\n?? src/criado.ts`).sort()).toEqual([
+      'src/criado.ts',
+      'src/durante.ts',
+    ]);
+  });
+
+  it('AI-28 uma linha que some é atribuída (o arquivo voltou ao estado do HEAD)', () => {
+    expect(mod.changesDuring(BEFORE, ' M src/antes.ts\n?? src/novo-antes.ts')).toEqual(['src/some-antes.ts']);
+  });
+
+  it('AI-28 uma linha que muda é atribuída (o arquivo foi para o índice, ou foi apagado)', () => {
+    expect(sorted(mod.changesDuring(BEFORE, 'M  src/antes.ts\n?? src/novo-antes.ts\nD  src/some-antes.ts'))).toEqual([
+      'src/antes.ts',
+    ]);
+    expect(mod.changesDuring(' M src/a.ts', ' D src/a.ts')).toEqual(['src/a.ts']);
+  });
+
+  it('AI-28 a mesma linha com outro hash de conteúdo é atribuída', () => {
+    expect(mod.changesDuring(' M src/a.ts\thash1\n M src/b.ts\thash2', ' M src/a.ts\thash9\n M src/b.ts\thash2')).toEqual([
+      'src/a.ts',
+    ]);
+  });
+
+  // Controle negativo: sem o retrato do início (a comparação contra o HEAD, que é só o status da parada), a mudança
+  // anterior ao agente é atribuída a ele.
+  it('AI-28 controle: contra o HEAD, sem o início, a mudança anterior é atribuída; com o início, não', () => {
+    const duringOnly = ' M src/antes.ts\n M src/durante.ts';
+
+    expect(sorted(mod.changesDuring('', duringOnly))).toEqual(['src/antes.ts', 'src/durante.ts']);
+    expect(mod.changesDuring(' M src/antes.ts', duringOnly)).toEqual(['src/durante.ts']);
+  });
+});
+
+// Repositório de verdade: a mudança é feita no disco, e o retrato do início e o da parada são tirados com
+// takeSnapshot, como os hooks fazem.
+describe('AI-28 changesDuring com o retrato do git de um repositório real', () => {
+  function seeded(): string {
+    const dir = repo();
+    writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 1;\n');
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 1;\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'mais arquivos');
+    return dir;
+  }
+
+  function changes(dir: string, act: () => void): string[] {
+    const before = mod.takeSnapshot(dir);
+    act();
+    return sorted(mod.changesDuring(before.status, mod.takeSnapshot(dir).status));
+  }
+
+  it('AI-28 sem nenhuma mudança entre o início e a parada, nada é atribuído', () => {
+    const dir = seeded();
+
+    expect(changes(dir, () => undefined)).toEqual([]);
+  });
+
+  it('AI-28 uma mudança feita antes do início não é atribuída ao agente', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    writeFileIn(dir, 'src/criado-antes.ts', 'export {};\n');
+
+    expect(changes(dir, () => undefined)).toEqual([]);
+  });
+
+  it('AI-28 um arquivo alterado ou criado entre o início e a parada é atribuído, em pasta nova também', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+
+    const result = changes(dir, () => {
+      writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
+      writeFileIn(dir, 'src/pasta/nova/criado.ts', 'export {};\n');
+    });
+
+    expect(result).toEqual(['src/limpo.ts', 'src/pasta/nova/criado.ts']);
+  });
+
+  it('AI-28 um arquivo rastreado apagado durante a execução é atribuído', () => {
+    const dir = seeded();
+
+    expect(changes(dir, () => rmSync(join(dir, 'src/limpo.ts')))).toEqual(['src/limpo.ts']);
+  });
+
+  it('AI-28 um arquivo já sujo no início e alterado de novo é atribuído, mesmo com a linha do status igual', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    writeFileIn(dir, 'src/criado-antes.ts', 'export const a = 1;\n');
+
+    const result = changes(dir, () => {
+      writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 3;\n');
+      writeFileIn(dir, 'src/criado-antes.ts', 'export const a = 2;\n');
+    });
+
+    expect(result).toEqual(['src/criado-antes.ts', 'src/sujo-antes.ts']);
+  });
+
+  // Controle negativo: o status da parada sozinho (contra o HEAD) atribui ao agente o que já estava sujo.
+  it('AI-28 controle: contra o HEAD, sem o retrato do início, a mudança anterior seria atribuída', () => {
+    const dir = seeded();
+    writeFileIn(dir, 'src/sujo-antes.ts', 'export const sujo = 2;\n');
+    const before = mod.takeSnapshot(dir);
+    writeFileIn(dir, 'src/limpo.ts', 'export const limpo = 2;\n');
+    const after = mod.takeSnapshot(dir);
+
+    expect(sorted(mod.changesDuring('', after.status))).toEqual(['src/limpo.ts', 'src/sujo-antes.ts']);
+    expect(mod.changesDuring(before.status, after.status)).toEqual(['src/limpo.ts']);
   });
 });
 

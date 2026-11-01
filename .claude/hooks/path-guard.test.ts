@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { cleanupTempDirs, git, initRepo, makeTempDir } from '../../test/helpers/git-sandbox.ts';
 
 const root = fileURLToPath(new URL('../..', import.meta.url)).replace(/\/$/, '');
 const hook = join(root, '.claude', 'hooks', 'path-guard.mjs');
@@ -18,11 +19,14 @@ interface HookInput {
 
 // O motivo da recusa, ou null quando a edição passa.
 let decide: (input: HookInput, projectRoot: string) => string | null;
+// A raiz contra a qual o caminho é decidido (AI-26): a da worktree do agente, ou a do projeto.
+let rootFor: (input: { cwd?: string }, projectDir: string) => string;
 
 // Import dinâmico: o hook é .mjs sem tipos, e assim o teste falha com "módulo inexistente" enquanto ele não existe.
 beforeAll(async () => {
-  const module = (await import(pathToFileURL(hook).href)) as { decide: typeof decide };
+  const module = (await import(pathToFileURL(hook).href)) as { decide: typeof decide; rootFor: typeof rootFor };
   decide = module.decide;
+  rootFor = module.rootFor;
 });
 
 function editInput(agentType: string | undefined, filePath: string): HookInput {
@@ -559,5 +563,111 @@ describe('FND-08 o hook como processo', () => {
 
     expectAllowed(edit(agentType, allowed));
     expectProcessAllowed(runHook(JSON.stringify(editInput(agentType, allowed))));
+  });
+});
+
+// AI-26: o agente em worktree edita arquivos da worktree, que fica em outra pasta (ou em .claude/worktrees/ do
+// projeto). A guarda decide pelo caminho relativo à raiz da worktree, tirada do cwd da entrada; contra a pasta
+// principal, o arquivo de código da worktree cairia em .claude/worktrees/..., que é protegido.
+describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () => {
+  let project: string;
+  let inside: string;
+  let outside: string;
+  let unrelated: string;
+
+  // Um repositório com duas worktrees, criado uma vez: os testes só leem. `inside` fica onde o Claude Code a cria
+  // (dentro do projeto); `outside` prova que a regra não depende do lugar.
+  beforeAll(() => {
+    project = makeTempDir('ai26-proj-');
+    initRepo(project);
+    inside = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', inside, '-b', 'wt-inside');
+    outside = join(makeTempDir('ai26-out-'), 'agent-2');
+    git(project, 'worktree', 'add', '-q', outside, '-b', 'wt-outside');
+    unrelated = makeTempDir('ai26-other-');
+    initRepo(unrelated);
+  });
+
+  afterAll(cleanupTempDirs);
+
+  function worktreeEdit(agentType: string, worktree: string, filePath: string): HookInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      cwd: worktree,
+      agent_type: agentType,
+      tool_input: { file_path: filePath },
+    };
+  }
+
+  it.each([
+    ['dentro do projeto', () => inside],
+    ['fora do projeto', () => outside],
+  ])('AI-26 o rootFor devolve a raiz da worktree do cwd (%s)', (_label, worktree) => {
+    expect(rootFor({ cwd: worktree() }, project)).toBe(worktree());
+    expect(rootFor({ cwd: join(worktree(), 'src') }, project)).toBe(worktree());
+  });
+
+  it('AI-26 o rootFor devolve o projectDir sem cwd e com o cwd dentro da pasta principal', () => {
+    expect(rootFor({}, project)).toBe(project);
+    expect(rootFor({ cwd: project }, project)).toBe(project);
+    expect(rootFor({ cwd: join(project, 'src') }, project)).toBe(project);
+  });
+
+  // Controle negativo: um cwd de outro repositório, ou de fora de qualquer repositório, não muda a raiz.
+  it('AI-26 o rootFor ignora um cwd que não é worktree do repositório do projeto', () => {
+    expect(rootFor({ cwd: unrelated }, project)).toBe(project);
+    expect(rootFor({ cwd: tmpdir() }, project)).toBe(project);
+  });
+
+  it.each([
+    ['dentro do projeto', () => inside],
+    ['fora do projeto', () => outside],
+  ])('AI-26 o implementer edita o código da worktree (%s)', (_label, worktree) => {
+    const dir = worktree();
+    for (const filePath of [join(dir, 'src/x.ts'), 'src/x.ts', 'migrations/store/001_x.ts']) {
+      const input = worktreeEdit('implementer', dir, filePath);
+      expectAllowed(decide(input, rootFor(input, project)));
+    }
+  });
+
+  it.each([
+    ['dentro do projeto', () => inside],
+    ['fora do projeto', () => outside],
+  ])('AI-26 o implementer não edita teste nem o que é protegido dentro da worktree (%s)', (_label, worktree) => {
+    const dir = worktree();
+    for (const relative of ['test/x.test.ts', 'src/x.test.ts', 'test/helpers/clock.ts', '.claude/hooks/x.mjs', 'AGENTS.md']) {
+      for (const filePath of [join(dir, relative), relative]) {
+        const input = worktreeEdit('implementer', dir, filePath);
+        expectDenied(decide(input, rootFor(input, project)));
+      }
+    }
+  });
+
+  it('AI-26 o test-writer edita teste e não edita código dentro da worktree', () => {
+    const allowed = worktreeEdit('test-writer', inside, join(inside, 'test/x.test.ts'));
+    const denied = worktreeEdit('test-writer', inside, join(inside, 'src/x.ts'));
+
+    expectAllowed(decide(allowed, rootFor(allowed, project)));
+    expectDenied(decide(denied, rootFor(denied, project)));
+  });
+
+  // Controle negativo: a decisão pelo caminho relativo à pasta principal nega o código da worktree.
+  it.each([
+    ['dentro do projeto, o caminho cai em .claude/worktrees/', () => inside],
+    ['fora do projeto, o caminho cai fora do repositório', () => outside],
+  ])('AI-26 controle: com a raiz da pasta principal o implementer perde o código da worktree (%s)', (_label, worktree) => {
+    const input = worktreeEdit('implementer', worktree(), join(worktree(), 'src/x.ts'));
+
+    expectDenied(decide(input, project));
+    expectAllowed(decide(input, rootFor(input, project)));
+  });
+
+  it('AI-26 o hook como processo usa a raiz da worktree: código permitido, teste negado', () => {
+    const code = worktreeEdit('implementer', inside, join(inside, 'src/x.ts'));
+    const test = worktreeEdit('implementer', inside, join(inside, 'test/x.test.ts'));
+
+    expectProcessAllowed(runHook(JSON.stringify(code), project, inside));
+    expectProcessDenied(runHook(JSON.stringify(test), project, inside));
   });
 });

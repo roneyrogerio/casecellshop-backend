@@ -21,12 +21,16 @@ interface CheckResult {
 }
 
 interface Deps {
-  runCheck(name: string): Promise<CheckResult>;
+  // O `cwd` é onde a checagem roda: a worktree do agente (AI-27).
+  runCheck(name: string, cwd?: string): Promise<CheckResult>;
   readCount(key: string): number;
   writeCount(key: string, n: number): void;
+  // Os arquivos mudados na worktree do agente (ou na pasta principal, para quem não tem worktree).
   changedFiles(): string[];
   scriptsChanged(): boolean;
   gitChanges(): string[];
+  // AI-28: o que mudou na pasta principal durante a execução do agente.
+  mainChanges(): string[];
 }
 
 interface StopInput {
@@ -34,6 +38,7 @@ interface StopInput {
   agent_id: string;
   session_id: string;
   stop_hook_active?: boolean;
+  cwd?: string;
 }
 
 interface Decision {
@@ -55,14 +60,16 @@ beforeAll(async () => {
 function makeDeps(
   failing: Record<string, string> = {},
   counts: Record<string, number> = {},
-  git: { changed?: string[]; scriptsChanged?: boolean; gitChanges?: string[] } = {},
+  git: { changed?: string[]; scriptsChanged?: boolean; gitChanges?: string[]; mainChanges?: string[] } = {},
 ) {
   const ran: string[] = [];
+  const ranIn: [string, string | undefined][] = [];
   const reads: string[] = [];
   const writes: [string, number][] = [];
   const deps: Deps = {
-    runCheck: (name) => {
+    runCheck: (name, cwd) => {
       ran.push(name);
+      ranIn.push([name, cwd]);
       const output = failing[name];
       return Promise.resolve(output === undefined ? { ok: true, output: `SAIDA-OK-${name}` } : { ok: false, output });
     },
@@ -78,8 +85,10 @@ function makeDeps(
     scriptsChanged: () => git.scriptsChanged ?? false,
     // O que mudou no HEAD, nos refs, nas worktrees e no .git/config desde o início do agente (AI-12).
     gitChanges: () => git.gitChanges ?? [],
+    // O que mudou na pasta principal durante a execução do agente (AI-28, AI-29).
+    mainChanges: () => git.mainChanges ?? [],
   };
-  return { deps, ran, reads, writes, counts };
+  return { deps, ran, ranIn, reads, writes, counts };
 }
 
 function stop(agentType: string | undefined, extra: Partial<StopInput> = {}): StopInput {
@@ -532,6 +541,180 @@ describe('AI-12 o hook de parada deixa terminar e registra a exceção quando o 
     const { deps } = makeDeps({ lint: 'erro de lint' }, {}, { gitChanges: [] });
 
     expect((await decide(stop('implementer'), deps)).action).toBe('block');
+  });
+});
+
+const WORKTREE = '/tmp/worktrees/agent-1';
+
+describe('AI-27 na parada de um agente em worktree, as checagens rodam dentro dela', () => {
+  it.each([
+    ['implementer', ['lint', 'test:changed', 'typecheck']],
+    ['test-writer', ['lint', 'typecheck']],
+  ])('AI-27 o %s roda cada checagem no cwd da worktree', async (agentType, expected) => {
+    const { deps, ranIn } = makeDeps();
+
+    await decide(stop(agentType, { cwd: WORKTREE }), deps);
+
+    expect(ranIn.map(([name]) => name).sort()).toEqual(expected);
+    for (const [, cwd] of ranIn) expect(cwd).toBe(WORKTREE);
+  });
+
+  // Controle negativo: o cwd vem da entrada de cada parada, e não de um valor fixo.
+  it('AI-27 duas worktrees diferentes rodam as checagens cada uma na sua pasta', async () => {
+    const { deps, ranIn } = makeDeps();
+
+    await decide(stop('implementer', { cwd: '/wt/um', agent_id: 'a' }), deps);
+    await decide(stop('implementer', { cwd: '/wt/dois', agent_id: 'b' }), deps);
+
+    expect(new Set(ranIn.slice(0, 3).map(([, cwd]) => cwd))).toEqual(new Set(['/wt/um']));
+    expect(new Set(ranIn.slice(3).map(([, cwd]) => cwd))).toEqual(new Set(['/wt/dois']));
+  });
+
+  it('AI-27 o implementer com arquivo fora do papel nos arquivos mudados da worktree é devolvido', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/ok.ts', 'test/helpers/clock.ts'] });
+
+    const decision = await decide(stop('implementer', { cwd: WORKTREE }), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('test/helpers/clock.ts');
+  });
+
+  it('AI-27 o test-writer com código nos arquivos mudados da worktree é devolvido', async () => {
+    const { deps } = makeDeps({}, {}, { changed: ['src/x.test.ts', 'src/app.ts'] });
+
+    const decision = await decide(stop('test-writer', { cwd: WORKTREE }), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('src/app.ts');
+  });
+
+  it.each([
+    ['implementer', ['src/app.ts', 'migrations/store/001_x.ts']],
+    ['test-writer', ['src/x.test.ts', 'test/helpers/clock.ts']],
+  ])('AI-27 o %s que só mudou arquivos do papel dele na worktree é liberado', async (agentType, changed) => {
+    const { deps } = makeDeps({}, {}, { changed });
+
+    expect((await decide(stop(agentType, { cwd: WORKTREE }), deps)).action).toBe('allow');
+  });
+
+  it('AI-27 a checagem vermelha na worktree devolve o agente com a saída dela', async () => {
+    const { deps } = makeDeps({ lint: 'wt/src/x.ts: no-unused-vars' });
+
+    const decision = await decide(stop('implementer', { cwd: WORKTREE }), deps);
+
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain('wt/src/x.ts: no-unused-vars');
+  });
+});
+
+describe('AI-28 e AI-29 o que muda na pasta principal durante a execução do agente vira exceção', () => {
+  const MAIN_CHANGES = ['src/escrito-fora.ts', 'docs/outro.md'];
+
+  it.each(['implementer', 'test-writer', 'reviewer'])(
+    'AI-28 o %s com mudança na pasta principal vira exceção, com cada caminho na mensagem',
+    async (agentType) => {
+      const { deps } = makeDeps({}, {}, { mainChanges: MAIN_CHANGES });
+
+      const decision = await decide(stop(agentType, { cwd: WORKTREE }), deps);
+
+      expect(decision.action).toBe('exception');
+      for (const file of MAIN_CHANGES) expect(decision.message).toContain(file);
+    },
+  );
+
+  it('AI-28 a exceção vale já na primeira parada, mesmo com o lint falhando', async () => {
+    const { deps } = makeDeps({ lint: 'erro de lint' }, {}, { mainChanges: MAIN_CHANGES });
+
+    const decision = await decide(stop('implementer', { cwd: WORKTREE }), deps);
+
+    expect(decision.action).toBe('exception');
+    expect(decision.message).toContain('src/escrito-fora.ts');
+  });
+
+  it('AI-29 o reviewer com uma única mudança na pasta principal vira exceção', async () => {
+    const { deps } = makeDeps({}, {}, { mainChanges: ['README.md'] });
+
+    const decision = await decide(stop('reviewer'), deps);
+
+    expect(decision.action).toBe('exception');
+    expect(decision.message).toContain('README.md');
+  });
+
+  // Controle negativo: sem mudança na pasta principal, o comportamento anterior continua.
+  it.each(['implementer', 'test-writer', 'reviewer'])(
+    'AI-28 o %s sem mudança na pasta principal e com as checagens ok é liberado',
+    async (agentType) => {
+      const { deps } = makeDeps({}, {}, { mainChanges: [] });
+
+      expect((await decide(stop(agentType, { cwd: WORKTREE }), deps)).action).toBe('allow');
+    },
+  );
+
+  it('AI-28 o implementer sem mudança na pasta principal e com o lint falhando continua sendo devolvido', async () => {
+    const { deps } = makeDeps({ lint: 'erro de lint' }, {}, { mainChanges: [] });
+
+    expect((await decide(stop('implementer', { cwd: WORKTREE }), deps)).action).toBe('block');
+  });
+});
+
+describe('AI-30 um erro interno do hook de parada devolve o agente ao trabalho com a mensagem do erro', () => {
+  const BOOM = 'quebrou-por-dentro-7f3a';
+
+  type DepName = 'changedFiles' | 'scriptsChanged' | 'gitChanges' | 'mainChanges' | 'runCheck' | 'readCount' | 'writeCount';
+
+  // Cada dependência que lança, no papel que a usa: o readCount só roda com uma checagem vermelha e o writeCount, com todas ok.
+  const BREAKABLE: [string, DepName, Record<string, string>][] = [
+    ['implementer', 'runCheck', {}],
+    ['implementer', 'changedFiles', {}],
+    ['implementer', 'scriptsChanged', {}],
+    ['implementer', 'gitChanges', {}],
+    ['implementer', 'mainChanges', {}],
+    ['implementer', 'readCount', { lint: 'erro' }],
+    ['implementer', 'writeCount', {}],
+    ['test-writer', 'runCheck', {}],
+    ['test-writer', 'changedFiles', {}],
+    ['test-writer', 'mainChanges', {}],
+    ['reviewer', 'gitChanges', {}],
+    ['reviewer', 'mainChanges', {}],
+  ];
+
+  function breaking(name: DepName, failing: Record<string, string>, mode: 'throw' | 'reject') {
+    const { deps } = makeDeps(failing);
+    const fired: string[] = [];
+    const explode = () => {
+      fired.push(name);
+      throw new Error(BOOM);
+    };
+    (deps as unknown as Record<string, unknown>)[name] =
+      mode === 'reject' ? () => Promise.reject(new Error(BOOM)).finally(() => fired.push(name)) : explode;
+    return { deps, fired };
+  }
+
+  it.each(BREAKABLE)('AI-30 o %s com %s lançando é devolvido com o erro, e não liberado', async (agentType, name, failing) => {
+    const { deps, fired } = breaking(name, failing, 'throw');
+
+    const decision = await decide(stop(agentType), deps);
+
+    expect(fired).toContain(name);
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain(BOOM);
+  });
+
+  it.each(['implementer', 'test-writer'])('AI-30 o %s com a checagem rejeitando a promessa é devolvido com o erro', async (agentType) => {
+    const { deps, fired } = breaking('runCheck', {}, 'reject');
+
+    const decision = await decide(stop(agentType, { cwd: WORKTREE }), deps);
+
+    expect(fired).toContain('runCheck');
+    expect(decision.action).toBe('block');
+    expect(decision.message).toContain(BOOM);
+  });
+
+  // Controle negativo: sem erro interno, as mesmas entradas seguem sendo liberadas.
+  it.each(['implementer', 'test-writer', 'reviewer'])('AI-30 controle: o %s sem erro interno é liberado', async (agentType) => {
+    const { deps } = makeDeps();
+
+    expect((await decide(stop(agentType), deps)).action).toBe('allow');
   });
 });
 
@@ -1072,6 +1255,74 @@ describe('AI-12 o hook de parada como processo compara o retrato do git', () => 
 
     expect(result.code).toBe(0);
     expect(systemMessageOf(result.stdout)).toBeUndefined();
+    expect(exceptionLog(sandbox)).toBeUndefined();
+  });
+});
+
+// AI-28 e AI-29 com git de verdade: o reviewer não tem worktree, então tudo que muda na pasta principal entre o
+// SubagentStart e a parada é dele; o que já estava sujo no início não é. O repositório ignora .claude/reviews/ e
+// .claude/state/ como o do projeto, porque o próprio hook grava ali.
+describe('AI-28 e AI-29 o hook de parada atribui só o que mudou durante a execução', () => {
+  function ignoringRepo(sandbox: Sandbox): void {
+    makeRepo(sandbox);
+    writeIn(sandbox, '.gitignore', '.claude/reviews/\n.claude/state/\n');
+    git(sandbox, 'add', '-A');
+    git(sandbox, 'commit', '-q', '-m', 'gitignore');
+  }
+
+  // Controle negativo: a comparação contra o HEAD atribuiria estas duas mudanças, anteriores ao agente, ao reviewer.
+  it('AI-28 uma mudança feita antes do início não é atribuída ao reviewer', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    ignoringRepo(sandbox);
+    writeIn(sandbox, 'src/app.ts', 'export const antes = 1;\n');
+    writeIn(sandbox, 'src/criado-antes.ts', 'export {};\n');
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(systemMessageOf(result.stdout)).toBeUndefined();
+    expect(exceptionLog(sandbox)).toBeUndefined();
+  });
+
+  it.each([
+    ['um arquivo criado', 'src/durante.ts', 'export {};\n'],
+    ['um arquivo rastreado alterado', 'src/app.ts', 'export const durante = 1;\n'],
+    ['um arquivo criado em pasta nova', 'docs/novo/nota.md', 'texto\n'],
+  ])('AI-29 %s durante a execução do reviewer vira exceção, com o caminho', (_label, file, content) => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    ignoringRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    writeIn(sandbox, file, content);
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain(file);
+    expect(systemMessageOf(result.stdout)).toContain(file);
+  });
+
+  it('AI-28 um arquivo já sujo no início e alterado de novo durante a execução é atribuído', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    ignoringRepo(sandbox);
+    writeIn(sandbox, 'src/app.ts', 'export const antes = 1;\n');
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    writeIn(sandbox, 'src/app.ts', 'export const durante = 2;\n');
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
+    expect(exceptionLog(sandbox)).toContain('src/app.ts');
+  });
+
+  it('AI-29 o reviewer que não mudou nada na pasta principal termina sem exceção', () => {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    ignoringRepo(sandbox);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+
+    const result = runStopOnly(sandbox, REVIEWER);
+
+    expect(result.code).toBe(0);
     expect(exceptionLog(sandbox)).toBeUndefined();
   });
 });

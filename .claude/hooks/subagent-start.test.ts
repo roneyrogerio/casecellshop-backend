@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -19,10 +19,16 @@ interface SnapshotModule {
 
 const hook = join(import.meta.dirname, 'subagent-start.mjs');
 
+type Run = (command: string, args: string[], options: { cwd: string }) => unknown;
+
 let snapshots: SnapshotModule;
+// Devolve se instalou; a instalação em si (o `run`) é injetada.
+let ensureDependencies: (dir: string, run: Run) => boolean | Promise<boolean>;
 
 beforeAll(async () => {
   snapshots = (await import(pathToFileURL(join(import.meta.dirname, 'git-snapshot.mjs')).href)) as SnapshotModule;
+  const start = (await import(pathToFileURL(hook).href)) as { ensureDependencies: typeof ensureDependencies };
+  ensureDependencies = start.ensureDependencies;
 });
 
 afterEach(cleanupTempDirs);
@@ -149,5 +155,52 @@ describe('AI-12 o hook de início grava o retrato do git do agente', () => {
     expect(result.code).not.toBe(2);
     expect(result.stderr).not.toBe('');
     expect(readdirSync(sandbox.tmp)).toEqual([]);
+  });
+});
+
+// A worktree nasce sem node_modules (a pasta é ignorada pelo git), e o agente nela não roda lint nem testes sem
+// as dependências. O `run` é um falso que registra as chamadas: nenhum npm de verdade roda aqui.
+describe('AI-25 o hook de início instala as dependências da worktree quando faltam', () => {
+  const NPM_CI = ['ci', '--no-audit', '--no-fund', '--prefer-offline'];
+
+  function recorder(onRun?: (cwd: string) => void) {
+    const calls: { command: string; args: string[]; cwd: string }[] = [];
+    const run: Run = (command, args, options) => {
+      calls.push({ command, args, cwd: options.cwd });
+      onRun?.(options.cwd);
+      return { status: 0 };
+    };
+    return { calls, run };
+  }
+
+  it('AI-25 sem node_modules roda npm ci uma vez, na pasta da worktree, e devolve true', async () => {
+    const dir = makeTempDir('ai25-');
+    const { calls, run } = recorder();
+
+    const installed = await ensureDependencies(dir, run);
+
+    expect(installed).toBe(true);
+    expect(calls).toEqual([{ command: 'npm', args: NPM_CI, cwd: dir }]);
+  });
+
+  // Controle negativo: com as dependências já instaladas, nada roda.
+  it('AI-25 com node_modules presente não roda nada e devolve false', async () => {
+    const dir = makeTempDir('ai25-');
+    mkdirSync(join(dir, 'node_modules'));
+    const { calls, run } = recorder();
+
+    const installed = await ensureDependencies(dir, run);
+
+    expect(installed).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('AI-25 depois de instalar, uma segunda chamada (retomada) não instala de novo', async () => {
+    const dir = makeTempDir('ai25-');
+    const { calls, run } = recorder((cwd) => mkdirSync(join(cwd, 'node_modules')));
+
+    expect(await ensureDependencies(dir, run)).toBe(true);
+    expect(await ensureDependencies(dir, run)).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 });
