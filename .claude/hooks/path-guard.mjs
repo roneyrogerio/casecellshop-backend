@@ -45,6 +45,13 @@ const PROTECTED_NAMES = [
   /^\.prettierrc(\..+)?$/,
   /^prettier\.config\./,
   /^\.prettierignore$/,
+  // Código sem uso e código repetido (AI-35, AI-36): a configuração e a linha de
+  // base decidem o que cada checagem enxerga.
+  /^\.?knip(\.config)?\.(jsonc?|[cm]?[jt]s)$/,
+  /^\.jscpd.*\.json$/,
+  /^\.editorconfig$/,
+  // O pnpm aceita o manifesto em YAML; outro manifesto ao lado mudaria os scripts.
+  /^package\.yaml$/,
   /^\.npmrc$/,
   /^\.nvmrc$/,
   /^\.gitignore$/,
@@ -53,11 +60,15 @@ const PROTECTED_NAMES = [
   /^agents\.md$/,
 ];
 
-function isProtected(rel) {
+function isProtectedName(rel) {
   const name = rel.slice(rel.lastIndexOf('/') + 1);
+  return PROTECTED_NAMES.some((re) => re.test(name));
+}
+
+function isProtected(rel) {
   return (
     PROTECTED_FROM_IMPLEMENTER.some((entry) => isUnder(rel, entry)) ||
-    PROTECTED_NAMES.some((re) => re.test(name))
+    isProtectedName(rel)
   );
 }
 
@@ -68,10 +79,12 @@ export function isTestFile(rel) {
 }
 
 const RULES = {
+  // Um .oxlintrc.json ou vitest.config.ts dentro de test/ mudaria como os
+  // próprios testes rodam (FND-08), então os nomes negados valem aqui também.
   'test-writer': {
-    allows: (rel) => isTestFile(rel),
+    allows: (rel) => isTestFile(rel) && !isProtectedName(rel),
     reason:
-      'O test-writer só edita testes: arquivos *.test.ts e test/ (AGENTS.md, "Guardrails").',
+      'O test-writer só edita testes: arquivos *.test.ts e test/, fora da configuração da verificação (AGENTS.md, "Guardrails").',
   },
   implementer: {
     allows: (rel) => !isTestFile(rel) && !isProtected(rel),

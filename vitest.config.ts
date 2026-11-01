@@ -24,7 +24,13 @@ export default defineConfig({
           // A varredura com ** não entra em pastas que começam com ponto, então os
           // testes dos hooks e das permissões, em .claude/, entram pelo próprio padrão.
           include: ['**/*.test.ts', '.claude/**/*.test.ts'],
-          exclude: [...configDefaults.exclude, 'test/integration/**'],
+          // As worktrees dos agentes isolados ficam em .claude/worktrees/ e
+          // repetiriam a suíte inteira, com o código de outra versão.
+          exclude: [
+            ...configDefaults.exclude,
+            'test/integration/**',
+            '.claude/worktrees/**',
+          ],
         },
       },
       {

@@ -2,8 +2,9 @@
 openapi.yaml
 src/db/types/
 package-lock.json
-# Migrações já aplicadas não mudam (AI-01).
-migrations/
+# Migrações já aplicadas não mudam (AI-01). Só a pasta da raiz: as fixtures de
+# test/fixtures/migrations/ são código de teste e entram no formato.
+/migrations/
 # O Markdown fica com o markdownlint (PR E do F2).
 *.md
 # Gravados pelos hooks e pelo Claude Code.
