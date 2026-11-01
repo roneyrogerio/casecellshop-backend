@@ -405,6 +405,218 @@ describe('AI-05 lockfileViolations confere a origem e a integridade de cada paco
   });
 });
 
+// O campo `name` de uma entrada só vale como nome real do pacote quando alguma entrada (a raiz "" inclusive) declara o
+// apelido num bloco de dependências, na forma "<chave>": "npm:<name>@<faixa>". Sem a declaração, o nome vem da chave:
+// quem grava o lockfile também grava o `name`, e o `npm ci` instala o tarball do `resolved` sob o nome da chave (o
+// node_modules/ms com o tarball do is-number sai como is-number 7.0.0).
+describe('AI-05 lockfileViolations só aceita o name da entrada quando um apelido npm: o declara', () => {
+  const STRING_WIDTH_TARBALL =
+    'https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz';
+  const ALIAS_KEY = 'node_modules/string-width-cjs';
+  const aliasEntry = {
+    name: 'string-width',
+    resolved: STRING_WIDTH_TARBALL,
+    integrity: GOOD_INTEGRITY,
+  };
+  const CLIUI_RESOLVED =
+    'https://registry.npmjs.org/@isaacs/cliui/-/cliui-8.0.2.tgz';
+
+  function cliui(
+    dependencies: Record<string, string>,
+    block = 'dependencies',
+  ): Record<string, unknown> {
+    return {
+      resolved: CLIUI_RESOLVED,
+      integrity: GOOD_INTEGRITY,
+      [block]: dependencies,
+    };
+  }
+
+  it('AI-05 o apelido real do projeto (string-width-cjs declarado por @isaacs/cliui) passa', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({
+        'string-width-cjs': 'npm:string-width@^4.2.0',
+      }),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it.each([
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ])(
+    'AI-05 o apelido declarado no bloco %s de outra entrada passa',
+    (block) => {
+      const text = lock({
+        ...ROOT,
+        'node_modules/@isaacs/cliui': cliui(
+          { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+          block,
+        ),
+        [ALIAS_KEY]: aliasEntry,
+      });
+
+      expect(lockfileViolations(text)).toEqual([]);
+    },
+  );
+
+  it('AI-05 o apelido declarado pela raiz "" passa', () => {
+    const text = lock({
+      '': {
+        name: 'x',
+        version: '0.0.0',
+        devDependencies: { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+      },
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 o apelido aninhado, declarado por uma entrada qualquer, passa (a chave é o nome depois do último node_modules/)', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/a': {
+        resolved: 'https://registry.npmjs.org/a/-/a-1.0.0.tgz',
+        integrity: GOOD_INTEGRITY,
+        dependencies: { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+      },
+      'node_modules/a/node_modules/string-width-cjs': aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 o apelido escopado ("@scope/alias" declarado como npm:@real/pkg@faixa) passa', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/a': {
+        resolved: 'https://registry.npmjs.org/a/-/a-1.0.0.tgz',
+        integrity: GOOD_INTEGRITY,
+        dependencies: { '@scope/alias': 'npm:@real/pkg@^1.0.0' },
+      },
+      'node_modules/@scope/alias': {
+        name: '@real/pkg',
+        resolved: 'https://registry.npmjs.org/@real/pkg/-/pkg-1.0.0.tgz',
+        integrity: GOOD_INTEGRITY,
+      },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  it('AI-05 controle: o name igual ao nome da chave, sem declaração de apelido, passa', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/zod': { name: 'zod', ...GOOD_ENTRY },
+    });
+
+    expect(lockfileViolations(text)).toEqual([]);
+  });
+
+  // O caso provado com o npm ci: sem a declaração, o node_modules/ms recebe o tarball do is-number.
+  it('AI-05 a entrada com o name e o tarball de outro pacote, sem declaração de apelido, reprova e cita a chave', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/ms': {
+        name: 'is-number',
+        resolved: 'https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz',
+        integrity: GOOD_INTEGRITY,
+      },
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining('node_modules/ms'),
+    ]);
+  });
+
+  it('AI-05 o apelido real sem a declaração em nenhuma entrada reprova e cita a chave', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({}),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+
+  it('AI-05 a declaração que aponta outro pacote (npm:strip-ansi@…) para uma entrada de name string-width reprova', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({
+        'string-width-cjs': 'npm:strip-ansi@^6.0.1',
+      }),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+
+  it('AI-05 a declaração de um nome que só começa igual (npm:string-width-extra@…) não vale', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({
+        'string-width-cjs': 'npm:string-width-extra@^4.2.0',
+      }),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+
+  it('AI-05 a declaração de outra chave (outro-apelido) não vale para a entrada string-width-cjs', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({
+        'outro-apelido': 'npm:string-width@^4.2.0',
+      }),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+
+  it('AI-05 a declaração com versão semver comum (sem npm:) não vale como apelido', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui({ 'string-width-cjs': '^4.2.0' }),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+
+  it('AI-05 a declaração fora de um bloco de dependências (em overrides) não vale', () => {
+    const text = lock({
+      ...ROOT,
+      'node_modules/@isaacs/cliui': cliui(
+        { 'string-width-cjs': 'npm:string-width@^4.2.0' },
+        'overrides',
+      ),
+      [ALIAS_KEY]: aliasEntry,
+    });
+
+    expect(lockfileViolations(text)).toEqual([
+      expect.stringContaining(ALIAS_KEY),
+    ]);
+  });
+});
+
 describe('AI-05 o CLI do check-lockfile lê o package-lock.json da raiz', () => {
   it('AI-05 o lockfile bom sai com 0 e o com pacote fora do registro sai com 1, citando o pacote', () => {
     const good = sandboxWithScript(FILE);

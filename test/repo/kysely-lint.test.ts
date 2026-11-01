@@ -190,6 +190,33 @@ const PLUGIN: [string, string, string][] = [
     "const k = await import('kysely');\nexport const q = k.sql`now()`;\n",
     'no-sql-alias',
   ],
+  // A6 e A7 do #27: todo import('kysely') reprova, mesmo lendo outro nome do namespace, e o namespace do
+  // import * só passa como objeto de membro não computado ou em posição de tipo; as duas chegam pelo .oxlintrc.json.
+  [
+    'import dinâmico do kysely que só lê outro nome do namespace (k.Kysely)',
+    "const k = await import('kysely');\nexport const c = k.Kysely;\n",
+    'no-sql-alias',
+  ],
+  [
+    'import dinâmico do kysely com then',
+    "export const p = import('kysely').then((k) => k.sql);\n",
+    'no-sql-alias',
+  ],
+  [
+    'import dinâmico do kysely com o sql desestruturado com o mesmo nome',
+    "const { sql } = await import('kysely');\nexport const q = sql`now()`;\n",
+    'no-sql-alias',
+  ],
+  [
+    'namespace do import * guardado em outra variável',
+    "import * as k from 'kysely';\nexport const k2 = k;\n",
+    'no-sql-alias',
+  ],
+  [
+    'namespace do import * passado como argumento',
+    "import * as k from 'kysely';\ndeclare function f(x: unknown): void;\nf(k);\n",
+    'no-sql-alias',
+  ],
 ];
 
 const QUERY_BODY =
@@ -266,9 +293,9 @@ const ACCEPTED: [string, string, string][] = [
     "import { Kysely, sql } from 'kysely';\nexport const a = sql`now()`;\nexport const b = sql.join([a, a]);\nexport const c = new Kysely<never>({} as never);\n",
   ],
   [
-    'o namespace do import dinâmico lido para outro nome que não o sql, em src/checkout',
-    'src/checkout/dynamic-ok.ts',
-    "const k = await import('kysely');\nexport const c = k.Kysely;\n",
+    'o namespace do import * lido como membro não computado e em posição de tipo, em src/checkout',
+    'src/checkout/namespace-ok.ts',
+    "import * as k from 'kysely';\nexport const c = k.Kysely;\nexport type T = k.Kysely<never>;\nexport type U = typeof k;\n",
   ],
   ['.query( do pg em src/db/', 'src/db/pool.ts', QUERY_BODY],
   ['.query( do pg em src/db/sub/', 'src/db/sub/pool.ts', QUERY_BODY],

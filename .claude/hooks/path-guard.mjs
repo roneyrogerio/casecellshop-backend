@@ -162,33 +162,64 @@ function ignoresCase(dir) {
 // "test/x.ts" são o mesmo arquivo, e a raiz também (A20 do #26); o resultado
 // vem em minúsculas, que é como as regras comparam.
 function relativeTo(root, target) {
+  return relativeFromRoot(root, realPath(joinedTarget(root, target)));
+}
+
+function joinedTarget(root, target) {
+  return path.isAbsolute(target) ? target : `${root}${path.sep}${target}`;
+}
+
+// O caminho já com o prefixo real, relativo à raiz real e na regra de caixa
+// dela; o resultado vem em minúsculas, que é como as regras comparam.
+function relativeFromRoot(root, absolute) {
   const realRoot = realPath(root);
-  const joined = path.isAbsolute(target)
-    ? target
-    : `${root}${path.sep}${target}`;
-  const realTarget = realPath(joined);
   const fold = ignoresCase(realRoot)
     ? (value) => value.toLowerCase()
     : (value) => value;
   return path
-    .relative(fold(realRoot), fold(realTarget))
+    .relative(fold(realRoot), fold(absolute))
     .split(path.sep)
     .join('/')
     .toLowerCase();
 }
 
-// O caminho como foi pedido, sem seguir link: um link com nome protegido
-// (src/.oxlintrc.json apontando para src/x.json) não passa como o arquivo que
-// ele aponta (revisão de segurança do #26). Fora da raiz, não conta.
+const isOutside = (rel) =>
+  rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
+
+// O caminho como foi pedido, sem seguir o último componente: um link com nome
+// protegido (src/.oxlintrc.json apontando para src/x.json) não passa como o
+// arquivo que ele aponta (revisão de segurança do #26). As pastas vão pelo
+// caminho real, como no relativeTo, para um pedido por um link de pasta (o /tmp
+// do macOS) ou em outra caixa não cair fora da raiz e pular a conferência do
+// nome (A13 do #27). Fora da raiz, não conta.
 function requestedRelative(root, target) {
+  const joined = joinedTarget(root, target);
+  const rel = relativeFromRoot(
+    root,
+    path.join(realPath(path.dirname(joined)), path.basename(joined)),
+  );
+  return isOutside(rel) ? null : rel;
+}
+
+// O caminho pedido só pelo texto, sem seguir link nenhum. Fora da raiz, não
+// conta.
+function textRelative(root, absolute) {
   const rel = path
-    .relative(path.resolve(root), path.resolve(root, target))
+    .relative(path.resolve(root), path.resolve(absolute))
     .split(path.sep)
     .join('/')
     .toLowerCase();
-  return rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)
-    ? null
-    : rel;
+  return isOutside(rel) ? null : rel;
+}
+
+// O caminho com o .. resolvido pelo texto e depois seguido pelas pastas reais,
+// com e sem o último componente: um link depois do .. (lnk → scripts em
+// src/deep/../../lnk/x) ou um pedido absoluto por outro prefixo da raiz não
+// escapam da leitura pelo texto (A16 da fatia 2 do #30).
+function textThenReal(root, absolute) {
+  const resolved = path.resolve(absolute);
+  const real = relativeTo(root, resolved);
+  return [isOutside(real) ? null : real, requestedRelative(root, resolved)];
 }
 
 // A decisão inteira, sem processo nem stdin: devolve o motivo da recusa, ou null
@@ -203,21 +234,37 @@ export function decide(input, root, projectDir = root) {
     return rule ? `${rule.reason} Caminho não informado.` : null;
 
   const rel = relativeTo(root, target);
-  const fromProject = projectDir
-    ? relativeTo(projectDir, path.resolve(root, target))
-    : rel;
-  if (hookOwned(rel)) return `${HOOK_OWNED_REASON} Caminho: ${rel}`;
-  if (hookOwned(fromProject))
-    return `${HOOK_OWNED_REASON} Caminho: ${fromProject}`;
+  const absolute = joinedTarget(root, target);
+  const fromProject = projectDir ? relativeTo(projectDir, absolute) : rel;
+  // O caminho pedido em duas leituras: pelas pastas reais e pelo texto, com o
+  // .. resolvido antes de qualquer link, como o path.resolve faz. Não se sabe
+  // qual delas a ferramenta usa para gravar, então as duas são conferidas
+  // (A3 da fatia 2 do #30).
+  const requested = [
+    requestedRelative(root, target),
+    textRelative(root, absolute),
+    ...textThenReal(root, absolute),
+  ].filter(Boolean);
+  const requestedFromProject = projectDir
+    ? [
+        requestedRelative(projectDir, absolute),
+        textRelative(projectDir, absolute),
+        ...textThenReal(projectDir, absolute),
+      ].filter(Boolean)
+    : [];
+  // Pelo caminho real e pelo pedido: um link dentro das pastas dos hooks para
+  // um arquivo editável gravaria o relatório que o github-guard lê (A14 do #27).
+  const owned = [rel, fromProject, ...requested, ...requestedFromProject].find(
+    (candidate) => candidate && hookOwned(candidate),
+  );
+  if (owned) return `${HOOK_OWNED_REASON} Caminho: ${owned}`;
   if (!rule) return null;
-  if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+  if (isOutside(rel)) {
     return `${rule.reason} O caminho está fora do repositório.`;
   }
   if (!rule.allows(rel)) return `${rule.reason} Caminho: ${rel}`;
-  const requested = requestedRelative(root, target);
-  return requested && !rule.allows(requested)
-    ? `${rule.reason} Caminho pedido: ${requested}`
-    : null;
+  const denied = requested.find((candidate) => !rule.allows(candidate));
+  return denied ? `${rule.reason} Caminho pedido: ${denied}` : null;
 }
 
 // AI-26: a raiz contra a qual o caminho é decidido. Para um agente isolado, é a

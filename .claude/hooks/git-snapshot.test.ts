@@ -1,4 +1,10 @@
-import { chmodSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -48,6 +54,8 @@ interface SnapshotModule {
     path: string;
     origin?: string | null;
   }[];
+  // O caminho real (AI-26): segue os links componente por componente, com um limite de links seguidos.
+  realPath(path: string): string;
 }
 
 // O status do retrato como lista. Aceita o texto JSON (o formato do critério) ou a lista já pronta.
@@ -1245,5 +1253,59 @@ describe('AI-12 snapshotFile', () => {
     const file = mod.snapshotFile('../../s', '../../../evil');
 
     expect(relative(dir, file).startsWith('..')).toBe(false);
+  });
+});
+
+// A19 do #27 (AI-26): um ciclo de links (a -> b, b -> a) ou uma cadeia além de 40 links termina e devolve um caminho,
+// em vez de laçar para sempre ou lançar. O teste do vitest acaba por tempo se o laço não terminar.
+describe('AI-26 o realPath termina com um ciclo de links e com uma cadeia além de 40 links', () => {
+  // Uma cadeia l0 -> l1 -> ... -> l<n> -> alvo, com links relativos na mesma pasta.
+  function chain(dir: string, length: number): string {
+    writeFileIn(dir, 'alvo.ts', 'export {};\n');
+    for (let index = 0; index < length; index += 1) {
+      const next = index === length - 1 ? 'alvo.ts' : `l${index + 1}`;
+      symlinkSync(next, join(dir, `l${index}`));
+    }
+    return join(dir, 'l0');
+  }
+
+  it('AI-26 o ciclo a -> b, b -> a termina e devolve um caminho', () => {
+    const dir = makeTempDir('ai26-ciclo-');
+    symlinkSync('b', join(dir, 'a'));
+    symlinkSync('a', join(dir, 'b'));
+
+    for (const requested of [join(dir, 'a'), join(dir, 'b')])
+      expect(mod.realPath(requested)).toEqual(expect.any(String));
+  });
+
+  it('AI-26 o ciclo no meio do caminho termina e devolve um caminho', () => {
+    const dir = makeTempDir('ai26-ciclo-meio-');
+    symlinkSync('b', join(dir, 'a'));
+    symlinkSync('a', join(dir, 'b'));
+
+    expect(mod.realPath(join(dir, 'a', 'x.ts'))).toEqual(expect.any(String));
+    expect(mod.realPath(join(dir, 'a', '..', 'y.ts'))).toEqual(
+      expect.any(String),
+    );
+  });
+
+  it('AI-26 um link para si mesmo termina e devolve um caminho', () => {
+    const dir = makeTempDir('ai26-auto-');
+    symlinkSync('a', join(dir, 'a'));
+
+    expect(mod.realPath(join(dir, 'a'))).toEqual(expect.any(String));
+  });
+
+  it('AI-26 uma cadeia de 45 links termina e devolve um caminho', () => {
+    const dir = makeTempDir('ai26-cadeia-longa-');
+
+    expect(mod.realPath(chain(dir, 45))).toEqual(expect.any(String));
+  });
+
+  // Controle negativo: uma cadeia curta chega ao alvo, então o limite não corta o que o sistema seguiria.
+  it('AI-26 controle: uma cadeia de 3 links resolve para o arquivo de verdade', () => {
+    const dir = makeTempDir('ai26-cadeia-curta-');
+
+    expect(mod.realPath(chain(dir, 3))).toBe(join(dir, 'alvo.ts'));
   });
 });
