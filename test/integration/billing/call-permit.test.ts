@@ -3,7 +3,7 @@ import type pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from '../../../src/db/database.ts';
 import { type CallPermit, renewCallPermit, takeCallPermit } from '../../../src/billing/call-permit.ts';
-import { createAppPool } from '../../helpers/checkout.ts';
+import { createAppPool, PATIENT_LIMITS } from '../../helpers/checkout.ts';
 import { startMigratedDatabase, type TestDatabase } from '../../helpers/database.ts';
 import { MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 
@@ -17,8 +17,11 @@ const options = { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: true };
 
 beforeAll(async () => {
   database = await startMigratedDatabase();
-  // Pool do worker de produção: 10 conexões, para as tomadas simultâneas serem de fato simultâneas.
-  pool = createAppPool(database.uri, 10);
+  // 10 conexões, como o worker de produção, para as tomadas simultâneas serem de fato simultâneas. Os limites
+  // de lock são os folgados (ver PATIENT_LIMITS): o teste prova a exclusão, não a latência da máquina. Com a
+  // CPU escassa, as UPDATEs que perdem esperam o lock da vencedora e passariam do lock_timeout de 2 s de
+  // produção (55P03). Uma exclusão quebrada aparece como mais de uma vencedora, não como timeout.
+  pool = createAppPool(database.uri, 10, PATIENT_LIMITS);
 }, 120_000);
 
 afterAll(async () => {
