@@ -128,6 +128,12 @@ export function decide(input, root) {
   return rule.allows(rel) ? null : `${rule.reason} Caminho: ${rel}`;
 }
 
+// AI-26: a raiz contra a qual o caminho é decidido; para um agente em worktree,
+// a raiz da worktree dele, tirada do cwd da entrada. Stub do PR das guardas.
+export function rootFor(_input, _projectDir) {
+  throw new Error('não implementado');
+}
+
 function main() {
   let input;
   try {

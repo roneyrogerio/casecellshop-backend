@@ -71,3 +71,9 @@ export function snapshotFile(sessionId, agentId) {
   const safe = (value) => String(value ?? '').replaceAll(/[^\w.-]/g, '_').replace(/^\.+/, '_');
   return join(tmpdir(), 'casecellshop-git-snapshot', `${safe(sessionId)}__${safe(agentId)}.json`);
 }
+
+// AI-28: o que mudou na pasta principal entre o início e a parada do agente,
+// pelo git status gravado no retrato. Stub do PR das guardas.
+export function changesDuring(_beforeStatus, _afterStatus) {
+  throw new Error('não implementado');
+}

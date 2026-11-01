@@ -8,6 +8,12 @@ import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { snapshotFile, takeSnapshot } from './git-snapshot.mjs';
 
+// AI-25: instala as dependências na worktree do agente quando faltam. Devolve
+// se instalou. Stub do PR das guardas.
+export function ensureDependencies(_dir, _run) {
+  throw new Error('não implementado');
+}
+
 function main() {
   let input;
   try {
