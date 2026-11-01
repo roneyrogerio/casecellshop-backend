@@ -691,7 +691,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-025 · Pastas por capacidade do negócio e por tecnologia de fronteira
 
-**Status:** proposta (31/10/2026)
+**Status:** aceita (31/10/2026, PR #17)
 
 **Contexto.** Até o M3, o checkout, os pedidos e a saúde tinham pasta própria, mas o faturamento ficou espalhado: `worker.ts`, `reconciliation.ts` e `runbook.ts` na raiz de `src/`, e o relay e a conclusão em `outbox/`. Os módulos usados por todo o código (relógio, configuração, logs, telemetria) também ficavam na raiz, ao lado da fábrica do app. Uma mudança no faturamento atravessava três lugares, e não havia regra de onde entram as capacidades do M4 (vitrine e sincronização). Nos testes, `test/integration/erp/` não correspondia a nenhuma área do `spec.md`, e as migrações de exemplo tinham nomes em português, contra a convenção de idioma.
 
@@ -724,7 +724,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-026 · Limites de tamanho, complexidade e dependências conferidos pelo lint
 
-**Status:** proposta (31/10/2026)
+**Status:** aceita (31/10/2026, PR #17)
 
 **Contexto.** O `.oxlintrc.json` ligava só a categoria `correctness`. Uma auditoria do código em 31/10/2026 achou, em `src/`, uma função de 257 linhas (`createWorker`), cinco funções com complexidade ciclomática entre 11 e 15, o mesmo laço de início e parada escrito três vezes, com diferenças entre as cópias, e variáveis de ambiente lidas fora do módulo de configuração. O código é escrito por agentes, e uma regra só escrita em texto não é cumprida de forma consistente: o que precisa valer sempre tem de ser conferido pela máquina (AD-012). O sentido das dependências da AD-025 também precisava de uma conferência.
 
