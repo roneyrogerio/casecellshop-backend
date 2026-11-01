@@ -73,13 +73,13 @@ export function httpMetrics(telemetry: Telemetry) {
 
 export const HTTP_LOG_EVENTS = {
   'casecellshop.http.request.completed': {
-    level: 'info',
+    levels: ['info', 'error'],
     description:
-      'Fim de uma requisição HTTP; sai como `error` quando o status é 5xx.',
+      'Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta.',
     fields: ['route', 'method', 'status', 'duration_ms', 'orderId'],
   },
   'casecellshop.http.request.failed': {
-    level: 'error',
+    levels: ['error'],
     description: 'Erro sem tratamento numa rota; a resposta é o 500 genérico.',
     fields: ['err'],
   },

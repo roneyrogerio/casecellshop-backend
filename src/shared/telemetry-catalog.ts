@@ -44,7 +44,8 @@ export interface MetricSpec {
 export type LogLevel = 'info' | 'warn' | 'error';
 
 export interface LogEventSpec {
-  readonly level: LogLevel;
+  // Os níveis em que o evento sai; quase todos têm um só, e o logger tipado só aceita esses.
+  readonly levels: readonly [LogLevel, ...LogLevel[]];
   readonly description: string;
   // Os campos próprios do evento, além dos que todo log leva (service, env, version, correlationId,
   // trace_id, span_id, trace_flags). `err` é o erro serializado pelo pino.

@@ -168,23 +168,23 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
 // OBS-07 (AD-029): os eventos do encerramento do processo (lifecycle.ts), a telemetria declarada por esta pasta.
 export const PROCESS_LOG_EVENTS = {
   'casecellshop.process.shutdown.started': {
-    level: 'info',
+    levels: ['info'],
     description: 'O processo recebeu o sinal e começou a encerrar.',
     fields: ['signal'],
   },
   'casecellshop.process.shutdown.completed': {
-    level: 'info',
+    levels: ['info'],
     description: 'O processo encerrou no prazo.',
     fields: [],
   },
   'casecellshop.process.shutdown.timed_out': {
-    level: 'error',
+    levels: ['error'],
     description:
       'O encerramento passou do prazo e o processo saiu com código 1.',
     fields: [],
   },
   'casecellshop.process.shutdown.failed': {
-    level: 'error',
+    levels: ['error'],
     description: 'O encerramento falhou.',
     fields: ['err'],
   },

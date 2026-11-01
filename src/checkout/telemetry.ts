@@ -34,22 +34,22 @@ export function checkoutMetrics(telemetry: Telemetry) {
 
 export const CHECKOUT_LOG_EVENTS = {
   'casecellshop.checkout.accepted': {
-    level: 'info',
+    levels: ['info'],
     description: 'Checkout aceito, com o pedido criado.',
     fields: ['orderId'],
   },
   'casecellshop.checkout.rejected': {
-    level: 'warn',
+    levels: ['warn'],
     description: 'Checkout recusado; `reason` é o tipo do problem.',
     fields: ['reason'],
   },
   'casecellshop.checkout.price_changed': {
-    level: 'warn',
+    levels: ['warn'],
     description: 'Checkout recusado porque o preço informado mudou.',
     fields: ['reason', 'items'],
   },
   'casecellshop.checkout.db.unavailable': {
-    level: 'warn',
+    levels: ['warn'],
     description: 'O banco não respondeu no checkout; a resposta é 503.',
     fields: ['err', 'step'],
   },

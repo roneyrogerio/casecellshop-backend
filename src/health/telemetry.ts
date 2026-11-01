@@ -3,7 +3,7 @@ import type { LogEventSpec } from '../shared/telemetry-catalog.ts';
 
 export const HEALTH_LOG_EVENTS = {
   'casecellshop.health.db.unavailable': {
-    level: 'warn',
+    levels: ['warn'],
     description: 'O banco não respondeu ao /health.',
     fields: ['err'],
   },

@@ -3,17 +3,17 @@ import type { LogEventSpec } from '../shared/telemetry-catalog.ts';
 
 export const MAIN_LOG_EVENTS = {
   'casecellshop.api.started': {
-    level: 'info',
+    levels: ['info'],
     description: 'A API começou a escutar.',
     fields: ['port'],
   },
   'casecellshop.migration.completed': {
-    level: 'info',
+    levels: ['info'],
     description: 'As migrações dos dois schemas terminaram.',
     fields: [],
   },
   'casecellshop.worker.metrics_server.started': {
-    level: 'info',
+    levels: ['info'],
     description: 'O servidor do /metrics do worker começou a escutar.',
     fields: ['port'],
   },
