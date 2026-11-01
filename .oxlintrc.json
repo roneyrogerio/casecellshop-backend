@@ -76,7 +76,16 @@
     "unicorn/prefer-structured-clone": "error",
     "unicorn/prefer-at": "error",
     "eslint/no-var": "error",
-    "eslint/prefer-const": "error"
+    "eslint/prefer-const": "error",
+    "vitest/valid-title": [
+      "error",
+      {
+        "mustMatch": {
+          "it": "^[A-Z]+(-[A-Z]+)*-\\d+( |$)",
+          "test": "^[A-Z]+(-[A-Z]+)*-\\d+( |$)"
+        }
+      }
+    ]
   },
   "overrides": [
     {

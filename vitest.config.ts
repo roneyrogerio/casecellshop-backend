@@ -4,6 +4,16 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // para que as pastas rodem isoladas e em qualquer ordem.
 export default defineConfig({
   test: {
+    // AI-37: só vale com --coverage, que o CI passa na perna do .nvmrc. Os
+    // processos de src/main/ rodam em outro processo ou no compose, fora da
+    // medição em processo. O piso é o medido ao criar a checagem, arredondado
+    // para baixo, e só sobe.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/db/types/**', 'src/main/**'],
+      thresholds: { lines: 1, functions: 1, branches: 1, statements: 1 },
+    },
     projects: [
       {
         test: {

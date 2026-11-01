@@ -1,0 +1,19 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/main/*.ts",
+    "scripts/*.ts",
+    "scripts/lint-rules/*.ts",
+    ".claude/hooks/*.mjs",
+    "migrations/**/*.ts",
+    "test/fixtures/**"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    ".claude/hooks/**/*.mjs",
+    "test/**/*.ts"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": ["secret-tool"]
+}

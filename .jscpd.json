@@ -1,0 +1,6 @@
+{
+  "path": ["src", "scripts", ".claude/hooks", "test"],
+  "format": ["typescript", "javascript"],
+  "ignore": ["**/node_modules/**", "src/db/types/**", "test/fixtures/**"],
+  "reporters": ["console"]
+}
