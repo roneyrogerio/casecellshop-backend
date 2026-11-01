@@ -56,30 +56,41 @@ function matchedRouteOf(res: Response): string | undefined {
     : undefined;
 }
 
-// Atributos da convenção do OpenTelemetry: o `error.type` só na resposta 5xx e o `http.route` só quando a
-// requisição casou com uma rota; o status entra sempre, porque o servidor sempre envia um.
+// Só há status a gravar se a resposta foi enviada: o cliente que desconecta antes dela deixa o
+// `res.statusCode` no 200 padrão do Node, e a convenção pede o status "if and only if" um foi enviado.
+function sentStatusOf(res: Response): number | undefined {
+  return res.headersSent ? res.statusCode : undefined;
+}
+
+// Atributos da convenção do OpenTelemetry: o `http.response.status_code` e o `error.type` (resposta 5xx)
+// só com resposta enviada, e o `http.route` só quando a requisição casou com uma rota.
 // O tipo anotado faz o texto do status valer como `${number}`, o que a declaração do atributo aceita.
 // O span e a métrica partem desta mesma função, para os valores comuns não divergirem.
 function commonAttributes(req: Request, res: Response) {
-  const status = res.statusCode;
+  const status = sentStatusOf(res);
   const matchedRoute = matchedRouteOf(res);
   const errorType: { [ATTR_ERROR_TYPE]?: `${number}` } =
-    status >= 500 ? { [ATTR_ERROR_TYPE]: `${status}` } : {};
+    status !== undefined && status >= 500
+      ? { [ATTR_ERROR_TYPE]: `${status}` }
+      : {};
   return {
     [ATTR_HTTP_REQUEST_METHOD]: methodAttribute(req.method),
     ...(matchedRoute === undefined ? {} : { [ATTR_HTTP_ROUTE]: matchedRoute }),
-    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
+    ...(status === undefined
+      ? {}
+      : { [ATTR_HTTP_RESPONSE_STATUS_CODE]: status }),
     [ATTR_URL_SCHEME]: req.secure ? 'https' : 'http',
     ...errorType,
   } as const;
 }
 
-// Nome do span pela convenção: `{method} {route}`, só `{method}` sem rota e `HTTP` quando o método vira `_OTHER`.
+// Nome do span pela convenção, `{method} {target}`: o método fora da lista (`_OTHER`) vira `HTTP`,
+// e o nome mantém a rota quando a requisição casou com uma.
 function spanNameOf(req: Request, res: Response): string {
   const method = methodAttribute(req.method);
-  if (method === '_OTHER') return 'HTTP';
+  const name = method === '_OTHER' ? 'HTTP' : method;
   const matchedRoute = matchedRouteOf(res);
-  return matchedRoute === undefined ? method : `${method} ${matchedRoute}`;
+  return matchedRoute === undefined ? name : `${name} ${matchedRoute}`;
 }
 
 // O método original só é gravado quando o enviado difere do normalizado.
@@ -92,7 +103,11 @@ function applyHttpSpan(span: Span, req: Request, res: Response): void {
       ? {}
       : { [ATTR_HTTP_REQUEST_METHOD_ORIGINAL]: req.method }),
   });
-  if (res.statusCode >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
+  // Mesma condição do `error.type`: sem resposta enviada não há 5xx a marcar.
+  const status = sentStatusOf(res);
+  if (status !== undefined && status >= 500) {
+    span.setStatus({ code: SpanStatusCode.ERROR });
+  }
 }
 
 // Fecha o span, mede a duração e registra o log da requisição.
