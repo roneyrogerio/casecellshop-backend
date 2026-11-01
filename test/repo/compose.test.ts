@@ -169,9 +169,11 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
       ).toContain(name);
   });
 
-  it('FND-01 o elasticmq.conf do repositório define as duas filas e o compose o monta no elasticmq', () => {
-    const configPath = join(root, 'elasticmq.conf');
+  it('FND-01 o elasticmq.conf fica em docker/elasticmq/, define as duas filas e o compose o monta no elasticmq', () => {
+    const configPath = join(root, 'docker', 'elasticmq', 'elasticmq.conf');
     expect(existsSync(configPath)).toBe(true);
+    // O caminho antigo, na raiz, deixa de existir: dois arquivos de configuração divergiriam.
+    expect(existsSync(join(root, 'elasticmq.conf'))).toBe(false);
     const config = readFileSync(configPath, 'utf8');
     expect(config).toContain('billing-dlq');
     expect(config).toMatch(/\bbilling\b/);
@@ -179,8 +181,13 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
     const mounts = (elasticmq?.volumes ?? []).filter(
       (volume): volume is string => typeof volume === 'string',
     );
+    expect(
+      mounts.some((mount) =>
+        mount.startsWith('./docker/elasticmq/elasticmq.conf:'),
+      ),
+    ).toBe(true);
     expect(mounts.some((mount) => mount.startsWith('./elasticmq.conf:'))).toBe(
-      true,
+      false,
     );
   });
 

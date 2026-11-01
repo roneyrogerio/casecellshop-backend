@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -19,10 +19,15 @@ const hook = join(root, '.claude', 'hooks', 'format-edited.mjs');
 
 // O hook decide pelo nome da ferramenta e pelo `file_path` (AI-34); a tabela inteira roda dentro do processo.
 let targetToFormat: (input: unknown) => string | null;
+// Os argumentos do Prettier para um arquivo: o caminho vai depois de `--`, para um nome que começa com `-` não virar opção.
+let prettierArgs: (file: string) => string[];
 
 beforeAll(async () => {
-  ({ targetToFormat } = (await import(pathToFileURL(hook).href)) as {
+  ({ targetToFormat, prettierArgs } = (await import(
+    pathToFileURL(hook).href
+  )) as {
     targetToFormat: typeof targetToFormat;
+    prettierArgs: typeof prettierArgs;
   });
 });
 
@@ -155,6 +160,101 @@ describe('AI-34 o hook como processo (stdin, arquivo, código de saída)', () =>
 
     expect(readFileSync(broken, 'utf8')).toBe('const = ;;{\n');
     expect(readFileSync(good, 'utf8')).toBe(FORMATTED);
+  });
+});
+
+describe('AI-34 o hook passa -- antes do caminho', () => {
+  it.each(['/repo/src/app.ts', '/repo/--version.ts', '/repo/-w.ts'])(
+    'AI-34 os argumentos para %s terminam em -- e no caminho, depois das opções',
+    (file) => {
+      const args = prettierArgs(file);
+
+      expect(args.slice(-2)).toEqual(['--', file]);
+      expect(args).toContain('--write');
+      expect(args).toContain('--ignore-unknown');
+      expect(args.indexOf('--write')).toBeLessThan(args.indexOf('--'));
+      expect(args.indexOf('--ignore-unknown')).toBeLessThan(args.indexOf('--'));
+    },
+  );
+});
+
+// Um projeto temporário com o Prettier ligado, como o repositório real.
+function makeProject(project: string = makeTempDir('ai34-project-')): string {
+  mkdirSync(project, { recursive: true });
+  initRepo(project);
+  writeFileIn(project, '.prettierrc.json', '{}\n');
+  symlinkSync(join(root, 'node_modules'), join(project, 'node_modules'));
+  return project;
+}
+
+describe('AI-34 o hook só formata um caminho absoluto dentro de CLAUDE_PROJECT_DIR', () => {
+  it('AI-34 controle: um arquivo cujo nome começa com -- dentro do projeto é formatado, e não lido como opção', () => {
+    const project = makeProject();
+    const file = join(project, '--version.ts');
+    writeFileSync(file, MESSY);
+
+    expect(runHook(edited('Write', file), project).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(FORMATTED);
+  });
+
+  it('AI-34 um caminho absoluto fora do projeto não é formatado, mesmo num repositório com .prettierrc e node_modules', () => {
+    const project = makeProject();
+    const outside = makeProject();
+    const file = join(outside, 'src', 'fora.ts');
+    writeFileIn(outside, 'src/fora.ts', MESSY);
+
+    expect(runHook(edited('Edit', file), project).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(MESSY);
+  });
+
+  it('AI-34 um caminho absoluto fora do projeto, noutro lugar da pasta temporária, não é formatado', () => {
+    const project = makeProject();
+    const file = join(makeTempDir('ai34-solto-'), 'solto.ts');
+    writeFileSync(file, MESSY);
+
+    expect(runHook(edited('Write', file), project).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(MESSY);
+  });
+
+  it('AI-34 uma pasta irmã com o mesmo prefixo do projeto não conta como dentro dele', () => {
+    const parent = makeTempDir('ai34-pai-');
+    const project = makeProject(join(parent, 'app'));
+    const sibling = makeProject(join(parent, 'app-outro'));
+    const file = join(sibling, 'src', 'irmao.ts');
+    writeFileIn(sibling, 'src/irmao.ts', MESSY);
+
+    expect(runHook(edited('Edit', file), project).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(MESSY);
+  });
+
+  it('AI-34 um caminho absoluto com .. que sai do projeto não é formatado', () => {
+    const project = makeProject();
+    const outside = makeProject();
+    const file = join(outside, 'src', 'fora.ts');
+    writeFileIn(outside, 'src/fora.ts', MESSY);
+
+    expect(
+      runHook(
+        edited('Edit', `${project}/src/../../${basename(outside)}/src/fora.ts`),
+        project,
+      ).code,
+    ).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(MESSY);
+  });
+
+  it('AI-34 um caminho relativo não é formatado, mesmo apontando para um arquivo do projeto', () => {
+    const project = makeProject();
+    const file = join(project, 'src', 'rel.ts');
+    writeFileIn(project, 'src/rel.ts', MESSY);
+
+    expect(runHook(edited('Edit', 'src/rel.ts'), project).code).toBe(0);
+
+    expect(readFileSync(file, 'utf8')).toBe(MESSY);
   });
 });
 

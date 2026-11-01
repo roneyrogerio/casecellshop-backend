@@ -212,6 +212,36 @@ describe('FND-08 guarda de caminho do test-writer', () => {
     },
   );
 
+  // Mesmo dentro de test/, a configuração que o AI-04 nega pelo nome também é negada ao test-writer.
+  it.each([
+    'test/prettier.config.mjs',
+    'test/.oxlintrc.json',
+    'test/vitest.config.ts',
+    'test/knip.json',
+    'test/.editorconfig',
+    'src/vitest.config.ts',
+  ])(
+    'FND-08 o test-writer não pode editar a configuração da verificação %s',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectDenied(edit('test-writer', variant));
+    },
+  );
+
+  it.each([
+    'test/repo/x.test.ts',
+    'test/helpers/x.ts',
+    'src/x.test.ts',
+    '.claude/hooks/x.test.ts',
+    'test/fixtures/migrations/a/1_x.ts',
+  ])(
+    'FND-08 o test-writer continua podendo editar %s, que não é configuração',
+    (path) => {
+      for (const [, variant] of variants(path))
+        expectAllowed(edit('test-writer', variant));
+    },
+  );
+
   it.each([
     ['absoluto fora do repositório', '/etc/hosts'],
     ['*.test.ts absoluto fora do repositório', '/etc/fora.test.ts'],
@@ -292,6 +322,11 @@ const IMPLEMENTER_VERIFICATION_CONFIG = [
   '.prettierignore',
   '.npmrc',
   '.claude/settings.json',
+  'knip.json',
+  '.jscpd.json',
+  '.jscpd-baseline.json',
+  '.editorconfig',
+  'package.yaml',
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer o que configura a verificação', () => {
@@ -355,6 +390,9 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   'src/CLAUDE.local.md',
   'CLAUDE.local.md',
   'src/x/AGENTS.md',
+  'src/.editorconfig',
+  'src/package.yaml',
+  'src/knip.json',
 ];
 
 describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome, em qualquer pasta', () => {
@@ -402,6 +440,7 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
     'src/db/codegen.ts',
     'src/kysely-codegen/index.ts',
     'src/shared/prettier-like.ts',
+    'src/shared/knip-like.ts',
   ])('AI-04 o implementer continua podendo editar %s', (path) => {
     for (const [, variant] of variants(path))
       expectAllowed(edit('implementer', variant));

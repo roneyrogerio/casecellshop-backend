@@ -32,12 +32,7 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
     expect(config).not.toHaveProperty('printWidth');
   });
 
-  const IGNORED = [
-    'openapi.yaml',
-    'src/db/types/',
-    'package-lock.json',
-    'migrations/',
-  ];
+  const IGNORED = ['openapi.yaml', 'src/db/types/', 'package-lock.json'];
 
   it.each(IGNORED)('AI-34 o .prettierignore lista %s', (entry) => {
     const lines = readText('.prettierignore')
@@ -45,6 +40,48 @@ describe('AI-34 o .prettierrc.json e o .prettierignore', () => {
       .map((line) => line.trim().replace(/^\//, '').replace(/\/$/, ''));
 
     expect(lines).toContain(entry.replace(/\/$/, ''));
+  });
+
+  // Só a pasta da raiz: sem a barra no início, o padrão casaria também test/fixtures/migrations/, que é formatada.
+  it('AI-34 o .prettierignore lista /migrations/, com a barra no início, e não migrations/ sem ela', () => {
+    const lines = readText('.prettierignore')
+      .split('\n')
+      .map((line) => line.trim());
+
+    expect(lines).toContain('/migrations/');
+    expect(lines).not.toContain('migrations/');
+  });
+
+  it('AI-34 o Prettier não ignora as fixtures de migração de test/fixtures/migrations/', async () => {
+    const info = await getFileInfo(
+      join(root, 'test/fixtures/migrations/basic/20260101000000_create_a.ts'),
+      { ignorePath: join(root, '.prettierignore') },
+    );
+
+    expect(info.ignored).toBe(false);
+  });
+
+  // Sem o .prettierignore (--ignore-path vazio): um arquivo ignorado passaria em silêncio, e aqui o que se prova é o formato.
+  it('AI-34 os arquivos de test/fixtures/migrations/ passam no prettier --check', () => {
+    const result = spawnSync(
+      prettierBin,
+      [
+        '--check',
+        '--ignore-unknown',
+        '--ignore-path',
+        '/dev/null',
+        'test/fixtures/migrations',
+      ],
+      { cwd: root, encoding: 'utf8' },
+    );
+
+    expect(`${result.stdout}${result.stderr}`).not.toContain(
+      'Code style issues',
+    );
+    expect(result.stdout + result.stderr).toContain(
+      'All matched files use Prettier code style',
+    );
+    expect(result.status).toBe(0);
   });
 
   it('AI-34 o .prettierignore lista o Markdown (*.md)', () => {
