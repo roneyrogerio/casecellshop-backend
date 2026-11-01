@@ -7,10 +7,11 @@ import {
   writeFileIn,
 } from '../test/helpers/git-sandbox.ts';
 import { repoRoot } from '../test/helpers/repo-root.ts';
-import { runNode } from '../test/helpers/run-node.ts';
+import type { NodeRun } from '../test/helpers/run-node.ts';
 import {
   exportedFn,
   loadScript,
+  runScript,
   sandboxWithScript,
   type ScriptModule,
 } from '../test/helpers/script-module.ts';
@@ -551,7 +552,7 @@ describe('AI-49 baselineViolations reprova a repetição que entrou na linha de 
 interface Sandbox {
   dir: string;
   // Roda o CLI com a base `main` (ou a ref dada) e os argumentos dados.
-  run: (args?: string[], ref?: string) => ReturnType<typeof runNode>;
+  run: (args?: string[], ref?: string) => NodeRun;
   // Grava o relatório do Vitest na pasta temporária e devolve o caminho dele.
   report: (text: string) => string;
 }
@@ -580,19 +581,9 @@ function prSandbox(options: {
   git(dir, 'commit', '-q', '--allow-empty', '-m', 'pr');
   return {
     dir,
+    // O runScript tira as variáveis GIT_ da máquina, que desviariam o `git show` do repositório temporário.
     run: (args = [], ref = 'main') =>
-      runNode(join('scripts', FILE), args, {
-        cwd: dir,
-        // Sem as variáveis do git da máquina, que desviariam o `git show` do repositório temporário.
-        env: {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter(
-              ([name]) => !name.startsWith('GIT_'),
-            ),
-          ),
-          BASE_REF: ref,
-        },
-      }),
+      runScript(dir, FILE, { BASE_REF: ref }, args),
     report: (text) => {
       writeFileIn(dir, 'out/coverage-summary.json', text);
       return join(dir, 'out', 'coverage-summary.json');
