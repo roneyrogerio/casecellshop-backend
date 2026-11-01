@@ -141,9 +141,10 @@ export const BILLING_LOG_EVENTS = {
     description: 'A tentativa falhou com um erro inesperado.',
     fields: ['err'],
   },
-  'casecellshop.outbox.dead_lettered': {
+  'casecellshop.outbox.dead': {
     level: 'error',
-    description: 'A mensagem chegou à DLQ e o pedido foi encerrado como falha.',
+    description:
+      'A mensagem chegou à DLQ; o pedido segue pendente com a reserva, à espera do runbook.',
     fields: [],
   },
   'casecellshop.outbox.reconciliation.completed': {

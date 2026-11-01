@@ -48,6 +48,34 @@ interface ConcludedRequest {
   startedAt: bigint;
 }
 
+function matchedRouteOf(res: Response): string | undefined {
+  return typeof res.locals['route'] === 'string'
+    ? res.locals['route']
+    : undefined;
+}
+
+// Atributos da convenção do OpenTelemetry: o `error.type` só na resposta 5xx e o `http.route` só quando a
+// requisição casou com uma rota; o status entra sempre, porque o servidor sempre envia um.
+// O tipo anotado faz o texto do status valer como `${number}`, o que a declaração do atributo aceita.
+function recordDuration(
+  telemetry: Telemetry,
+  req: Request,
+  res: Response,
+  seconds: number,
+): void {
+  const status = res.statusCode;
+  const matchedRoute = matchedRouteOf(res);
+  const errorType: { [ATTR_ERROR_TYPE]?: `${number}` } =
+    status >= 500 ? { [ATTR_ERROR_TYPE]: `${status}` } : {};
+  httpMetrics(telemetry).record(METRIC_HTTP_SERVER_REQUEST_DURATION, seconds, {
+    [ATTR_HTTP_REQUEST_METHOD]: methodAttribute(req.method),
+    ...(matchedRoute === undefined ? {} : { [ATTR_HTTP_ROUTE]: matchedRoute }),
+    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
+    [ATTR_URL_SCHEME]: req.secure ? 'https' : 'http',
+    ...errorType,
+  });
+}
+
 // Fecha o span, mede a duração e registra o log da requisição.
 function concludeRequest({
   telemetry,
@@ -58,8 +86,8 @@ function concludeRequest({
   correlationId,
   startedAt,
 }: ConcludedRequest): void {
-  const route =
-    typeof res.locals['route'] === 'string' ? res.locals['route'] : 'unmatched';
+  // O log e o span seguem com `unmatched`; só a métrica omite a chave sem rota, como a convenção manda.
+  const route = matchedRouteOf(res) ?? 'unmatched';
   const status = res.statusCode;
   const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
 
@@ -73,17 +101,7 @@ function concludeRequest({
   const spanContext = span.spanContext();
   span.end();
 
-  // Atributos da convenção do OpenTelemetry; o `error.type` só na resposta 5xx, como pede a convenção.
-  // O tipo anotado faz o texto do status valer como `${number}`, o que a declaração do atributo aceita.
-  const errorType: { [ATTR_ERROR_TYPE]?: `${number}` } =
-    status >= 500 ? { [ATTR_ERROR_TYPE]: `${status}` } : {};
-  httpMetrics(telemetry).record(METRIC_HTTP_SERVER_REQUEST_DURATION, seconds, {
-    [ATTR_HTTP_REQUEST_METHOD]: methodAttribute(req.method),
-    [ATTR_HTTP_ROUTE]: route,
-    [ATTR_HTTP_RESPONSE_STATUS_CODE]: status,
-    [ATTR_URL_SCHEME]: req.secure ? 'https' : 'http',
-    ...errorType,
-  });
+  recordDuration(telemetry, req, res, seconds);
   // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
   // O orderId entra só quando o handler o gravou (pedido existente).
   const orderId =

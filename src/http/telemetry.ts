@@ -42,13 +42,14 @@ export const HTTP_METRICS = {
         values: { kind: 'enum', values: HTTP_METHODS },
       },
       [ATTR_HTTP_ROUTE]: {
-        description: 'Template da rota do contrato, ou `unmatched`.',
-        requirement: 'required',
+        description:
+          'Template da rota do contrato; ausente quando a requisição não casou com nenhuma rota.',
+        requirement: 'conditionally_required',
         values: { kind: 'http_route' },
       },
       [ATTR_HTTP_RESPONSE_STATUS_CODE]: {
         description: 'Código de status da resposta.',
-        requirement: 'required',
+        requirement: 'conditionally_required',
         values: { kind: 'http_status_code' },
       },
       [ATTR_URL_SCHEME]: {

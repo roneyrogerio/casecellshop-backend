@@ -12,7 +12,7 @@ import {
 // das regras de nome, sem nenhum nome de negócio (AD-025). scripts/telemetry-catalog.ts junta as declarações para
 // a documentação e para os testes.
 // Os valores que um atributo aceita. A lista fechada (`values`) é a regra; o código de status HTTP (inteiro
-// de 100 a 599) e a rota (o template da rota do contrato, ou `unmatched`) têm cardinalidade limitada pela
+// de 100 a 599) e a rota (o template da rota do contrato, ausente sem match) têm cardinalidade limitada pela
 // própria forma, e não por uma lista.
 export type AttributeValues =
   | { readonly kind: 'enum'; readonly values: readonly string[] }
@@ -56,8 +56,25 @@ const SEGMENT = '[a-z][a-z0-9]*(?:_[a-z0-9]+)*';
 const OWN_NAME = new RegExp(`^casecellshop(?:\\.${SEGMENT})+$`);
 const EVENT_NAME = new RegExp(`^casecellshop(?:\\.${SEGMENT}){2,}$`);
 const SNAKE_CASE = new RegExp(`^${SEGMENT}$`);
-// A unidade vai no `unit`, nunca no nome; `total` é do exportador, que o acrescenta aos contadores.
-const REDUNDANT_SUFFIX = /(?:^|[._])(?:total|seconds|milliseconds|ms|bytes)$/;
+// A unidade vai no `unit`, nunca no nome, em qualquer palavra; `total` é do exportador, que o acrescenta aos
+// contadores, e só vale como última palavra.
+const UNIT_WORDS = new Set<string>([
+  ...'s ms us ns kb mb gb kib mib gib percent'.split(' '),
+  ...'second millisecond microsecond nanosecond minute hour day byte bit'.split(
+    ' ',
+  ),
+  ...'seconds milliseconds microseconds nanoseconds minutes hours days bytes bits'.split(
+    ' ',
+  ),
+]);
+
+function redundantWord(name: string): string | undefined {
+  const words = name.split(/[._]/);
+  return (
+    words.find((word) => UNIT_WORDS.has(word)) ??
+    (words.at(-1) === 'total' ? 'total' : undefined)
+  );
+}
 // A convenção do OpenTelemetry tem nomes próprios, sem o prefixo: só estes escapam da regra do prefixo.
 const CONVENTION_METRICS = new Set<string>([
   METRIC_HTTP_SERVER_REQUEST_DURATION,
@@ -138,9 +155,10 @@ function metricViolations(metric: string, spec: MetricSpec): string[] {
     violations.push(
       `a métrica ${metric} não segue o padrão casecellshop.<namespace>.<nome> em snake_case`,
     );
-  if (REDUNDANT_SUFFIX.test(metric))
+  const redundant = redundantWord(metric);
+  if (redundant !== undefined)
     violations.push(
-      `a métrica ${metric} traz a unidade ou o sufixo total no nome`,
+      `a métrica ${metric} traz a unidade ou o sufixo total no nome (palavra "${redundant}")`,
     );
   if (!spec.unit) violations.push(`a métrica ${metric} não tem unidade`);
   if (spec.instrument === 'histogram' && spec.unit !== 's')
