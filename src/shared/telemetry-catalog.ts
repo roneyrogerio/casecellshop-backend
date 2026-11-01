@@ -19,8 +19,13 @@ export type AttributeValues =
   | { readonly kind: 'http_status_code' }
   | { readonly kind: 'http_route' };
 
+// O nível de exigência do atributo, pela convenção do OpenTelemetry: o `required` vai em toda gravação; o
+// `conditionally_required` só quando a condição da descrição vale (o `error.type` só quando houve erro).
+export type AttributeRequirement = 'required' | 'conditionally_required';
+
 export interface AttributeSpec {
   readonly description: string;
+  readonly requirement: AttributeRequirement;
   readonly values: AttributeValues;
 }
 

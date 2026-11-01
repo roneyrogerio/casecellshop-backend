@@ -20,6 +20,7 @@ export const CHECKOUT_METRICS = {
     attributes: {
       'casecellshop.checkout.outcome': {
         description: 'Desfecho do checkout.',
+        requirement: 'required',
         values: { kind: 'enum', values: CHECKOUT_OUTCOMES },
       },
     },

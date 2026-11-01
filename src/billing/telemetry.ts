@@ -22,6 +22,7 @@ export const BILLING_METRICS = {
     attributes: {
       'casecellshop.outbox.attempt.outcome': {
         description: 'Desfecho da tentativa.',
+        requirement: 'required',
         values: { kind: 'enum', values: ATTEMPT_OUTCOMES },
       },
     },

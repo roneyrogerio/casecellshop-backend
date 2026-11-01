@@ -29,10 +29,12 @@ export const ERP_METRICS = {
     attributes: {
       'casecellshop.erp.operation': {
         description: 'Operação da porta ErpClient.',
+        requirement: 'required',
         values: { kind: 'enum', values: ERP_OPERATIONS },
       },
       'casecellshop.erp.outcome': {
         description: 'Desfecho da chamada, pela lista fechada da porta.',
+        requirement: 'required',
         values: { kind: 'enum', values: ERP_OUTCOMES },
       },
     },

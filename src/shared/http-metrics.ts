@@ -37,22 +37,27 @@ export const HTTP_SERVER_METRICS = {
     attributes: {
       [ATTR_HTTP_REQUEST_METHOD]: {
         description: 'Método HTTP; um método fora da lista vira `_OTHER`.',
+        requirement: 'required',
         values: { kind: 'enum', values: HTTP_METHODS },
       },
       [ATTR_HTTP_ROUTE]: {
         description: 'Template da rota do contrato, ou `unmatched`.',
+        requirement: 'required',
         values: { kind: 'http_route' },
       },
       [ATTR_HTTP_RESPONSE_STATUS_CODE]: {
         description: 'Código de status da resposta.',
+        requirement: 'required',
         values: { kind: 'http_status_code' },
       },
       [ATTR_URL_SCHEME]: {
         description: 'Esquema da URL recebida.',
+        requirement: 'required',
         values: { kind: 'enum', values: ['http', 'https'] },
       },
       [ATTR_ERROR_TYPE]: {
         description: 'Só nas respostas 5xx: o código de status, como texto.',
+        requirement: 'conditionally_required',
         values: { kind: 'http_status_code' },
       },
     },
