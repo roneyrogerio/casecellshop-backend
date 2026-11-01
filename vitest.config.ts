@@ -12,7 +12,7 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.test.ts', 'src/db/types/**', 'src/main/**'],
-      thresholds: { lines: 1, functions: 1, branches: 1, statements: 1 },
+      thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 },
     },
     projects: [
       {
