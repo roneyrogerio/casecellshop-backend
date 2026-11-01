@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mutated,
   parseWorkflow,
+  parseYaml,
   readWorkflowFile,
   stepsOfWorkflow,
   topPermissionViolations,
@@ -92,6 +93,31 @@ function stepViolations(workflow: CiWorkflow): string[] {
     violations.push(`languages é ${String(init[0]?.with?.languages)}`);
   if (init[0]?.with?.['build-mode'] !== 'none')
     violations.push('build-mode não é none');
+  violations.push(...configViolations(init[0]?.with?.config));
+  return violations;
+}
+
+// A única exclusão permitida é a dos testes; qualquer outra chave (`paths`, `query-filters`,
+// `disable-default-queries`, ...) ou caminho a mais (`src`, `scripts`, `.claude/hooks`) tira código de produção da análise.
+const IGNORED_PATHS = ['test', '**/*.test.ts'];
+
+function configViolations(config: unknown): string[] {
+  if (typeof config !== 'string') return ['o init não tem config em linha'];
+  let parsed: unknown;
+  try {
+    parsed = parseYaml<unknown>(config);
+  } catch {
+    return ['o config do init não é YAML'];
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+    return ['o config do init não é um mapa'];
+  const keys = Object.keys(parsed);
+  const violations = keys
+    .filter((key) => key !== 'paths-ignore')
+    .map((key) => `o config tem a chave ${key}`);
+  const ignored = (parsed as Record<string, unknown>)['paths-ignore'];
+  if (JSON.stringify(ignored) !== JSON.stringify(IGNORED_PATHS))
+    violations.push(`paths-ignore é ${JSON.stringify(ignored)}`);
   return violations;
 }
 
@@ -121,6 +147,10 @@ jobs:
         with:
           languages: javascript-typescript
           build-mode: none
+          config: |
+            paths-ignore:
+              - test
+              - '**/*.test.ts'
       - uses: github/codeql-action/analyze@${SHA} # v4.0.0
 `;
 
@@ -216,6 +246,47 @@ describe('AI-44 as conferências do codeql.yml enxergam o que procuram (controle
       'o analyze por SHA curto',
       `codeql-action/analyze@${SHA}`,
       `codeql-action/analyze@${'c'.repeat(39)}`,
+    ],
+    [
+      'paths-ignore com src',
+      "              - '**/*.test.ts'",
+      "              - '**/*.test.ts'\n              - src",
+    ],
+    [
+      'paths-ignore com scripts',
+      "              - '**/*.test.ts'",
+      "              - '**/*.test.ts'\n              - scripts",
+    ],
+    [
+      'paths-ignore com .claude/hooks',
+      "              - '**/*.test.ts'",
+      "              - '**/*.test.ts'\n              - .claude/hooks",
+    ],
+    ['paths-ignore sem o test', '              - test\n', ''],
+    [
+      'a chave paths',
+      '            paths-ignore:',
+      '            paths:\n              - docs\n            paths-ignore:',
+    ],
+    [
+      'query-filters',
+      '            paths-ignore:',
+      '            query-filters:\n              - exclude:\n                  problem.severity: error\n            paths-ignore:',
+    ],
+    [
+      'disable-default-queries',
+      '            paths-ignore:',
+      '            disable-default-queries: true\n            paths-ignore:',
+    ],
+    [
+      'o config apontando para um arquivo',
+      "config: |\n            paths-ignore:\n              - test\n              - '**/*.test.ts'\n",
+      'config: ./codeql.yml\n',
+    ],
+    [
+      'o config ausente',
+      "          config: |\n            paths-ignore:\n              - test\n              - '**/*.test.ts'\n",
+      '',
     ],
   ])('AI-44 %s reprova nos passos', (_label, from, to) => {
     expect(stepViolations(edited(from, to))).not.toEqual([]);
