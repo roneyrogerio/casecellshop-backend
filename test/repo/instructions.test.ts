@@ -1,6 +1,15 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
@@ -51,6 +60,24 @@ function agentsMdReadItems(content: string): string[] {
 
 const SKILL = '.claude/skills/marco/SKILL.md';
 
+// Links Markdown relativos do texto cujo alvo não existe na pasta dada.
+// Links com esquema (https:, mailto:) e só de âncora (#secao) ficam fora; a
+// âncora e a query de um link para arquivo são descartadas antes de conferir.
+function brokenRelativeLinks(text: string, dir: string): string[] {
+  const broken: string[] = [];
+  for (const match of text.matchAll(
+    /\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+  )) {
+    const target = match[1] as string;
+    if (target.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+    const file = target.split(/[#?]/)[0] as string;
+    if (file === '') continue;
+    if (!existsSync(path.join(dir, decodeURIComponent(file))))
+      broken.push(target);
+  }
+  return broken;
+}
+
 describe('AI-07 a skill marco', () => {
   it('AI-07 o .claude/skills/marco/SKILL.md existe', () => {
     expect(existsSync(path.join(root, SKILL))).toBe(true);
@@ -70,6 +97,61 @@ describe('AI-07 a skill marco', () => {
 
   it('AI-07 a skill tem até 500 linhas', () => {
     expect(lineCount(read(SKILL))).toBeLessThanOrEqual(500);
+  });
+});
+
+describe('AI-07 os links relativos da skill marco', () => {
+  const skillDir = path.join(root, path.dirname(SKILL));
+
+  // Pasta temporária do sistema com a.md e sub/b.md, removida ao fim de cada uso.
+  function brokenIn(text: string): string[] {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'ai07-links-'));
+    try {
+      mkdirSync(path.join(tmp, 'sub'));
+      writeFileSync(path.join(tmp, 'a.md'), '');
+      writeFileSync(path.join(tmp, 'sub', 'b.md'), '');
+      return brokenRelativeLinks(text, tmp);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  it('AI-07 todo link relativo do SKILL.md aponta para um arquivo que existe', () => {
+    expect(brokenRelativeLinks(read(SKILL), skillDir)).toEqual([]);
+  });
+
+  it('AI-07 o SKILL.md linka o arquivo de apoio delegation.md e ele existe', () => {
+    expect(read(SKILL)).toMatch(/\]\(delegation\.md(?:#[^)\s]*)?\)/);
+    expect(existsSync(path.join(skillDir, 'delegation.md'))).toBe(true);
+  });
+
+  it('AI-07 o conferidor reprova e cita um link para arquivo de apoio inexistente (controle negativo)', () => {
+    const text = `${read(SKILL)}\nVeja [x](nao-existe.md).\n`;
+
+    expect(brokenRelativeLinks(text, skillDir)).toEqual(['nao-existe.md']);
+  });
+
+  it('AI-07 o conferidor reprova link com âncora para arquivo inexistente', () => {
+    expect(brokenIn('[x](nao-existe.md#secao)')).toEqual([
+      'nao-existe.md#secao',
+    ]);
+  });
+
+  it('AI-07 o conferidor aceita link com âncora e link em subpasta existentes', () => {
+    const text = '[a](a.md#secao) e [b](sub/b.md) e [c](sub/b.md#x)';
+
+    expect(brokenIn(text)).toEqual([]);
+  });
+
+  it('AI-07 o conferidor reprova link em subpasta inexistente', () => {
+    expect(brokenIn('[b](sub/c.md)')).toEqual(['sub/c.md']);
+  });
+
+  it('AI-07 o conferidor ignora link absoluto e link só de âncora', () => {
+    const text =
+      '[w](https://example.com/x.md) [m](mailto:a@b.c) [s](#secao-que-nao-existe)';
+
+    expect(brokenIn(text)).toEqual([]);
   });
 });
 
