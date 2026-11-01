@@ -7,11 +7,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { captureLogs } from '../../test/helpers/logs.ts';
 import { scrapeMetrics } from '../../test/helpers/metrics.ts';
 import {
-  expectAsyncProperty,
   expectFalsified,
-  expectFalsifiedAsync,
   expectProperty,
 } from '../../test/helpers/properties.ts';
+import {
+  propertyTimeoutMs,
+  readPropertyConfig,
+} from '../../test/helpers/property-setup.ts';
 import { CorrelationId } from '../contract/index.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { requestContext } from './request-context.ts';
@@ -52,8 +54,12 @@ function exchangeWith(requestId: unknown, status = 200): Exchange {
   };
 }
 
-function run(make: Factory, exchange: Exchange): void {
-  make(telemetry, logger)(exchange.req, exchange.res, () => {
+function run(
+  make: Factory,
+  exchange: Exchange,
+  target: Telemetry = telemetry,
+): void {
+  make(target, logger)(exchange.req, exchange.res, () => {
     exchange.nextCalls += 1;
   });
 }
@@ -103,24 +109,36 @@ function correlationIdIsValid(make: Factory) {
   });
 }
 
-function statusBecomesItsClass(make: Factory) {
-  return fc.asyncProperty(
-    fc.integer({ min: 100, max: 599 }),
-    async (status) => {
-      const before = await classCounts();
-      const exchange = exchangeWith('abc', status);
-      run(make, exchange);
-      exchange.res.emit('finish');
-      const after = await classCounts();
-
-      const expected = `${Math.floor(status / 100)}xx`;
-      for (const name of CLASSES) {
-        expect((after.get(name) ?? 0) - (before.get(name) ?? 0)).toBe(
-          name === expected ? 1 : 0,
-        );
-      }
+// A telemetria entregue ao middleware repassa a medição à real e guarda o label `status_class` de cada uma: a
+// propriedade confere a classe de cada caso sem raspar o /metrics 2 vezes por caso (com 1000 casos, eram 2.000
+// raspagens e estourava o prazo); o /metrics é raspado uma vez antes e uma depois da propriedade inteira.
+function recordingTelemetry(labels: (string | undefined)[]): Telemetry {
+  return {
+    ...telemetry,
+    httpRequestDuration: {
+      record: (value: number, attributes?: Record<string, string>) => {
+        labels.push(attributes?.['status_class']);
+        telemetry.httpRequestDuration.record(value, attributes);
+      },
     },
-  );
+  };
+}
+
+// `executed` conta, por classe esperada, os casos que passaram pelo middleware (inclusive os da redução do
+// contraexemplo), para somar com o que o /metrics acumulou.
+function statusBecomesItsClass(make: Factory, executed: Map<string, number>) {
+  const recorded: (string | undefined)[] = [];
+  const target = recordingTelemetry(recorded);
+  return fc.property(fc.integer({ min: 100, max: 599 }), (status) => {
+    recorded.length = 0;
+    const exchange = exchangeWith('abc', status);
+    run(make, exchange, target);
+    exchange.res.emit('finish');
+
+    const expected = `${Math.floor(status / 100)}xx`;
+    executed.set(expected, (executed.get(expected) ?? 0) + 1);
+    expect(recorded).toEqual([expected]);
+  });
 }
 
 // Versões quebradas do middleware, escritas aqui.
@@ -182,11 +200,28 @@ describe('FND-15 requestContext: X-Request-Id', () => {
 });
 
 describe('FND-15 requestContext: classe do status', () => {
-  it('FND-15 qualquer status de 100 a 599 vira a classe Nxx correspondente no label da métrica', async () => {
-    await expectAsyncProperty(statusBecomesItsClass(requestContext));
-  });
+  it(
+    'FND-15 qualquer status de 100 a 599 vira a classe Nxx correspondente no label da métrica',
+    async () => {
+      const executed = new Map<string, number>();
+      const before = await classCounts();
+      expectProperty(statusBecomesItsClass(requestContext, executed));
+      const after = await classCounts();
 
-  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que junta as classes 1xx a 4xx numa só', async () => {
-    await expectFalsifiedAsync(statusBecomesItsClass(collapsedClasses));
+      // O /metrics acumulou exatamente os casos executados, cada um na classe do seu status.
+      for (const name of CLASSES) {
+        expect((after.get(name) ?? 0) - (before.get(name) ?? 0)).toBe(
+          executed.get(name) ?? 0,
+        );
+      }
+      expect(
+        [...executed.values()].reduce((sum, count) => sum + count, 0),
+      ).toBe(readPropertyConfig().numRuns);
+    },
+    propertyTimeoutMs(),
+  );
+
+  it('FND-15 controle negativo: a mesma propriedade reprova o middleware que junta as classes 1xx a 4xx numa só', () => {
+    expectFalsified(statusBecomesItsClass(collapsedClasses, new Map()));
   });
 });

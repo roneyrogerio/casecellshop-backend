@@ -1,3 +1,5 @@
+import { once } from 'node:events';
+import type { Server } from 'node:http';
 import express, { type RequestHandler } from 'express';
 import * as fc from 'fast-check';
 import request from 'supertest';
@@ -8,6 +10,7 @@ import {
   expectAsyncProperty,
   expectFalsifiedAsync,
 } from '../../test/helpers/properties.ts';
+import { propertyTimeoutMs } from '../../test/helpers/property-setup.ts';
 import {
   expectMatchesContract,
   findRoute,
@@ -110,10 +113,29 @@ function expectedPaths(body: unknown): string[] {
   return [...new Set(paths)];
 }
 
-function rejectsWithOneErrorPerField(validator: Validator) {
-  const app = appWith(validator);
+// Um único servidor por propriedade, aberto uma vez e fechado no fim: o `request(app)` abriria e fecharia um por
+// caso, e com 1000 casos o teste estourava o prazo.
+async function withServer(
+  validator: Validator,
+  use: (server: Server) => Promise<void>,
+): Promise<void> {
+  const server = appWith(validator).listen(0);
+  await once(server, 'listening');
+  try {
+    await use(server);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  }
+}
+
+function rejectsWithOneErrorPerField(server: Server) {
   return fc.asyncProperty(invalidBodyArb, async (body) => {
-    const response = await request(app)
+    const response = await request(server)
       .post('/checkout')
       .set('Idempotency-Key', 'chave-property-0001')
       .set('Content-Type', 'application/json')
@@ -190,9 +212,15 @@ const onlyFirstError: Validator = (target) => {
 };
 
 describe('FND-15 validateRequest', () => {
-  it('FND-15 qualquer corpo fora do contrato dá 400 em problem+json, com um erro por campo e mensagens da lista do módulo', async () => {
-    await expectAsyncProperty(rejectsWithOneErrorPerField(validateRequest));
-  });
+  it(
+    'FND-15 qualquer corpo fora do contrato dá 400 em problem+json, com um erro por campo e mensagens da lista do módulo',
+    async () => {
+      await withServer(validateRequest, (server) =>
+        expectAsyncProperty(rejectsWithOneErrorPerField(server)),
+      );
+    },
+    propertyTimeoutMs(),
+  );
 
   it.each([
     { defect: 'devolve a mensagem crua do zod', broken: rawZodMessages },
@@ -205,7 +233,10 @@ describe('FND-15 validateRequest', () => {
   ])(
     'FND-15 controle negativo: a mesma propriedade reprova o validador que $defect',
     async ({ broken }) => {
-      await expectFalsifiedAsync(rejectsWithOneErrorPerField(broken));
+      await withServer(broken, (server) =>
+        expectFalsifiedAsync(rejectsWithOneErrorPerField(server)),
+      );
     },
+    propertyTimeoutMs(),
   );
 });

@@ -1,6 +1,10 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import config from '../../vitest.config.ts';
 import { WAIT_GUARD_MS } from '../helpers/async.ts';
+import { PROPERTY_BASE_TIMEOUT_MS } from '../helpers/property-setup.ts';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // O vitest.config.ts é lido como objeto (o que o vitest recebe), e não como texto: o teste não depende de a
 // configuração estar escrita de uma forma ou de outra.
@@ -10,6 +14,7 @@ interface ProjectConfig {
     testTimeout?: number;
     maxWorkers?: number | string;
     sequence?: { groupOrder?: number };
+    setupFiles?: string | string[];
   };
 }
 
@@ -129,6 +134,77 @@ function withoutIntegrationMaxWorkers(source: unknown): unknown {
   });
   return { ...(source as object), test: { projects } };
 }
+
+// FND-15: o projeto unit liga a semente e o número de casos do fast-check pelo `setupFiles`. Sem ele, o fast-check
+// usa a hora como semente e o PR deixa de ser repetível, sem nenhum teste reprovar. O módulo property-setup.ts já é
+// testado direto; aqui se confere só a ligação. Devolve o que falta, uma frase por problema.
+const PROPERTY_SETUP = './test/helpers/property-setup.ts';
+
+function propertySetupViolations(source: unknown): string[] {
+  const declared = projectNamed(projectsOf(source), 'unit')?.setupFiles;
+  const files = typeof declared === 'string' ? [declared] : (declared ?? []);
+  return files.includes(PROPERTY_SETUP)
+    ? []
+    : [`o projeto unit precisa ter ${PROPERTY_SETUP} em setupFiles`];
+}
+
+// Uma cópia da configuração em que o projeto unit troca os setupFiles (ou os perde, com `undefined`).
+function withUnitSetupFiles(
+  source: unknown,
+  setupFiles: string | string[] | undefined,
+): unknown {
+  const projects = projectsOf(source).map((project) =>
+    project.test?.name === 'unit'
+      ? { ...project, test: { ...project.test, setupFiles } }
+      : project,
+  );
+  return { ...(source as object), test: { projects } };
+}
+
+describe('FND-15 o projeto unit liga a configuração das propriedades do fast-check', () => {
+  it('FND-15 o projeto unit tem ./test/helpers/property-setup.ts em setupFiles, e o arquivo existe', () => {
+    expect(propertySetupViolations(config)).toEqual([]);
+    expect(existsSync(join(repoRoot, PROPERTY_SETUP))).toBe(true);
+  });
+
+  it('FND-15 controle negativo: uma configuração sem o property-setup em setupFiles reprova', () => {
+    for (const other of [undefined, [], ['./outro.ts'], './outro.ts']) {
+      const violations = propertySetupViolations(
+        withUnitSetupFiles(config, other),
+      );
+
+      expect(violations, JSON.stringify(other)).toHaveLength(1);
+      expect(violations[0]).toContain('setupFiles');
+    }
+  });
+
+  it('FND-15 controle negativo: o property-setup entre outros arquivos e como texto único passa', () => {
+    for (const allowed of [
+      [PROPERTY_SETUP],
+      ['./antes.ts', PROPERTY_SETUP],
+      PROPERTY_SETUP,
+    ]) {
+      expect(
+        propertySetupViolations(withUnitSetupFiles(config, allowed)),
+        JSON.stringify(allowed),
+      ).toEqual([]);
+    }
+  });
+
+  it('FND-15 o prazo dos testes de propriedade cresce com o número de casos sem subir o testTimeout do projeto unit', () => {
+    const unit = projectNamed(projectsOf(config), 'unit');
+
+    expect(unit?.testTimeout ?? PROPERTY_BASE_TIMEOUT_MS).toBeLessThanOrEqual(
+      PROPERTY_BASE_TIMEOUT_MS,
+    );
+  });
+
+  it('FND-15 o property-setup só vale no unit: o projeto integration não o liga', () => {
+    const integration = projectNamed(projectsOf(config), 'integration');
+
+    expect(integration?.setupFiles ?? []).not.toContain(PROPERTY_SETUP);
+  });
+});
 
 describe('FND-13 o prazo real das esperas é o testTimeout do projeto de integração', () => {
   it('FND-13 WAIT_GUARD_MS dos testes é igual ao testTimeout do projeto integration', () => {

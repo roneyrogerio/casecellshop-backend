@@ -18,6 +18,7 @@ import {
   type CiStep,
   type CiWorkflow,
 } from '../helpers/ci-workflow.ts';
+import { DEFAULT_NUM_RUNS } from '../helpers/property-setup.ts';
 
 // AI-46: o nightly.yml roda todo dia num minuto fora da hora cheia e por workflow_dispatch. O `main-full` repete o CI
 // na main, o `flaky-hunt` roda a suíte embaralhada em três pernas, o `workflows` roda o zizmor na main e o `report`,
@@ -981,6 +982,103 @@ describe('AI-46 as checagens do main-full são as do job checks do ci.yml', () =
       );
 
     expect(uncovered).toEqual([]);
+  });
+});
+
+// --- FND-15: a semente e o número de casos do fast-check no passo embaralhado -----------------------------------------
+// "O agendado roda com a semente da execução e mais casos": se as variáveis saírem do passo, o agendado volta a 100
+// casos com a semente fixa e nenhum teste reprova. O YAML é lido como dado.
+
+function shuffledStep(workflow: NightlyWorkflow): CiStep | undefined {
+  return workflow.jobs?.['flaky-hunt']?.steps?.find((step) =>
+    /(^|\n)\s*npm test(\s|$)/.test(step.run ?? ''),
+  );
+}
+
+function propertyEnvViolations(workflow: NightlyWorkflow): string[] {
+  const step = shuffledStep(workflow);
+  if (step === undefined) return ['o flaky-hunt não tem o passo npm test'];
+  const violations: string[] = [];
+  const seed = text(step.env?.['FAST_CHECK_SEED']);
+  if (seed === '') violations.push('falta FAST_CHECK_SEED no passo');
+  else if (!seed.includes('github.run_id'))
+    violations.push('FAST_CHECK_SEED não depende da execução (github.run_id)');
+  const raw = text(step.env?.['FAST_CHECK_NUM_RUNS']).trim();
+  if (raw === '') violations.push('falta FAST_CHECK_NUM_RUNS no passo');
+  else if (!/^\d+$/.test(raw) || Number(raw) <= DEFAULT_NUM_RUNS)
+    violations.push(
+      `FAST_CHECK_NUM_RUNS ${raw} não é um inteiro maior que ${DEFAULT_NUM_RUNS}`,
+    );
+  return violations;
+}
+
+// Uma cópia do nightly.yml do repositório em que o passo embaralhado troca (ou perde, com `undefined`) uma variável.
+function withShuffledEnv(
+  name: string,
+  value: string | number | undefined,
+): NightlyWorkflow {
+  const copy = structuredClone(
+    readRepoYaml<NightlyWorkflow>('.github', 'workflows', 'nightly.yml') ?? {},
+  );
+  const env = shuffledStep(copy)?.env;
+  if (env === undefined) return copy;
+  if (value === undefined) delete env[name];
+  else env[name] = value;
+  return copy;
+}
+
+describe('FND-15 o passo embaralhado do flaky-hunt passa a semente da execução e mais casos ao fast-check', () => {
+  it('FND-15 o passo do npm test do flaky-hunt tem FAST_CHECK_SEED com github.run_id e FAST_CHECK_NUM_RUNS maior que o padrão', () => {
+    const workflow =
+      readRepoYaml<NightlyWorkflow>('.github', 'workflows', 'nightly.yml') ??
+      {};
+
+    expect(propertyEnvViolations(workflow)).toEqual([]);
+  });
+
+  it('FND-15 controle negativo: o passo sem FAST_CHECK_SEED reprova', () => {
+    expect(
+      propertyEnvViolations(withShuffledEnv('FAST_CHECK_SEED', undefined)),
+    ).toEqual(['falta FAST_CHECK_SEED no passo']);
+  });
+
+  it('FND-15 controle negativo: a semente que não vem da execução reprova', () => {
+    for (const other of ['42', '${{ matrix.seed }}']) {
+      expect(
+        propertyEnvViolations(withShuffledEnv('FAST_CHECK_SEED', other)),
+        other,
+      ).toEqual(['FAST_CHECK_SEED não depende da execução (github.run_id)']);
+    }
+  });
+
+  it('FND-15 controle negativo: o passo sem FAST_CHECK_NUM_RUNS reprova', () => {
+    expect(
+      propertyEnvViolations(withShuffledEnv('FAST_CHECK_NUM_RUNS', undefined)),
+    ).toEqual(['falta FAST_CHECK_NUM_RUNS no passo']);
+  });
+
+  it('FND-15 controle negativo: o número de casos igual ao padrão, menor ou que não é inteiro reprova', () => {
+    for (const other of [
+      String(DEFAULT_NUM_RUNS),
+      DEFAULT_NUM_RUNS,
+      '10',
+      'muitos',
+    ]) {
+      const violations = propertyEnvViolations(
+        withShuffledEnv('FAST_CHECK_NUM_RUNS', other),
+      );
+
+      expect(violations, String(other)).toHaveLength(1);
+      expect(violations[0]).toContain('FAST_CHECK_NUM_RUNS');
+    }
+  });
+
+  it('FND-15 controle negativo: um número de casos logo acima do padrão passa', () => {
+    expect(
+      propertyEnvViolations(
+        withShuffledEnv('FAST_CHECK_NUM_RUNS', DEFAULT_NUM_RUNS + 1),
+      ),
+    ).toEqual([]);
   });
 });
 

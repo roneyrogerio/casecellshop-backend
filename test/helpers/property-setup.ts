@@ -46,6 +46,19 @@ export function readPropertyConfig(env: Env = process.env): PropertyConfig {
   };
 }
 
+// Prazo de um teste de propriedade assíncrono (HTTP, métricas): o padrão do vitest (5 s, que o `testTimeout` do `unit`
+// mantém) mais uma parcela por caso. O agendado passa 1000 casos, e com o `unit` inteiro disputando a CPU de um
+// runner pequeno, 5 s não bastam; subir o `testTimeout` do projeto afrouxaria também os testes que não são de
+// propriedade. A parcela por caso é folgada de propósito: o prazo só evita um teste pendurado, não mede velocidade.
+export const PROPERTY_BASE_TIMEOUT_MS = 5_000;
+export const PROPERTY_CASE_TIMEOUT_MS = 40;
+
+export function propertyTimeoutMs(
+  numRuns: number = readPropertyConfig().numRuns,
+): number {
+  return PROPERTY_BASE_TIMEOUT_MS + numRuns * PROPERTY_CASE_TIMEOUT_MS;
+}
+
 export function configureProperties(env: Env = process.env): PropertyConfig {
   const config = readPropertyConfig(env);
   fc.configureGlobal({ seed: config.seed, numRuns: config.numRuns });

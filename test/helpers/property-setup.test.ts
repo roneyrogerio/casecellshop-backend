@@ -4,6 +4,8 @@ import {
   configureProperties,
   DEFAULT_NUM_RUNS,
   DEFAULT_SEED,
+  PROPERTY_BASE_TIMEOUT_MS,
+  propertyTimeoutMs,
   readPropertyConfig,
 } from './property-setup.ts';
 
@@ -89,6 +91,26 @@ describe('FND-15 configuração da semente e do número de casos', () => {
     const first = sample();
     expect(first).toHaveLength(5);
     expect(sample()).toEqual(first);
+  });
+
+  it('FND-15 o prazo do teste de propriedade assíncrono cresce com o número de casos, a partir dos 5 s do vitest', () => {
+    const counts = [1, DEFAULT_NUM_RUNS, 500, 1000, 5000];
+    const timeouts = counts.map((numRuns) => propertyTimeoutMs(numRuns));
+
+    for (const timeout of timeouts)
+      expect(timeout).toBeGreaterThan(PROPERTY_BASE_TIMEOUT_MS);
+    expect(timeouts).toEqual([...timeouts].sort((a, b) => a - b));
+    expect(new Set(timeouts).size).toBe(counts.length);
+    expect(PROPERTY_BASE_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('FND-15 o prazo padrão vem do FAST_CHECK_NUM_RUNS lido pelo readPropertyConfig', () => {
+    expect(propertyTimeoutMs()).toBe(
+      propertyTimeoutMs(readPropertyConfig().numRuns),
+    );
+    expect(propertyTimeoutMs(1000)).toBeGreaterThan(
+      propertyTimeoutMs(DEFAULT_NUM_RUNS),
+    );
   });
 
   it('FND-15 uma propriedade que falha imprime a semente e o caminho para reproduzir', () => {
