@@ -214,8 +214,8 @@ function gitChanges(before, after, agentRoot) {
 
 // O retrato gravado antes da atualização do hook guardava o status em texto. O
 // JSON.parse dele lançava a cada parada, e o agente voltava sem contar as
-// devoluções (A17 do #27); ele conta como retrato ausente. O status vazio é o
-// retrato fora de um repositório, nos dois formatos.
+// devoluções (A17 do #27); ele conta como retrato ausente. O status vazio (nada
+// sujo no início, ou fora de um repositório) se lê igual nos dois formatos.
 function previousFormat(before) {
   if (typeof before.status !== 'string' || before.status === '') return false;
   try {
