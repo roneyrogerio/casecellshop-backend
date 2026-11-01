@@ -4,7 +4,7 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado: serve o catálogo do banco da loja, reserva o estoque de forma atômica no checkout e envia os pedidos ao ERP de forma assíncrona, por uma outbox e uma fila SQS. Node.js 26, TypeScript, PostgreSQL e OpenTelemetry. O ERP é simulado no processo do worker, atrás da porta `ErpClient`.
 
-**Estado:** checkout, faturamento assíncrono, retry, DLQ e reconciliação prontos (marcos M1 a M3). Vitrine com cache (M4), observabilidade completa (M5) e entrega final (M6) estão em andamento; cada item abaixo diz se está pronto ou em qual marco entra. O andamento está no [`ROADMAP.md`](.specs/project/ROADMAP.md).
+**Estado:** checkout, faturamento assíncrono, retry, DLQ e reconciliação prontos (marcos M1 a M3). Vitrine com cache (M4), observabilidade completa (M5) e entrega final (M6) estão pendentes; cada item abaixo diz se está pronto ou em qual marco entra. O andamento está no [`ROADMAP.md`](.specs/project/ROADMAP.md).
 
 ## Índice
 
@@ -59,7 +59,7 @@ curl http://localhost:3000/orders/<orderId>/status
 # {"orderId":"…","status":"invoiced"} depois de o worker faturar
 ```
 
-O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1, importável no Insomnia ou no Postman), e o [`requests.http`](requests.http) tem as requisições de exemplo.
+O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições de exemplo. Ao importar o `openapi.yaml` no Insomnia ou no Postman, defina a URL base `http://localhost:3000`: o contrato declara o servidor como `/`, o que muda no M4.
 
 ## Testar
 
@@ -77,14 +77,14 @@ Os testes de integração rodam contra PostgreSQL e ElasticMQ reais, pelo Testco
 
 | O desafio pede | Onde | Prova | Estado |
 | --- | --- | --- | --- |
-| `GET /products` com cache e TTL | [`src/catalog/`](src/), cache em memória (AD-005) | critérios `CAT-*` | M4 |
+| `GET /products` com cache e TTL | `src/catalog/` (a criar no M4), cache em memória (AD-005) | critérios `CAT-*` | M4 |
 | `POST /checkout` responde `202` com `orderId` e status | [`src/checkout/`](src/checkout/) | `CHK-09` | pronto |
 | `GET /orders/{orderId}/status` | [`src/orders/`](src/orders/) | `CHK-11`, `ORD-19` | pronto |
 | Contrato com schemas de sucesso e erro | [`openapi.yaml`](openapi.yaml), gerado de [`src/contract/`](src/contract/); erros em `application/problem+json` (RFC 9457) | `FND-03`, `FND-07` | pronto |
-| Logs estruturados com `correlationId` e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts) | `FND-03`, `ORD-18`, `OBS-01` | pronto; campos completos no M5 |
+| Logs estruturados com `correlationId` e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts) | `OBS-01` | pronto; campos completos no M5 |
 | Métricas de cache, checkout e fila | `/metrics` da API e do worker | `OBS-02`; cache no M4 | parcial |
-| Trace ligando requisição, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18` | pronto; spans do ERP no M5 |
-| Exemplo de dashboard, alerta ou runbook | [Operação](#operação) | `OBS-03` | runbook pronto; dashboard e alertas no M5 |
+| Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18`; cache: `CAT-12` | pronto, menos o cache (M4); spans do ERP no M5 |
+| Exemplo de dashboard, alerta ou runbook | [Operação](#operação) | runbook: `ORD-15`; dashboard e alertas: `OBS-03` | runbook pronto; dashboard e alertas no M5 |
 | Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | `CHK-01`, `CHK-02` (controle negativo) | pronto |
 | Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | `CHK-03` a `CHK-05` | pronto |
 | Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | `ORD-01` a `ORD-22` | pronto |
@@ -98,7 +98,7 @@ As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada u
 | Pergunta | Seção do `ARCHITECTURE.md` | Critérios | Estado |
 | --- | --- | --- | --- |
 | 1. Diagnóstico, trade-offs e arquitetura alvo | "Diagnóstico e arquitetura alvo" | `DOC-DIA-01` a `06` | pronto |
-| 2. Cache, invalidação e vitrine | "Cache e vitrine" | `DOC-CAC-01` a `04` | M4 |
+| 2. Cache, invalidação e vitrine | "Cache e performance da vitrine" | `DOC-CAC-01` a `04` | M4 |
 | 3. Observabilidade | "Observabilidade" | `DOC-OBS-01` a `04` | M5 |
 | 4. Concorrência, estoque e idempotência | "Concorrência e idempotência" | `DOC-CON-01` a `04` | pronto |
 | 5. Mensageria, resiliência, contrato e IA | "Mensageria e resiliência" | `DOC-MSG-01` a `04` | pronto |
@@ -143,19 +143,19 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | Worker morre no meio da chamada | a mensagem volta a ficar visível no SQS | nova tentativa só depois do atraso mínimo, consultando antes de criar | `ORD-02` |
 | Mensagem que derruba o processo ou fora do schema | contagem de recebimentos do SQS | vai sozinha para a DLQ; as outras seguem | `ORD-12` |
 | Banco falha ao gravar o desfecho | erro na transação de conclusão | até 5 repetições; a mensagem continua na fila | `ORD-16` |
-| ERP acima do limite da H4 e sem a H1b | não detectável pela loja | fatura duplicada demonstrada no teste e registrada como risco (R6) | `ORD-06` |
+| ERP acima do limite da H4 e sem a H1b | não detectável pela loja | duas faturas para o pedido, ou o pedido falho com uma fatura que aparece depois; demonstrado no teste e registrado como risco (R6) | `ORD-06` |
 
 ## Operação
 
 - **Logs:** JSON em uma linha, com `correlationId`, `orderId`, `trace_id` e o nome do evento (`docker compose logs api worker`).
-- **Métricas:** `/metrics` da API e do worker, no formato Prometheus: checkout por resultado, tentativas de faturamento por desfecho, mensagens publicadas, chamadas ao ERP por operação e resultado, e o tempo do aceite ao faturamento.
+- **Métricas:** no formato Prometheus, em `http://localhost:3000/metrics` para a API; as do worker ficam na porta 9464 dentro da rede do compose (`docker compose exec worker node -e "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then(console.log)"`). Incluem checkout por resultado, tentativas de faturamento por desfecho, mensagens publicadas, chamadas ao ERP por operação e resultado, e o tempo do aceite ao faturamento.
 - **Traces:** no Jaeger, o trace sai da requisição de checkout e continua na tentativa do worker, pelo `traceparent` da mensagem.
-- **Runbook da DLQ:** `docker compose exec worker node src/main/runbook.ts redrive` devolve as mensagens da DLQ à fila; `docker compose exec worker node src/main/runbook.ts cancel <orderId>` cancela um pedido pendente e libera a reserva.
+- **Runbook da DLQ:** `docker compose exec worker node src/main/runbook.ts redrive` devolve as mensagens da DLQ à fila; `docker compose exec worker node src/main/runbook.ts cancel <orderId>`, só depois de confirmar no ERP que o pedido não existe, marca o pedido pendente como `failed` (`cancelled`) e libera a reserva. Se o ERP tem o pedido, use o `redrive` ou espere a reconciliação, que o fatura (`ORD-14`, `ORD-15`).
 - **Dashboard e alertas:** M5, com as consultas PromQL, os limites de cada alerta e o runbook de cada um, conferidos contra o `/metrics` real (`OBS-03`).
 
 ## Limitações e simplificações
 
-- **ERP simulado:** roda no processo do worker e segue as hipóteses H1a a H4. Um ERP real precisa confirmá-las; sem a H1b e acima do limite da H4, pode haver fatura duplicada (`ORD-06`, risco R6).
+- **ERP simulado:** roda no processo do worker e segue as hipóteses H1a a H4. Um ERP real precisa confirmá-las; sem a H1b e acima do limite da H4, um pedido pode terminar com duas faturas, ou falho com uma fatura que aparece depois, sem que a loja detecte (`ORD-06`, risco R6).
 - **Sem autenticação nem pagamento:** fora do escopo do desafio.
 - **Catálogo:** a sincronização com o ERP e a vitrine com cache entram no M4; até lá, o catálogo é copiado à mão (ver [Rodar](#rodar)).
 - **Uma instância de cada serviço no compose:** o desenho admite várias (fila, outbox e locks no banco), mas o compose sobe uma de cada.
@@ -171,15 +171,14 @@ O código foi escrito por agentes do Claude Code num fluxo em que a verificaçã
 4. **Revisão:** o agente `reviewer`, só leitura, revisa cada fatia; o relatório vai ao PR sem edição, e a revisão só termina sem achado alto ou médio aberto (AD-015).
 5. **Merge:** só com CI verde e a aprovação do mantenedor, que responde pelo resultado.
 
-O que impõe cada regra está no código, não só em instruções:
+Os commits feitos com IA levam o trailer `Assisted-by: <papel>:<modelo>`, na convenção do kernel Linux ([`CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md)); o mantenedor é o autor e responde por eles. As regras abaixo são impostas pelo código, não só por instruções:
 
 | Regra | Onde é imposta | Teste |
 | --- | --- | --- |
 | Cada agente edita só os arquivos do seu papel | [`.claude/hooks/path-guard.mjs`](.claude/hooks/path-guard.mjs) | `FND-08` |
-| O agente não termina com lint, tipos ou testes falhando | [`.claude/hooks/subagent-stop.mjs`](.claude/hooks/subagent-stop.mjs) | `AI-03` |
+| O `implementer` não termina com lint, tipos ou testes falhando, nem o `test-writer` com lint ou tipos; depois da terceira devolução, a parada passa como exceção registrada | [`.claude/hooks/subagent-stop.mjs`](.claude/hooks/subagent-stop.mjs) | `AI-03` |
 | Tamanho, complexidade e sentido das dependências do código | [`.oxlintrc.json`](.oxlintrc.json) (AD-026) | lint no CI |
 | A `main` só muda por PR aprovado e com CI verde | ruleset do GitHub (AD-013) | — |
-| Cada commit diz quem o produziu | trailer `Assisted-by: <papel>:<modelo>`, na convenção do kernel Linux; o mantenedor é o autor e responde pelo commit | — |
 
 Exemplos de erros da IA que o fluxo pegou antes do merge, com o relatório de revisão de cada um, estão no `ARCHITECTURE.md`, seção "Prompts de IA relevantes". Os prompts que governam os agentes e o motivo de não haver um diário de prompts estão no [`PROMPTS.md`](PROMPTS.md).
 

@@ -17,6 +17,8 @@ Como preparar a máquina, rodar as checagens e abrir um PR. O que o projeto é e
 
 Outros comandos: `npm run lint`, `npm run typecheck`, `npm run openapi` (gera o `openapi.yaml` a partir do contrato), `npm run lint:openapi` e `npm run check:instructions`. O CI roda tudo no Node do `.nvmrc` e de novo na 24.12, menos os testes que sobem o `docker compose`, cuja imagem já fixa o Node 26.
 
+Os volumes do compose guardam o banco e as mensagens do ElasticMQ entre execuções. Se o histórico de migrações deixar de bater com o banco local, como na troca de migrador da AD-017, recrie os volumes uma vez com `docker compose down -v`.
+
 As consultas e as migrações usam o Kysely com os tipos gerados do banco migrado: depois de uma migração nova, rode `node scripts/check-db-types.ts --write`. Uma coluna apagada ou renomeada quebra o `npm run typecheck`, e o CI confere que os tipos estão em dia (`FND-09`).
 
 ## Fluxo de trabalho
