@@ -203,14 +203,37 @@ function gitChanges(before, after, agentRoot) {
     return [
       'retrato do git ausente: o início do agente não gravou o estado do git, então não há como provar que ele ficou igual',
     ];
+  if (previousFormat(before))
+    return [
+      'retrato do git no formato anterior, com o status em texto e não em JSON: o agente começou antes da atualização do hook, e não há como separar o que ele mudou',
+    ];
   if (after instanceof Error)
     return [`estado do git ilegível na parada (${after.message})`];
   return compareSnapshots(before, after, { agentRoot });
 }
 
-// Um retrato antigo, sem o status, não tem como separar o que já estava sujo.
+// O retrato gravado antes da atualização do hook guardava o status em texto. O
+// JSON.parse dele lançava a cada parada, e o agente voltava sem contar as
+// devoluções (A17 do #27); ele conta como retrato ausente. O status vazio é o
+// retrato fora de um repositório, nos dois formatos.
+function previousFormat(before) {
+  if (typeof before.status !== 'string' || before.status === '') return false;
+  try {
+    return !Array.isArray(JSON.parse(before.status));
+  } catch {
+    return true;
+  }
+}
+
+// Um retrato antigo, sem o status ou com ele em texto, não tem como separar o
+// que já estava sujo.
 function mainChanges(before, after) {
-  if (!before || after instanceof Error || typeof before.status !== 'string')
+  if (
+    !before ||
+    after instanceof Error ||
+    typeof before.status !== 'string' ||
+    previousFormat(before)
+  )
     return [];
   const changed = changesDuring(before.status, after.status);
   // No rename ou na cópia, a origem também passa pela conferência do papel
