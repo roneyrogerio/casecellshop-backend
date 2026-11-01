@@ -283,6 +283,19 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       'const s = sql<number>`1`;',
     ),
     ok('o sql executado', 'await sql`now()`.execute(db);'),
+    // Controle do A1 do #21: a referência ao sql só passa como tag ou como objeto de um membro não computado
+    ok(
+      'o sql usado como tag, com o import',
+      "import { sql } from 'kysely';\nconst q = sql`now()`;\nconst n = sql<number>`1`;",
+    ),
+    ok(
+      'o sql como objeto de um membro não computado (sql.join e sql.val)',
+      "import { sql } from 'kysely';\nconst a = sql.join(xs);\nconst b = sql.val(1);",
+    ),
+    ok(
+      'uma variável local chamada sql, sem import do kysely, usada como membro',
+      'const sql = makeSql();\nsql.val(1);',
+    ),
     ok('um nome que só começa com sql', 'const s = sqlText;'),
     ok('um índice de um nome que só termina em sql', 'const first = mysql[0];'),
     ok('uma lista de fragmentos', 'const list = [sql`now()`];'),
@@ -347,6 +360,51 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
     bad(
       'o sql lido de um import de namespace, usado como tag (k.sql`…`)',
       "import * as k from 'kysely';\nconst q = k.sql`now()`;",
+    ),
+    // A1 do #21: o sql guardado ou levado adiante por qualquer pai que não seja tag, membro não computado ou import
+    bad(
+      'o sql atribuído depois da declaração (s = sql)',
+      "import { sql } from 'kysely';\nlet s;\ns = sql;\ns.raw(1);",
+    ),
+    bad(
+      'o sql como valor padrão de parâmetro de seta',
+      "import { sql } from 'kysely';\nconst f = (s = sql) => s.raw(1);",
+    ),
+    bad(
+      'o sql como valor padrão de parâmetro de função',
+      "import { sql } from 'kysely';\nfunction f(s = sql) {}",
+    ),
+    bad(
+      'o sql como valor de propriedade de objeto',
+      "import { sql } from 'kysely';\nconst o = { s: sql };",
+    ),
+    bad(
+      'o sql como elemento de array',
+      "import { sql } from 'kysely';\nconst a = [sql];",
+    ),
+    bad(
+      'o sql devolvido por uma função',
+      "import { sql } from 'kysely';\nfunction f() {\n  return sql;\n}",
+    ),
+    bad(
+      'o sql num ramo de condicional',
+      "import { sql } from 'kysely';\nconst s = cond ? sql : null;",
+    ),
+    bad(
+      'a reexportação do sql importado com outro nome',
+      "import { sql } from 'kysely';\nexport { sql as q };",
+    ),
+    bad(
+      'a reexportação do sql importado com o mesmo nome',
+      "import { sql } from 'kysely';\nexport { sql };",
+    ),
+    bad(
+      'a reexportação direta do sql do kysely com outro nome',
+      "export { sql as q } from 'kysely';",
+    ),
+    bad(
+      'a reexportação direta do sql do kysely com o mesmo nome',
+      "export { sql } from 'kysely';",
     ),
     ...regexAfterAlias.invalid,
   ],
