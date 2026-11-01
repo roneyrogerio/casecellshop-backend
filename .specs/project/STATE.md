@@ -946,5 +946,4 @@ Além da lista "Adicionais" do roadmap:
 - circuit breaker na reivindicação;
 - cancelamento automático com consulta prévia;
 - invalidação de cache entre processos;
-- estoque de um SKU dividido em buckets;
-- testes de mutação.
+- estoque de um SKU dividido em buckets.
