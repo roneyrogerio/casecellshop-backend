@@ -30,13 +30,17 @@ function codeOf(error: Error): unknown {
 
 // Pool com uma conexão ociosa aberta. Sem `onError` é o pool sem ouvinte do controle negativo; com ele, o pool de
 // teste de sempre, mais o ouvinte que recebe os erros dela.
+// `idleTimeoutMillis: 0` é necessário: o pg-pool fecha a conexão ociosa após 10.000 ms por padrão, e entre a criação
+// do pool e o stop() rodam o migrador e o gerador de tipos, que com a máquina carregada passam disso. Sem conexão
+// aberta, a testemunha não vê o servidor cair. O valor 0 faz o pg-pool nunca fechar a conexão ociosa.
 async function idlePool(
   uri: string,
   onError?: (error: Error) => void,
 ): Promise<pg.Pool> {
+  const config = { max: 1, idleTimeoutMillis: 0 };
   const pool = onError
-    ? createTestPool(uri, { max: 1 })
-    : createPoolWithoutErrorListener(uri, { max: 1 });
+    ? createTestPool(uri, config)
+    : createPoolWithoutErrorListener(uri, config);
   if (onError) pool.on('error', onError);
   await pool.query('SELECT 1');
   return pool;
@@ -86,6 +90,12 @@ describe('FND-13 encerramento do contêiner de um banco de teste', () => {
       fixtureFolder('basic', 'fnd13_controle'),
     );
     await checkDbTypes({ databaseUrl: database.uri, outDir, write: true });
+    // Se a máquina estiver tão lenta que o pool fechou a testemunha, o teste deve falhar aqui, pela causa certa, e
+    // não por "a testemunha não viu o servidor cair".
+    expect({
+      total: witness.totalCount,
+      idle: witness.idleCount,
+    }).toEqual({ total: 1, idle: 1 });
     const uncaught = captureUncaught();
     try {
       await container.stop();
