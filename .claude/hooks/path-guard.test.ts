@@ -288,6 +288,8 @@ const IMPLEMENTER_VERIFICATION_CONFIG = [
   '.oxlintrc.json',
   'commitlint.config.mjs',
   'redocly.yaml',
+  '.prettierrc.json',
+  '.prettierignore',
   '.npmrc',
   '.claude/settings.json',
 ];
@@ -338,6 +340,13 @@ const IMPLEMENTER_PROTECTED_BY_NAME = [
   '.kysely-codegenrc.js',
   'src/db/.kysely-codegenrc.json',
   'src/a/b/.kysely-codegenrc.outro',
+  'src/.prettierrc.json',
+  '.prettierrc',
+  '.prettierrc.yaml',
+  'src/a/.prettierrc.mjs',
+  'prettier.config.mjs',
+  'src/prettier.config.js',
+  'src/.prettierignore',
   '.npmrc',
   '.nvmrc',
   '.gitignore',
@@ -392,6 +401,7 @@ describe('AI-04 guarda de caminho nega ao implementer a configuração pelo nome
     'src/db/kysely-codegenrc.ts',
     'src/db/codegen.ts',
     'src/kysely-codegen/index.ts',
+    'src/shared/prettier-like.ts',
   ])('AI-04 o implementer continua podendo editar %s', (path) => {
     for (const [, variant] of variants(path))
       expectAllowed(edit('implementer', variant));
