@@ -92,6 +92,20 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 
 **Pronto quando:** `ORD-*` passam, contando faturas no ERP com falhas injetadas pelo ERP simulado, com a fila do faturamento no SQS.
 
+## F2 — Fábrica v3: qualidade e confiabilidade do código gerado
+
+**Meta:** o código que a fábrica gera fica padronizado e confiável por checagens de máquina, e não só por instruções: cada classe de erro que a retrospectiva dos PRs #1 a #16 achou (guardas com brechas, documentação desatualizada, código repetido, verificadores fracos, ciclo de vida, testes que provam menos que dizem) passa a ter a checagem mais cedo possível que a pega. Plano aprovado pelo mantenedor em 31/10/2026; vem antes do M4.
+
+- PR #17: pastas e regras do código (AD-025, AD-026). Concluído.
+- PR #18: README para quem avalia e `CONTRIBUTING.md`. Concluído.
+- PR A, guardas da fábrica: `implementer` e `test-writer` em worktree própria; hook de parada que confere o que mudou durante o agente e falha fechado; guardas de ferramenta que bloqueiam quando quebram; guarda de escrita do `reviewer`; teste dos comandos das skills contra as permissões; regras por tipo de arquivo para os agentes; hook de parada mais rápido (`AI-24` a `AI-31`).
+- PR B, barreiras no CI: Prettier, knip, jscpd sobre a base, ast-grep no lugar do verificador de Kysely por regex, actionlint, zizmor, CodeQL, Dependabot, `npm audit`, cobertura, CI em jobs e busca agendada de teste instável.
+- PR C, testes: banco compartilhado por rodada com banco clonado por arquivo, helpers divididos e sem cópias, fast-check, Stryker no CI agendado, controles negativos que faltam, porta travada para todo timeout.
+- PR D, catálogo de eventos de log e de métricas, no padrão de nomes do OpenTelemetry, conferido com o `design.md`.
+- PR E, documentação e specs: uma decisão por arquivo (MADR), spec da fábrica separada, critérios com uma exigência por ID, glossário, seção "Escrita", markdownlint, lychee e verificador de caminhos citados.
+
+**Pronto quando:** os critérios de cada PR estão verdes, cada guarda com controle negativo, e a spec da fábrica diz, para cada classe de erro, se a checagem a garante ou só a reduz.
+
 ## M4 — Vitrine e frescor
 
 **Meta:** `GET /products` rápido e independente do ERP; com o ERP respondendo, defasagem de até 65,5 s mais a duração de uma rodada.
