@@ -10,9 +10,34 @@ import { pathToFileURL } from 'node:url';
 const REGISTRY = 'https://registry.npmjs.org/';
 
 interface LockEntry {
+  name?: unknown;
   resolved?: unknown;
   integrity?: unknown;
   link?: unknown;
+}
+
+// O nome do pacote pela chave: o que vem depois do último node_modules/, com o
+// escopo quando houver (node_modules/a/node_modules/@s/b é @s/b).
+function packageName(key: string): string {
+  return key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
+}
+
+// O resolved do registro aponta o tarball do próprio pacote: o caminho é o que o
+// new URL devolve, sem .., ./, escape de ponto nem barra dupla, e começa por
+// /<nome>/-/. Senão um nome conhecido traria o tarball de outro pacote do
+// registro (A12 do #26).
+function tarballProblem(resolved: string, name: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(resolved);
+  } catch {
+    return 'resolved não é uma URL';
+  }
+  if (url.href !== resolved || url.pathname.includes('//'))
+    return 'resolved fora da forma normalizada';
+  if (!url.pathname.startsWith(`/${name}/-/`))
+    return `resolved não é um tarball de ${name}`;
+  return undefined;
 }
 
 export function lockfileViolations(lockText: string): string[] {
@@ -39,7 +64,8 @@ export function lockfileViolations(lockText: string): string[] {
     // ou uma pasta fora de node_modules/ trocaria um pacote por código local com
     // o mesmo nome, e o npm instala também o node_modules/ aninhado numa pasta.
     if (name === '') continue;
-    if (entry.link === true) {
+    // O npm trata como link qualquer valor verdadeiro, e não só o true (A11 do #26).
+    if (entry.link) {
       violations.push(`${name}: link para código local, sem workspaces`);
       continue;
     }
@@ -55,6 +81,14 @@ export function lockfileViolations(lockText: string): string[] {
     const reasons: string[] = [];
     if (!resolved.startsWith(REGISTRY))
       reasons.push(`resolved fora de ${REGISTRY} (${resolved})`);
+    else {
+      // Um apelido de dependência (string-width-cjs instalado como string-width)
+      // traz o nome real no campo name da entrada, como o npm grava.
+      const real =
+        typeof entry.name === 'string' ? entry.name : packageName(name);
+      const problem = tarballProblem(resolved, real);
+      if (problem) reasons.push(`${problem} (${resolved})`);
+    }
     if (
       typeof entry.integrity !== 'string' ||
       !entry.integrity.startsWith('sha512-')

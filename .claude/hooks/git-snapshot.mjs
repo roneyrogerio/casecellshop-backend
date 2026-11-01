@@ -3,9 +3,9 @@
 // próprio agente); o retrato tirado no início e comparado na parada prova o que
 // mudou sem depender de como o comando foi escrito.
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 function git(projectDir, ...args) {
   const result = spawnSync('git', ['-C', projectDir, ...args], {
@@ -58,21 +58,43 @@ export function takeSnapshot(projectDir) {
   };
 }
 
-// O caminho pelo realpath, para o /private do macOS e um link simbólico não
-// separarem a mesma pasta. Um caminho que ainda não existe (o arquivo novo de um
-// Write) sai pelo realpath do maior ancestral que existe, mais o resto.
+// Limite de links seguidos, o mesmo do sistema (ELOOP): um ciclo para aqui.
+const MAX_LINKS = 40;
+
+// O caminho real, para o /private do macOS e um link simbólico não separarem a
+// mesma pasta. Componente por componente, como o sistema resolve: o .. sobe a
+// partir do que já é real, e não pelo texto antes do link (A21 do #26); um link
+// é seguido mesmo quando o destino ainda não existe, como o Write o seguiria; e
+// um componente que não existe (o arquivo novo de um Write) entra como está.
 export function realPath(path) {
-  const absolute = resolve(path);
-  let base = absolute;
-  for (;;) {
-    try {
-      return join(realpathSync(base), relative(base, absolute));
-    } catch {
-      const parent = dirname(base);
-      if (parent === base) return absolute;
-      base = parent;
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
+  const pending = absolute.split(sep).filter(Boolean);
+  let current = parse(absolute).root || sep;
+  let links = 0;
+  while (pending.length > 0) {
+    const part = pending.shift();
+    if (part === '.') continue;
+    if (part === '..') {
+      current = dirname(current);
+      continue;
     }
+    const next = join(current, part);
+    let isLink = false;
+    try {
+      isLink = lstatSync(next).isSymbolicLink();
+    } catch {
+      // Não existe: entra pelo nome, e o resto segue do mesmo jeito.
+    }
+    if (isLink && links < MAX_LINKS) {
+      links += 1;
+      const target = readlinkSync(next);
+      if (isAbsolute(target)) current = parse(target).root;
+      pending.unshift(...target.split(sep).filter(Boolean));
+      continue;
+    }
+    current = next;
   }
+  return current;
 }
 
 // O HEAD de cada worktree, pelo caminho real: um commit do agente isolado na
@@ -125,8 +147,9 @@ function foreignBranches(projectDir) {
 }
 
 // As entradas do git status pelo formato -z: o nome vem como está, sem aspas nem
-// octal para acento e espaço (A5 do #19). No rename, o destino; a origem vem na
-// entrada seguinte e é pulada. O hook de parada usa o mesmo parser (A9 do #19).
+// octal para acento e espaço (A5 do #19). No rename ou na cópia, o caminho é o
+// destino e a origem, que vem no campo seguinte, fica em origin: a conferência do
+// papel olha os dois (A22 do #26). O hook de parada usa o mesmo parser.
 export function statusEntries(projectDir) {
   const parts = git(
     projectDir,
@@ -140,17 +163,13 @@ export function statusEntries(projectDir) {
     const part = parts[index];
     if (!part) continue;
     const code = part.slice(0, 2);
-    entries.push({ code, path: part.slice(3) });
     // O rename ou a cópia, no índice (X) ou na worktree (Y), traz a origem em
     // seguida.
-    if (/[RC]/.test(code)) index += 1;
+    const origin = /[RC]/.test(code) ? (parts[index + 1] ?? null) : null;
+    if (origin !== null) index += 1;
+    entries.push({ code, path: part.slice(3), origin });
   }
   return entries;
-}
-
-// Caminho de uma linha do status gravado no retrato: `XY caminho\thash`.
-function statusPath(line) {
-  return line.slice(3).split('\t')[0];
 }
 
 function isFile(path) {
@@ -161,32 +180,55 @@ function isFile(path) {
   }
 }
 
+// Caminhos por chamada do hash-object: muitos arquivos sujos numa chamada só
+// passariam do limite de argumentos do sistema.
+const HASH_BATCH = 200;
+
 // O status sozinho não pega a segunda edição de um arquivo que já estava sujo
-// (a linha " M x" fica igual), então cada linha leva o hash do conteúdo atual.
-// Uma falha do hash-object lança: um status sem hash esconderia a edição.
+// (a entrada " M x" fica igual), então cada entrada leva o hash do conteúdo
+// atual. Os caminhos vão como argumentos, depois de --, e não um por linha: no
+// --stdin-paths, um nome com quebra de linha ou que começa por aspas quebrava o
+// retrato (A17 do #26). Uma falha do hash-object lança: um status sem hash
+// esconderia a edição. O retrato grava a lista em JSON, que guarda qualquer nome.
 function statusWithHashes(projectDir) {
   const entries = statusEntries(projectDir);
-  if (entries.length === 0) return '';
   const present = entries
     .map((entry) => entry.path)
     .filter((file) => isFile(join(projectDir, file)));
   const hashes = new Map();
-  if (present.length > 0) {
+  for (let start = 0; start < present.length; start += HASH_BATCH) {
+    const batch = present.slice(start, start + HASH_BATCH);
     const hashed = spawnSync(
       'git',
-      ['-C', projectDir, 'hash-object', '--stdin-paths'],
-      { input: present.join('\n'), encoding: 'utf8' },
+      ['-C', projectDir, 'hash-object', '--', ...batch],
+      { encoding: 'utf8' },
     );
     if (hashed.status !== 0)
       throw new Error(
-        `git hash-object falhou (${present.join(', ')}): ${hashed.stderr.trim()}`,
+        `git hash-object falhou (${batch.join(', ')}): ${hashed.stderr.trim()}`,
       );
     const lines = hashed.stdout.split('\n');
-    present.forEach((file, index) => hashes.set(file, lines[index] ?? ''));
+    batch.forEach((file, index) => hashes.set(file, lines[index] ?? ''));
   }
-  return entries
-    .map(({ code, path }) => `${code} ${path}\t${hashes.get(path) ?? '-'}`)
-    .join('\n');
+  return JSON.stringify(
+    entries.map((entry) => ({
+      ...entry,
+      hash: hashes.get(entry.path) ?? null,
+    })),
+  );
+}
+
+// O status gravado no retrato; o retrato fora de um repositório guarda ''.
+function parseStatus(text) {
+  return text ? JSON.parse(text) : [];
+}
+
+// A origem de um rename ou cópia de cada caminho dado, pelo status gravado.
+export function originsOf(statusText, paths) {
+  const wanted = new Set(paths);
+  return parseStatus(statusText)
+    .filter((entry) => entry.origin && wanted.has(entry.path))
+    .map((entry) => entry.origin);
 }
 
 function refMap(text) {
@@ -299,22 +341,21 @@ const HOOK_WRITTEN = [
 ];
 
 function statusMap(text) {
-  const map = new Map();
-  for (const line of String(text ?? '')
-    .split('\n')
-    .filter(Boolean))
-    map.set(statusPath(line), line);
-  return map;
+  return new Map(
+    parseStatus(text).map((entry) => [entry.path, JSON.stringify(entry)]),
+  );
 }
 
 // AI-28: o que mudou na pasta principal entre o início e a parada do agente. Uma
-// mudança que já estava lá no início, sem alteração, não é atribuída a ele.
+// mudança que já estava lá no início, sem alteração, não é atribuída a ele. No
+// rename, o caminho é o destino; a origem fica na entrada, e o hook de parada a
+// confere pelo originsOf.
 export function changesDuring(beforeStatus, afterStatus) {
   const before = statusMap(beforeStatus);
   const after = statusMap(afterStatus);
   const changed = [];
-  for (const [file, line] of after)
-    if (before.get(file) !== line) changed.push(file);
+  for (const [file, entry] of after)
+    if (before.get(file) !== entry) changed.push(file);
   for (const file of before.keys()) if (!after.has(file)) changed.push(file);
   return changed.filter(
     (file) => !HOOK_WRITTEN.some((prefix) => file.startsWith(prefix)),
