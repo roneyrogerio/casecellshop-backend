@@ -1652,6 +1652,44 @@ describe('AI-26 a guarda decide com um ciclo de links e com uma cadeia além de 
   });
 });
 
+// A decisão numa raiz própria do teste, com a pasta principal igual a ela.
+function decideIn(
+  project: string,
+  agentType: string | undefined,
+  filePath: string,
+  tool: string,
+): string | null {
+  const input: HookInput = {
+    ...editInput(agentType, filePath),
+    tool_name: tool,
+    cwd: project,
+  };
+  return decide(input, project, project);
+}
+
+function deciderIn(getProject: () => string) {
+  return (
+    agentType: string | undefined,
+    filePath: string,
+    tool = 'Write',
+  ): string | null => decideIn(getProject(), agentType, filePath, tool);
+}
+
+// O pedido escrito como texto, e não pelo `join`: o `join` já resolveria o `..` antes da guarda.
+function textForms(
+  getProject: () => string,
+): [string, (relative: string) => string][] {
+  return [
+    ['relativo', (relative) => relative],
+    ['absoluto', (relative) => `${getProject()}/${relative}`],
+  ];
+}
+
+function expectHooksOnly(reason: string | null): void {
+  expectDenied(reason);
+  expect(reason).toContain('gravados só pelos hooks');
+}
+
 // A3 da Revisão 1 da fatia 2 (AI-26, AI-15): não se sabe se a ferramenta Write normaliza o `..` pelo texto antes de
 // gravar. Com `src/deep` apontando para `src/a/b/c`, o pedido `src/deep/../../scripts/x.mjs` é `scripts/x.mjs` pelo
 // texto e `src/a/scripts/x.mjs` pelo caminho real. A guarda nega se qualquer das duas leituras cai num lugar protegido.
@@ -1666,26 +1704,9 @@ describe('AI-26 a guarda também nega quando o .. lido pelo texto cai num lugar 
 
   afterAll(cleanupTempDirs);
 
-  function decideFor(
-    agentType: string | undefined,
-    filePath: string,
-    tool = 'Write',
-  ): string | null {
-    const input: HookInput = {
-      ...editInput(agentType, filePath),
-      tool_name: tool,
-      cwd: project,
-    };
-    return decide(input, project, project);
-  }
+  const decideFor = deciderIn(() => project);
 
-  // O texto, e não o `join`: o `join` já resolveria o `..` antes da guarda.
-  const forms: [string, (relative: string) => string][] = [
-    ['relativo', (relative) => relative],
-    ['absoluto', (relative) => `${project}/${relative}`],
-  ];
-
-  describe.each(forms)('pedido %s', (_form, pick) => {
+  describe.each(textForms(() => project))('pedido %s', (_form, pick) => {
     it.each([
       ['scripts/', 'src/deep/../../scripts/x.mjs'],
       ['.claude/', 'src/deep/../../.claude/hooks/x.mjs'],
@@ -1708,10 +1729,7 @@ describe('AI-26 a guarda também nega quando o .. lido pelo texto cai num lugar 
       'AI-15 a sessão principal não grava em %s pelo .. depois do link, lido pelo texto',
       (_label, relative) => {
         for (const tool of ['Write', 'Edit']) {
-          const reason = decideFor(undefined, pick(relative), tool);
-
-          expectDenied(reason);
-          expect(reason).toContain('gravados só pelos hooks');
+          expectHooksOnly(decideFor(undefined, pick(relative), tool));
         }
       },
     );
@@ -1785,5 +1803,82 @@ describe('AI-15 a sessão principal com o cwd numa worktree não grava um link d
   // Controle negativo: o destino do link, escrito direto, segue liberado à sessão principal.
   it('AI-15 controle: notes/r.md da pasta principal, escrito direto, segue liberado', () => {
     expectAllowed(decideInWorktree(join(project, 'notes', 'r.md'), 'Write'));
+  });
+});
+
+// A16 da Revisão 2 da fatia 2 (AI-26, AI-15): a mesma premissa do A3. Se a ferramenta normaliza o `..` pelo texto,
+// `src/deep/../../lnk/x.mjs` vira `lnk/x.mjs`, e o link `lnk` (na raiz) leva a `scripts/x.mjs`. Pelo caminho real o
+// pedido cai em `src/a/lnk/x.mjs`. A guarda segue os links também depois da leitura pelo texto.
+describe('AI-26 a guarda segue os links do caminho que sai da leitura do .. pelo texto', () => {
+  let project: string;
+  let alias: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-a16-');
+    mkdirSync(join(project, 'src', 'a', 'b', 'c'), { recursive: true });
+    mkdirSync(join(project, 'src', 'b'), { recursive: true });
+    mkdirSync(join(project, 'scripts'), { recursive: true });
+    mkdirSync(join(project, 'notes'), { recursive: true });
+    mkdirSync(join(project, '.claude', 'state'), { recursive: true });
+    mkdirSync(join(project, '.claude', 'reviews'), { recursive: true });
+    symlinkSync('a/b/c', join(project, 'src', 'deep'));
+    symlinkSync('scripts', join(project, 'lnk'));
+    symlinkSync('.claude/state', join(project, 'lnkState'));
+    symlinkSync('.claude/reviews', join(project, 'lnkReviews'));
+    symlinkSync('src/b', join(project, 'lnk2'));
+    // Outro prefixo da mesma raiz: um link de pasta que aponta para ela (o /tmp do macOS).
+    alias = join(makeTempDir('ai26-a16-alias-'), 'L');
+    symlinkSync(project, alias);
+  });
+
+  afterAll(cleanupTempDirs);
+
+  const decideFor = deciderIn(() => project);
+
+  describe.each(textForms(() => project))('pedido %s', (_form, pick) => {
+    it('AI-26 o implementer não grava em scripts/ pelo link lnk depois do .. lido pelo texto', () => {
+      for (const tool of ['Write', 'Edit']) {
+        expectDenied(
+          decideFor('implementer', pick('src/deep/../../lnk/x.mjs'), tool),
+        );
+      }
+    });
+
+    it.each([
+      ['.claude/state', 'src/deep/../../lnkState/x'],
+      ['.claude/reviews', 'src/deep/../../lnkReviews/x'],
+    ])(
+      'AI-15 a sessão principal não grava em %s pelo link depois do .. lido pelo texto',
+      (_label, relative) => {
+        for (const tool of ['Write', 'Edit']) {
+          expectHooksOnly(decideFor(undefined, pick(relative), tool));
+        }
+      },
+    );
+
+    // Controles negativos: o destino do link fica em src/ pelos dois jeitos, ou fora das pastas protegidas.
+    it('AI-26 controle: src/deep/../y.ts segue liberado ao implementer', () => {
+      expectAllowed(decideFor('implementer', pick('src/deep/../y.ts')));
+    });
+
+    it('AI-26 controle: o link lnk2, que aponta para src/b, segue liberado ao implementer', () => {
+      expectAllowed(decideFor('implementer', pick('src/deep/../../lnk2/x.ts')));
+    });
+
+    it('AI-15 controle: a sessão principal segue gravando em notes/ pelo .. depois do link', () => {
+      expectAllowed(decideFor(undefined, pick('src/deep/../../notes/x.md')));
+    });
+  });
+
+  it('AI-26 o implementer não grava em scripts/ pelo .. depois do link quando o pedido absoluto usa outro prefixo da raiz', () => {
+    for (const tool of ['Write', 'Edit']) {
+      expectDenied(
+        decideFor('implementer', `${alias}/src/deep/../../scripts/x.mjs`, tool),
+      );
+    }
+  });
+
+  it('AI-26 controle: com outro prefixo da raiz, src/deep/../y.ts segue liberado ao implementer', () => {
+    expectAllowed(decideFor('implementer', `${alias}/src/deep/../y.ts`));
   });
 });
