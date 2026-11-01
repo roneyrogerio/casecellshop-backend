@@ -175,7 +175,8 @@
         "complexity": [
           "error",
           {
-            "max": 10
+            "max": 10,
+            "variant": "modified"
           }
         ],
         "max-depth": [
@@ -185,12 +186,6 @@
           }
         ],
         "max-params": [
-          "error",
-          {
-            "max": 4
-          }
-        ],
-        "max-nested-callbacks": [
           "error",
           {
             "max": 4
@@ -242,6 +237,10 @@
               {
                 "regex": "(^|/)(checkout|orders|health|billing|catalog|main)/|(^|/)app\\.ts$",
                 "message": "A fronteira e o contrato não importam pastas de negócio, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
@@ -260,6 +259,10 @@
               {
                 "regex": "(^|/)(orders|health|billing|catalog|main)/|(^|/)app\\.ts$",
                 "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
@@ -278,6 +281,10 @@
               {
                 "regex": "(^|/)(checkout|health|billing|catalog|main)/|(^|/)app\\.ts$",
                 "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
@@ -296,6 +303,10 @@
               {
                 "regex": "(^|/)(checkout|orders|billing|catalog|main)/|(^|/)app\\.ts$",
                 "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
@@ -314,6 +325,10 @@
               {
                 "regex": "(^|/)(checkout|orders|health|catalog|main)/|(^|/)app\\.ts$",
                 "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
@@ -332,10 +347,23 @@
               {
                 "regex": "(^|/)(checkout|orders|health|billing|main)/|(^|/)app\\.ts$",
                 "message": "Uma pasta de negócio não importa outra, src/app.ts nem src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/|^\\./sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "files": [
+        "src/**/*.test.ts"
+      ],
+      "rules": {
+        "max-lines": "off",
+        "max-lines-per-function": "off"
       }
     },
     {
@@ -350,20 +378,14 @@
               {
                 "regex": "(^|/)main/",
                 "message": "src/app.ts não importa src/main/ (AD-025)."
+              },
+              {
+                "regex": "(^|/)erp/sim/",
+                "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
               }
             ]
           }
         ]
-      }
-    },
-    {
-      "files": [
-        "src/**/*.test.ts"
-      ],
-      "rules": {
-        "max-lines": "off",
-        "max-lines-per-function": "off",
-        "max-nested-callbacks": "off"
       }
     }
   ]

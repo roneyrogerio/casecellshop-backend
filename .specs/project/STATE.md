@@ -288,6 +288,8 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 **Status:** aceita (30/10/2026, PR #4). O teto fixo de rodadas da revisão é substituído pela AD-015, o destino dos achados `baixa` de texto, pela AD-022, e a leitura de uns 10 minutos do mantenedor, pela AD-023.
 
+**Errata (31/10/2026, PR #17):** a última frase do contexto trocou a lista de autores e empresas pelo princípio técnico que ela resumia; a decisão não mudou.
+
 **Contexto.** O M1 entregou o que prometia, mas o processo custou mais que o produto:
 - **Documentos:** cerca de 162 KB de documentação de processo para 1.105 linhas de código.
 - **Leitura por chamada:** cada agente relia de 65 KB a 147 KB, e o `AGENTS.md` entrava duas vezes, pelo `CLAUDE.md` e pela instrução de lê-lo.
@@ -696,7 +698,7 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 **Decisão.** A tabela está em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Pastas do código".
 
 - **Uma pasta por capacidade do negócio:** `checkout/`, `orders/`, `health/`, `billing/` e, no M4, `catalog/`. Cada uma guarda as rotas, as consultas e os laços e comandos que rodam fora da requisição. O relay, o worker, a reconciliação, o runbook, a permissão de chamada e a conclusão mudam juntos quando o faturamento muda (AD-021, AD-024), então ficam juntos em `src/billing/`.
-- **Uma pasta por tecnologia de fronteira:** `erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`. Cada uma tem a porta e o adaptador, para trocar o ElasticMQ pelo SQS ou o ERP simulado pelo real sem tocar a regra de negócio (AD-004).
+- **Uma pasta por sistema externo:** `erp/`, `db/`, `queue/`, `http/` e, no M4, `cache/`. Cada uma tem a porta, definida pela conversa de que o negócio precisa (`ErpClient`, `Queue`), e o adaptador da tecnologia que a atende. O ERP simulado é um adaptador da porta `ErpClient`, e o ERP real entra no lugar dele sem mudar a regra de negócio (AD-004).
 - **`src/shared/`** guarda o que todo o código usa e que não conhece o negócio: relógio, configuração, encerramento, logs, telemetria, identidade do serviço e semáforo.
 - **`src/main/`** tem uma entrada por processo e é o único lugar que monta as dependências. **`src/app.ts`** é a fábrica do app HTTP, sem abrir porta, para os testes subirem o app pelo supertest.
 - As dependências seguem um sentido só: de `main/` para o negócio, e do negócio para a fronteira, o contrato e o `shared/`. A fronteira e o `shared/` não importam pastas de negócio, e uma pasta de negócio não importa outra. O lint confere esse sentido (AD-026).
@@ -716,9 +718,9 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 **Referências:**
 
 - Robert C. Martin, *Clean Architecture*, 1.ª ed., cap. 13 ("Component Cohesion", princípio do fechamento comum) e cap. 14 ("Component Coupling", princípio das dependências acíclicas): agrupar o que muda junto e manter as dependências sem ciclo.
-- [Alistair Cockburn, *Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/): porta e adaptador por tecnologia externa.
+- [Alistair Cockburn, *Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/), consultado em 31/10/2026: a porta é definida pelo propósito da conversa, e o adaptador é a parte específica da tecnologia; uma porta pode ter vários adaptadores.
 - [Mark Seemann, *Composition Root*](https://blog.ploeh.dk/2011/07/28/CompositionRoot/): a montagem das dependências fica junto da entrada de cada processo.
-- [Yoni Goldberg et al., *Node.js Best Practices*, seção 1.1](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
+- [Yoni Goldberg et al., *Node.js Best Practices*, "Structure your solution by components"](https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/projectstructre/breakintcomponents.md): estrutura por componentes de negócio em serviços Node.js.
 
 ### AD-026 · Limites de tamanho, complexidade e dependências conferidos pelo lint
 
@@ -729,15 +731,15 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 **Decisão.** Os limites e as regras estão em [`CONVENTIONS.md`](../codebase/CONVENTIONS.md), "Tamanho e forma do código", e são conferidos pelo `npm run lint` em `src/`, no hook de parada dos agentes, no pre-push e no CI.
 
 - **Tamanho:** 300 linhas por arquivo e 50 por função, contando só linhas com código. Os comentários explicam o porquê (`AGENTS.md`) e não podem empurrar uma função para fora do limite.
-- **Complexidade:** 10 de complexidade ciclomática por função, 4 níveis de aninhamento, 4 parâmetros (acima disso, um objeto de opções, como as fábricas `createX` já usam) e 4 callbacks aninhados.
-- **Dependências:** `no-restricted-imports` por pasta confere o sentido da AD-025, e `import/no-cycle` impede ciclos.
-- **Configuração:** `node/no-process-env` deixa só o `src/shared/config.ts` ler o ambiente, para a configuração ter um ponto de entrada e falhar na partida.
-- **Testes:** em `*.test.ts`, os limites de linhas por arquivo e por função e de callbacks aninhados não valem, porque `describe` e `it` são funções e uma tabela de casos é longa por natureza.
+- **Complexidade:** 10 de complexidade ciclomática por função, na variante em que um `switch` conta como uma decisão só, porque um `switch` sobre os valores de uma lista fechada (os desfechos do ERP, os códigos do zod) é lido como uma tabela; 4 níveis de aninhamento; e 4 parâmetros (acima disso, um objeto de opções, como as fábricas `createX` já usam).
+- **Dependências:** `no-restricted-imports` por pasta confere o sentido da AD-025 e deixa só o `src/main/` importar o ERP simulado; `import/no-cycle` impede ciclos.
+- **Configuração:** `node/no-process-env` deixa só o `src/shared/config.ts` ler o ambiente, para os padrões, a validação e as mensagens de erro de cada variável ficarem num lugar só.
+- **Testes:** em `*.test.ts`, os limites de linhas por arquivo e por função não valem, porque `describe` e `it` são funções e uma tabela de casos é longa por natureza.
 - **Exceção:** um limite não sobe e uma regra não é desligada num arquivo sem uma AD. O `.oxlintrc.json` fica fora do alcance do `implementer` (AI-04).
 
 **Alternativas consideradas:**
 
-- **Os padrões das regras** (300 linhas, 50 por função, complexidade 20, 3 parâmetros): complexidade 20 deixa passar as cinco funções achadas; 3 parâmetros acusaria o middleware de erro do Express, que exige 4.
+- **Os padrões das regras** (complexidade 20, 3 parâmetros): complexidade 20 deixa passar as cinco funções achadas; 3 parâmetros acusaria o middleware de erro do Express, que exige 4. Os outros números (300 linhas por arquivo, 50 por função, aninhamento 4) são os padrões das próprias regras.
 - **Complexidade cognitiva** (limite 15) em vez da ciclomática: mede melhor a dificuldade de leitura, mas o oxlint não tem a regra nativa, e as opções (o plugin `sonarjs` pelos plugins em JavaScript, ainda em alfa, ou um pacote de terceiros) trazem uma dependência para uma medida que a ciclomática com aninhamento limitado já aproxima.
 - **dependency-cruiser** para o sentido das dependências: cobre camadas e arquivos órfãos, mas é uma dependência a mais para uma regra que o `no-restricted-imports` nativo expressa em poucas linhas.
 - **Só a revisão:** o revisor acha o problema depois do código escrito; o lint devolve o agente no próprio hook de parada.
@@ -748,10 +750,10 @@ Os seis problemas têm a mesma origem: a verificação dependia de quem implemen
 
 **Referências:**
 
-- [ESLint, regras `max-lines`, `max-lines-per-function`, `complexity`, `max-depth` e `max-params`](https://eslint.org/docs/latest/rules/): os padrões de cada regra e a observação de que não há um máximo objetivo, só uma faixa usual.
+- [ESLint, *max-lines*](https://eslint.org/docs/latest/rules/max-lines): "não há um número máximo objetivo" de linhas por arquivo, e as recomendações vão de 100 a 500; o padrão da regra é 300. Os limites desta AD são, portanto, escolha do projeto dentro da faixa usual, e não um número de consenso.
+- [ESLint, *complexity*](https://eslint.org/docs/latest/rules/complexity): as variantes `classic` e `modified`.
 - Thomas J. McCabe, *A Complexity Measure*, IEEE Transactions on Software Engineering, SE-2(4), 1976: o limite de 10 de complexidade ciclomática por módulo.
-- Arthur H. Watson e Thomas J. McCabe, *Structured Testing: A Testing Methodology Using the Cyclomatic Complexity Metric*, NIST SP 500-235, 1996: recomenda 10 como limite e registra limites de até 15 usados com justificativa.
-- [Google, *TypeScript Style Guide*](https://google.github.io/styleguide/tsguide.html): uma função acima de uns 40 linhas pede que se pense em dividi-la.
+- [Google, *TypeScript Style Guide*](https://google.github.io/styleguide/tsguide.html): uma função acima de umas 40 linhas pede que se pense em dividi-la.
 - [oxc, regras do oxlint](https://oxc.rs/docs/guide/usage/linter/rules.html), consultado em 31/10/2026: as regras nativas e as que exigem plugin.
 - [Anthropic, *Claude Code: Best practices*](https://code.claude.com/docs/en/best-practices), consultado em 31/10/2026: o que precisa acontecer toda vez vai para um hook ou para o CI, não para as instruções.
 

@@ -63,7 +63,7 @@ A estrutura separa o que muda em ritmos diferentes: a visão, a ordem de entrega
 
 **Ciclo:**
 - a AD nasce "proposta" no PR que a cria e fica aceita com o merge dele; a substituída é marcada no mesmo PR;
-- aceita, não é editada: uma nova AD a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN"); quando a nova muda só uma parte, "alterada pela AD-NNN" / "altera a AD-NNN".
+- aceita, não é editada, exceto por uma errata de redação que não muda a decisão, registrada logo abaixo do status com data e PR ("**Errata (DD/MM/AAAA, PR #N):** …"); uma mudança de decisão pede uma nova AD, que a substitui, e as duas se apontam ("substituída por AD-NNN" / "substitui AD-NNN"); quando a nova muda só uma parte, "alterada pela AD-NNN" / "altera a AD-NNN".
 
 **Fontes.**
 
