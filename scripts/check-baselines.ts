@@ -25,10 +25,22 @@ interface Floor {
 // qualquer outra forma reprova, e o arquivo sem thresholds não tem piso.
 function floorOf(config: string): Floor {
   const values = new Map<string, number>();
+  // Uma chave computada (['thresh' + 'olds']: …) poria o piso de verdade fora
+  // do texto, com uma isca num comentário no lugar (A15 do #27).
+  if (/\]\s*:/.test(config))
+    return { values, problem: 'chave computada no arquivo' };
   const mentions = config.match(/\bthresholds\b/g)?.length ?? 0;
   if (mentions === 0) return { values };
   if (mentions > 1)
     return { values, problem: `thresholds aparece ${mentions} vezes` };
+  const coverage = coverageBlock(config);
+  if (typeof coverage === 'string') return { values, problem: coverage };
+  const at = config.search(/\bthresholds\b/);
+  if (at < coverage.start || at >= coverage.end)
+    return { values, problem: 'thresholds fora do bloco coverage' };
+  // Um spread no bloco poderia trazer outro thresholds por cima do literal.
+  if (config.slice(coverage.start, coverage.end).includes('...'))
+    return { values, problem: '... no bloco coverage' };
   const block = /\bthresholds\s*:\s*\{([^{}\n]*)\}/.exec(config)?.[1];
   if (block === undefined)
     return { values, problem: 'thresholds não é um objeto de uma linha' };
@@ -46,6 +58,25 @@ function floorOf(config: string): Floor {
   if (missing.length > 0)
     return { values, problem: `piso de ${missing.join(', ')} removido` };
   return { values };
+}
+
+// O trecho entre as chaves do bloco coverage:, que aparece uma vez só, ou o
+// motivo de não haver um. As chaves de um glob ('*.{ts,js}') se equilibram.
+function coverageBlock(
+  config: string,
+): { start: number; end: number } | string {
+  const keys = [...config.matchAll(/\bcoverage\s*:\s*/g)];
+  if (keys.length !== 1) return `o bloco coverage aparece ${keys.length} vezes`;
+  const [key] = keys;
+  const start = (key?.index ?? 0) + (key?.[0].length ?? 0);
+  if (config[start] !== '{') return 'coverage não é um objeto literal';
+  let depth = 0;
+  for (let index = start; index < config.length; index += 1) {
+    if (config[index] === '{') depth += 1;
+    else if (config[index] === '}') depth -= 1;
+    if (depth === 0) return { start, end: index + 1 };
+  }
+  return 'o bloco coverage não fecha';
 }
 
 export function coverageFloorViolations(

@@ -47,7 +47,10 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          pr=$(gh pr view "$HEAD_BRANCH" --json number,state --jq 'select(.state == "OPEN") | .number')
+          # Pela lista dos PRs da branch: o seletor de um PR só lê como número
+          # uma branch de nome numérico, e sem PR sai com erro, o que o set -e
+          # transformaria em job vermelho em vez do aviso (A2 do #27).
+          pr=$(gh pr list --head "$HEAD_BRANCH" --state open --json number,isCrossRepository --jq 'map(select(.isCrossRepository == false)) | .[0].number // empty')
           if [ -z "$pr" ]; then
             echo "::warning::Nenhum PR aberto da branch $HEAD_BRANCH."
             exit 0

@@ -1,9 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTempDirs,
   git,
+  makeTempDir,
   writeFileIn,
 } from '../test/helpers/git-sandbox.ts';
 import { repoRoot } from '../test/helpers/repo-root.ts';
@@ -317,6 +319,245 @@ describe('AI-49 coverageFloorViolations só aceita o piso na forma fixa, nos doi
 
     expect(text.match(/thresholds/g)).toHaveLength(1);
     expect(coverageFloorViolations(text, text)).toEqual([]);
+  });
+});
+
+// A forma fixa, parte 2 (AI-49): `thresholds` só dentro do bloco `coverage:`, que aparece uma vez; o arquivo não tem
+// chave computada (`[expressão]:`), e o bloco `coverage:` não tem `...`. Cada caso mantém o piso da base, para o único
+// defeito ser a forma. A isca é o `thresholds` de um comentário, que a leitura por texto tomaria pelo bloco de verdade.
+describe('AI-49 coverageFloorViolations reprova o thresholds fora do bloco coverage, a chave computada e o ... no bloco', () => {
+  const FLOOR_BLOCK =
+    'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 }';
+  const DECOY = `    // ${FLOOR_BLOCK}\n`;
+
+  function edit(text: string, from: string, to: string): string {
+    const result = text.replace(from, to);
+    expect(result, `trecho trocado: ${from}`).not.toBe(text);
+    return result;
+  }
+
+  const withoutFloor = edit(config(FLOOR), `      ${FLOOR_BLOCK},\n`, '');
+
+  const BAD_SHAPES: [string, string][] = [
+    [
+      'o thresholds ao lado do bloco coverage (fora dele), numa linha',
+      edit(
+        withoutFloor,
+        '    projects: [],',
+        `    ${FLOOR_BLOCK},\n    projects: [],`,
+      ),
+    ],
+    [
+      'o thresholds dentro de um projeto (fora do bloco coverage)',
+      edit(
+        withoutFloor,
+        'projects: [],',
+        `projects: [{ test: { ${FLOOR_BLOCK} } }],`,
+      ),
+    ],
+    [
+      'o thresholds antes do bloco coverage (fora dele), e um coverage sem piso depois',
+      edit(
+        withoutFloor,
+        '    coverage: {',
+        `    ${FLOOR_BLOCK},\n    coverage: {`,
+      ),
+    ],
+    [
+      'o bloco coverage citado duas vezes',
+      edit(
+        config(FLOOR),
+        'projects: [],',
+        "projects: [{ test: { coverage: { provider: 'v8' } } }],",
+      ),
+    ],
+    [
+      "uma chave computada ['thresh' + 'olds'] com a isca num comentário",
+      edit(
+        edit(
+          config(FLOOR),
+          `      ${FLOOR_BLOCK},\n`,
+          "      ['thresh' + 'olds']: { lines: 1, functions: 1, branches: 1, statements: 1 },\n",
+        ),
+        '    projects: [],',
+        `${DECOY}    projects: [],`,
+      ),
+    ],
+    [
+      "uma chave computada de template (cover${''}age) com a isca num comentário",
+      edit(
+        edit(
+          edit(config(FLOOR), `      ${FLOOR_BLOCK},\n`, ''),
+          '    coverage: {',
+          "    [`cover${''}age`]: {",
+        ),
+        '    projects: [],',
+        `${DECOY}    projects: [],`,
+      ),
+    ],
+    [
+      'uma chave computada longe do piso (num projeto), com o piso na forma certa',
+      edit(
+        config(FLOOR),
+        'projects: [],',
+        "projects: [{ test: { [`na${'me'}`]: 'unit' } }],",
+      ),
+    ],
+    [
+      'uma chave computada por identificador ([nome]:)',
+      edit(
+        config(FLOOR),
+        'projects: [],',
+        "projects: [{ test: { [nome]: 'unit' } }],",
+      ),
+    ],
+    [
+      'um ...spread no começo do bloco coverage',
+      edit(
+        config(FLOOR),
+        "      provider: 'v8',",
+        "      ...extra,\n      provider: 'v8',",
+      ),
+    ],
+    [
+      'um ...spread no fim do bloco coverage, depois do thresholds',
+      edit(
+        config(FLOOR),
+        `${FLOOR_BLOCK},\n`,
+        `${FLOOR_BLOCK},\n      ...extra,\n`,
+      ),
+    ],
+  ];
+
+  // Cada forma ruim, de cada lado: o outro lado é o piso na forma certa e igual.
+  const BOTH_SIDES = BAD_SHAPES.flatMap(([label, text]) => [
+    { name: `${label} no PR`, base: config(FLOOR), head: text },
+    { name: `${label} na base`, base: text, head: config(FLOOR) },
+  ]);
+
+  it.each(BOTH_SIDES)(
+    'AI-49 $name reprova, mesmo com o piso igual',
+    ({ base, head }) => {
+      expect(coverageFloorViolations(base, head)).not.toEqual([]);
+    },
+  );
+
+  // Controles negativos: o ... fora do bloco coverage e os colchetes de lista não são chave computada nem spread
+  // do bloco, e o vitest.config.ts do repositório (que tem o ...configDefaults.exclude) continua passando.
+  it('AI-49 controle: um ...configDefaults.exclude fora do bloco coverage passa, nos dois lados', () => {
+    const spread = edit(
+      config(FLOOR),
+      'projects: [],',
+      'projects: [{ test: { exclude: [...configDefaults.exclude] } }],',
+    );
+
+    expect(coverageFloorViolations(config(FLOOR), spread)).toEqual([]);
+    expect(coverageFloorViolations(spread, config(FLOOR))).toEqual([]);
+  });
+
+  it('AI-49 controle: o vitest.config.ts do repositório, que tem ...configDefaults.exclude fora do bloco coverage, passa', () => {
+    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
+
+    expect(text).toContain('...configDefaults.exclude');
+    expect(coverageFloorViolations(text, text)).toEqual([]);
+  });
+});
+
+// O piso longo (AI-49): quatro pisos de 100 passam das 80 colunas do Prettier com a indentação do arquivo. O
+// `// prettier-ignore` logo acima mantém a linha inteira, e a conferência a lê do mesmo jeito. Sem ele, o Prettier
+// quebra o objeto em várias linhas, forma que a conferência reprova.
+describe('AI-49 o piso longo com // prettier-ignore passa no Prettier e na conferência', () => {
+  const LONG: Floor = {
+    lines: 100,
+    functions: 100,
+    branches: 100,
+    statements: 100,
+  };
+  const prettierBin = join(repoRoot, 'node_modules', '.bin', 'prettier');
+
+  function longConfig(withIgnore: boolean): string {
+    const text = config(LONG);
+    if (!withIgnore) return text;
+    return text.replace(
+      '      thresholds:',
+      '      // prettier-ignore\n      thresholds:',
+    );
+  }
+
+  // O arquivo fica numa pasta temporária fora do repositório; a configuração do projeto entra por --config.
+  function runPrettier(
+    content: string,
+    mode: '--check' | 'format',
+  ): { status: number | null; stdout: string; output: string } {
+    const file = join(makeTempDir('ai49-prettier-'), 'vitest.config.ts');
+    writeFileSync(file, content);
+    const args = [
+      '--config',
+      join(repoRoot, '.prettierrc.json'),
+      '--ignore-path',
+      '/dev/null',
+    ];
+    if (mode === '--check') args.push('--check');
+    const result = spawnSync(prettierBin, [...args, file], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      output: `${result.stdout}${result.stderr}`,
+    };
+  }
+
+  it('AI-49 a linha do piso de 100 passa das 80 colunas (premissa dos casos abaixo)', () => {
+    const line = config(LONG)
+      .split('\n')
+      .find((candidate) => candidate.includes('thresholds'));
+
+    expect(line?.length).toBeGreaterThan(80);
+  });
+
+  it('AI-49 o piso longo com // prettier-ignore passa na conferência, contra ele mesmo e contra um piso menor', () => {
+    const text = longConfig(true);
+
+    expect(text).toContain('// prettier-ignore\n      thresholds:');
+    expect(coverageFloorViolations(text, text)).toEqual([]);
+    expect(
+      coverageFloorViolations(
+        text,
+        longConfig(true).replace('lines: 100', 'lines: 99'),
+      ),
+    ).toEqual([expect.stringContaining('lines')]);
+  });
+
+  it('AI-49 o piso longo com // prettier-ignore passa no prettier --check', () => {
+    const result = runPrettier(longConfig(true), '--check');
+
+    expect(result.output).not.toContain('Code style issues');
+    expect(result.output).toContain(
+      'All matched files use Prettier code style',
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it('AI-49 o mesmo piso sem o // prettier-ignore reprova no prettier --check', () => {
+    const result = runPrettier(longConfig(false), '--check');
+
+    expect(result.output).toContain('Code style issues');
+    expect(result.status).toBeGreaterThan(0);
+  });
+
+  it('AI-49 o mesmo piso sem o // prettier-ignore, como o Prettier o reformata em várias linhas, reprova na conferência', () => {
+    const formatted = runPrettier(longConfig(false), 'format');
+
+    expect(formatted.status).toBe(0);
+    expect(formatted.stdout).toMatch(/thresholds: \{\n\s+lines: 100,/);
+    expect(
+      coverageFloorViolations(config(LONG), formatted.stdout).length,
+    ).toBeGreaterThan(0);
+    expect(
+      coverageFloorViolations(formatted.stdout, formatted.stdout).length,
+    ).toBeGreaterThan(0);
   });
 });
 

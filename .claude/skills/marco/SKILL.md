@@ -29,24 +29,10 @@ Read only the sections you need: the milestone criteria in `spec.md`, the matchi
 
 - the criteria in scope, with any `SPEC_DEVIATION` found (criterion, evidence, proposed fix);
 - slices by area, each of at most ~400 lines of production code (`src/`, `migrations/`), checked after each `feat:` with `git diff --shortstat <base>..HEAD -- src migrations`; if the milestone estimate passes ~800 lines, split it into two PRs;
-- for each slice, the task map below;
+- for each slice, the task map of [delegation.md](delegation.md), sent in every delegation prompt;
 - the ADs to propose, the stubs to create, and the pending items inherited from the previous milestone as checklist items;
 - the `DOC-*` criteria this milestone touches (the answers to the challenge questions), drafted in `ARCHITECTURE.md` in this same PR;
 - the threats the milestone's area opens, each with the criterion that covers it (AD-016).
-
-Task map, sent in every delegation prompt (a subagent does not see this conversation):
-
-```text
-Fatia N de M · Área: <área> · Critérios: <IDs>
-Tarefa: <uma frase>
-Ler (só estes trechos): spec.md § <seção>; design.md § <seção>; STATE.md § AD-NNN; <arquivos>
-Tocar: <arquivos ou pastas>
-Stubs já criados: <arquivos e rotas>
-Testes que devem passar: <arquivos>
-Estimativa: ~<linhas> linhas de produção
-Achados e CI (correções): <texto do achado ou .claude/reviews/<arquivo>.md>; <cauda do log do CI>
-Se faltar algo: buscar com grep e listar no relatório o que leu além do mapa.
-```
 
 Show the plan to the maintainer and wait for approval (maintainer point 1).
 
@@ -56,10 +42,12 @@ Update `spec.md`, `design.md`, the contract in `src/contract/` (then `npm run op
 
 ## 4. Each slice
 
-1. `test-writer` with the map: failing tests for the slice criteria. Its stop hook requires lint and typecheck green. Bring its worktree's changes in: `git -C <wt> add -A && git -C <wt> diff --cached --binary | git apply --index` (the result names `<wt>` and its branch), then `git -C <wt> reset -q && git worktree remove --force <wt> && git branch -D <branch>`; if the apply fails, `git restore --staged --worktree` the files it touched and retry. Check `git status` against the role, then commit `test(<escopo>): …`. The tests must fail by assertion; a collection error goes back to it.
-2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Read `.claude/state/stop-exceptions.log` (a stop-hook exception is an escalation; a git-state change listed there is undone by you before anything else); bring its worktree's changes in as in step 1, check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
-3. Read the CI with `mcp__github__pull_request_read` (`method: get_check_runs`) and, on a failure, `mcp__github__get_job_logs` (`failed_only: true`, `return_content: true`, `tail_lines: 200`), so only the failing tail enters the context. Route it: code → `implementer` (escalation step for that problem); a test that looks wrong → `implementer` reports with evidence and `test-writer` fixes it; oracle, spec or contract → you; infrastructure → one re-run, then treat as a code problem.
-4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan, the CI summary, the round number and, from the second round on, the path of the previous report in `.claude/reviews/`. Before a whole-PR round, run `git fetch origin` yourself: the reviewer only reads git (AI-11), and a ref change in its run is logged as an exception (AI-12). A hook saves its report to `.claude/reviews/<agent_id>.md` (AI-15); post that file's text unchanged with `mcp__github__add_issue_comment`: a hook refuses a comment that differs from a saved report, so the PR shows the report exactly as written. Never write that folder yourself. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta, except a text fix: the `reviewer` checks its delta in the same round, given the round's last report; post only the round's last report (AD-022).
+Read [delegation.md](delegation.md) before the first delegation of each slice and before a whole-PR round: it holds how to bring an agent's work in (also when `isolation` did not apply and it edited the main folder), how to read and route the CI, the `git fetch` and the posting of the review report, and how to wait for the CI and long commands without a fixed timer.
+
+1. `test-writer` with the map: failing tests for the slice criteria. Its stop hook requires lint and typecheck green. Bring its work in, check `git status` against the role, then commit `test(<escopo>): …`. The tests must fail by assertion; a collection error goes back to it.
+2. `implementer` with the map and the test files: code until the slice tests pass. Its stop hook runs `npm run verify:fast` and sends it back while anything is red (after the third return it lets it stop and reports an exception: treat it as an escalation). Bring its work in, check `git status` against the role, then commit `feat(<escopo>): …`, `git push`, and tick the checklist with `mcp__github__update_pull_request` (`body`).
+3. Read the CI after the push and route a failure.
+4. `reviewer` on the slice delta (`git diff <base>..<head>`), with the map's criteria, the plan, the CI summary, the round number and, from the second round on, the path of the previous report in `.claude/reviews/`. Post its saved report unchanged. Route findings: code → `implementer` (escalation); tests → `test-writer`; spec, docs, ADs, CI → you. Each fix commit outside the free list needs a new round on its delta, except a text fix: the `reviewer` checks its delta in the same round, given the round's last report; post only the round's last report (AD-022).
 
 The free list (commits that need no new round): the status line of `ROADMAP.md`, the PR description and its checklist. `README.md` is not free: the challenge evaluates it.
 

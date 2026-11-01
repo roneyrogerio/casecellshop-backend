@@ -341,6 +341,71 @@ const aliasAllowed: [string, string][] = [
   ],
 ];
 
+// A6 do #27: o namespace dinâmico chega ao sql por caminhos que a árvore de um arquivo não acompanha, então todo
+// import('kysely') reprova. Cada forma é inteira.
+const dynamicImportForms: [string, string][] = [
+  [
+    'o import dinâmico do kysely lendo outro nome do namespace (new k.Kysely)',
+    "const k = await import('kysely');\nexport const db = new k.Kysely({});",
+  ],
+  [
+    'o import dinâmico do kysely com o sql desestruturado com o mesmo nome',
+    "const { sql } = await import('kysely');\nconst q = sql`now()`;",
+  ],
+  [
+    'o import dinâmico do kysely com then ((k) => k.sql)',
+    "import('kysely').then((k) => k.sql);",
+  ],
+  [
+    'o import dinâmico do kysely atribuído depois da declaração (k = await import)',
+    "let k;\nk = await import('kysely');\nk.sql;",
+  ],
+  [
+    'o import dinâmico do kysely sob asserção de tipo ((await import(…) as any).sql)',
+    "(await import('kysely') as any).sql;",
+  ],
+  [
+    'o import dinâmico do kysely sem uso nenhum do resultado',
+    "await import('kysely');",
+  ],
+  [
+    'o import dinâmico do kysely como expressão solta, sem await',
+    "import('kysely');",
+  ],
+];
+
+const NAMESPACE_IMPORT = "import * as k from 'kysely';\n";
+
+// A7 do #27: o namespace do import * só passa como objeto de um membro não computado e em posição de tipo. Cada forma
+// leva o NAMESPACE_IMPORT na frente e reporta um erro só.
+const namespaceEscapes: [string, string][] = [
+  ['o namespace guardado em outra variável (const k2 = k)', 'const k2 = k;'],
+  ['o namespace espalhado ({ ...k })', 'const o = ({ ...k });'],
+  ['o namespace passado como argumento (f(k))', 'f(k);'],
+  ['o namespace sob asserção de tipo ((k as any).sql)', '(k as any).sql;'],
+  ['o namespace sob asserção não nula (k!.sql)', 'k!.sql;'],
+  ["o namespace lido por colchete (k['Kysely'])", "k['Kysely'];"],
+];
+
+const namespaceAllowed: [string, string][] = [
+  [
+    'o namespace como objeto de um membro não computado (k.Kysely)',
+    'k.Kysely;',
+  ],
+  [
+    'o namespace como objeto de um membro numa expressão new (new k.Kysely({}))',
+    'const db = new k.Kysely({});',
+  ],
+  [
+    'o namespace em posição de tipo (type T = k.Kysely<DB>)',
+    'type T = k.Kysely<DB>;',
+  ],
+  [
+    'o namespace em typeof, posição de tipo (type U = typeof k)',
+    'type U = typeof k;',
+  ],
+];
+
 tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
   valid: [
     ok('o import normal de sql', "import { sql } from 'kysely';"),
@@ -377,14 +442,6 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
     ok(
       'o reexport de outro nome do kysely',
       "export { Kysely } from 'kysely';\nexport type { Selectable } from 'kysely';",
-    ),
-    ok(
-      'o import dinâmico do kysely lendo outro nome do namespace',
-      "const k = await import('kysely');\nexport const db = new k.Kysely({});",
-    ),
-    ok(
-      'o import dinâmico do kysely com o sql desestruturado com o mesmo nome',
-      "const { sql } = await import('kysely');\nconst q = sql`now()`;",
     ),
     ok(
       'o sql lido do import dinâmico de outro módulo',
@@ -443,6 +500,9 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
       "// const s = sql; import { sql as s } from 'kysely';\nconst t = 'const s = sql;';",
     ),
     ...aliasAllowed.map(([label, code]) => ok(label, code)),
+    ...namespaceAllowed.map(([label, code]) =>
+      ok(label, `${NAMESPACE_IMPORT}${code}`),
+    ),
     ...regexAfterAlias.valid,
   ],
   invalid: [
@@ -527,6 +587,13 @@ tester.run('no-sql-alias', plugin.rules['no-sql-alias'], {
     bad(
       'a reexportação direta do sql do kysely com o mesmo nome',
       "export { sql } from 'kysely';",
+    ),
+    // A6 do #27: todo import('kysely') reprova, qualquer que seja o uso, com um erro por import. Os dois primeiros
+    // passavam como aceitos (o endurecimento do critério os trocou de lado).
+    ...dynamicImportForms.map(([label, code]) => bad(label, code)),
+    // A7 do #27: o namespace de import * as k só passa como objeto de membro não computado ou em posição de tipo.
+    ...namespaceEscapes.map(([label, code]) =>
+      bad(label, `${NAMESPACE_IMPORT}${code}`),
     ),
     ...aliasEscapes.map(([label, code]) => bad(label, `${SQL_IMPORT}${code}`)),
     ...aliasThroughModules.map(([label, code]) => bad(label, code)),

@@ -14,6 +14,36 @@ interface LockEntry {
   resolved?: unknown;
   integrity?: unknown;
   link?: unknown;
+  [block: string]: unknown;
+}
+
+const DEPENDENCY_BLOCKS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+] as const;
+
+// Os apelidos declarados no lockfile: a chave da dependência e os nomes reais
+// do "npm:<nome>@<faixa>" (string-width-cjs → string-width). O npm ci instala
+// pelo name da entrada mesmo sem a declaração, então o name sozinho deixaria
+// quem grava o lockfile trocar o pacote de um nome conhecido (A12 do #27).
+function declaredAliases(entries: LockEntry[]): Map<string, Set<string>> {
+  const aliases = new Map<string, Set<string>>();
+  for (const entry of entries)
+    for (const block of DEPENDENCY_BLOCKS) {
+      const deps = entry[block];
+      if (deps === null || typeof deps !== 'object') continue;
+      for (const [key, spec] of Object.entries(deps)) {
+        if (typeof spec !== 'string' || !spec.startsWith('npm:')) continue;
+        const target = spec.slice('npm:'.length);
+        // O @ da versão vem depois do nome; o do escopo é o primeiro caractere.
+        const at = target.lastIndexOf('@');
+        const real = at > 0 ? target.slice(0, at) : target;
+        aliases.set(key, (aliases.get(key) ?? new Set()).add(real));
+      }
+    }
+  return aliases;
 }
 
 // O nome do pacote pela chave: o que vem depois do último node_modules/, com o
@@ -58,6 +88,9 @@ export function lockfileViolations(lockText: string): string[] {
   )
     return ['packages ausente ou não é um objeto'];
   const violations: string[] = [];
+  const aliases = declaredAliases(
+    Object.values(lock.packages).map((raw) => (raw ?? {}) as LockEntry),
+  );
   for (const [name, raw] of Object.entries(lock.packages)) {
     const entry = (raw ?? {}) as LockEntry;
     // Só a raiz ("") não é pacote baixado. O projeto não usa workspaces: um link
@@ -83,9 +116,13 @@ export function lockfileViolations(lockText: string): string[] {
       reasons.push(`resolved fora de ${REGISTRY} (${resolved})`);
     else {
       // Um apelido de dependência (string-width-cjs instalado como string-width)
-      // traz o nome real no campo name da entrada, como o npm grava.
+      // traz o nome real no campo name da entrada, como o npm grava; ele só
+      // vale quando alguma entrada declara o apelido.
+      const key = packageName(name);
       const real =
-        typeof entry.name === 'string' ? entry.name : packageName(name);
+        typeof entry.name === 'string' && aliases.get(key)?.has(entry.name)
+          ? entry.name
+          : key;
       const problem = tarballProblem(resolved, real);
       if (problem) reasons.push(`${problem} (${resolved})`);
     }
