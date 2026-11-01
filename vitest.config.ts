@@ -46,8 +46,8 @@ export default defineConfig({
           sequence: { groupOrder: 2 },
           // Cada arquivo de integração sobe o próprio PostgreSQL e ElasticMQ;
           // com mais de 4 ao mesmo tempo, o Docker de 4 CPUs e 6 GB derrubou um
-          // banco no meio da suíte (FND-13). O PR C troca isso por um contêiner
-          // por rodada (FND-14), e aí este limite é revisto.
+          // banco no meio da suíte (FND-13). O PR C troca isso por um PostgreSQL
+          // e um ElasticMQ por rodada (FND-14), e aí este limite é revisto.
           maxWorkers: 4,
         },
       },
