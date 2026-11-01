@@ -1,24 +1,23 @@
-import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTempDirs,
   git,
-  makeTempDir,
   writeFileIn,
 } from '../test/helpers/git-sandbox.ts';
 import { repoRoot } from '../test/helpers/repo-root.ts';
+import { runNode } from '../test/helpers/run-node.ts';
 import {
   exportedFn,
   loadScript,
-  runScript,
   sandboxWithScript,
   type ScriptModule,
 } from '../test/helpers/script-module.ts';
 
-// AI-49: o piso de cobertura (AI-37) só sobe e a linha de base do jscpd (AI-36) só perde repetições. O script compara
-// o PR com a origin/main: um piso menor em qualquer métrica, ou uma repetição que não estava na base, reprova.
+// AI-49: o piso de cobertura (AI-37) só sobe e a linha de base do jscpd (AI-36) só perde repetições. O piso é um
+// dado, o coverage-floor.json, e três conferências o seguram: a forma (esquema fechado), a queda (contra a origin/main)
+// e a medida (o relatório do Vitest contra o piso da base). Nenhuma lê o vitest.config.ts.
 const FILE = 'check-baselines.ts';
 const METRICS = ['lines', 'functions', 'branches', 'statements'] as const;
 type Metric = (typeof METRICS)[number];
@@ -39,6 +38,13 @@ const coverageFloorViolations = (base: string, head: string): string[] =>
     'coverageFloorViolations',
   )(base, head);
 
+const measuredCoverageViolations = (floor: string, report: string): string[] =>
+  exportedFn<(floor: string, report: string) => string[]>(
+    mod,
+    FILE,
+    'measuredCoverageViolations',
+  )(floor, report);
+
 const baselineViolations = (base: string, head: string): string[] =>
   exportedFn<(base: string, head: string) => string[]>(
     mod,
@@ -46,46 +52,102 @@ const baselineViolations = (base: string, head: string): string[] =>
     'baselineViolations',
   )(base, head);
 
-// Do jeito que o vitest.config.ts é escrito: `thresholds` numa linha, dentro de `coverage`.
-function config(floor: Partial<Floor>): string {
-  const body = Object.entries(floor)
-    .map(([metric, value]) => `${metric}: ${String(value)}`)
-    .join(', ');
-  return `import { defineConfig } from 'vitest/config';
+const floorJson = (floor: Partial<Floor>): string => JSON.stringify(floor);
 
-export default defineConfig({
-  test: {
-    coverage: {
-      provider: 'v8',
-      include: ['src/**/*.ts'],
-      thresholds: { ${body} },
-    },
-    projects: [],
-  },
-});
-`;
+// O coverage-floor.json do repositório; a falta dele reprova por asserção, e não por erro de leitura.
+function repoFloor(): { text: string; parsed: Floor } {
+  const file = join(repoRoot, 'coverage-floor.json');
+  expect(existsSync(file), 'coverage-floor.json na raiz').toBe(true);
+  const text = readFileSync(file, 'utf8');
+  return { text, parsed: JSON.parse(text) as Floor };
 }
 
-// O mesmo `thresholds`, quebrado em várias linhas como o Prettier quebraria um objeto longo.
-function multilineConfig(floor: Floor): string {
-  return config(floor).replace(
-    /thresholds: \{[^}]*\},/,
-    `thresholds: {\n        lines: ${String(floor.lines)},\n        functions: ${String(floor.functions)},\n        branches: ${String(floor.branches)},\n        statements: ${String(floor.statements)},\n      },`,
-  );
-}
+const BASE_SCHEMA = /^coverage-floor\.json da base fora do esquema/;
+const HEAD_SCHEMA = /^coverage-floor\.json do PR fora do esquema/;
+
+// Tudo que o esquema fechado recusa: objeto com exatamente as quatro chaves, cada uma um número > 0 e <= 100.
+const INVALID_FLOORS: [string, string][] = [
+  [
+    'uma chave a mais (perFile)',
+    floorJson({ ...FLOOR, perFile: true } as Floor),
+  ],
+  [
+    'uma chave a mais (autoUpdate)',
+    floorJson({ ...FLOOR, autoUpdate: true } as Floor),
+  ],
+  [
+    'um glob como chave ("src/**")',
+    JSON.stringify({ ...FLOOR, 'src/**': { lines: 1 } }),
+  ],
+  ...METRICS.map((metric): [string, string] => [
+    `a chave ${metric} a menos`,
+    floorJson(
+      Object.fromEntries(
+        METRICS.filter((other) => other !== metric).map((other) => [
+          other,
+          FLOOR[other],
+        ]),
+      ),
+    ),
+  ]),
+  ['o objeto vazio', '{}'],
+  ['um valor string', JSON.stringify({ ...FLOOR, lines: '92' })],
+  ['um valor null', JSON.stringify({ ...FLOOR, functions: null })],
+  ['um valor 0', floorJson({ ...FLOOR, branches: 0 })],
+  ['um valor negativo', floorJson({ ...FLOOR, statements: -1 })],
+  ['um valor acima de 100 (101)', floorJson({ ...FLOOR, lines: 101 })],
+  ['um valor acima de 100 (100.01)', floorJson({ ...FLOOR, lines: 100.01 })],
+  ['um JSON inválido', '{"lines": 92, "functions": 92,'],
+  ['um array', '[92, 92, 83, 91]'],
+  ['null', 'null'],
+];
 
 describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em relação à base', () => {
   it('AI-49 o mesmo piso passa (controle)', () => {
-    expect(coverageFloorViolations(config(FLOOR), config(FLOOR))).toEqual([]);
+    expect(coverageFloorViolations(floorJson(FLOOR), floorJson(FLOOR))).toEqual(
+      [],
+    );
+  });
+
+  it('AI-49 outra ordem das chaves e outra formatação do JSON não mudam o resultado (controle)', () => {
+    const reordered = JSON.stringify(
+      {
+        statements: 91,
+        branches: 83,
+        functions: 92,
+        lines: 92,
+      },
+      null,
+      4,
+    );
+
+    expect(coverageFloorViolations(floorJson(FLOOR), reordered)).toEqual([]);
+    expect(coverageFloorViolations(reordered, floorJson(FLOOR))).toEqual([]);
+  });
+
+  it('AI-49 o piso de 100 e o piso com casas decimais são aceitos pelo esquema (controle)', () => {
+    const full = floorJson({
+      lines: 100,
+      functions: 100,
+      branches: 100,
+      statements: 100,
+    });
+    const decimals = floorJson({ ...FLOOR, lines: 92.5 });
+
+    expect(coverageFloorViolations(full, full)).toEqual([]);
+    expect(coverageFloorViolations(decimals, decimals)).toEqual([]);
+    expect(
+      coverageFloorViolations(decimals, floorJson({ ...FLOOR, lines: 92.4 })),
+    ).toEqual([expect.stringContaining('lines')]);
   });
 
   it.each(METRICS)(
-    'AI-49 o piso de %s 1 ponto abaixo reprova, e cita a métrica',
+    'AI-49 o piso de %s 1 ponto abaixo reprova, e cita a métrica, o valor antes e o depois',
     (metric) => {
-      const head = config({ ...FLOOR, [metric]: FLOOR[metric] - 1 });
+      const head = floorJson({ ...FLOOR, [metric]: FLOOR[metric] - 1 });
 
-      expect(coverageFloorViolations(config(FLOOR), head)).toEqual([
-        expect.stringContaining(metric),
+      expect(coverageFloorViolations(floorJson(FLOOR), head)).toEqual([
+        `piso de ${metric} caiu de ${String(FLOOR[metric])} para ${String(FLOOR[metric] - 1)}`,
       ]);
     },
   );
@@ -94,8 +156,8 @@ describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em 
     for (const delta of [0, 1, 5])
       expect(
         coverageFloorViolations(
-          config(FLOOR),
-          config({ ...FLOOR, [metric]: FLOOR[metric] + delta }),
+          floorJson(FLOOR),
+          floorJson({ ...FLOOR, [metric]: FLOOR[metric] + delta }),
         ),
         `${metric} +${String(delta)}`,
       ).toEqual([]);
@@ -109,12 +171,14 @@ describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em 
       statements: 93,
     };
 
-    expect(coverageFloorViolations(config(FLOOR), config(higher))).toEqual([]);
+    expect(
+      coverageFloorViolations(floorJson(FLOOR), floorJson(higher)),
+    ).toEqual([]);
   });
 
   it('AI-49 cair em duas métricas ao mesmo tempo gera uma violação por métrica', () => {
-    const head = config({ ...FLOOR, lines: 50, branches: 10 });
-    const violations = coverageFloorViolations(config(FLOOR), head);
+    const head = floorJson({ ...FLOOR, lines: 50, branches: 10 });
+    const violations = coverageFloorViolations(floorJson(FLOOR), head);
 
     expect(violations).toHaveLength(2);
     expect(violations.join('\n')).toContain('lines');
@@ -122,442 +186,260 @@ describe('AI-49 coverageFloorViolations reprova o piso de cobertura que caiu em 
   });
 
   it('AI-49 cair numa métrica e subir em outra reprova só a que caiu', () => {
-    const head = config({ ...FLOOR, lines: 99, functions: 91 });
+    const head = floorJson({ ...FLOOR, lines: 99, functions: 91 });
 
-    expect(coverageFloorViolations(config(FLOOR), head)).toEqual([
+    expect(coverageFloorViolations(floorJson(FLOOR), head)).toEqual([
       expect.stringContaining('functions'),
     ]);
   });
 
-  it.each(METRICS)(
-    'AI-49 a métrica %s removida do PR reprova (sem o piso, qualquer cobertura passaria)',
-    (metric) => {
-      const rest = Object.fromEntries(
-        METRICS.filter((other) => other !== metric).map((other) => [
-          other,
-          FLOOR[other],
-        ]),
-      );
-
-      expect(coverageFloorViolations(config(FLOOR), config(rest))).toEqual([
-        expect.stringContaining(metric),
-      ]);
-    },
-  );
-
-  it('AI-49 o bloco thresholds removido do PR reprova as quatro métricas', () => {
-    const head = config({});
-    const withoutBlock = head.replace(/\s*thresholds: \{[^}]*\},/, '');
-
-    expect(withoutBlock).not.toContain('thresholds');
-    expect(coverageFloorViolations(config(FLOOR), withoutBlock)).toHaveLength(
-      4,
-    );
+  it('AI-49 o PR que apaga o coverage-floor.json reprova', () => {
+    expect(coverageFloorViolations(floorJson(FLOOR), '')).toEqual([
+      expect.stringContaining('coverage-floor.json removido do PR'),
+    ]);
   });
 
-  // O piso tem forma fixa (AI-49): o objeto de uma linha só. O que antes passava, o objeto quebrado em várias linhas,
-  // agora reprova nos dois lados da comparação, porque uma forma fora do padrão esconde um piso menor.
-  it('AI-49 o thresholds em várias linhas reprova, no PR e na base, mesmo com o mesmo piso', () => {
-    expect(
-      coverageFloorViolations(config(FLOOR), multilineConfig(FLOOR)).length,
-    ).toBeGreaterThan(0);
-    expect(
-      coverageFloorViolations(multilineConfig(FLOOR), config(FLOOR)).length,
-    ).toBeGreaterThan(0);
-    expect(
-      coverageFloorViolations(multilineConfig(FLOOR), multilineConfig(FLOOR))
-        .length,
-    ).toBeGreaterThan(0);
-  });
-
-  it('AI-49 o vitest.config.ts do repositório contra ele mesmo passa', () => {
-    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
+  it('AI-49 o coverage-floor.json do repositório existe e contra ele mesmo passa', () => {
+    const { text } = repoFloor();
 
     expect(coverageFloorViolations(text, text)).toEqual([]);
   });
 
-  it('AI-49 o vitest.config.ts do repositório com uma métrica 1 ponto abaixo reprova', () => {
-    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
-    const lower = text.replace(
-      /lines: (\d+)/,
-      (_match, value: string) => `lines: ${String(Number(value) - 1)}`,
-    );
+  it('AI-49 o coverage-floor.json do repositório com uma métrica 1 ponto abaixo reprova', () => {
+    const { text, parsed } = repoFloor();
+    const lower = floorJson({ ...parsed, lines: parsed.lines - 1 });
 
-    expect(lower).not.toBe(text);
     expect(coverageFloorViolations(text, lower)).toEqual([
       expect.stringContaining('lines'),
     ]);
   });
 });
 
-// A forma fixa do piso (AI-49): `thresholds` citado uma vez só, num objeto de uma linha com exatamente as quatro chaves,
-// cada uma com um número literal. Cada caso mantém o mesmo piso da base, para o único defeito ser a forma.
-describe('AI-49 coverageFloorViolations só aceita o piso na forma fixa, nos dois lados da comparação', () => {
-  const BLOCK =
-    'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 }';
-  const LOW_BLOCK =
-    'thresholds: { lines: 1, functions: 1, branches: 1, statements: 1 }';
-
-  function withBlock(block: string): string {
-    const text = config(FLOOR).replace(BLOCK, block);
-    expect(text).not.toBe(config(FLOOR));
-    return text;
-  }
-
-  const BAD_SHAPES: [string, string][] = [
-    [
-      'um segundo thresholds no código',
-      config(FLOOR).replace(
-        'projects: [],',
-        `projects: [{ test: { coverage: { ${LOW_BLOCK} } } }],`,
-      ),
-    ],
-    [
-      'um segundo thresholds num comentário',
-      config(FLOOR).replace(
-        '    projects: [],',
-        `    // ${LOW_BLOCK}\n    projects: [],`,
-      ),
-    ],
-    [
-      'uma chave a mais',
-      withBlock(
-        'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91, perFile: true }',
-      ),
-    ],
-    [
-      'uma chave a menos',
-      withBlock('thresholds: { lines: 92, functions: 92, branches: 83 }'),
-    ],
-    [
-      'um ...spread no começo',
-      withBlock(
-        'thresholds: { ...OUTRO, lines: 92, functions: 92, branches: 83, statements: 91 }',
-      ),
-    ],
-    [
-      'um ...spread no fim',
-      withBlock(
-        'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91, ...OUTRO }',
-      ),
-    ],
-    [
-      'um valor que é uma conta',
-      withBlock(
-        'thresholds: { lines: 92 - 90, functions: 92, branches: 83, statements: 91 }',
-      ),
-    ],
-    [
-      'um valor com uma conversão',
-      withBlock(
-        'thresholds: { lines: 92 as number, functions: 92, branches: 83, statements: 91 }',
-      ),
-    ],
-    [
-      'um valor que é texto',
-      withBlock(
-        "thresholds: { lines: '92', functions: 92, branches: 83, statements: 91 }",
-      ),
-    ],
-    ['o objeto em mais de uma linha', multilineConfig(FLOOR)],
-  ];
-
-  it.each(BAD_SHAPES)(
-    'AI-49 %s no PR reprova, mesmo com o piso igual ao da base',
+// A forma (esquema fechado), em cada lado da comparação. Cada caso ruim de um lado tem o outro lado correto e igual ao
+// piso, para o único defeito ser o esquema; e a conferência não compara quando um lado está fora dele.
+describe('AI-49 coverageFloorViolations só aceita o piso no esquema fechado, nos dois lados da comparação', () => {
+  it.each(INVALID_FLOORS)(
+    'AI-49 %s no PR reprova com o aviso de esquema do PR, mesmo com a base certa',
     (_label, head) => {
-      expect(
-        coverageFloorViolations(config(FLOOR), head).length,
-      ).toBeGreaterThan(0);
+      const violations = coverageFloorViolations(floorJson(FLOOR), head);
+
+      expect(violations.length).toBeGreaterThan(0);
+      for (const violation of violations)
+        expect(violation).toMatch(HEAD_SCHEMA);
     },
   );
 
-  it.each(BAD_SHAPES)(
-    'AI-49 %s na base reprova, mesmo com o PR na forma certa',
+  it.each(INVALID_FLOORS)(
+    'AI-49 %s na base reprova com o aviso de esquema da base, mesmo com o PR certo',
     (_label, base) => {
-      expect(
-        coverageFloorViolations(base, config(FLOOR)).length,
-      ).toBeGreaterThan(0);
+      const violations = coverageFloorViolations(base, floorJson(FLOOR));
+
+      expect(violations.length).toBeGreaterThan(0);
+      for (const violation of violations)
+        expect(violation).toMatch(BASE_SCHEMA);
     },
   );
 
-  // O comentário com o piso antigo na frente do bloco de verdade, que caiu: lido pelo primeiro `thresholds`, o piso
-  // menor passaria escondido.
-  it('AI-49 um comentário com o piso da base antes do bloco que caiu não esconde a queda', () => {
-    const head = config({ ...FLOOR, branches: 82 }).replace(
-      '      thresholds:',
-      `      // ${BLOCK}\n      thresholds:`,
-    );
+  it('AI-49 os dois lados fora do esquema geram o aviso de cada lado', () => {
+    const violations = coverageFloorViolations('[]', 'null');
 
-    expect(head).toContain(`// ${BLOCK}`);
-    expect(coverageFloorViolations(config(FLOOR), head).length).toBeGreaterThan(
-      0,
+    expect(violations.some((violation) => BASE_SCHEMA.test(violation))).toBe(
+      true,
+    );
+    expect(violations.some((violation) => HEAD_SCHEMA.test(violation))).toBe(
+      true,
     );
   });
 
-  // Controles negativos: a forma fixa, com outra ordem das chaves ou com um comentário que não cita `thresholds`, passa,
-  // e o vitest.config.ts do repositório (de uma linha) continua passando.
-  it('AI-49 controle: as quatro chaves em outra ordem, numa linha, passam', () => {
-    const reordered = withBlock(
-      'thresholds: { statements: 91, branches: 83, functions: 92, lines: 92 }',
-    );
+  // Um PR fora do esquema que também derrubou o piso mostra só o esquema: sem um piso válido não há o que comparar.
+  it('AI-49 um lado fora do esquema devolve só as violações de esquema, sem comparar os valores', () => {
+    const lowerAndWrong = JSON.stringify({ lines: 1, perFile: true });
 
-    expect(coverageFloorViolations(config(FLOOR), reordered)).toEqual([]);
-    expect(coverageFloorViolations(reordered, config(FLOOR))).toEqual([]);
-  });
-
-  it('AI-49 controle: um comentário que não cita thresholds não reprova', () => {
-    const commented = config(FLOOR).replace(
-      '    projects: [],',
-      '    // o piso só sobe\n    projects: [],',
-    );
-
-    expect(coverageFloorViolations(config(FLOOR), commented)).toEqual([]);
-  });
-
-  it('AI-49 controle: o vitest.config.ts do repositório cita thresholds uma vez só, numa linha com as quatro chaves', () => {
-    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
-
-    expect(text.match(/thresholds/g)).toHaveLength(1);
-    expect(coverageFloorViolations(text, text)).toEqual([]);
+    for (const violation of coverageFloorViolations(
+      floorJson(FLOOR),
+      lowerAndWrong,
+    ))
+      expect(violation).not.toContain('caiu');
+    for (const violation of coverageFloorViolations(
+      lowerAndWrong,
+      floorJson({ ...FLOOR, lines: 1 }),
+    ))
+      expect(violation).not.toContain('caiu');
   });
 });
 
-// A forma fixa, parte 2 (AI-49): `thresholds` só dentro do bloco `coverage:`, que aparece uma vez; o arquivo não tem
-// chave computada (`[expressão]:`), e o bloco `coverage:` não tem `...`. Cada caso mantém o piso da base, para o único
-// defeito ser a forma. A isca é o `thresholds` de um comentário, que a leitura por texto tomaria pelo bloco de verdade.
-describe('AI-49 coverageFloorViolations reprova o thresholds fora do bloco coverage, a chave computada e o ... no bloco', () => {
-  const FLOOR_BLOCK =
-    'thresholds: { lines: 92, functions: 92, branches: 83, statements: 91 }';
-  const DECOY = `    // ${FLOOR_BLOCK}\n`;
+// A medida (AI-49): o relatório json-summary do Vitest contra o piso da base.
+const SUMMARY_TOTAL = 200;
 
-  function edit(text: string, from: string, to: string): string {
-    const result = text.replace(from, to);
-    expect(result, `trecho trocado: ${from}`).not.toBe(text);
-    return result;
-  }
+interface SummaryEntry {
+  total: number;
+  covered: number;
+  skipped: number;
+  pct: number | string | null;
+}
 
-  const withoutFloor = edit(config(FLOOR), `      ${FLOOR_BLOCK},\n`, '');
+function entry(pct: number | string | null): SummaryEntry {
+  return {
+    total: SUMMARY_TOTAL,
+    covered: typeof pct === 'number' ? Math.floor(pct * 2) : 0,
+    skipped: 0,
+    pct,
+  };
+}
 
-  const BAD_SHAPES: [string, string][] = [
-    [
-      'o thresholds ao lado do bloco coverage (fora dele), numa linha',
-      edit(
-        withoutFloor,
-        '    projects: [],',
-        `    ${FLOOR_BLOCK},\n    projects: [],`,
+// A forma real do coverage-summary.json: o `total` com as quatro métricas e o `branchesTrue`, mais uma chave por
+// arquivo com as mesmas métricas. Uma métrica ausente do argumento fica ausente do `total`.
+function summary(
+  pcts: Partial<Record<Metric, number | string | null>>,
+): string {
+  const perFile: Record<string, SummaryEntry> = { branchesTrue: entry(100) };
+  for (const [metric, pct] of Object.entries(pcts))
+    perFile[metric] = entry(pct);
+  return JSON.stringify({
+    total: { ...perFile },
+    '/repo/src/app.ts': perFile,
+  });
+}
+
+describe('AI-49 measuredCoverageViolations reprova a cobertura medida abaixo do piso da base', () => {
+  const BELOW: Floor = {
+    lines: 91.99,
+    functions: 91.99,
+    branches: 82.99,
+    statements: 90.99,
+  };
+
+  it('AI-49 a cobertura medida igual ao piso passa (o Vitest reprova só abaixo do piso)', () => {
+    expect(
+      measuredCoverageViolations(floorJson(FLOOR), summary(FLOOR)),
+    ).toEqual([]);
+  });
+
+  it('AI-49 a cobertura medida acima do piso passa', () => {
+    expect(
+      measuredCoverageViolations(
+        floorJson(FLOOR),
+        summary({ lines: 100, functions: 99.5, branches: 90, statements: 95 }),
       ),
-    ],
+    ).toEqual([]);
+  });
+
+  it.each(METRICS)(
+    'AI-49 a cobertura de %s medida 0,01 abaixo do piso reprova, e cita a métrica, a medida e o piso',
+    (metric) => {
+      const report = summary({ ...FLOOR, [metric]: BELOW[metric] });
+
+      expect(measuredCoverageViolations(floorJson(FLOOR), report)).toEqual([
+        `cobertura de ${metric} medida em ${String(BELOW[metric])}%, abaixo do piso da base (${String(FLOOR[metric])})`,
+      ]);
+    },
+  );
+
+  it('AI-49 duas métricas abaixo geram uma violação por métrica', () => {
+    const violations = measuredCoverageViolations(
+      floorJson(FLOOR),
+      summary({ ...FLOOR, lines: 10, statements: 20 }),
+    );
+
+    expect(violations).toHaveLength(2);
+    expect(violations.join('\n')).toContain('cobertura de lines');
+    expect(violations.join('\n')).toContain('cobertura de statements');
+  });
+
+  it('AI-49 o piso da base é o que vale: a cobertura que passa num piso menor reprova num maior', () => {
+    const report = summary({ ...FLOOR, lines: 80 });
+
+    expect(
+      measuredCoverageViolations(floorJson({ ...FLOOR, lines: 80 }), report),
+    ).toEqual([]);
+    expect(measuredCoverageViolations(floorJson(FLOOR), report)).toEqual([
+      expect.stringContaining('lines'),
+    ]);
+  });
+
+  it('AI-49 as chaves extras do relatório (arquivos, branchesTrue, pct "Unknown" fora das quatro métricas) são aceitas', () => {
+    const report = JSON.parse(summary(FLOOR)) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    report['/repo/src/empty.ts'] = {
+      lines: entry('Unknown'),
+      branchesTrue: entry('Unknown'),
+    };
+    const text = JSON.stringify(report);
+
+    expect(text).toContain('branchesTrue');
+    expect(text).toContain('/repo/src/app.ts');
+    expect(measuredCoverageViolations(floorJson(FLOOR), text)).toEqual([]);
+  });
+
+  it('AI-49 o relatório ausente reprova', () => {
+    expect(measuredCoverageViolations(floorJson(FLOOR), '')).toEqual([
+      expect.stringContaining('relatório de cobertura ausente'),
+    ]);
+  });
+
+  const BAD_REPORTS: [string, string][] = [
+    ['um JSON inválido', '{"total": {"lines": '],
+    ['um array', '[]'],
+    ['null', 'null'],
+    ['o objeto vazio, sem total', '{}'],
     [
-      'o thresholds dentro de um projeto (fora do bloco coverage)',
-      edit(
-        withoutFloor,
-        'projects: [],',
-        `projects: [{ test: { ${FLOOR_BLOCK} } }],`,
-      ),
+      'só os arquivos, sem total',
+      JSON.stringify({ '/repo/src/a.ts': entry(95) }),
     ],
-    [
-      'o thresholds antes do bloco coverage (fora dele), e um coverage sem piso depois',
-      edit(
-        withoutFloor,
-        '    coverage: {',
-        `    ${FLOOR_BLOCK},\n    coverage: {`,
-      ),
-    ],
-    [
-      'o bloco coverage citado duas vezes',
-      edit(
-        config(FLOOR),
-        'projects: [],',
-        "projects: [{ test: { coverage: { provider: 'v8' } } }],",
-      ),
-    ],
-    [
-      "uma chave computada ['thresh' + 'olds'] com a isca num comentário",
-      edit(
-        edit(
-          config(FLOOR),
-          `      ${FLOOR_BLOCK},\n`,
-          "      ['thresh' + 'olds']: { lines: 1, functions: 1, branches: 1, statements: 1 },\n",
+    ['o total null', '{"total": null}'],
+    ...METRICS.map((metric): [string, string] => [
+      `o total sem ${metric}`,
+      summary(
+        Object.fromEntries(
+          METRICS.filter((other) => other !== metric).map((other) => [
+            other,
+            FLOOR[other],
+          ]),
         ),
-        '    projects: [],',
-        `${DECOY}    projects: [],`,
       ),
-    ],
-    [
-      "uma chave computada de template (cover${''}age) com a isca num comentário",
-      edit(
-        edit(
-          edit(config(FLOOR), `      ${FLOOR_BLOCK},\n`, ''),
-          '    coverage: {',
-          "    [`cover${''}age`]: {",
-        ),
-        '    projects: [],',
-        `${DECOY}    projects: [],`,
-      ),
-    ],
-    [
-      'uma chave computada longe do piso (num projeto), com o piso na forma certa',
-      edit(
-        config(FLOOR),
-        'projects: [],',
-        "projects: [{ test: { [`na${'me'}`]: 'unit' } }],",
-      ),
-    ],
-    [
-      'uma chave computada por identificador ([nome]:)',
-      edit(
-        config(FLOOR),
-        'projects: [],',
-        "projects: [{ test: { [nome]: 'unit' } }],",
-      ),
-    ],
-    [
-      'um ...spread no começo do bloco coverage',
-      edit(
-        config(FLOOR),
-        "      provider: 'v8',",
-        "      ...extra,\n      provider: 'v8',",
-      ),
-    ],
-    [
-      'um ...spread no fim do bloco coverage, depois do thresholds',
-      edit(
-        config(FLOOR),
-        `${FLOOR_BLOCK},\n`,
-        `${FLOOR_BLOCK},\n      ...extra,\n`,
-      ),
-    ],
+    ]),
+    ...METRICS.map((metric): [string, string] => [
+      `o pct "Unknown" em ${metric}`,
+      summary({ ...FLOOR, [metric]: 'Unknown' }),
+    ]),
+    ['um pct texto ("95")', summary({ ...FLOOR, lines: '95' })],
+    ['um pct null', summary({ ...FLOOR, branches: null })],
   ];
 
-  // Cada forma ruim, de cada lado: o outro lado é o piso na forma certa e igual.
-  const BOTH_SIDES = BAD_SHAPES.flatMap(([label, text]) => [
-    { name: `${label} no PR`, base: config(FLOOR), head: text },
-    { name: `${label} na base`, base: text, head: config(FLOOR) },
-  ]);
+  it.each(BAD_REPORTS)(
+    'AI-49 %s no relatório reprova como fora do formato',
+    (_label, report) => {
+      const violations = measuredCoverageViolations(floorJson(FLOOR), report);
 
-  it.each(BOTH_SIDES)(
-    'AI-49 $name reprova, mesmo com o piso igual',
-    ({ base, head }) => {
-      expect(coverageFloorViolations(base, head)).not.toEqual([]);
+      expect(violations.length).toBeGreaterThan(0);
+      for (const violation of violations)
+        expect(violation).toMatch(/^relatório de cobertura fora do formato/);
     },
   );
 
-  // Controles negativos: o ... fora do bloco coverage e os colchetes de lista não são chave computada nem spread
-  // do bloco, e o vitest.config.ts do repositório (que tem o ...configDefaults.exclude) continua passando.
-  it('AI-49 controle: um ...configDefaults.exclude fora do bloco coverage passa, nos dois lados', () => {
-    const spread = edit(
-      config(FLOOR),
-      'projects: [],',
-      'projects: [{ test: { exclude: [...configDefaults.exclude] } }],',
-    );
+  it.each(INVALID_FLOORS)(
+    'AI-49 o piso da base com %s reprova com o aviso de esquema da base',
+    (_label, base) => {
+      const violations = measuredCoverageViolations(base, summary(FLOOR));
 
-    expect(coverageFloorViolations(config(FLOOR), spread)).toEqual([]);
-    expect(coverageFloorViolations(spread, config(FLOOR))).toEqual([]);
-  });
+      expect(violations.length).toBeGreaterThan(0);
+      for (const violation of violations)
+        expect(violation).toMatch(BASE_SCHEMA);
+    },
+  );
 
-  it('AI-49 controle: o vitest.config.ts do repositório, que tem ...configDefaults.exclude fora do bloco coverage, passa', () => {
-    const text = readFileSync(join(repoRoot, 'vitest.config.ts'), 'utf8');
+  it('AI-49 o coverage-floor.json do repositório contra um relatório exatamente nele passa, e 0,01 abaixo reprova', () => {
+    const { text, parsed } = repoFloor();
 
-    expect(text).toContain('...configDefaults.exclude');
-    expect(coverageFloorViolations(text, text)).toEqual([]);
-  });
-});
-
-// O piso longo (AI-49): quatro pisos de 100 passam das 80 colunas do Prettier com a indentação do arquivo. O
-// `// prettier-ignore` logo acima mantém a linha inteira, e a conferência a lê do mesmo jeito. Sem ele, o Prettier
-// quebra o objeto em várias linhas, forma que a conferência reprova.
-describe('AI-49 o piso longo com // prettier-ignore passa no Prettier e na conferência', () => {
-  const LONG: Floor = {
-    lines: 100,
-    functions: 100,
-    branches: 100,
-    statements: 100,
-  };
-  const prettierBin = join(repoRoot, 'node_modules', '.bin', 'prettier');
-
-  function longConfig(withIgnore: boolean): string {
-    const text = config(LONG);
-    if (!withIgnore) return text;
-    return text.replace(
-      '      thresholds:',
-      '      // prettier-ignore\n      thresholds:',
-    );
-  }
-
-  // O arquivo fica numa pasta temporária fora do repositório; a configuração do projeto entra por --config.
-  function runPrettier(
-    content: string,
-    mode: '--check' | 'format',
-  ): { status: number | null; stdout: string; output: string } {
-    const file = join(makeTempDir('ai49-prettier-'), 'vitest.config.ts');
-    writeFileSync(file, content);
-    const args = [
-      '--config',
-      join(repoRoot, '.prettierrc.json'),
-      '--ignore-path',
-      '/dev/null',
-    ];
-    if (mode === '--check') args.push('--check');
-    const result = spawnSync(prettierBin, [...args, file], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    return {
-      status: result.status,
-      stdout: result.stdout,
-      output: `${result.stdout}${result.stderr}`,
-    };
-  }
-
-  it('AI-49 a linha do piso de 100 passa das 80 colunas (premissa dos casos abaixo)', () => {
-    const line = config(LONG)
-      .split('\n')
-      .find((candidate) => candidate.includes('thresholds'));
-
-    expect(line?.length).toBeGreaterThan(80);
-  });
-
-  it('AI-49 o piso longo com // prettier-ignore passa na conferência, contra ele mesmo e contra um piso menor', () => {
-    const text = longConfig(true);
-
-    expect(text).toContain('// prettier-ignore\n      thresholds:');
-    expect(coverageFloorViolations(text, text)).toEqual([]);
+    expect(measuredCoverageViolations(text, summary(parsed))).toEqual([]);
     expect(
-      coverageFloorViolations(
+      measuredCoverageViolations(
         text,
-        longConfig(true).replace('lines: 100', 'lines: 99'),
+        summary({ ...parsed, branches: parsed.branches - 0.01 }),
       ),
-    ).toEqual([expect.stringContaining('lines')]);
-  });
-
-  it('AI-49 o piso longo com // prettier-ignore passa no prettier --check', () => {
-    const result = runPrettier(longConfig(true), '--check');
-
-    expect(result.output).not.toContain('Code style issues');
-    expect(result.output).toContain(
-      'All matched files use Prettier code style',
-    );
-    expect(result.status).toBe(0);
-  });
-
-  it('AI-49 o mesmo piso sem o // prettier-ignore reprova no prettier --check', () => {
-    const result = runPrettier(longConfig(false), '--check');
-
-    expect(result.output).toContain('Code style issues');
-    expect(result.status).toBeGreaterThan(0);
-  });
-
-  it('AI-49 o mesmo piso sem o // prettier-ignore, como o Prettier o reformata em várias linhas, reprova na conferência', () => {
-    const formatted = runPrettier(longConfig(false), 'format');
-
-    expect(formatted.status).toBe(0);
-    expect(formatted.stdout).toMatch(/thresholds: \{\n\s+lines: 100,/);
-    expect(
-      coverageFloorViolations(config(LONG), formatted.stdout).length,
-    ).toBeGreaterThan(0);
-    expect(
-      coverageFloorViolations(formatted.stdout, formatted.stdout).length,
-    ).toBeGreaterThan(0);
+    ).toEqual([expect.stringContaining('branches')]);
   });
 });
 
@@ -668,101 +550,209 @@ describe('AI-49 baselineViolations reprova a repetição que entrou na linha de 
 // ref em refs/remotes, sem rede.
 interface Sandbox {
   dir: string;
-  run: () => ReturnType<typeof runScript>;
+  // Roda o CLI com a base `main` (ou a ref dada) e os argumentos dados.
+  run: (args?: string[], ref?: string) => ReturnType<typeof runNode>;
+  // Grava o relatório do Vitest na pasta temporária e devolve o caminho dele.
+  report: (text: string) => string;
 }
 
 function prSandbox(options: {
-  base: { config?: string; baseline?: string };
-  head: { config: string; baseline: string };
+  base: { floor?: string; baseline?: string };
+  // `null`: o PR apaga o arquivo.
+  head: { floor: string | null; baseline: string };
 }): Sandbox {
   const dir = sandboxWithScript(FILE);
   git(dir, 'init', '-q');
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'base');
-  if (options.base.config !== undefined)
-    writeFileIn(dir, 'vitest.config.ts', options.base.config);
+  if (options.base.floor !== undefined)
+    writeFileIn(dir, 'coverage-floor.json', options.base.floor);
   if (options.base.baseline !== undefined)
     writeFileIn(dir, '.jscpd-baseline.json', options.base.baseline);
   git(dir, 'add', '-A');
-  git(dir, 'commit', '-q', '--allow-empty', '-m', 'base com as linhas');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'base com os arquivos');
   git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
-  writeFileIn(dir, 'vitest.config.ts', options.head.config);
+  if (options.head.floor === null) rmSync(join(dir, 'coverage-floor.json'));
+  else writeFileIn(dir, 'coverage-floor.json', options.head.floor);
   writeFileIn(dir, '.jscpd-baseline.json', options.head.baseline);
   git(dir, 'add', '-A');
   // --allow-empty: com pisos e linha de base iguais aos da base o PR não muda arquivo, e o git recusaria o commit.
   git(dir, 'commit', '-q', '--allow-empty', '-m', 'pr');
-  return { dir, run: () => runScript(dir, FILE, { BASE_REF: 'main' }) };
+  return {
+    dir,
+    run: (args = [], ref = 'main') =>
+      runNode(join('scripts', FILE), args, {
+        cwd: dir,
+        // Sem as variáveis do git da máquina, que desviariam o `git show` do repositório temporário.
+        env: {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([name]) => !name.startsWith('GIT_'),
+            ),
+          ),
+          BASE_REF: ref,
+        },
+      }),
+    report: (text) => {
+      writeFileIn(dir, 'out/coverage-summary.json', text);
+      return join(dir, 'out', 'coverage-summary.json');
+    },
+  };
 }
 
+const standard = {
+  base: { floor: floorJson(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
+  head: { floor: floorJson(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
+};
+
 describe('AI-49 o CLI do check-baselines compara com a origin/BASE_REF', () => {
-  const lowered = config({ ...FLOOR, branches: 82 });
+  const lowered = floorJson({ ...FLOOR, branches: 82 });
 
   it('AI-49 pisos e linha de base iguais saem com 0', () => {
-    const { run } = prSandbox({
-      base: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
-      head: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
-    });
-    const result = run();
+    const result = prSandbox(standard).run();
 
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it('AI-49 um piso 1 ponto abaixo sai com 1, citando a métrica', () => {
-    const { run } = prSandbox({
-      base: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
-      head: { config: lowered, baseline: baseline(BASE_FINGERPRINTS) },
-    });
-    const result = run();
+  it('AI-49 um piso 1 ponto abaixo no coverage-floor.json sai com 1, citando a métrica', () => {
+    const result = prSandbox({
+      ...standard,
+      head: { ...standard.head, floor: lowered },
+    }).run();
 
     expect(result.status).toBe(1);
     expect(result.stderr + result.stdout).toContain('branches');
   });
 
-  it('AI-49 uma repetição nova na linha de base sai com 1, citando a impressão', () => {
-    const { run } = prSandbox({
-      base: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
+  it('AI-49 o coverage-floor.json apagado no PR sai com 1', () => {
+    const result = prSandbox({
+      ...standard,
+      head: { ...standard.head, floor: null },
+    }).run();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain(
+      'coverage-floor.json removido do PR',
+    );
+  });
+
+  it('AI-49 o coverage-floor.json do PR fora do esquema sai com 1', () => {
+    const result = prSandbox({
+      ...standard,
       head: {
-        config: config(FLOOR),
+        ...standard.head,
+        floor: JSON.stringify({ ...FLOOR, perFile: true }),
+      },
+    }).run();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain('fora do esquema');
+  });
+
+  it('AI-49 uma repetição nova na linha de base sai com 1, citando a impressão', () => {
+    const result = prSandbox({
+      ...standard,
+      head: {
+        ...standard.head,
         baseline: baseline([...BASE_FINGERPRINTS, 'ffffffffffffffff']),
       },
-    });
-    const result = run();
+    }).run();
 
     expect(result.status).toBe(1);
     expect(result.stderr + result.stdout).toContain('ffffffffffffffff');
   });
 
   it('AI-49 os arquivos que ainda não existem na base (primeiro PR) não têm o que comparar e passam', () => {
-    const { run } = prSandbox({
+    const result = prSandbox({
       base: {},
-      head: { config: lowered, baseline: baseline(BASE_FINGERPRINTS) },
-    });
-    const result = run();
+      head: { floor: lowered, baseline: baseline(BASE_FINGERPRINTS) },
+    }).run();
 
     expect(result.status, result.stderr).toBe(0);
   });
 
   it('AI-49 só o arquivo da linha de base falta na base (o PR que o cria): a ref existe e o CLI sai com 0', () => {
-    const { run } = prSandbox({
-      base: { config: config(FLOOR) },
-      head: {
-        config: config(FLOOR),
-        baseline: baseline(BASE_FINGERPRINTS),
-      },
-    });
-    const result = run();
+    const result = prSandbox({
+      base: { floor: floorJson(FLOOR) },
+      head: standard.head,
+    }).run();
 
     expect(result.status, result.stderr).toBe(0);
   });
 
   it('AI-49 BASE_REF apontando para uma ref que não existe sai com código diferente de 0 (sem a base não há o que comparar)', () => {
-    const { dir } = prSandbox({
-      base: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
-      head: { config: config(FLOOR), baseline: baseline(BASE_FINGERPRINTS) },
-    });
-    const result = runScript(dir, FILE, { BASE_REF: 'ref-que-nao-existe' });
+    const result = prSandbox(standard).run([], 'ref-que-nao-existe');
 
     expect(result.status).not.toBe(0);
     expect(result.status).not.toBeNull();
+  });
+
+  it('AI-49 um argumento desconhecido sai com código diferente de 0', () => {
+    const result = prSandbox(standard).run(['--desconhecido']);
+
+    expect(result.status).not.toBe(0);
+    expect(result.status).not.toBeNull();
+  });
+});
+
+describe('AI-49 o CLI do check-baselines --measured confere o relatório contra o piso da origin/BASE_REF', () => {
+  it('AI-49 --measured com a cobertura medida abaixo do piso da base sai com 1, citando a métrica', () => {
+    const sandbox = prSandbox(standard);
+    const path = sandbox.report(summary({ ...FLOOR, functions: 91.99 }));
+    const result = sandbox.run(['--measured', path]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain('functions');
+  });
+
+  it('AI-49 --measured com a cobertura medida igual ao piso sai com 0', () => {
+    const sandbox = prSandbox(standard);
+    const result = sandbox.run(['--measured', sandbox.report(summary(FLOOR))]);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('AI-49 --measured vale o piso da base, e não o do PR: o PR que baixou o piso não salva a medida', () => {
+    const sandbox = prSandbox({
+      ...standard,
+      head: { ...standard.head, floor: floorJson({ ...FLOOR, lines: 50 }) },
+    });
+    const path = sandbox.report(summary({ ...FLOOR, lines: 80 }));
+    const result = sandbox.run(['--measured', path]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain('lines');
+  });
+
+  it('AI-49 --measured com a base sem o coverage-floor.json (o PR que o cria) sai com 0', () => {
+    const sandbox = prSandbox({
+      base: { baseline: baseline(BASE_FINGERPRINTS) },
+      head: standard.head,
+    });
+    const path = sandbox.report(summary({ ...FLOOR, lines: 10 }));
+    const result = sandbox.run(['--measured', path]);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it('AI-49 --measured com o relatório ausente sai com 1', () => {
+    const sandbox = prSandbox(standard);
+    const result = sandbox.run([
+      '--measured',
+      join(sandbox.dir, 'nao-existe.json'),
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr + result.stdout).toContain(
+      'relatório de cobertura ausente',
+    );
+  });
+
+  it('AI-49 --measured sem a ref da base sai com 1', () => {
+    const sandbox = prSandbox(standard);
+    const path = sandbox.report(summary(FLOOR));
+    const result = sandbox.run(['--measured', path], 'ref-que-nao-existe');
+
+    expect(result.status).toBe(1);
   });
 });

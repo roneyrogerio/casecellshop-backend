@@ -710,9 +710,14 @@ describe('AI-42 o ci.yml tem os jobs checks, test, workflows e ci-ok', () => {
     expect(steps[0]?.if ?? '').toMatch(PULL_REQUEST_ONLY);
     expect(steps[0]?.env?.BASE_REF).toBe('${{ github.base_ref }}');
     expect(steps[0]?.run ?? '').not.toContain('base_ref');
+    // No job test só roda a conferência da medida (--measured), e nunca a da queda.
     expect(
-      stepsOfJob(ci, 'test').some((s) => /check-baselines/.test(s.run ?? '')),
-    ).toBe(false);
+      stepsOfJob(ci, 'test').filter(
+        (s) =>
+          /check-baselines/.test(s.run ?? '') &&
+          !(s.run ?? '').includes('--measured'),
+      ),
+    ).toEqual([]);
   });
 
   it('AI-05 o check-lockfile roda no job checks pelo node, uma vez só, e não por npm run', () => {
@@ -1093,5 +1098,163 @@ describe('FND-16 o ci.yml roda a versão leve do fuzzing num job próprio, em pa
   it('FND-16 o ci-ok espera o api-fuzz e reprova quando ele termina em failure ou cancelled', () => {
     expect(needsOf(jobOf(ci, 'ci-ok') ?? {})).toContain('api-fuzz');
     expect(ciOkRejectsFuzzViolations(ci)).toEqual([]);
+  });
+});
+
+// --- AI-49: a conferência da medida ---------------------------------------------------------------------------
+
+const COVERAGE_FLAGS =
+  '--coverage --coverage.reporter=text --coverage.reporter=json-summary --coverage.reportsDirectory="$RUNNER_TEMP/coverage"';
+const TEST_STEP = `      - run: npm test -- --reporter=default \${{ matrix.node == 'nvmrc' && '${COVERAGE_FLAGS}' || '' }}\n`;
+const MEASURED_IF =
+  "if: matrix.node == 'nvmrc' && github.event_name == 'pull_request'";
+const MEASURED_PATH = '$RUNNER_TEMP/coverage/coverage-summary.json';
+const MEASURED_STEP = `      - name: Cobertura medida contra o piso da base
+        ${MEASURED_IF}
+        env:
+          BASE_REF: \${{ github.base_ref }}
+        run: node scripts/check-baselines.ts --measured "${MEASURED_PATH}"
+`;
+
+function measuredWorkflow(steps: string): string {
+  return `jobs:\n  test:\n    steps:\n      - run: npm ci\n${steps}`;
+}
+
+const GOOD_MEASURED = measuredWorkflow(TEST_STEP + MEASURED_STEP);
+
+// O passo da medida lê o relatório que o passo do npm test grava: depois dele, só na perna do .nvmrc e no pull_request,
+// com a base pelo env, e o caminho do --measured é o reportsDirectory (fora do repositório) mais /coverage-summary.json.
+function measuredStepViolations(workflow: CiWorkflow): string[] {
+  const steps = stepsOfJob(workflow, 'test');
+  const measured = steps.filter((step) =>
+    /check-baselines/.test(step.run ?? ''),
+  );
+  const [step] = measured;
+  const testIndex = steps.findIndex((s) =>
+    (s.run ?? '').includes('--coverage'),
+  );
+  if (measured.length !== 1 || step === undefined)
+    return [`${measured.length} passos da medida, esperado 1`];
+  const violations: string[] = [];
+  const run = step.run ?? '';
+  const condition = step.if ?? '';
+  if (steps.indexOf(step) <= testIndex)
+    violations.push('não vem depois do passo com --coverage');
+  if (!NVMRC_ONLY.test(condition))
+    violations.push('sem a condição da perna do .nvmrc');
+  if (!PULL_REQUEST_ONLY.test(condition))
+    violations.push('sem a condição de pull_request');
+  if (step.env?.BASE_REF !== '${{ github.base_ref }}')
+    violations.push('a base não vem pelo env BASE_REF');
+  if (run.includes('base_ref')) violations.push('interpola base_ref no run');
+  const testRun = steps[testIndex]?.run ?? '';
+  if (!testRun.includes('--coverage.reporter=json-summary'))
+    violations.push('o npm test não grava o reporter json-summary');
+  const dir = /--coverage\.reportsDirectory=("?)(\S+?)\1(?:\s|'|$)/.exec(
+    testRun,
+  )?.[2];
+  if (dir === undefined || !dir.startsWith('$RUNNER_TEMP/'))
+    violations.push('o reportsDirectory não fica em $RUNNER_TEMP');
+  const path = /--measured\s+"?([^"\s]+)"?/.exec(run)?.[1];
+  if (path !== `${dir ?? ''}/coverage-summary.json`)
+    violations.push('o caminho do --measured não é o reportsDirectory');
+  return violations;
+}
+
+describe('AI-49 o job test confere a cobertura medida contra o piso da base', () => {
+  it('AI-49 o ci.yml tem o passo da medida depois do npm test, na perna do .nvmrc e no pull_request, lendo o relatório do reportsDirectory', () => {
+    expect(measuredStepViolations(readCi())).toEqual([]);
+  });
+
+  it('AI-49 o passo da medida roda pelo node, com a base pelo env e sem github.base_ref no run', () => {
+    const [step] = stepsOfJob(readCi(), 'test').filter((s) =>
+      /check-baselines/.test(s.run ?? ''),
+    );
+
+    expect((step?.run ?? '').trim()).toMatch(
+      /^node scripts\/check-baselines\.ts --measured \S+$/,
+    );
+    expect(step?.env?.BASE_REF).toBe('${{ github.base_ref }}');
+    expect(step?.run ?? '').not.toContain('base_ref');
+  });
+
+  it('AI-49 controle: a estrutura correta passa na conferência da medida', () => {
+    expect(measuredStepViolations(parseWorkflow(GOOD_MEASURED))).toEqual([]);
+  });
+
+  const CASES: [label: string, from: string, to: string, expected: string][] = [
+    [
+      'o passo da medida ausente',
+      MEASURED_STEP,
+      '',
+      '0 passos da medida, esperado 1',
+    ],
+    [
+      'sem a condição da perna do .nvmrc',
+      MEASURED_IF,
+      "if: github.event_name == 'pull_request'",
+      'sem a condição da perna do .nvmrc',
+    ],
+    [
+      'sem a condição de pull_request',
+      MEASURED_IF,
+      "if: matrix.node == 'nvmrc'",
+      'sem a condição de pull_request',
+    ],
+    [
+      'o reportsDirectory dentro do repositório (coverage)',
+      '--coverage.reportsDirectory="$RUNNER_TEMP/coverage"',
+      '--coverage.reportsDirectory="coverage"',
+      'o reportsDirectory não fica em $RUNNER_TEMP',
+    ],
+    [
+      'sem o reporter json-summary',
+      ' --coverage.reporter=json-summary',
+      '',
+      'o npm test não grava o reporter json-summary',
+    ],
+    [
+      'o caminho do --measured diferente do reportsDirectory',
+      `--measured "${MEASURED_PATH}"`,
+      '--measured "$RUNNER_TEMP/outro/coverage-summary.json"',
+      'o caminho do --measured não é o reportsDirectory',
+    ],
+    [
+      'o caminho do --measured sem o nome coverage-summary.json',
+      `--measured "${MEASURED_PATH}"`,
+      '--measured "$RUNNER_TEMP/coverage/index.json"',
+      'o caminho do --measured não é o reportsDirectory',
+    ],
+    [
+      'sem a base pelo env',
+      '        env:\n          BASE_REF: ${{ github.base_ref }}\n',
+      '',
+      'a base não vem pelo env BASE_REF',
+    ],
+    [
+      'a base interpolada no run',
+      `--measured "${MEASURED_PATH}"`,
+      `--measured "${MEASURED_PATH}" --base \${{ github.base_ref }}`,
+      'interpola base_ref no run',
+    ],
+  ];
+
+  it.each(CASES)(
+    'AI-49 controle negativo: %s reprova a conferência da medida',
+    (_label, from, to, expected) => {
+      const violations = measuredStepViolations(
+        parseWorkflow(mutated(GOOD_MEASURED, from, to)),
+      );
+
+      expect(violations).toContain(expected);
+    },
+  );
+
+  it('AI-49 controle negativo: o passo da medida antes do npm test reprova a conferência', () => {
+    const violations = measuredStepViolations(
+      parseWorkflow(measuredWorkflow(MEASURED_STEP + TEST_STEP)),
+    );
+
+    expect(violations).toContain('não vem depois do passo com --coverage');
   });
 });

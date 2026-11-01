@@ -386,6 +386,7 @@ const IMPLEMENTER_FORBIDDEN_CHANGES = [
   'src/tsconfig.json',
   '.oxlintrc.json',
   'vitest.config.ts',
+  'coverage-floor.json',
   'commitlint.config.mjs',
   '.npmrc',
   '.gitignore',
