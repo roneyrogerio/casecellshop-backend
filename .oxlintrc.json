@@ -456,12 +456,16 @@
             "paths": [
               {
                 "name": "@testcontainers/postgresql",
-                "importNames": ["PostgreSqlContainer"],
+                "importNames": ["PostgreSqlContainer", "default"],
                 "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
               },
               {
                 "name": "testcontainers",
-                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
                 "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
               }
             ]
@@ -478,17 +482,26 @@
             "paths": [
               {
                 "name": "@testcontainers/postgresql",
-                "importNames": ["PostgreSqlContainer"],
+                "importNames": ["PostgreSqlContainer", "default"],
                 "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
               },
               {
                 "name": "testcontainers",
-                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
                 "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
               },
               {
                 "name": "node:child_process",
-                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
                 "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
               }
             ]
@@ -505,7 +518,12 @@
             "paths": [
               {
                 "name": "node:child_process",
-                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
                 "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
               }
             ]
@@ -526,7 +544,12 @@
             "paths": [
               {
                 "name": "node:child_process",
-                "importNames": ["spawnSync", "execSync", "execFileSync"],
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
                 "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
               }
             ]
@@ -543,12 +566,16 @@
             "paths": [
               {
                 "name": "@testcontainers/postgresql",
-                "importNames": ["PostgreSqlContainer"],
+                "importNames": ["PostgreSqlContainer", "default"],
                 "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
               },
               {
                 "name": "testcontainers",
-                "importNames": ["GenericContainer", "DockerComposeEnvironment"],
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
                 "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
               }
             ]
