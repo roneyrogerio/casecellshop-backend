@@ -80,7 +80,7 @@ The PR is ready when every slice has its `feat:` green, the last review round co
 
 ## 7. Close (`/marco fechar`)
 
-`git fetch --prune`, `git switch main`, `git pull --ff-only`, `git branch -d <branch>`; set each AD the merge accepted to `aceita (<data>, PR #<n>)` (from then on it is never edited: a new AD supersedes it); confirm `ROADMAP.md` points to the next milestone; print the first step for it.
+`git fetch --prune`, `git switch main`, `git pull --ff-only`, `git branch -d <branch>`; set each AD the merge accepted to `aceita (<data>, PR #<n>)` (see "Decision records"); confirm `ROADMAP.md` points to the next milestone; print the first step for it.
 
 ## Commits
 
