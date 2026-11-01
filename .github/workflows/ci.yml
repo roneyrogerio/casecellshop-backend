@@ -120,13 +120,13 @@ jobs:
       # FND-12: na perna do piso, os testes que sobem o compose ficam de fora, porque a
       # imagem fixa o Node do Dockerfile e repetiria o que a perna do .nvmrc já testou.
       # AI-37: a cobertura de src/ e o piso dela, uma vez só, na perna do .nvmrc.
-      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json=$RUNNER_TEMP/vitest-report.json ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
+      - run: npm test -- --reporter=default --reporter=github-actions --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-report.json" ${{ matrix.node == '24.12.0' && '--exclude test/integration/foundation/compose.test.ts --exclude test/integration/billing/worker-compose.test.ts' || '' }} ${{ matrix.node == 'nvmrc' && '--coverage' || '' }}
 
       # AI-18: a tabela que o dono lê antes de aprovar; informa e não reprova. Roda
       # também com teste vermelho, que é quando ela mais ajuda, e uma vez só.
       - name: Tabela critério × teste
         if: ${{ !cancelled() && matrix.node == 'nvmrc' }}
-        run: node scripts/criteria-report.ts $RUNNER_TEMP/vitest-report.json >> "$GITHUB_STEP_SUMMARY"
+        run: node scripts/criteria-report.ts "$RUNNER_TEMP/vitest-report.json" >> "$GITHUB_STEP_SUMMARY"
 
       # FND-09: os tipos do banco versionados batem com o banco migrado. Sobe o
       # próprio PostgreSQL pelo Testcontainers, por isso fica no job que já usa o
