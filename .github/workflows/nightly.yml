@@ -19,8 +19,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # O mesmo CI do PR na main, menos o que só existe num PR (migrações, package.json
-  # e commits contra a base).
+  # Na main, as checagens do job checks, a suíte com cobertura e os tipos do banco;
+  # ficam de fora o que só existe num PR (migrações, package.json e commits contra a
+  # base), o job workflows e a perna do piso.
   main-full:
     name: CI completo na main
     runs-on: ubuntu-latest
