@@ -32,7 +32,7 @@ import {
   createTelemetry,
   type Telemetry,
 } from '../../../src/shared/telemetry.ts';
-import { settle } from '../../helpers/async.ts';
+import { settle, WAIT_GUARD_MS, waitAdvancing } from '../../helpers/async.ts';
 import {
   APP_POOL_SIZE,
   checkoutBody,
@@ -44,7 +44,11 @@ import {
   startCheckoutHarness,
   type CheckoutHarness,
 } from '../../helpers/checkout.ts';
-import { createManualClock, type ManualClock } from '../../helpers/clock.ts';
+import {
+  createManualClock,
+  watchSleeps,
+  type ManualClock,
+} from '../../helpers/clock.ts';
 import {
   startMigratedDatabase,
   type TestDatabase,
@@ -208,22 +212,6 @@ function newRelay(queue: Queue, options: RelayOptions = {}): Relay {
     clock: options.clock ?? createManualClock(),
     ...(options.config ? { config: options.config } : {}),
   });
-}
-
-// O relógio manual que anota cada espera pedida: o teste só avança o relógio depois de o laço
-// ter dormido, senão o `advance` cairia no vazio e o laço esperaria para sempre.
-function watchSleeps(): { clock: ManualClock; sleeps: number[] } {
-  const inner = createManualClock();
-  const sleeps: number[] = [];
-  const clock: ManualClock = {
-    now: () => inner.now(),
-    advance: (ms) => inner.advance(ms),
-    sleep(ms) {
-      sleeps.push(ms);
-      return inner.sleep(ms);
-    },
-  };
-  return { clock, sleeps };
 }
 
 // ---------------------------------------------------------------- injeção na fronteira
@@ -511,8 +499,9 @@ describe('ORD-22 relay publica as linhas da outbox', () => {
     ).toBe(1);
     expect((await readState(orderId)).publishedAt).toBeNull();
     // O SQS já aceitou a mensagem antes da falha do banco.
-    await vi.waitFor(async () =>
-      expect(await visibleCount(emq, queues.queueUrl)).toBe(1),
+    await vi.waitFor(
+      async () => expect(await visibleCount(emq, queues.queueUrl)).toBe(1),
+      { timeout: WAIT_GUARD_MS },
     );
 
     expect(await relay.publishOnce()).toBe(1);
@@ -594,11 +583,19 @@ describe('ORD-22 outbox_published_total', () => {
 
 // ---------------------------------------------------------------- start e stop
 
+// Espera o laço ter dormido ao menos uma vez no relógio injetado (`watchSleeps`).
+function untilSlept(sleeps: number[]): Promise<void> {
+  return vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
+    timeout: WAIT_GUARD_MS,
+    interval: 10,
+  });
+}
+
 async function untilPublished(orderIds: string[]): Promise<void> {
   await vi.waitFor(
     async () =>
       expect(await publishedOrderIds(orderIds)).toEqual([...orderIds].sort()),
-    { timeout: 30_000, interval: 25 },
+    { timeout: WAIT_GUARD_MS, interval: 25 },
   );
 }
 
@@ -609,10 +606,7 @@ describe('ORD-22 laço do relay (start e stop)', () => {
     const relay = newRelay(queues.queue, { clock });
     void relay.start();
     try {
-      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
-        timeout: 30_000,
-        interval: 10,
-      });
+      await untilSlept(sleeps);
       expect(sleeps[0]).toBe(DEFAULT_RELAY_CONFIG.idleIntervalMs);
       expect(DEFAULT_RELAY_CONFIG.idleIntervalMs).toBe(500);
 
@@ -660,13 +654,10 @@ describe('ORD-22 laço do relay (start e stop)', () => {
     void relay.start();
     try {
       await vi.waitFor(() => expect(failing.fired()).toBe(1), {
-        timeout: 30_000,
+        timeout: WAIT_GUARD_MS,
         interval: 10,
       });
-      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
-        timeout: 30_000,
-        interval: 10,
-      });
+      await untilSlept(sleeps);
 
       const errors = logs.eventsOf('outbox.relay_error');
       expect(errors).toHaveLength(1);
@@ -689,10 +680,7 @@ describe('ORD-22 laço do relay (start e stop)', () => {
     const { clock, sleeps } = watchSleeps();
     const relay = newRelay(queues.queue, { clock });
     void relay.start();
-    await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
-      timeout: 30_000,
-      interval: 10,
-    });
+    await untilSlept(sleeps);
 
     const stopping = relay.stop();
     clock.advance(500);
@@ -742,16 +730,15 @@ async function rowLockIsFree(orderId: string): Promise<boolean> {
   }
 }
 
-// Para o laço sem depender de a espera já ter começado: anda o relógio até o stop terminar.
+// Para o laço sem depender de a espera já ter começado: leva o relógio até a próxima espera até o stop terminar.
 async function stopRelay(relay: Relay, clock: ManualClock): Promise<void> {
   let stopped = false;
   const stopping = relay.stop().finally(() => {
     stopped = true;
   });
-  for (let attempt = 0; attempt < 5_000 && !stopped; attempt += 1) {
-    clock.advance(500);
-    await settle(2);
-  }
+  await waitAdvancing(clock.advanceToNext, () => {
+    expect(stopped, 'o stop() do relay ainda espera o laço').toBe(true);
+  });
   await stopping;
 }
 
@@ -783,7 +770,7 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
       hole.destroy();
       await observe(round, 10_000);
     }
-  }, 40_000);
+  });
 
   it('ORD-22 sob start() o send sem resposta vira outbox.relay_error na rodada, e o stop não trava', async () => {
     const { orderId } = await acceptCheckout();
@@ -796,7 +783,7 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
     try {
       await vi.waitFor(
         () => expect(logs.eventsOf('outbox.relay_error')).toHaveLength(1),
-        { timeout: 15_000, interval: 50 },
+        { timeout: WAIT_GUARD_MS, interval: 50 },
       );
 
       expect(
@@ -805,16 +792,13 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
       ).toBeGreaterThan(requestsBefore);
       expect(logs.eventsOf('outbox.relay_error')[0]?.['level']).toBe('error');
       expect((await readState(orderId)).publishedAt).toBeNull();
-      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
-        timeout: 5_000,
-        interval: 10,
-      });
+      await untilSlept(sleeps);
       expect(sleeps[0]).toBe(500);
     } finally {
       hole.destroy();
       await stopRelay(relay, clock);
     }
-  }, 40_000);
+  });
 });
 
 // ---------------------------------------------------------------- linha inválida e espera sem publicação (A3, A4)
@@ -881,10 +865,7 @@ describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', ()
     void relay.start();
     try {
       // Se o laço girasse sem esperar, o relógio nunca seria pedido e a espera abaixo estouraria o prazo.
-      await vi.waitFor(() => expect(sleeps.length).toBeGreaterThanOrEqual(1), {
-        timeout: 5_000,
-        interval: 10,
-      });
+      await untilSlept(sleeps);
 
       expect(sleeps[0]).toBe(500);
       expect(
@@ -900,5 +881,5 @@ describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', ()
     } finally {
       await stopRelay(relay, clock);
     }
-  }, 20_000);
+  });
 });

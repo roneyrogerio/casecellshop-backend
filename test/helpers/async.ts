@@ -1,3 +1,5 @@
+import { vi } from 'vitest';
+
 // O relógio manual acorda os timers de forma síncrona, mas as continuações das
 // promessas rodam depois. Ceder ao laço de eventos algumas vezes deixa essas
 // continuações terminarem sem esperar tempo de parede (nada de sleep).
@@ -5,6 +7,32 @@ export async function settle(rounds = 5): Promise<void> {
   for (let round = 0; round < rounds; round += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+}
+
+// Prazo, em tempo real, para o que o teste espera de um efeito (do worker, do relay, da reconciliação, da
+// fila): igual ao `testTimeout` do projeto de integração (vitest.config.ts; conferido em test/repo). Serve só
+// para o teste não ficar parado para sempre e dar uma falha de asserção que diz o que faltou; não decide
+// se o teste passa (FND-13).
+export const WAIT_GUARD_MS = 60_000;
+
+// Espera um efeito com o relógio manual andando: a cada volta que falha, `advance` leva o relógio até a próxima
+// espera pendente (`ManualClock.advanceToNext`, ou o `advanceIdle` do mundo do worker, que não anda com uma chamada
+// ao ERP em andamento). Nunca avança um passo fixo (FND-13).
+export function waitAdvancing(
+  advance: () => unknown,
+  check: () => void | Promise<void>,
+): Promise<void> {
+  return vi.waitFor(
+    async () => {
+      try {
+        await check();
+      } catch (error) {
+        advance();
+        throw error;
+      }
+    },
+    { timeout: WAIT_GUARD_MS, interval: 20 },
+  );
 }
 
 // Acompanha uma promessa sem esperá-la, para o teste afirmar que ela ainda

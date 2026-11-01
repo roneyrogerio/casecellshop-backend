@@ -10,9 +10,10 @@ import {
 import type { ReceivedMessage } from '../../src/queue/sqs.ts';
 import { createSemaphore, type Semaphore } from '../../src/shared/semaphore.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
-import type { ManualClock } from './clock.ts';
+import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
+import { watchSleeps } from './clock.ts';
 import { countsOf, observeQueue, type ObservedQueue } from './sqs.ts';
-import { waitForDlq, type QueueWorld } from './worker.ts';
+import { waitForDlq, type ErpWorld, type QueueWorld } from './worker.ts';
 
 // Apoio à reconciliação e ao runbook da DLQ (Fatia 3 do M3).
 
@@ -41,7 +42,7 @@ export async function moveToDlq(
       expect(await queue.receive({ max: 10, waitSeconds: 0 })).toEqual([]);
       expect(await world.queues.dlq.approximateCount()).toBe(count);
     },
-    { timeout: 10_000, interval: 50 },
+    { timeout: WAIT_GUARD_MS, interval: 50 },
   );
   await waitForDlq(world, count);
 }
@@ -111,15 +112,7 @@ export function buildReconciler(
   options: ReconcilerOptions = {},
 ): ReconcilerRig {
   const dlq = observeQueue(world.queues.dlq);
-  const sleeps: number[] = [];
-  const clock: ManualClock = {
-    now: () => world.clock.now(),
-    advance: (ms) => world.clock.advance(ms),
-    sleep(ms) {
-      sleeps.push(ms);
-      return world.clock.sleep(ms);
-    },
-  };
+  const { clock, sleeps } = watchSleeps(world.clock);
   // Montada na primeira chamada, e não aqui: a preparação do teste (pedidos, mensagens na DLQ) não depende
   // da reconciliação, e uma montagem que falha não deve escondê-la.
   let instance: Reconciler | undefined;
@@ -142,12 +135,12 @@ export function buildReconciler(
   return { reconciler, dlq, sleeps };
 }
 
-// Avança o relógio manual enquanto espera a promessa, para nenhuma espera do código (um intervalo, a
-// pausa entre duas contagens da DLQ) segurá-la; o prazo é em tempo real, e a falha é de asserção.
+// Leva o relógio do mundo até a próxima espera (sem chamada ao ERP em andamento) enquanto espera a promessa, para
+// nenhuma espera do código (um intervalo, a pausa entre duas contagens da DLQ) segurá-la; o prazo em tempo real
+// é só a guarda, e a falha é de asserção.
 export async function driveClock<T>(
   promise: Promise<T>,
-  clock: ManualClock,
-  stepMs = 1_000,
+  world: Pick<ErpWorld, 'advanceIdle'>,
 ): Promise<T> {
   let settled = false;
   const tracked = promise.then(
@@ -161,13 +154,9 @@ export async function driveClock<T>(
     },
   );
   tracked.catch(() => undefined);
-  await vi.waitFor(
-    () => {
-      clock.advance(stepMs);
-      expect(settled, 'a operação ainda espera o relógio').toBe(true);
-    },
-    { timeout: 20_000, interval: 20 },
-  );
+  await waitAdvancing(world.advanceIdle, () => {
+    expect(settled, 'a operação ainda espera o relógio').toBe(true);
+  });
   return tracked;
 }
 

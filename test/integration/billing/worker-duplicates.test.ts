@@ -9,7 +9,7 @@ import {
   vi,
 } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
-import { settle } from '../../helpers/async.ts';
+import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   ERP_TIMEOUT_MS,
   MIN_RETRY_DELAY_MS,
@@ -386,10 +386,12 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const order = await acceptOrder(suite);
     await publishTwiceWithRealRelay(world, order.orderId);
-    await vi.waitFor(async () =>
-      expect((await countsOf(world.emq, world.queues.queueUrl)).visible).toBe(
-        2,
-      ),
+    await vi.waitFor(
+      async () =>
+        expect((await countsOf(world.emq, world.queues.queueUrl)).visible).toBe(
+          2,
+        ),
+      { timeout: WAIT_GUARD_MS },
     );
     const worker = buildWorker(world);
 
@@ -408,7 +410,7 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
               'a segunda tentativa foi adiada pela permissão',
             ).toHaveLength(1),
           {
-            timeout: 20_000,
+            timeout: WAIT_GUARD_MS,
             interval: 10,
           },
         );

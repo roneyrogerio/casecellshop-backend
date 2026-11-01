@@ -8,11 +8,11 @@ import {
   describe,
   expect,
   it,
-  vi,
 } from 'vitest';
 import type { ErpClient } from '../../../src/erp/erp-client.ts';
 import type { WorkerConfig } from '../../../src/billing/worker.ts';
 import { resolveServiceIdentity } from '../../../src/shared/service-identity.ts';
+import { waitAdvancing } from '../../helpers/async.ts';
 import { countInvoices } from '../../helpers/erp.ts';
 import { captureLogs, type LogLine } from '../../helpers/logs.ts';
 import {
@@ -24,8 +24,8 @@ import {
   expectInvoiced,
   interceptPool,
   makeClaimable,
+  untilInvoiced,
   markSentBefore,
-  readOrder,
   startWorkerSuite,
   stealMessage,
   stopAdvancing,
@@ -570,13 +570,9 @@ describe('OBS-01 worker.poll_error', () => {
 
     await worker.start();
     // O laço pode esperar um intervalo no relógio injetável depois do erro: o teste o avança junto com a espera.
-    await vi.waitFor(
-      () => {
-        world.clock.advance(500);
-        expect(logs.eventsOf('worker.poll_error')).toHaveLength(1);
-      },
-      { timeout: 20_000, interval: 20 },
-    );
+    await waitAdvancing(world.advanceIdle, () => {
+      expect(logs.eventsOf('worker.poll_error')).toHaveLength(1);
+    });
     expect(injection.fired, 'a falha injetada disparou').toBe(1);
     expect(logs.eventsOf('worker.poll_error')[0]).toMatchObject({
       level: 'error',
@@ -584,15 +580,7 @@ describe('OBS-01 worker.poll_error', () => {
     });
 
     const order = await submitOrder(suite, world);
-    await vi.waitFor(
-      async () => {
-        world.clock.advance(500);
-        expect((await readOrder(world.pool, order.orderId)).status).toBe(
-          'invoiced',
-        );
-      },
-      { timeout: 20_000, interval: 20 },
-    );
+    await untilInvoiced(world, order.orderId);
     await stopAdvancing(worker, world);
     await expectInvoiced(world, order);
   });

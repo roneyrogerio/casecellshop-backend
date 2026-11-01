@@ -7,7 +7,7 @@ import {
   it,
   vi,
 } from 'vitest';
-import { settle } from '../../helpers/async.ts';
+import { settle, WAIT_GUARD_MS, waitAdvancing } from '../../helpers/async.ts';
 import {
   buildWorker,
   createGate,
@@ -18,6 +18,7 @@ import {
   startWorkerSuite,
   stopAdvancing,
   submitOrder,
+  untilInvoiced,
   within,
   type Gate,
   type QueueWorld,
@@ -54,15 +55,7 @@ describe('A14 o worker volta a receber depois do stop()', () => {
 
     const order = await submitOrder(suite, world);
     await worker.start();
-    await vi.waitFor(
-      async () => {
-        world.clock.advance(500);
-        expect((await readOrder(world.pool, order.orderId)).status).toBe(
-          'invoiced',
-        );
-      },
-      { timeout: 20_000, interval: 20 },
-    );
+    await untilInvoiced(world, order.orderId);
     await stopAdvancing(worker, world);
 
     await expectInvoiced(world, order);
@@ -104,7 +97,7 @@ describe('A14 o worker volta a receber depois do stop()', () => {
           'invoiced',
         );
       },
-      { timeout: 20_000, interval: 20 },
+      { timeout: WAIT_GUARD_MS, interval: 20 },
     );
     await Promise.all([stopping, restarting]);
     expect(sequence).toEqual(['stop', 'start']);
@@ -144,8 +137,9 @@ async function expectNoReceiveAfterStop(
 ): Promise<void> {
   const count = world.queue.receives.length;
   gate.releaseAll();
-  await vi.waitFor(() =>
-    expect(world.queue.completedReceives).toBeGreaterThanOrEqual(count),
+  await vi.waitFor(
+    () => expect(world.queue.completedReceives).toBeGreaterThanOrEqual(count),
+    { timeout: WAIT_GUARD_MS },
   );
   await settle(30);
   expect(
@@ -209,14 +203,10 @@ describe('A28 em qualquer sequência de start() e stop(), o stop() que resolve p
     void finished.then(() => {
       done = true;
     });
-    await vi.waitFor(
-      () => {
-        gate.releaseAll();
-        world.clock.advance(500);
-        expect(done, 'as três chamadas ainda esperam').toBe(true);
-      },
-      { timeout: 20_000, interval: 20 },
-    );
+    await waitAdvancing(world.advanceIdle, () => {
+      gate.releaseAll();
+      expect(done, 'as três chamadas ainda esperam').toBe(true);
+    });
 
     await expectNoReceiveAfterStop(world, gate);
   });

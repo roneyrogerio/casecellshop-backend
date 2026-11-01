@@ -10,6 +10,7 @@ import {
 } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { cancelOrder, redriveDlq } from '../../../src/billing/runbook.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { readInventory } from '../../helpers/checkout.ts';
 import {
   buildReconciler,
@@ -97,7 +98,7 @@ function redrive(world: QueueWorld): ReturnType<typeof redriveDlq> {
       dlqUrl: world.queues.dlqUrl,
       clock: world.clock,
     }),
-    world.clock,
+    world,
   );
 }
 
@@ -151,7 +152,7 @@ describe('ORD-07 redrive em lote da DLQ', () => {
     ).toEqual([]);
     await vi.waitFor(
       async () => expect(await world.queues.queue.approximateCount()).toBe(4),
-      { timeout: 20_000, interval: 50 },
+      { timeout: WAIT_GUARD_MS, interval: 50 },
     );
 
     // A contagem de recebimentos recomeça: o worker vê a primeira tentativa, e não a seguinte ao limite.
@@ -197,7 +198,7 @@ describe('ORD-07 redrive em lote da DLQ', () => {
     expect(result).toEqual({ before: 1, remaining: 0 });
     await vi.waitFor(
       async () => expect(await world.queues.queue.approximateCount()).toBe(1),
-      { timeout: 20_000, interval: 50 },
+      { timeout: WAIT_GUARD_MS, interval: 50 },
     );
     const [back] = await world.queues.queue.receive({ max: 1, waitSeconds: 0 });
     expect(back?.body).toContain(order.orderId);
@@ -308,7 +309,7 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     await redrive(world);
     await vi.waitFor(
       async () => expect(await world.queues.queue.approximateCount()).toBe(1),
-      { timeout: 20_000, interval: 50 },
+      { timeout: WAIT_GUARD_MS, interval: 50 },
     );
 
     expect(await buildWorker(world, { logger: logs.logger }).pollOnce()).toBe(

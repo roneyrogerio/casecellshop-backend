@@ -15,7 +15,9 @@ import {
   NO_MIGRATIONS,
 } from 'kysely/migration';
 import pg from 'pg';
+import { expect, vi } from 'vitest';
 import type { MigrationFolder } from '../../src/db/migrate.ts';
+import { WAIT_GUARD_MS } from './async.ts';
 
 // Ajudantes dos testes do FND-11: um banco novo por teste, no mesmo contêiner, e um Migrator do
 // Kysely montado à mão, para os controles negativos provarem que o gancho do migrate é o que
@@ -39,9 +41,30 @@ export interface ScratchDatabase {
 }
 
 export interface MigrationContainer {
+  // Banco administrativo do contêiner (não é um dos bancos de teste): os testes de encerramento abrem nele
+  // uma conexão-testemunha, que vê o servidor cair sem entrar na conferência do stop().
+  uri: string;
   // Banco vazio e exclusivo do teste: as tabelas de controle e as de fixture não vazam entre testes.
   createDatabase(): Promise<ScratchDatabase>;
-  stop(): Promise<void>;
+  // Encerra os pools dos bancos de teste, confere que nenhuma conexão sobrou e só então para o contêiner
+  // (FND-13): uma conexão ociosa aberta no `container.stop()` recebe o 57P01 e, sem ouvinte de erro, derruba
+  // o processo. Uma conexão que sobrar reprova o stop() citando o banco, depois de `graceMs` (o servidor leva
+  // um instante para soltar o backend de um cliente que já saiu); o contêiner é parado de qualquer forma.
+  stop(options?: { graceMs?: number }): Promise<void>;
+}
+
+const TEST_DATABASE_PATTERN = 'fnd11\\_%';
+
+// Conexões de clientes que seguem abertas nos bancos de teste, uma frase por conexão.
+async function openConnections(admin: pg.Pool): Promise<string[]> {
+  const result = await admin.query<{ datname: string; state: string | null }>(
+    `SELECT datname, state FROM pg_stat_activity
+      WHERE backend_type = 'client backend' AND pid <> pg_backend_pid() AND datname LIKE $1`,
+    [TEST_DATABASE_PATTERN],
+  );
+  return result.rows.map(
+    (row) => `${row.datname} (${row.state ?? 'sem estado'})`,
+  );
 }
 
 export async function startMigrationContainer(): Promise<MigrationContainer> {
@@ -56,6 +79,7 @@ export async function startMigrationContainer(): Promise<MigrationContainer> {
   const pools: pg.Pool[] = [];
   let counter = 0;
   return {
+    uri: container.getConnectionUri(),
     async createDatabase() {
       counter += 1;
       // Nome montado só de um contador, nunca de entrada externa; DDL não aceita parâmetro.
@@ -70,10 +94,22 @@ export async function startMigrationContainer(): Promise<MigrationContainer> {
       pools.push(pool);
       return { uri, pool };
     },
-    async stop() {
-      await Promise.all(pools.map((pool) => pool.end()));
-      await adminPool.end();
-      await container.stop();
+    async stop({ graceMs = WAIT_GUARD_MS } = {}) {
+      try {
+        await Promise.all(pools.map((pool) => pool.end()));
+        await vi.waitFor(
+          async () => {
+            expect(
+              await openConnections(adminPool),
+              'um pool aberto pelo teste sobrou no stop() do contêiner',
+            ).toEqual([]);
+          },
+          { timeout: graceMs, interval: 50 },
+        );
+      } finally {
+        await adminPool.end();
+        await container.stop();
+      }
     },
   };
 }

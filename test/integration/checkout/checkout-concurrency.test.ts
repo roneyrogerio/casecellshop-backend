@@ -136,8 +136,17 @@ describe('CHK-02 controle negativo da reserva', () => {
       priceCents: 1990,
       onHand: STOCK,
     });
-    const naivePool = createAppPool(database.uri, APP_POOL_SIZE);
+    // Os limites pacientes (FND-13): com o lock_timeout de produção (2 s), as 50 reservas sobre 10 conexões
+    // estouravam o prazo do banco numa máquina carregada, e a venda além do estoque medida não vinha da janela.
+    const naivePool = createAppPool(
+      database.uri,
+      APP_POOL_SIZE,
+      PATIENT_LIMITS,
+    );
     try {
+      expect(naivePool.options).toMatchObject({
+        lock_timeout: PATIENT_LOCK_TIMEOUT_MS,
+      });
       const barrier = createBarrier(SIMULTANEOUS);
 
       const outcomes = await Promise.all(

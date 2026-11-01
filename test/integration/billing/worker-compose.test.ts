@@ -15,6 +15,7 @@ import {
   observeFetchResponse,
   type ObservedResponse,
 } from '../../helpers/contract.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { parseExposition, valueOf } from '../../helpers/metrics.ts';
 import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
@@ -245,7 +246,7 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
           notVisible: 0,
         });
       },
-      { timeout: 30_000, interval: 500 },
+      { timeout: WAIT_GUARD_MS, interval: 500 },
     );
   }, 120_000);
 

@@ -12,6 +12,7 @@ import {
   createSqsClient,
   startRedrive,
 } from '../../../src/queue/sqs.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   drain,
   observe,
@@ -333,15 +334,18 @@ describe('ORD-19 contagem pela API de consulta do SQS', () => {
       await sendRaw(emq, queueUrl, `m${index}`);
     await queue.receive({ max: 1, waitSeconds: 0 });
 
-    await vi.waitFor(async () => {
-      const response = await fetch(
-        `${queueUrl}?Action=GetQueueAttributes&AttributeName.1=All`,
-      );
-      expect(parseQueueCountsXml(await response.text())).toEqual({
-        visible: 1,
-        notVisible: 1,
-      });
-    });
+    await vi.waitFor(
+      async () => {
+        const response = await fetch(
+          `${queueUrl}?Action=GetQueueAttributes&AttributeName.1=All`,
+        );
+        expect(parseQueueCountsXml(await response.text())).toEqual({
+          visible: 1,
+          notVisible: 1,
+        });
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 });
 
@@ -351,12 +355,14 @@ describe('ORD-22 porta do SQS: contagem', () => {
     for (let index = 0; index < 3; index += 1)
       await sendRaw(emq, queueUrl, `m${index}`);
 
-    await vi.waitFor(async () =>
-      expect(await queue.approximateCount()).toBe(3),
+    await vi.waitFor(
+      async () => expect(await queue.approximateCount()).toBe(3),
+      { timeout: WAIT_GUARD_MS },
     );
     const [received] = await queue.receive({ max: 1, waitSeconds: 0 });
-    await vi.waitFor(async () =>
-      expect(await queue.approximateCount()).toBe(2),
+    await vi.waitFor(
+      async () => expect(await queue.approximateCount()).toBe(2),
+      { timeout: WAIT_GUARD_MS },
     );
     await queue.delete(received?.receiptHandle ?? '');
 
@@ -377,7 +383,9 @@ describe('ORD-13 porta do SQS: DLQ e redrive', () => {
     // O recebimento seguinte ao 2º não devolve a mensagem: ela vai para a DLQ.
     expect(await queue.receive({ max: 1, waitSeconds: 0 })).toEqual([]);
 
-    await vi.waitFor(async () => expect(await dlq.approximateCount()).toBe(1));
+    await vi.waitFor(async () => expect(await dlq.approximateCount()).toBe(1), {
+      timeout: WAIT_GUARD_MS,
+    });
     expect(await queue.approximateCount()).toBe(0);
     const [dead] = await dlq.receive({ max: 1, waitSeconds: 0 });
     expect(dead?.body).toBe('corpo');
@@ -394,17 +402,19 @@ describe('ORD-13 porta do SQS: DLQ e redrive', () => {
       await queue.changeVisibility(message?.receiptHandle ?? '', 0);
     }
     await queue.receive({ max: 1, waitSeconds: 0 });
-    await vi.waitFor(async () => expect(await dlq.approximateCount()).toBe(1));
+    await vi.waitFor(async () => expect(await dlq.approximateCount()).toBe(1), {
+      timeout: WAIT_GUARD_MS,
+    });
 
     await startRedrive(client, dlqUrl);
 
     // O redrive é uma tarefa assíncrona do SQS: o teste acompanha pelo número de mensagens, como o runbook.
     await vi.waitFor(async () => expect(await dlq.approximateCount()).toBe(0), {
-      timeout: 20_000,
+      timeout: WAIT_GUARD_MS,
     });
     await vi.waitFor(
       async () => expect(await queue.approximateCount()).toBe(1),
-      { timeout: 20_000 },
+      { timeout: WAIT_GUARD_MS },
     );
     const [back] = await queue.receive({ max: 1, waitSeconds: 0 });
     expect(back?.body).toBe('corpo');

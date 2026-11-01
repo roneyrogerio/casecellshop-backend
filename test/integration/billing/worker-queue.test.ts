@@ -11,7 +11,7 @@ import {
   createSemaphore,
   type Semaphore,
 } from '../../../src/shared/semaphore.ts';
-import { settle } from '../../helpers/async.ts';
+import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { createAppPool, readInventory } from '../../helpers/checkout.ts';
 import {
   countInvoices,
@@ -576,12 +576,15 @@ describe('ORD-20 chamadas simultâneas ao ERP', () => {
       );
       // No meio da rodada, só as tentativas que têm permissão foram recebidas: as outras seguem visíveis no SQS,
       // com a visibilidade sem correr.
-      await vi.waitFor(async () => {
-        expect((await snapshotQueues(world)).queue).toEqual({
-          visible: total - handled - expected,
-          notVisible: expected,
-        });
-      });
+      await vi.waitFor(
+        async () => {
+          expect((await snapshotQueues(world)).queue).toEqual({
+            visible: total - handled - expected,
+            notVisible: expected,
+          });
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
       world.clock.advance(SLOW_MS);
       expect(await within(poll.result, 'a rodada terminar')).toBe(expected);
       handled += expected;
@@ -682,7 +685,7 @@ describe('ORD-20 chamadas simultâneas ao ERP', () => {
             'invoiced',
           );
       },
-      { timeout: 20_000, interval: 25 },
+      { timeout: WAIT_GUARD_MS, interval: 25 },
     );
 
     // Enquanto isso a presa seguiu em voo, com a mensagem escondida e sem fatura.
@@ -690,11 +693,13 @@ describe('ORD-20 chamadas simultâneas ao ERP', () => {
     expect((await readOrder(suite.pool, stuck.orderId)).status).toBe('pending');
     expect(await invoices(stuck.orderId)).toBe(0);
     expect(world.transport.maxInFlight).toBeLessThanOrEqual(3);
-    await vi.waitFor(async () =>
-      expect((await snapshotQueues(world)).queue).toEqual({
-        visible: 0,
-        notVisible: 1,
-      }),
+    await vi.waitFor(
+      async () =>
+        expect((await snapshotQueues(world)).queue).toEqual({
+          visible: 0,
+          notVisible: 1,
+        }),
+      { timeout: WAIT_GUARD_MS },
     );
     for (const order of others) {
       expect(await invoices(order.orderId)).toBe(1);

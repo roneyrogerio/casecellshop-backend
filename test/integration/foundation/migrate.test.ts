@@ -9,6 +9,8 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MIGRATION_FOLDERS, migrate } from '../../../src/db/migrate.ts';
 import { createMigrationPool, createPool } from '../../../src/db/pool.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
+import { captureUncaught } from '../../helpers/uncaught.ts';
 import {
   appliedMigrations,
   fixtureFolder,
@@ -526,19 +528,12 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
   const SLEEP_MARKER = '%pg_sleep(37)%';
 
   // Destrói o socket da conexão que roda o pg_sleep da fixture e devolve o que `run` fez e as
-  // uncaughtException do processo. O vitest ouve uncaughtException e reprovaria a execução inteira por
-  // causa do controle negativo: os ouvintes dele saem durante o cenário e voltam depois.
+  // uncaughtException do processo (captureUncaught tira os ouvintes do vitest durante o cenário).
   async function destroySocketDuringSlowMigration(
     database: ScratchDatabase,
     run: (pool: pg.Pool) => Promise<unknown>,
   ): Promise<{ outcome: unknown; uncaught: Error[] }> {
-    const uncaught: Error[] = [];
-    const onUncaught = (error: Error): void => {
-      uncaught.push(error);
-    };
-    const previous = process.listeners('uncaughtException');
-    process.removeAllListeners('uncaughtException');
-    process.on('uncaughtException', onUncaught);
+    const { errors: uncaught, restore } = captureUncaught();
     const clients: pg.PoolClient[] = [];
     const pool = new pg.Pool({ connectionString: database.uri, max: 4 });
     // Um erro de conexão ociosa não pode derrubar o processo do teste.
@@ -561,7 +556,7 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
           expect(active.rows).toHaveLength(1);
           sleepingPid = active.rows[0]?.pid ?? -1;
         },
-        { timeout: 20_000 },
+        { timeout: WAIT_GUARD_MS },
       );
       const victim = clients.find(
         (client) =>
@@ -578,9 +573,7 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return { outcome, uncaught };
     } finally {
-      process.removeAllListeners('uncaughtException');
-      for (const listener of previous)
-        process.on('uncaughtException', listener);
+      restore();
       // O servidor continua no pg_sleep depois de o cliente cair; encerra o backend para não segurar o lock.
       await database.pool.query(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE $1`,
