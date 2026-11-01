@@ -16,7 +16,7 @@
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "lint": "oxlint",
+    "lint": "oxlint --ignore-path .gitignore",
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
     "lint:openapi": "redocly lint openapi.yaml",

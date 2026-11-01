@@ -45,6 +45,9 @@ const PROTECTED_NAMES = [
   /^\.prettierrc(\..+)?$/,
   /^prettier\.config\./,
   /^\.prettierignore$/,
+  // O oxlint lê o .eslintignore por padrão; o lint usa o .gitignore (AI-48), e
+  // este nome fica negado para não voltar a ter efeito.
+  /^\.eslintignore$/,
   // Código sem uso e código repetido (AI-35, AI-36): a configuração e a linha de
   // base decidem o que cada checagem enxerga.
   /^\.?knip(\.config)?\.(jsonc?|[cm]?[jt]s)$/,
@@ -62,6 +65,9 @@ const PROTECTED_NAMES = [
 
 function isProtectedName(rel) {
   const name = rel.slice(rel.lastIndexOf('/') + 1);
+  // O Prettier lê a chave prettier de um package.json aninhado (AI-04); o da
+  // raiz segue liberado, conferido pelo hook de parada e pelo CI (AI-05).
+  if (name === 'package.json' && rel.includes('/')) return true;
   return PROTECTED_NAMES.some((re) => re.test(name));
 }
 
