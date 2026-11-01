@@ -1,6 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
-import type { Histogram, Meter, MetricOptions } from '@opentelemetry/api';
 import type { Request, RequestHandler, Response } from 'express';
 import * as fc from 'fast-check';
 import type { Logger } from 'pino';
@@ -19,6 +18,11 @@ import {
   propertyTimeoutMs,
   readPropertyConfig,
 } from '../../test/helpers/property-setup.ts';
+import {
+  DURATION_METRIC,
+  interceptingTelemetry,
+  type RecordedAttributes,
+} from '../../test/helpers/telemetry-intercept.ts';
 import { CorrelationId } from '../contract/index.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { requestContext } from './request-context.ts';
@@ -33,10 +37,8 @@ type Factory = (telemetry: Telemetry, logger: Logger) => RequestHandler;
 
 const telemetry = createTelemetry();
 const { logger } = captureLogs('casecellshop-api', 'silent');
-const DURATION_METRIC = 'http.server.request.duration';
 const STATUS_ATTRIBUTE = 'http.response.status_code';
 const ERROR_ATTRIBUTE = 'error.type';
-type RecordedAttributes = Record<string, string | number | undefined>;
 
 afterAll(() => telemetry.shutdown());
 
@@ -117,50 +119,6 @@ function correlationIdIsValid(make: Factory) {
       CorrelationId.safeParse(requestId).success;
     expect(!keepsValidInput || correlationId === requestId).toBe(true);
   });
-}
-
-// A interceptação fica no limite do `Telemetry` que o middleware usa: o `meter(scope)` devolve o Meter real
-// envolvido, e o histograma da duração HTTP entrega os atributos de cada `record` à função `intercept`, que decide
-// o que repassar ao histograma real. Os outros instrumentos do Meter passam sem mudança.
-type Intercept = (
-  attributes: RecordedAttributes,
-  forward: (attributes: RecordedAttributes) => void,
-) => void;
-
-function interceptMeter(meter: Meter, intercept: Intercept): Meter {
-  const createHistogram = (
-    name: string,
-    options?: MetricOptions,
-  ): Histogram => {
-    const histogram = meter.createHistogram(name, options);
-    if (name !== DURATION_METRIC) return histogram;
-    return {
-      record: (value, attributes, context) => {
-        intercept({ ...attributes } as RecordedAttributes, (forwarded) => {
-          histogram.record(value, forwarded, context);
-        });
-      },
-    };
-  };
-  return new Proxy(meter, {
-    get: (target, property): unknown => {
-      if (property === 'createHistogram') return createHistogram;
-      const member: unknown = Reflect.get(target, property, target);
-      return typeof member === 'function'
-        ? (member as (...args: unknown[]) => unknown).bind(target)
-        : member;
-    },
-  });
-}
-
-function interceptingTelemetry(
-  target: Telemetry,
-  intercept: Intercept,
-): Telemetry {
-  return {
-    ...target,
-    meter: (scope) => interceptMeter(target.meter(scope), intercept),
-  };
 }
 
 // A telemetria entregue ao middleware repassa a medição à real e guarda os atributos de cada uma: a propriedade

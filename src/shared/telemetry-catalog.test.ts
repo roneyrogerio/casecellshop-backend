@@ -229,6 +229,14 @@ describe('OBS-07 controles negativos: o nome da métrica', () => {
     ['a unidade bits', 'casecellshop.x.rate_bits'],
     ['a unidade ns', 'casecellshop.x.latency_ns.p99'],
     ['a unidade day', 'casecellshop.x.age_day'],
+    ['a abreviação secs no fim', 'casecellshop.x.wait_secs'],
+    ['a abreviação sec no fim', 'casecellshop.x.wait_sec'],
+    ['a abreviação mins no fim', 'casecellshop.x.wait_mins'],
+    ['a abreviação msec no fim', 'casecellshop.x.timeout_msec'],
+    ['a abreviação msecs no meio', 'casecellshop.x.timeout_msecs.max'],
+    ['a abreviação usec no fim', 'casecellshop.x.latency_usec'],
+    ['a abreviação usecs no fim', 'casecellshop.x.latency_usecs'],
+    ['a abreviação min no começo de um segmento', 'casecellshop.x.min_wait'],
   ])(
     'OBS-07 controle negativo: a métrica cujo nome tem %s é acusada, em qualquer posição',
     (_defect, name) => {
@@ -243,6 +251,10 @@ describe('OBS-07 controles negativos: o nome da métrica', () => {
     'casecellshop.x.total_cost',
     'casecellshop.x.hourly_rate',
     'casecellshop.x.kbd_events',
+    'casecellshop.x.minimum_stock',
+    'casecellshop.x.secondary_requests',
+    'casecellshop.x.admin_requests',
+    'casecellshop.x.section_views',
   ])(
     'OBS-07 o nome %s, sem palavra de unidade e sem total no fim, não tem violação',
     (name) => {
