@@ -169,7 +169,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
 - **Pular o job `test` em PR que só muda `.specs/**` ou o `README.md`** (depois do B3): calculado no próprio YAML, com uma lista estreita de caminhos que nenhum teste lê, e nunca por `paths-ignore`, que deixaria o `ci-ok` pendente.
-- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
+- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `casecellshop_erp_out_of_stock_rejections_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor:**
   - feitas em 01/11/2026:
     - o ruleset exige só o `ci-ok`, a branch atualizada, o resultado do CodeQL (High or higher, Errors) e a aprovação do último push;

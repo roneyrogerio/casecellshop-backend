@@ -137,7 +137,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - A chamada ao SQS fica dentro da transação, para outro relay não publicar as mesmas linhas. O `statement_timeout` não conta o tempo em que a transação espera o SQS, então quem limita esse tempo é o timeout de 5 s da porta, que aborta a requisição e faz a rodada rejeitar. Uma queda entre publicar e o commit publica de novo: a entrega é pelo menos uma vez, e o consumidor tolera (`ORD-01`, `ORD-22`).
 - Uma linha cujo corpo não passa no schema (só uma linha gravada fora da API) é logada (`outbox.invalid_row`, `error`, com o `orderId`) e fica fora do lote; as outras seguem.
 - Uma rodada que publicou um lote cheio roda de novo na hora; senão (outbox vazia, lote parcial, nada aceito pelo SQS ou erro), espera 500 ms pelo relógio injetável. Um erro é logado (`outbox.relay_error`) e não para o laço.
-- Métrica: `outbox_published_total` (counter, sem label).
+- Métrica: `casecellshop.outbox.published.messages` (counter, sem atributo).
 - **Interface (`src/billing/relay.ts`):** `createRelay({ pool, queue, logger, telemetry, clock, config? })` devolve `start`, `stop` e `publishOnce()` (uma rodada; resolve com o número de linhas publicadas).
 
 ## Worker: envio (AD-003, AD-021, AD-024)
@@ -158,7 +158,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 - **Conclusão:** primeiro o banco, depois o SQS.
   - faturado ou falho: numa transação, o pedido muda por compare-and-set (`WHERE status = 'pending'`), o estoque só se o pedido mudou, na ordem de lock; depois, `DeleteMessage`;
   - retry: `ChangeMessageVisibility` com o atraso mínimo mais *full jitter* sobre um exponencial com teto, em segundos inteiros, arredondado para cima; o jitter espalha os retries depois de uma falha que atingiu muitos pedidos de uma vez;
-  - o SQS respondeu `stale` (outro recebimento já tem a mensagem): a tentativa não muda mais nada e conta em `outbox_conclusion_no_row_total` (`outbox.conclusion_no_row`); o banco já está protegido pelo compare-and-set;
+  - o SQS respondeu `stale` (outro recebimento já tem a mensagem): a tentativa não muda mais nada e conta em `casecellshop.outbox.orphan_conclusions` (`outbox.conclusion_no_row`); o banco já está protegido pelo compare-and-set;
   - se gravar o desfecho no banco falhar, o worker repete enquanto o prazo da mensagem vale, até 5 vezes por tentativa, para um erro rápido e persistente não virar um laço contra o banco; esgotadas as repetições, desiste sem responder ao SQS, e a mensagem volta quando a visibilidade vencer. Uma falha do SQS ao apagar ou ao mudar a visibilidade também só é logada: a mensagem volta, e o pedido já com desfecho a encerra.
 - **Desfechos:** transitório ou ambíguo, nova tentativa; permanente, pedido falho e reserva liberada; limite de recebimentos, a DLQ do SQS, com o pedido `pending` e a reserva.
 - **Encerramento:** no `SIGTERM`, o relay, a reconciliação e o worker param juntos, e não um depois do outro, para o worker parar de receber logo; o worker espera as tentativas em andamento, e a reconciliação interrompe a rodada entre uma mensagem e outra, sem começar consulta nova ao ERP (as que sobram voltam à DLQ pela visibilidade); se o prazo estourar, a visibilidade vence e a mensagem volta. O contêiner roda `node` direto, sem `npm`, para o sinal chegar ao processo.
@@ -172,7 +172,7 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 ## Worker: reconciliação e runbook (AD-003, AD-021)
 
 - **Reconciliação, periódica (`src/billing/reconciliation.ts`):** a cada 5 min, recebe da DLQ até 100 mensagens (lotes de 10), cada uma com visibilidade de 5 min, para a rodada seguinte ler outras e uma mensagem não ser vista duas vezes na mesma rodada. Para cada uma:
-  - marca a chegada à DLQ uma vez: `UPDATE outbox SET dead_at = now() WHERE order_id = :id AND dead_at IS NULL RETURNING`; com linha, loga `outbox.dead` (`error`, com `orderId` e `correlationId`) e conta `dead` em `outbox_attempt_outcome_total`. A permissão de chamada tomada pelo worker zera o `dead_at` (a tomada pela reconciliação não), então uma mensagem que volta à DLQ depois de um *redrive* e de nova tentativa é contada de novo;
+  - marca a chegada à DLQ uma vez: `UPDATE outbox SET dead_at = now() WHERE order_id = :id AND dead_at IS NULL RETURNING`; com linha, loga `casecellshop.outbox.dead` (`error`, com `orderId` e `correlationId`) e conta `dead` em `casecellshop.outbox.attempts`. A permissão de chamada tomada pelo worker zera o `dead_at` (a tomada pela reconciliação não), então uma mensagem que volta à DLQ depois de um *redrive* e de nova tentativa é contada de novo;
   - corpo fora do schema: fica para o runbook;
   - pedido que já não está `pending`: apaga da DLQ (`outbox.closed`);
   - com a permissão de chamada do worker (o atraso mínimo vale também aqui) e uma permissão do semáforo, consulta o ERP pela referência: achou, conclui como faturado pelo mesmo caminho do worker e apaga da DLQ (`order.invoiced`); não achou, ou a consulta falhou, ou não teve a permissão de chamada, a mensagem fica na DLQ para o runbook.
@@ -273,14 +273,15 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
   - **estoque:** unidades reservadas e SKUs com `reserved > on_hand` (gauges);
   - **ERP:** duração e desfecho (histogram e counter), chamadas em andamento (gauge), rejeições por falta de estoque e erros de configuração (counters);
   - **sincronização:** idade da última rodada completa (gauge), correções por campo e SKUs ausentes zerados (counters).
-- **Nomes das métricas do worker (M3),** no `/metrics` dele:
-  - `outbox_attempt_outcome_total` (counter, label `outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed`, `lease_short` ou `deferred`), contado quando o desfecho é gravado: `closed` quando a mensagem é de fato apagada (o `DeleteMessage` em `ok`) porque o pedido já tinha desfecho, `invoiced` e `failed` quando o banco gravou o desfecho, mesmo que o `DeleteMessage` depois saia `stale`, `lease_short` quando a tentativa desiste pelo prazo, `deferred` quando falta a permissão de chamada, `dead` pela reconciliação na primeira vez que vê a mensagem na DLQ; a conclusão recusada pelo SQS não conta aqui, só no counter dela;
-  - `outbox_conclusion_no_row_total` (counter, sem label): conclusões sem efeito porque o *receipt handle* já não vale;
-  - `outbox_published_total` (counter, sem label): linhas da outbox publicadas pelo relay;
-  - `order_accept_to_invoice_seconds` (histogram, sem label, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` e o `failed` do `outbox_attempt_outcome_total`, e os logs `order.invoiced` e `order.failed`, também só saem nesse caso;
-  - `erp_request_duration_seconds` (histogram) e `erp_request_total` (counter), com os labels `operation` (`create_order`, `find_order` ou `list_catalog`) e `outcome` (`ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous` ou `config_error`), com fronteiras até 30 s, a última em 30;
-  - `erp_requests_in_flight` (gauge, sem label);
-  - `erp_config_error_total` (counter, label `operation`) e `erp_out_of_stock_rejection_total` (counter, sem label).
+- **Nomes das métricas do worker (M3),** no `/metrics` dele, declarados em `src/billing/telemetry.ts` e `src/erp/telemetry.ts` (AD-029):
+  - `casecellshop.outbox.attempts` (counter, atributo `casecellshop.outbox.attempt.outcome`: `invoiced`, `failed`, `retry`, `dead`, `closed`, `lease_short` ou `deferred`), contado quando o desfecho é gravado: `closed` quando a mensagem é de fato apagada (o `DeleteMessage` em `ok`) porque o pedido já tinha desfecho, `invoiced` e `failed` quando o banco gravou o desfecho, mesmo que o `DeleteMessage` depois saia `stale`, `lease_short` quando a tentativa desiste pelo prazo, `deferred` quando falta a permissão de chamada, `dead` pela reconciliação na primeira vez que vê a mensagem na DLQ; a conclusão recusada pelo SQS não conta aqui, só no counter dela;
+  - `casecellshop.outbox.orphan_conclusions` (counter, sem atributo): conclusões sem efeito porque o *receipt handle* já não vale;
+  - `casecellshop.outbox.published.messages` (counter, sem atributo): linhas da outbox publicadas pelo relay;
+  - `casecellshop.order.accept_to_invoice.duration` (histogram em `s`, sem atributo, com fronteira em 60 s), com o `outcome_at - accepted_at` que o `RETURNING` do `UPDATE` do pedido devolve na própria transação da conclusão, só quando o pedido de fato mudou; o `invoiced` e o `failed` do `casecellshop.outbox.attempts`, e os logs `order.invoiced` e `order.failed`, também só saem nesse caso;
+  - `casecellshop.erp.client.operation.duration` (histogram em `s`), com os atributos `casecellshop.erp.operation` (`create_order`, `find_order` ou `list_catalog`) e `casecellshop.erp.outcome` (`ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous` ou `config_error`), com fronteiras até 30 s, a última em 30; o `_count` dele conta as chamadas por operação e desfecho, inclusive os erros de configuração;
+  - `casecellshop.erp.client.active_operations` (UpDownCounter, sem atributo);
+  - `casecellshop.erp.out_of_stock.rejections` (counter, sem atributo).
+- **No Prometheus,** o exportador troca o ponto por sublinhado e acrescenta `_total` aos counters: `casecellshop.outbox.attempts` sai como `casecellshop_outbox_attempts_total`, e um histograma sai com `_bucket`, `_sum` e `_count`. A unidade fica na linha `# UNIT`, sem sufixo no nome (risco R13).
 - **Gauges e counters lidos do banco** saem da API, que não é o processo monitorado; os alertas de fila e de sincronização também disparam sem dados. Um counter derivado do banco só sobe quando um `UPDATE … RETURNING` marca a linha.
 - **Alertas e dashboard:** em PromQL, com os nomes de `/metrics`; um teste confere cada nome usado. No Datadog, o Agent coleta o mesmo endpoint pela integração OpenMetrics, que acrescenta um namespace.
 

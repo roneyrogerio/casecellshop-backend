@@ -19,7 +19,7 @@ Valem para todo o repositório, desde o primeiro commit.
 
   | Pasta | Tipo | O que guarda |
   | --- | --- | --- |
-  | `src/main/` | entradas | Um arquivo por processo (`api.ts`, `worker.ts`, `runbook.ts`, `migrate.ts`): lê a configuração, monta as dependências e liga o processo. Nenhuma regra de negócio |
+  | `src/main/` | entradas | Um arquivo por processo (`api.ts`, `worker.ts`, `runbook.ts`, `migrate.ts`): lê a configuração, monta as dependências e liga o processo. Nenhuma regra de negócio. O `telemetry.ts` declara os eventos de log da partida dos processos |
   | `src/app.ts` | composição | A fábrica do app HTTP, sem abrir porta, que a API e os testes usam |
   | `src/checkout/`, `src/orders/`, `src/health/`, `src/billing/`, `src/catalog/` (M4) | negócio | Tudo de uma capacidade: rotas, consultas, e os laços e comandos que rodam fora da requisição (o relay, o worker, a reconciliação e o runbook ficam em `billing/`) |
   | `src/erp/`, `src/db/`, `src/queue/`, `src/http/`, `src/cache/` (M4) | fronteira | Um sistema externo: a porta, definida pela conversa de que o negócio precisa (`ErpClient`, `Queue`), e o adaptador da tecnologia que a atende. O ERP (com o simulado em `erp/sim/`), o PostgreSQL, o SQS, o Express e o cache em processo |
@@ -29,6 +29,7 @@ Valem para todo o repositório, desde o primeiro commit.
   - As dependências seguem um sentido só: `main/` monta cada processo e `app.ts` monta o app HTTP; o negócio usa a fronteira, o contrato e o `shared/`; a fronteira não importa pastas de negócio, o `shared/` não importa nenhuma outra pasta de `src/`, e uma pasta de negócio não importa outra.
   - Arquivo novo entra na pasta da capacidade ou da tecnologia que ele serve. Uma pasta nova de negócio nasce com o marco que traz a capacidade, nunca uma pasta por camada (`services/`, `repositories/`) ou genérica (`utils/`).
   - As migrações ficam fora de `src/`, em `migrations/<schema>/`, e os scripts do repositório em `scripts/`.
+  - A telemetria fica na pasta que a emite: cada pasta declara as próprias métricas e os próprios eventos de log num `telemetry.ts`, com os tipos e as regras em `src/shared/telemetry-catalog.ts` e o agregado em `scripts/telemetry-catalog.ts` (OBS-07, AD-029).
   - O sentido das dependências, o ERP simulado montado só em `src/main/` e a ausência de ciclos são conferidos pelo `npm run lint` (`no-restricted-imports` por pasta e `import/no-cycle`, AD-026).
 - **Tamanho e forma do código (AD-026):** conferidos pelo `npm run lint` em `src/`, contando só linhas com código (sem linhas em branco nem comentários).
 
