@@ -862,9 +862,10 @@ describe('AI-03 o hook de parada como processo', () => {
   it('AI-03 o implementer que alterou um teste rastreado sai com código 2 e o stderr cita o caminho, com o npm passando', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
     writeIn(sandbox, 'test/helpers/clock.ts', 'export const a = 1;\n');
 
-    const result = runHook(sandbox, IMPLEMENTER_STOP);
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('test/helpers/clock.ts');
@@ -874,9 +875,10 @@ describe('AI-03 o hook de parada como processo', () => {
   it('AI-03 o implementer que criou um teste dentro de uma pasta nova sai com código 2 e o stderr cita o arquivo', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'tudo ok' });
     makeRepo(sandbox);
+    runStart(sandbox, { ...IMPLEMENTER_STOP, cwd: sandbox.project });
     writeIn(sandbox, 'test/integration/checkout/novo.test.ts', 'export {};\n');
 
-    const result = runHook(sandbox, IMPLEMENTER_STOP);
+    const result = runStopOnly(sandbox, IMPLEMENTER_STOP);
 
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('test/integration/checkout/novo.test.ts');
