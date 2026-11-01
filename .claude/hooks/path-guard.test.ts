@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -936,6 +936,72 @@ describe('AI-26 a guarda de caminho decide pela raiz da worktree do agente', () 
 
     expectProcessAllowed(runHook(JSON.stringify(code), project, inside));
     expectProcessDenied(runHook(JSON.stringify(test), project, inside));
+  });
+});
+
+// A4 da Revisão do #19 (AI-26): os caminhos são comparados depois do `realpath`. Com o projectDir passado por um link
+// simbólico (como o `/tmp` do macOS, que aponta para `/private/tmp`) e o cwd da entrada pelo caminho real, a comparação
+// sem `realpath` não reconhece a worktree e devolve a pasta principal.
+describe('AI-26 o rootFor compara os caminhos depois do realpath', () => {
+  let project: string;
+  let link: string;
+  let worktree: string;
+  let unrelated: string;
+
+  beforeAll(() => {
+    project = makeTempDir('ai26-real-');
+    initRepo(project);
+    worktree = join(project, '.claude', 'worktrees', 'agent-1');
+    git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt-realpath');
+    link = join(makeTempDir('ai26-link-'), 'projeto');
+    symlinkSync(project, link);
+    unrelated = makeTempDir('ai26-unrelated-');
+    initRepo(unrelated);
+  });
+
+  afterAll(cleanupTempDirs);
+
+  it('AI-26 o projectDir por link simbólico e o cwd pelo caminho real dão a raiz da worktree', () => {
+    expect(realpathSync(link)).toBe(project);
+    expect(rootFor({ cwd: worktree }, link)).toBe(worktree);
+    expect(rootFor({ cwd: join(worktree, 'src') }, link)).toBe(worktree);
+  });
+
+  it('AI-26 o projectDir real e o cwd pelo link simbólico dão a mesma worktree', () => {
+    const viaLink = join(link, '.claude', 'worktrees', 'agent-1');
+
+    expect(realpathSync(rootFor({ cwd: viaLink }, project))).toBe(worktree);
+    expect(realpathSync(rootFor({ cwd: viaLink }, link))).toBe(worktree);
+  });
+
+  it('AI-26 a decisão com o projectDir por link simbólico libera o código da worktree e nega o teste', () => {
+    const code: HookInput = {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      cwd: worktree,
+      agent_type: 'implementer',
+      tool_input: { file_path: join(worktree, 'src/x.ts') },
+    };
+    const test: HookInput = {
+      ...code,
+      tool_input: { file_path: join(worktree, 'test/x.test.ts') },
+    };
+
+    expectAllowed(decide(code, rootFor(code, link), link));
+    expectDenied(decide(test, rootFor(test, link), link));
+  });
+
+  // Controle negativo: um cwd de outro repositório continua devolvendo o projectDir, do jeito que foi passado.
+  it('AI-26 controle: o cwd de outro repositório devolve o projectDir, mesmo por link simbólico', () => {
+    expect(rootFor({ cwd: unrelated }, link)).toBe(link);
+    expect(rootFor({ cwd: unrelated }, project)).toBe(project);
+    expect(rootFor({}, link)).toBe(link);
+  });
+
+  it('AI-26 controle: o cwd na pasta principal, pelo caminho real, devolve o projectDir passado por link simbólico', () => {
+    expect(realpathSync(rootFor({ cwd: join(project, 'src') }, link))).toBe(
+      project,
+    );
   });
 });
 

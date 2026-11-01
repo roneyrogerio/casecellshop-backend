@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { chmodSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -48,6 +48,30 @@ function repo(): string {
   const dir = makeTempDir('snap-');
   initRepo(dir);
   return dir;
+}
+
+// A mudança do HEAD da worktree do agente (A3 da Revisão do #19) cita a worktree ou o commit novo (completo ou
+// abreviado em 7 caracteres).
+function citesWorktreeOrCommit(
+  changes: string[],
+  agentRoot: string,
+  commit: string,
+): boolean {
+  const text = changes.join('\n');
+  return text.includes(agentRoot) || text.includes(commit.slice(0, 7));
+}
+
+// A atribuição de refs do AI-33 fica: nenhuma linha de refs cita a branch do agente. O commit conta pelo HEAD.
+function expectCommitWithoutAgentRef(
+  changes: string[],
+  agentRoot: string,
+  commit: string,
+  agentBranch: string,
+): void {
+  expect(changes.length).toBeGreaterThan(0);
+  expect(citesWorktreeOrCommit(changes, agentRoot, commit)).toBe(true);
+  for (const line of changes.filter((item) => item.startsWith('refs')))
+    expect(line).not.toContain(`refs/heads/${agentBranch}`);
 }
 
 describe('AI-12 takeSnapshot lê o estado do git', () => {
@@ -413,18 +437,33 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     expect(changes[0]).toContain('refs/heads/worktree-agent-x');
   });
 
-  // Controle negativo 1: a worktree do próprio agente (agentRoot) e a branch dela ficam fora da comparação.
-  it('AI-33 controle: com agentRoot, um commit na branch da worktree do agente que existia no início não aparece', () => {
-    const dir = repo();
-    const agentRoot = join(makeTempDir('wt-'), 'agente');
-    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
-    const before = mod.takeSnapshot(dir);
-    commitEmpty(agentRoot, 'do agente');
+  // Controle negativo 1: a branch da worktree do próprio agente (agentRoot) fica fora da comparação de refs (AI-33),
+  // mas o commit feito nela conta como mudança pelo HEAD da worktree (AI-12, A3 da Revisão do #19).
+  // O segundo cenário deixa a pasta principal em outra branch, sem o checkout da main.
+  it.each([
+    ['com a pasta principal na main', () => undefined],
+    [
+      'sem o checkout da main',
+      (dir: string) => git(dir, 'checkout', '-q', '-b', 'outra'),
+    ],
+  ])(
+    'AI-33 e AI-12 com agentRoot, um commit na branch da worktree do agente que existia no início (%s) sai do refs e aparece pelo HEAD da worktree',
+    (_label, prepare) => {
+      const dir = repo();
+      prepare(dir);
+      const agentRoot = join(makeTempDir('wt-'), 'agente');
+      git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+      const before = mod.takeSnapshot(dir);
+      commitEmpty(agentRoot, 'do agente');
+      const commit = git(agentRoot, 'rev-parse', 'HEAD').trim();
 
-    expect(
-      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
-    ).toEqual([]);
-  });
+      const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+        agentRoot,
+      });
+
+      expectCommitWithoutAgentRef(changes, agentRoot, commit, 'agente');
+    },
+  );
 
   it('AI-33 controle: com agentRoot, a worktree e a branch criadas durante a execução também não aparecem', () => {
     const dir = repo();
@@ -497,18 +536,114 @@ describe('AI-33 a comparação não esconde o que o agente fez com uma branch ou
     expect(changes.join('\n')).toContain('refs/heads/main');
     expect(changes.filter((line) => line.startsWith('refs'))).toHaveLength(1);
   });
+});
 
-  it('AI-33 controle: o mesmo cenário sem o checkout da main, com o commit na branch agente, não aparece', () => {
+// A3 da Revisão do #19 (AI-12): o retrato guarda o HEAD da worktree do agente isolado, e um commit feito ali conta como
+// mudança. Antes só a branch dela era conhecida, e essa fica fora da comparação de refs (AI-33). O critério é a saída de
+// compareSnapshots: o teste não fixa o nome do campo interno que guarda o HEAD da worktree.
+describe('AI-12 um commit do agente isolado na própria worktree conta como mudança', () => {
+  // A worktree nasce antes do primeiro retrato, onde o Claude Code a cria. A pasta fica no .gitignore, como no projeto,
+  // para o status da pasta principal não depender da pasta aninhada.
+  function repoWithAgentWorktree(): { dir: string; agentRoot: string } {
     const dir = repo();
-    git(dir, 'checkout', '-q', '-b', 'outra');
-    const agentRoot = join(makeTempDir('wt-'), 'agente');
-    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agente');
+    writeFileIn(dir, '.gitignore', '.claude/worktrees/\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'ignora as worktrees');
+    const agentRoot = join(dir, '.claude', 'worktrees', 'agent-x');
+    git(dir, 'worktree', 'add', '-q', agentRoot, '-b', 'agent-x');
+    return { dir, agentRoot };
+  }
+
+  it.each([
+    [
+      'um commit novo',
+      (agentRoot: string) => commitEmpty(agentRoot, 'do agente isolado'),
+    ],
+    [
+      'um amend do commit da worktree',
+      (agentRoot: string) =>
+        git(
+          agentRoot,
+          'commit',
+          '-q',
+          '--allow-empty',
+          '--amend',
+          '-m',
+          'reescrito',
+        ),
+    ],
+  ])(
+    'AI-12 %s na worktree do agente aparece na comparação, citando a worktree ou o commit',
+    (_label, act) => {
+      const { dir, agentRoot } = repoWithAgentWorktree();
+      const before = mod.takeSnapshot(dir);
+      act(agentRoot);
+      const commit = git(agentRoot, 'rev-parse', 'HEAD').trim();
+
+      const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+        agentRoot,
+      });
+
+      expect(changes.length).toBeGreaterThan(0);
+      expect(citesWorktreeOrCommit(changes, agentRoot, commit)).toBe(true);
+    },
+  );
+
+  it('AI-12 vários commits na worktree do agente citam o HEAD final', () => {
+    const { dir, agentRoot } = repoWithAgentWorktree();
     const before = mod.takeSnapshot(dir);
-    commitEmpty(agentRoot, 'commit na branch do agente');
+    commitEmpty(agentRoot, 'um');
+    commitEmpty(agentRoot, 'dois');
+    const commit = git(agentRoot, 'rev-parse', 'HEAD').trim();
+
+    const changes = mod.compareSnapshots(before, mod.takeSnapshot(dir), {
+      agentRoot,
+    });
+
+    expect(changes.join('\n')).toContain(commit.slice(0, 7));
+  });
+
+  // Controle negativo 1: sem commit, o retrato da worktree não muda.
+  it('AI-12 controle: sem commit na worktree do agente, nada é atribuído', () => {
+    const { dir, agentRoot } = repoWithAgentWorktree();
+    const before = mod.takeSnapshot(dir);
 
     expect(
       mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
     ).toEqual([]);
+  });
+
+  // Controle negativo 2: um arquivo editado na worktree sem commit não é mudança de git (é o `git status`, que a
+  // parada confere à parte).
+  it('AI-12 controle: um arquivo editado na worktree do agente sem commit não é mudança de git', () => {
+    const { dir, agentRoot } = repoWithAgentWorktree();
+    const before = mod.takeSnapshot(dir);
+    writeFileIn(agentRoot, 'src/app.ts', 'export const editado = 1;\n');
+    writeFileIn(agentRoot, 'src/novo.ts', 'export {};\n');
+
+    expect(
+      mod.compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot }),
+    ).toEqual([]);
+  });
+
+  // Controle negativo 3: o commit de outra sessão em outra worktree continua fora (AI-33), com o agentRoot dado.
+  it('AI-12 controle: com agentRoot, só o commit da worktree do agente é citado, e o de outra worktree não', () => {
+    const { dir, agentRoot } = repoWithAgentWorktree();
+    const other = join(makeTempDir('wt-'), 'outra');
+    git(dir, 'worktree', 'add', '-q', other, '-b', 'outra');
+    const before = mod.takeSnapshot(dir);
+    commitEmpty(other, 'da outra sessão');
+    const otherCommit = git(other, 'rev-parse', 'HEAD').trim();
+    commitEmpty(agentRoot, 'do agente isolado');
+    const agentCommit = git(agentRoot, 'rev-parse', 'HEAD').trim();
+
+    const text = mod
+      .compareSnapshots(before, mod.takeSnapshot(dir), { agentRoot })
+      .join('\n');
+
+    expect(citesWorktreeOrCommit([text], agentRoot, agentCommit)).toBe(true);
+    expect(text).not.toContain(other);
+    expect(text).not.toContain(otherCommit.slice(0, 7));
   });
 });
 
@@ -663,6 +798,105 @@ describe('AI-28 changesDuring com o retrato do git de um repositório real', () 
     expect(mod.changesDuring(before.status, after.status)).toEqual([
       'src/limpo.ts',
     ]);
+  });
+});
+
+// A5 da Revisão do #19 (AI-12): o status vem de `--porcelain=v1 -z`. Sem o -z, o git escapa entre aspas, com octal, o
+// nome fora do ASCII ou com espaço, o `git hash-object` não acha o arquivo e a segunda edição passa batida.
+describe('AI-12 o status lido com -z não escapa nome fora do ASCII nem com espaço', () => {
+  const NAMES = ['src/ação.ts', 'src/a b.ts'];
+
+  // Os dois arquivos existem no HEAD: o teste os suja antes do início (rastreados) ou os cria sem rastrear.
+  function seeded(): string {
+    const dir = repo();
+    for (const name of NAMES) writeFileIn(dir, name, 'export const v = 0;\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'nomes difíceis');
+    return dir;
+  }
+
+  function writeAll(dir: string, content: string): void {
+    for (const name of NAMES) writeFileIn(dir, name, content);
+  }
+
+  it.each([
+    ['rastreados', seeded],
+    ['novos (não rastreados)', repo],
+  ])(
+    'AI-12 arquivos %s já sujos no início e editados de novo durante o agente são atribuídos, pelo nome sem escape',
+    (_label, makeDir) => {
+      const dir = makeDir();
+      writeAll(dir, 'export const v = 1;\n');
+      const before = mod.takeSnapshot(dir);
+      writeAll(dir, 'export const v = 2;\n');
+
+      expect(
+        sorted(mod.changesDuring(before.status, mod.takeSnapshot(dir).status)),
+      ).toEqual(sorted(NAMES));
+    },
+  );
+
+  it('AI-12 o status do retrato traz o nome como é, sem aspas e sem octal', () => {
+    const dir = seeded();
+    writeAll(dir, 'export const v = 1;\n');
+
+    const { status } = mod.takeSnapshot(dir);
+
+    for (const name of NAMES) expect(status).toContain(name);
+    expect(status).not.toContain('\\303');
+    expect(status).not.toContain('"');
+  });
+
+  // Controle negativo: sem a segunda edição, nada é atribuído, mesmo com os nomes difíceis já sujos no início.
+  it('AI-12 controle: arquivos de nome difícil sujos no início e sem nova edição não são atribuídos', () => {
+    const dir = seeded();
+    writeAll(dir, 'export const v = 1;\n');
+    const before = mod.takeSnapshot(dir);
+
+    expect(
+      mod.changesDuring(before.status, mod.takeSnapshot(dir).status),
+    ).toEqual([]);
+  });
+
+  // Controle negativo: um arquivo de nome difícil criado durante o agente é atribuído com o nome certo.
+  it('AI-12 controle: um arquivo de nome difícil criado durante o agente é atribuído pelo nome sem escape', () => {
+    const dir = repo();
+    const before = mod.takeSnapshot(dir);
+    writeAll(dir, 'export const v = 1;\n');
+
+    expect(
+      sorted(mod.changesDuring(before.status, mod.takeSnapshot(dir).status)),
+    ).toEqual(sorted(NAMES));
+  });
+});
+
+// Forma escolhida para a falha do `git hash-object` (A5): o `takeSnapshot` lança um Error. Um status vazio ou com um
+// hash fixo (`?`) faria a segunda edição passar batida; um erro obriga quem chama (os hooks) a registrar a exceção.
+// A leitura negada vem de `chmod 000`, que o root ignora: o teste só roda para um usuário comum.
+describe('AI-12 uma falha do git hash-object não vira status vazio', () => {
+  const isRoot = process.getuid?.() === 0;
+
+  // O erro cita o arquivo, para quem lê a exceção saber qual leitura falhou.
+  it.skipIf(isRoot).each([
+    ['novo', 'src/ilegivel.ts'],
+    ['rastreado e alterado', 'src/app.ts'],
+  ])(
+    'AI-12 um arquivo %s sujo e ilegível faz o takeSnapshot lançar erro que cita %s',
+    (_label, file) => {
+      const dir = repo();
+      writeFileIn(dir, file, 'export const a = 1;\n');
+      chmodSync(join(dir, file), 0o000);
+
+      expect(() => mod.takeSnapshot(dir)).toThrow(file);
+    },
+  );
+
+  // Controle negativo: o mesmo arquivo, legível, gera retrato sem erro.
+  it('AI-12 controle: o mesmo arquivo, legível, gera o retrato com o status dele', () => {
+    const dir = repo();
+    writeFileIn(dir, 'src/ilegivel.ts', 'export {};\n');
+
+    expect(mod.takeSnapshot(dir).status).toContain('src/ilegivel.ts');
   });
 });
 

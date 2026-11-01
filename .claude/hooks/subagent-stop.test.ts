@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -1620,14 +1621,19 @@ describe('AI-12 o hook de parada como processo compara o retrato do git', () => 
 // AI-28 e AI-29 com git de verdade: o reviewer não tem worktree, então tudo que muda na pasta principal entre o
 // SubagentStart e a parada é dele; o que já estava sujo no início não é. O repositório ignora .claude/reviews/ e
 // .claude/state/ como o do projeto, porque o próprio hook grava ali.
-describe('AI-28 e AI-29 o hook de parada atribui só o que mudou durante a execução', () => {
-  function ignoringRepo(sandbox: Sandbox): void {
-    makeRepo(sandbox);
-    writeIn(sandbox, '.gitignore', '.claude/reviews/\n.claude/state/\n');
-    git(sandbox, 'add', '-A');
-    git(sandbox, 'commit', '-q', '-m', 'gitignore');
-  }
+// Também ignora .claude/worktrees/, onde o Claude Code cria a worktree do agente isolado.
+function ignoringRepo(sandbox: Sandbox): void {
+  makeRepo(sandbox);
+  writeIn(
+    sandbox,
+    '.gitignore',
+    '.claude/reviews/\n.claude/state/\n.claude/worktrees/\n',
+  );
+  git(sandbox, 'add', '-A');
+  git(sandbox, 'commit', '-q', '-m', 'gitignore');
+}
 
+describe('AI-28 e AI-29 o hook de parada atribui só o que mudou durante a execução', () => {
   // Controle negativo: a comparação contra o HEAD atribuiria estas duas mudanças, anteriores ao agente, ao reviewer.
   it('AI-28 uma mudança feita antes do início não é atribuída ao reviewer', () => {
     const sandbox = makeSandbox({ exit: 0, print: 'ok' });
@@ -1689,5 +1695,139 @@ describe('AI-28 e AI-29 o hook de parada atribui só o que mudou durante a execu
 
     expect(result.code).toBe(0);
     expect(exceptionLog(sandbox)).toBeUndefined();
+  });
+});
+
+// A9 da Revisão do #19 (AI-12 e AI-03): o hook de parada (a lista de arquivos alterados do agente isolado) e o retrato
+// leem o `git status` do mesmo jeito, com `--porcelain=v1 -z`. A prova é pelo comportamento: o nome de um arquivo
+// fora do ASCII ou com espaço chega à decisão sem aspas e sem octal.
+describe('AI-03 e AI-12 o agente isolado: o nome fora do ASCII ou com espaço chega ao hook de parada como é', () => {
+  const TEST_WRITER = {
+    agent_type: 'test-writer',
+    agent_id: 'tw1',
+    session_id: 's1',
+  };
+  const IMPLEMENTER = {
+    agent_type: 'implementer',
+    agent_id: 'im1',
+    session_id: 's1',
+  };
+
+  // O agente isolado edita a worktree dele, criada antes do início como o Claude Code faz. A pasta do projeto passa
+  // pelo realpath (no macOS o tmpdir() é um link para /private), para este teste provar só a leitura do status: a
+  // comparação de caminhos por link simbólico é do AI-26, no path-guard.test.ts.
+  function isolatedAgent(): { sandbox: Sandbox; cwd: string } {
+    const made = makeSandbox({ exit: 0, print: 'tudo ok' });
+    const sandbox = { ...made, project: realpathSync(made.project) };
+    ignoringRepo(sandbox);
+    const path = join(sandbox.project, '.claude', 'worktrees', 'agent-x');
+    git(sandbox, 'worktree', 'add', '-q', path, '-b', 'agent-x');
+    return { sandbox, cwd: path };
+  }
+
+  function stopIsolated(
+    sandbox: Sandbox,
+    cwd: string,
+    input: typeof TEST_WRITER,
+    edit: [string, string],
+  ) {
+    runStart(sandbox, { ...input, cwd });
+    mkdirSync(join(cwd, edit[0], '..'), { recursive: true });
+    writeFileSync(join(cwd, edit[0]), edit[1]);
+    return runStopOnly(sandbox, { ...input, cwd });
+  }
+
+  it.each([
+    ['test-writer', 'src/ação.ts'],
+    ['test-writer', 'src/a b.ts'],
+    ['implementer', 'test/ação.test.ts'],
+    ['implementer', 'test/a b.test.ts'],
+  ])(
+    'AI-03 o %s isolado que editou %s é devolvido, com o nome certo, sem aspas nem octal',
+    (agent, file) => {
+      const { sandbox, cwd } = isolatedAgent();
+
+      const result = stopIsolated(
+        sandbox,
+        cwd,
+        agent === 'implementer' ? IMPLEMENTER : TEST_WRITER,
+        [file, 'export const a = 1;\n'],
+      );
+
+      expect(result.code, result.stdout + result.stderr).toBe(2);
+      expect(result.stderr).toContain(file);
+      expect(result.stderr).not.toContain('\\303');
+      expect(result.stderr).not.toContain(`"${file}"`);
+    },
+  );
+
+  // Controle negativo: o arquivo de teste de nome difícil é do papel do test-writer, e o nome lido com o -z o reconhece
+  // como teste. Lido com aspas e octal, ele pareceria código e devolveria o agente.
+  it.each(['src/ação.test.ts', 'test/a b.test.ts'])(
+    'AI-03 controle: o test-writer isolado que só editou %s é liberado',
+    (file) => {
+      const { sandbox, cwd } = isolatedAgent();
+
+      const result = stopIsolated(sandbox, cwd, TEST_WRITER, [
+        file,
+        'export {};\n',
+      ]);
+
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+      expect(result.stderr).toBe('');
+    },
+  );
+
+  // Controle negativo: o nome simples continua aparecendo como antes.
+  it('AI-03 controle: o test-writer isolado que editou src/app2.ts é devolvido, com o nome', () => {
+    const { sandbox, cwd } = isolatedAgent();
+
+    const result = stopIsolated(sandbox, cwd, TEST_WRITER, [
+      'src/app2.ts',
+      'export {};\n',
+    ]);
+
+    expect(result.code, result.stdout + result.stderr).toBe(2);
+    expect(result.stderr).toContain('src/app2.ts');
+  });
+});
+
+// A5 da Revisão do #19 (AI-12): se o `git hash-object` falha (aqui, um arquivo sujo sem permissão de leitura), o
+// retrato não sai como status vazio nem com hash fixo. A forma escolhida é o `takeSnapshot` lançar erro; no hook, a
+// consequência observável é a exceção registrada para a sessão principal, e não uma parada limpa. O `chmod 000` não vale
+// para o root, que lê o arquivo mesmo assim.
+describe('AI-12 uma falha do git hash-object vira exceção na parada, e não um status vazio', () => {
+  const isRoot = process.getuid?.() === 0;
+
+  // O arquivo já está sujo no início e o reviewer não muda nada; só a leitura dele difere entre os dois casos.
+  function reviewerWithDirtyFile(mode: number): {
+    code: number | null;
+    log: string | undefined;
+  } {
+    const sandbox = makeSandbox({ exit: 0, print: 'ok' });
+    ignoringRepo(sandbox);
+    writeIn(sandbox, 'src/ilegivel.ts', 'export {};\n');
+    chmodSync(join(sandbox.project, 'src/ilegivel.ts'), mode);
+    runStart(sandbox, { ...REVIEWER, cwd: sandbox.project });
+    const result = runStopOnly(sandbox, REVIEWER);
+    return { code: result.code, log: exceptionLog(sandbox) };
+  }
+
+  it.skipIf(isRoot)(
+    'AI-12 o reviewer com um arquivo sujo ilegível termina com código 0 e a exceção fica registrada',
+    () => {
+      const { code, log } = reviewerWithDirtyFile(0o000);
+
+      expect(code).toBe(0);
+      expect(log).toEqual(expect.any(String));
+    },
+  );
+
+  // Controle negativo: o mesmo arquivo, legível, não gera exceção.
+  it('AI-12 controle: o reviewer com o mesmo arquivo sujo e legível termina sem exceção', () => {
+    const { code, log } = reviewerWithDirtyFile(0o644);
+
+    expect(code).toBe(0);
+    expect(log).toBeUndefined();
   });
 });
