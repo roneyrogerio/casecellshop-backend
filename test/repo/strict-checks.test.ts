@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
   readFileSync,
@@ -8,13 +7,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
+import { globToRegExp } from '../helpers/glob.ts';
+import { typecheckSample } from '../helpers/lint-tree.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 interface TsConfig {
   compilerOptions: Record<string, unknown>;
@@ -99,35 +97,16 @@ const TS_SAMPLES = [
   ...GENERATED_TYPE_FILES,
 ];
 
-function globToRegExp(glob: string): RegExp {
-  let source = '';
-  for (let index = 0; index < glob.length; index += 1) {
-    const char = glob.charAt(index);
-    if (char === '*' && glob.charAt(index + 1) === '*') {
-      const slash = glob.charAt(index + 2) === '/';
-      source += slash ? '(?:.*/)?' : '.*';
-      index += slash ? 2 : 1;
-    } else if (char === '*') {
-      source += '[^/]*';
-    } else if (char === '?') {
-      source += '[^/]';
-    } else if (char === '{') {
-      source += '(?:';
-    } else if (char === '}') {
-      source += ')';
-    } else if (char === ',' && source.includes('(?:')) {
-      source += '|';
-    } else {
-      source += char.replace(/[.+^$()|[\]\\]/g, '\\$&');
-    }
-  }
-  return new RegExp(`^${source}$`);
-}
-
-// O glob alcança .ts quando termina em `.ts`, em `*` ou em `**`, ou num grupo `{…ts…}`. Os caminhos de amostra
+// O glob alcança .ts quando o último trecho dele casa um nome terminado em `.ts` (`*.ts`, `*`, `**`,
+// `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou quando termina em `.ts` ou num grupo `{…ts…}`. Os caminhos de amostra
 // não servem para decidir: uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência.
 function reachesTs(glob: string): boolean {
-  return /(?:\.ts|\*)$/.test(glob) || /\{[^}]*\bts\b[^}]*\}$/.test(glob);
+  const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
+  return (
+    /(?:\.ts|\*)$/.test(glob) ||
+    /\{[^}]*\bts\b[^}]*\}$/.test(glob) ||
+    globToRegExp(lastSegment).test('arquivo.ts')
+  );
 }
 
 function overrideReachesTs(files: readonly string[]): boolean {
@@ -263,6 +242,10 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['uma pasta e os arquivos dela, com *', ['src/http/*']],
     ['o grupo {js,ts}', ['src/http/**/*.{js,ts}']],
     ['o grupo {ts,tsx}', ['src/http/**/*.{ts,tsx}']],
+    ['a classe [jt] (A6 do #12)', ['src/http/**/*.[jt]s']],
+    ['a classe [jt] na raiz', ['**/*.[jt]s']],
+    ['o coringa ?s (A6 do #12)', ['src/http/*.?s']],
+    ['o coringa ?s com **', ['**/*.?s']],
   ])(
     'AI-20 controle: um override para %s que desliga return-await reprova',
     (_label, files) => {
@@ -292,6 +275,8 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['os .js, .mjs e .cjs', ['src/http/**/*.{js,mjs,cjs}']],
     ['só os .md', ['docs/**/*.md']],
     ['os .json', ['src/http/*.json']],
+    ['a classe [jm]s, que não casa .ts', ['src/http/**/*.[jm]s']],
+    ['o coringa ?js, que não casa .ts', ['src/http/*.?js']],
   ])(
     'AI-20 controle: um override para %s, que não alcança .ts, pode desligar return-await',
     (_label, files) => {
@@ -404,10 +389,10 @@ describe('AI-20 controle negativo do lint: switch sem todos os casos da união r
   function lint(source: string): { status: number | null; output: string } {
     const file = path.join(tree, 'amostra.ts');
     writeFileSync(file, source);
-    const result = spawnSync(
+    const result = runCommand(
       path.join(root, 'node_modules', '.bin', 'oxlint'),
       ['-c', path.join(root, '.oxlintrc.json'), file],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root },
     );
     return {
       status: result.status,
@@ -436,44 +421,13 @@ describe('AI-20 controle negativo do lint: switch sem todos os casos da união r
 });
 
 describe('AI-20 controle negativo do typecheck: undefined explícito em propriedade opcional reprova', () => {
-  let tree: string;
-
-  beforeEach(() => {
-    tree = mkdtempSync(path.join(tmpdir(), 'ai20-tsc-'));
-    // A pasta herda as opções do repositório por caminho absoluto. `include` é refeito porque o herdado
-    // valeria para as pastas do repositório; `typeRoots` aponta para o repositório porque, fora dele,
-    // os tipos do Node não são achados.
-    writeFileSync(
-      path.join(tree, 'tsconfig.json'),
-      JSON.stringify({
-        extends: path.join(root, 'tsconfig.json'),
-        compilerOptions: {
-          typeRoots: [path.join(root, 'node_modules', '@types')],
-        },
-        include: ['amostra.mts'],
-      }),
-    );
-  });
-
-  afterEach(() => {
-    rmSync(tree, { recursive: true, force: true });
-  });
+  afterEach(cleanupTempDirs);
 
   function typecheck(source: string): {
     status: number | null;
     output: string;
   } {
-    // `.mts`: fora do repositório não há `"type": "module"`, e o `export` da amostra seria lido como CommonJS.
-    writeFileSync(path.join(tree, 'amostra.mts'), source);
-    const result = spawnSync(
-      path.join(root, 'node_modules', '.bin', 'tsc'),
-      ['--noEmit', '-p', path.join(tree, 'tsconfig.json')],
-      { cwd: root, encoding: 'utf8' },
-    );
-    return {
-      status: result.status,
-      output: `${result.stdout}${result.stderr}`,
-    };
+    return typecheckSample('ai20-tsc-', source);
   }
 
   it('AI-20 propriedade opcional recebendo undefined explícito reprova no tsc com exactOptionalPropertyTypes', () => {

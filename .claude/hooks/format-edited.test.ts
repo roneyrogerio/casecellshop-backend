@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTempDirs,
@@ -10,11 +10,8 @@ import {
   makeTempDir,
   writeFileIn,
 } from '../../test/helpers/git-sandbox.ts';
+import { repoRoot as root } from '../../test/helpers/repo-root.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 const hook = join(root, '.claude', 'hooks', 'format-edited.mjs');
 
 // O hook decide pelo nome da ferramenta e pelo `file_path` (AI-34); a tabela inteira roda dentro do processo.

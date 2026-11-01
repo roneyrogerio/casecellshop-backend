@@ -17,6 +17,7 @@ import {
   PROBLEM_MEDIA_TYPE,
   Problem,
 } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   checkoutBody,
   countKeyRows,
@@ -463,6 +464,25 @@ describe('CHK-10 entradas recusadas, cada causa com o seu type', () => {
     );
   });
 
+  it('CHK-10 sem Content-Type, com corpo JSON válido: 415 unsupported-media-type', async () => {
+    const item = await product();
+    const key = newKey();
+    // Um Buffer não ganha tipo do supertest (uma string ganharia application/x-www-form-urlencoded).
+    const payload = Buffer.from(JSON.stringify(checkoutBody(line(item))));
+    await expectRefused(
+      async () => {
+        const res = await postCheckout(harness.server, payload, { key });
+        // A premissa do teste: a requisição saiu mesmo sem o cabeçalho.
+        const sent = res as unknown as {
+          req: { getHeader(name: string): unknown };
+        };
+        expect(sent.req.getHeader('content-type')).toBeUndefined();
+        return res;
+      },
+      { status: 415, type: '/problems/unsupported-media-type', key },
+    );
+  });
+
   it('CHK-10 a mesma chave com outro corpo: 422 idempotency-key-reused, e o primeiro pedido segue intacto', async () => {
     const item = await product(1000, 10);
     const key = newKey();
@@ -655,27 +675,33 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     expect(replay.status).toBe(202);
     const { orderId } = CheckoutAccepted.parse(first.body);
 
-    await vi.waitFor(() => {
-      const accepted = harness.logLines.find(
-        (entry) =>
-          entry['event'] === 'checkout.accepted' &&
-          entry['correlationId'] === firstId,
-      );
-      expect(accepted, 'checkout.accepted ausente').toBeDefined();
-      expect(accepted?.['level']).toBe('info');
-      expect(accepted?.['orderId']).toBe(orderId);
-      for (const correlationId of [firstId, replayId]) {
-        const http = harness.logLines.find(
+    await vi.waitFor(
+      () => {
+        const accepted = harness.logLines.find(
           (entry) =>
-            entry['event'] === 'http_request' &&
-            entry['correlationId'] === correlationId,
+            entry['event'] === 'checkout.accepted' &&
+            entry['correlationId'] === firstId,
         );
-        expect(http, `http_request de ${correlationId} ausente`).toBeDefined();
-        expect(http?.['status']).toBe(202);
-        expect(http?.['route']).toBe('/checkout');
-        expect(http?.['orderId']).toBe(orderId);
-      }
-    });
+        expect(accepted, 'checkout.accepted ausente').toBeDefined();
+        expect(accepted?.['level']).toBe('info');
+        expect(accepted?.['orderId']).toBe(orderId);
+        for (const correlationId of [firstId, replayId]) {
+          const http = harness.logLines.find(
+            (entry) =>
+              entry['event'] === 'http_request' &&
+              entry['correlationId'] === correlationId,
+          );
+          expect(
+            http,
+            `http_request de ${correlationId} ausente`,
+          ).toBeDefined();
+          expect(http?.['status']).toBe(202);
+          expect(http?.['route']).toBe('/checkout');
+          expect(http?.['orderId']).toBe(orderId);
+        }
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 
   it('OBS-01 o checkout.rejected (warn) traz a causa da recusa por falta de estoque', async () => {
@@ -687,18 +713,21 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     });
     expect(res.status).toBe(409);
 
-    await vi.waitFor(() => {
-      const rejected = harness.logLines.find(
-        (entry) =>
-          entry['event'] === 'checkout.rejected' &&
-          entry['correlationId'] === correlationId,
-      );
-      expect(rejected, 'checkout.rejected ausente').toBeDefined();
-      expect(rejected?.['level']).toBe('warn');
-      // O nome do campo da causa é do implementer; o valor é a causa do type do problema.
-      const { msg: _msg, time: _time, ...fields } = rejected ?? {};
-      expect(JSON.stringify(fields)).toMatch(/out[-_]of[-_]stock/);
-    });
+    await vi.waitFor(
+      () => {
+        const rejected = harness.logLines.find(
+          (entry) =>
+            entry['event'] === 'checkout.rejected' &&
+            entry['correlationId'] === correlationId,
+        );
+        expect(rejected, 'checkout.rejected ausente').toBeDefined();
+        expect(rejected?.['level']).toBe('warn');
+        // O nome do campo da causa é do implementer; o valor é a causa do type do problema.
+        const { msg: _msg, time: _time, ...fields } = rejected ?? {};
+        expect(JSON.stringify(fields)).toMatch(/out[-_]of[-_]stock/);
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 
   it('OBS-01 o preço alterado deixa um log de nível warn (checkout.price_changed ou checkout.rejected) com a causa', async () => {
@@ -712,16 +741,19 @@ describe('OBS-01 orderId e causa nos logs do checkout', () => {
     );
     expect(res.status).toBe(409);
 
-    await vi.waitFor(() => {
-      const entry = harness.logLines.find(
-        (candidate) =>
-          candidate['correlationId'] === correlationId &&
-          (candidate['event'] === 'checkout.price_changed' ||
-            candidate['event'] === 'checkout.rejected'),
-      );
-      expect(entry, 'log de preço alterado ausente').toBeDefined();
-      expect(entry?.['level']).toBe('warn');
-    });
+    await vi.waitFor(
+      () => {
+        const entry = harness.logLines.find(
+          (candidate) =>
+            candidate['correlationId'] === correlationId &&
+            (candidate['event'] === 'checkout.price_changed' ||
+              candidate['event'] === 'checkout.rejected'),
+        );
+        expect(entry, 'log de preço alterado ausente').toBeDefined();
+        expect(entry?.['level']).toBe('warn');
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 });
 
@@ -783,25 +815,28 @@ describe('OBS-02 counter de desfecho do checkout', () => {
         invalid.status,
       ]).toEqual([202, 202, 409, 409, 400]);
 
-      await vi.waitFor(async () => {
-        const { outcomes } = await checkoutOutcomes(own.app);
-        for (const outcome of [
-          'accepted',
-          'replay',
-          'out_of_stock',
-          'price_changed',
-          'invalid',
-        ]) {
-          expect(
-            outcomes.get(outcome) ?? 0,
-            `outcome ${outcome}`,
-          ).toBeGreaterThanOrEqual(1);
-        }
-        // Os desfechos de uma só ocorrência contam exatamente uma vez.
-        expect(outcomes.get('out_of_stock')).toBe(1);
-        expect(outcomes.get('price_changed')).toBe(1);
-        expect(outcomes.get('invalid')).toBe(1);
-      });
+      await vi.waitFor(
+        async () => {
+          const { outcomes } = await checkoutOutcomes(own.app);
+          for (const outcome of [
+            'accepted',
+            'replay',
+            'out_of_stock',
+            'price_changed',
+            'invalid',
+          ]) {
+            expect(
+              outcomes.get(outcome) ?? 0,
+              `outcome ${outcome}`,
+            ).toBeGreaterThanOrEqual(1);
+          }
+          // Os desfechos de uma só ocorrência contam exatamente uma vez.
+          expect(outcomes.get('out_of_stock')).toBe(1);
+          expect(outcomes.get('price_changed')).toBe(1);
+          expect(outcomes.get('invalid')).toBe(1);
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
 
       const { labelNames, text } = await checkoutOutcomes(own.app);
       expect(labelNames.has('outcome')).toBe(true);
@@ -810,6 +845,44 @@ describe('OBS-02 counter de desfecho do checkout', () => {
       expect(text).not.toContain(orderId);
       expect(text).not.toContain(item.sku);
       expect(text).not.toContain(empty.sku);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('OBS-02 o banco indisponível no checkout (503 service-unavailable) soma 1 em outcome="unavailable" e em nenhum outro desfecho', async () => {
+    // App próprio, com telemetria nova: os contadores começam em zero e o teste conta exato.
+    const own = await startCheckoutHarness(database);
+    try {
+      const item = await product(1000, 5);
+      // Só o erro entra, no limite do pool: a conexão recusada que o banco parado produziria.
+      let injected = 0;
+      (own.pool as unknown as { connect: () => Promise<never> }).connect =
+        () => {
+          injected += 1;
+          return Promise.reject(
+            Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+              code: 'ECONNREFUSED',
+            }),
+          );
+        };
+
+      const res = await postCheckout(own.server, checkoutBody(line(item)));
+
+      expect(injected).toBeGreaterThanOrEqual(1);
+      expect(res.status).toBe(503);
+      expect(problemOf(res).type).toBe('/problems/service-unavailable');
+      expect(header(res, 'retry-after')).toBe('5');
+
+      await vi.waitFor(
+        async () => {
+          const { outcomes } = await checkoutOutcomes(own.app);
+          expect(outcomes.get('unavailable')).toBe(1);
+          // Nenhum outro desfecho foi contado: só há a série unavailable.
+          expect([...outcomes.keys()]).toEqual(['unavailable']);
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
     } finally {
       await own.close();
     }

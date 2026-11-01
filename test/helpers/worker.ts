@@ -1,7 +1,15 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
 import { pino, type Logger } from 'pino';
-import { assert, expect, onTestFinished, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeAll,
+  expect,
+  onTestFinished,
+  vi,
+} from 'vitest';
 import { CheckoutAccepted } from '../../src/contract/index.ts';
 import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
@@ -34,6 +42,7 @@ import {
   type CheckoutHarness,
   type InventorySnapshot,
 } from './checkout.ts';
+import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
 import { createManualClock, type ManualClock } from './clock.ts';
 import { startMigratedDatabase, type TestDatabase } from './database.ts';
 import { ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
@@ -78,6 +87,9 @@ export interface InstrumentedTransport extends ErpTransport {
   readonly sends: readonly ErpRequest[];
   // Maior número de chamadas ao transporte em voo ao mesmo tempo.
   readonly maxInFlight: number;
+  // Chamadas em andamento agora: as que o worker ainda espera. Uma chamada cortada ou abandonada pelo timeout
+  // (o sinal aborta) deixa de contar, e o `advanceIdle` do mundo só anda com este número em zero.
+  readonly inFlight: number;
   sendsOf(op: ErpRequest['op']): ErpRequest[];
   // Resolve quando o total de chamadas (do `op`, se dado) chega a `count`. A chamada ao simulado já foi
   // iniciada, então os timers do roteiro já estão armados no relógio manual.
@@ -158,6 +170,7 @@ export function instrumentTransport(
     call: Promise<ErpResponse>,
     request: ErpRequest,
     hook: ((request: ErpRequest) => Promise<void>) | undefined,
+    release: () => void,
   ) {
     try {
       let response: ErpResponse;
@@ -172,7 +185,7 @@ export function instrumentTransport(
       if (hook) await hook(request);
       return response;
     } finally {
-      inFlight -= 1;
+      release();
     }
   }
 
@@ -182,6 +195,9 @@ export function instrumentTransport(
     },
     get maxInFlight() {
       return maxInFlight;
+    },
+    get inFlight() {
+      return inFlight;
     },
     sendsOf(op) {
       return sends.filter((request) => request.op === op);
@@ -217,6 +233,15 @@ export function instrumentTransport(
       sends.push(request);
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
+      // A chamada deixa de estar em andamento quando termina, quando a cortam sem resposta ou quando o timeout
+      // do worker a abandona (o sinal aborta): uma chamada que o worker já desistiu de esperar não segura o relógio.
+      let counted = true;
+      const release = (): void => {
+        if (!counted) return;
+        counted = false;
+        inFlight -= 1;
+      };
+      signal.addEventListener('abort', release, { once: true });
       const stall = take(stalls, request);
       const hook = take(hooks, request);
       // A chamada ao simulado sai antes de acordar quem espera: os timers do roteiro já estão armados.
@@ -231,11 +256,14 @@ export function instrumentTransport(
           ) ?? Promise.resolve()
         ).then(stall.settle);
         return new Promise<ErpResponse>((_resolve, reject) => {
-          stall.rejecters.push(reject);
+          stall.rejecters.push((error) => {
+            release();
+            reject(error);
+          });
         });
       }
       if (!call) throw new Error('chamada sem ERP simulado fora de um stall');
-      return finish(call, request, hook);
+      return finish(call, request, hook, release);
     },
   };
 }
@@ -284,6 +312,10 @@ export interface ErpWorld {
   transport: InstrumentedTransport;
   // A camada anticorrupção sobre o transporte medido do ERP simulado, tudo no relógio manual.
   erp: ErpClient;
+  // Leva o relógio até a próxima espera pendente, sem passar dela, e só se nenhuma chamada ao ERP estiver em
+  // andamento: o tempo simulado nunca passa por cima de uma chamada em voo, então o timeout do ERP só dispara
+  // quando a chamada está de fato parada (FND-13). Devolve se avançou. É uma função solta, sem `this`.
+  advanceIdle: () => boolean;
 }
 
 export function createErpWorld(
@@ -304,7 +336,13 @@ export function createErpWorld(
     timeoutMs: ERP_TIMEOUT_MS,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
   });
-  return { clock, sim, transport, erp };
+  return {
+    clock,
+    sim,
+    transport,
+    erp,
+    advanceIdle: () => transport.inFlight === 0 && clock.advanceToNext(),
+  };
 }
 
 export interface WorkerSuite {
@@ -313,7 +351,7 @@ export interface WorkerSuite {
   // Pool do worker como em produção: 10 conexões, lock_timeout de 2 s e statement_timeout de 5 s.
   pool: pg.Pool;
   telemetry: Telemetry;
-  // Um ElasticMQ por arquivo de teste; cada teste cria as filas dele (createWorld).
+  // O ElasticMQ da rodada (FND-14); cada teste cria as filas dele (createWorld), com o prefixo do arquivo.
   emq: TestElasticMq;
   // Fecha o que cada teste abriu (os clientes do SQS): chamado no afterEach.
   releaseWorlds(): void;
@@ -323,7 +361,7 @@ export interface WorkerSuite {
 // Quem fecha as filas de cada mundo; fora da interface pública da suíte.
 const cleanupsOf = new WeakMap<WorkerSuite, (() => void)[]>();
 
-// PostgreSQL real, o app do checkout (pedidos nascem como em produção), o pool do worker e o ElasticMQ.
+// Banco clonado do modelo da rodada, o app do checkout (pedidos nascem como em produção), o pool do worker e o cliente do ElasticMQ.
 export async function startWorkerSuite(): Promise<WorkerSuite> {
   const [database, emq] = await Promise.all([
     startMigratedDatabase(),
@@ -359,6 +397,25 @@ export async function startWorkerSuite(): Promise<WorkerSuite> {
   };
   cleanupsOf.set(suite, cleanups);
   return suite;
+}
+
+// Registra no arquivo de teste o ciclo de vida da suíte (sobe antes de todos os testes, solta os mundos a cada
+// teste e para no fim) e devolve quem entrega a suíte já de pé.
+export function useWorkerSuite(): () => WorkerSuite {
+  let started: WorkerSuite | undefined;
+  beforeAll(async () => {
+    started = await startWorkerSuite();
+  }, 180_000);
+  afterAll(async () => {
+    await started?.stop();
+  });
+  afterEach(() => {
+    started?.releaseWorlds();
+  });
+  return () => {
+    if (!started) throw new Error('a suíte do worker ainda não subiu');
+    return started;
+  };
 }
 
 // ---------------------------------------------------------------- mundo de um teste: ERP, filas e relógio
@@ -472,10 +529,9 @@ export interface PollHandle {
   until<T>(wait: Promise<T>): Promise<T>;
 }
 
-// Prazo, em tempo real, para o que o teste espera do worker: sem ele, um comportamento que falta viraria um
-// teste pendurado até o timeout do vitest, em vez de uma falha de asserção que diz o que não aconteceu.
-export const WAIT_GUARD_MS = 20_000;
-
+// Prazo, em tempo real (WAIT_GUARD_MS), para o que o teste espera do worker: só impede a espera eterna. Com o
+// prazo igual ao testTimeout, e o timeout do teste contando desde antes, no projeto `integration` a falha de um
+// comportamento que falta aparece como timeout do teste; a mensagem daqui só chega onde o timeout do Vitest é maior.
 export async function within<T>(
   wait: Promise<T>,
   what: string,
@@ -538,11 +594,24 @@ export function untilState(
   poll: PollHandle,
   check: () => Promise<void>,
 ): Promise<void> {
-  return poll.until(vi.waitFor(check, { timeout: 20_000, interval: 25 }));
+  return poll.until(
+    vi.waitFor(check, { timeout: WAIT_GUARD_MS, interval: 25 }),
+  );
 }
 
-// O laço do start() só termina quando o stop() resolve; o teste avança o relógio manual enquanto espera,
-// para nenhum timer do processo (o timeout de uma chamada presa, um intervalo) segurar o encerramento.
+// Espera o pedido ficar `invoiced` com o relógio andando até a próxima espera (sem chamada ao ERP em andamento),
+// para um laço do worker ou da reconciliação (start()) chegar até lá sem o teste chamar a rodada.
+export function untilInvoiced(
+  world: QueueWorld,
+  orderId: string,
+): Promise<void> {
+  return waitAdvancing(world.advanceIdle, async () => {
+    expect((await readOrder(world.pool, orderId)).status).toBe('invoiced');
+  });
+}
+
+// O laço do start() só termina quando o stop() resolve; o teste leva o relógio manual até a próxima espera enquanto
+// espera (sem chamada ao ERP em andamento), para nenhum timer do processo (um intervalo) segurar o encerramento.
 export async function stopAdvancing(
   worker: Worker,
   world: ErpWorld,
@@ -551,15 +620,9 @@ export async function stopAdvancing(
   const stopping = worker.stop().then(() => {
     stopped = true;
   });
-  await vi.waitFor(
-    () => {
-      world.clock.advance(500);
-      expect(stopped, 'o stop() ainda espera o laço ou uma tentativa').toBe(
-        true,
-      );
-    },
-    { timeout: 20_000, interval: 20 },
-  );
+  await waitAdvancing(world.advanceIdle, () => {
+    expect(stopped, 'o stop() ainda espera o laço ou uma tentativa').toBe(true);
+  });
   await stopping;
 }
 
@@ -840,7 +903,7 @@ export async function expectQueuesEmpty(world: QueueWorld): Promise<void> {
         dlq: { visible: 0, notVisible: 0 },
       });
     },
-    { timeout: 5_000, interval: 50 },
+    { timeout: WAIT_GUARD_MS, interval: 50 },
   );
 }
 
@@ -853,7 +916,7 @@ export async function expectOneInFlight(world: QueueWorld): Promise<void> {
         dlq: { visible: 0, notVisible: 0 },
       });
     },
-    { timeout: 5_000, interval: 50 },
+    { timeout: WAIT_GUARD_MS, interval: 50 },
   );
 }
 
@@ -864,7 +927,7 @@ export async function waitForDlq(
 ): Promise<void> {
   await vi.waitFor(
     async () => expect(await world.queues.dlq.approximateCount()).toBe(count),
-    { timeout: 10_000, interval: 50 },
+    { timeout: WAIT_GUARD_MS, interval: 50 },
   );
 }
 

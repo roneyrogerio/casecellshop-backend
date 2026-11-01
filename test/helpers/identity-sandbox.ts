@@ -1,11 +1,11 @@
-import { spawnSync } from 'node:child_process';
 import { cpSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { git, makeTempDir } from './git-sandbox.ts';
+import { repoRoot } from './repo-root.ts';
+import { type NodeRun, runCommand, runNode } from './run-node.ts';
 
 // Ambiente de teste da identidade (AI-14): o git não pode enxergar a configuração global nem a do sistema da máquina,
 // senão a credencial real do dono entraria no teste.
-const repoRoot = join(import.meta.dirname, '..', '..');
 
 // Chaveiro falso: `security` (macOS) e `secret-tool` (Linux) que saem com 1 sem imprimir nada, como um item inexistente.
 // Vão no começo do PATH, para o teste nunca ler nem gravar no chaveiro real da máquina.
@@ -52,9 +52,8 @@ export function makeRepo(prefix = 'identity-'): string {
 }
 
 export function localConfig(dir: string, key: string): string | undefined {
-  const result = spawnSync('git', ['config', '--local', '--get', key], {
+  const result = runCommand('git', ['config', '--local', '--get', key], {
     cwd: dir,
-    encoding: 'utf8',
     env: isolatedEnv(),
   });
   return result.status === 0 ? result.stdout.trim() : undefined;
@@ -82,26 +81,19 @@ export function makeScriptsSandbox(): string {
   return dir;
 }
 
-export function runScript(
+// Roda `node <dir>/scripts/<script> <args>` com o ambiente isolado (git sem a configuração da máquina, chaveiro falso),
+// a entrada padrão vazia e 20 s de limite. Difere do `runScript` de script-module.ts, que herda o ambiente do processo
+// do teste (sem as variáveis do git) e não passa argumentos: aqui `env` substitui o ambiente isolado inteiro.
+export function runIsolatedScript(
   dir: string,
   script: string,
   args: string[],
   options: { env?: Record<string, string>; input?: string } = {},
-): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(
-    process.execPath,
-    [join(dir, 'scripts', script), ...args],
-    {
-      cwd: dir,
-      encoding: 'utf8',
-      env: options.env ?? isolatedEnv(),
-      input: options.input ?? '',
-      timeout: 20_000,
-    },
-  );
-  return {
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  };
+): NodeRun {
+  return runNode(join(dir, 'scripts', script), args, {
+    cwd: dir,
+    env: options.env ?? isolatedEnv(),
+    input: options.input ?? '',
+    timeout: 20_000,
+  });
 }

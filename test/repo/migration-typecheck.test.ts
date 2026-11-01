@@ -1,20 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { afterEach, describe, expect, it } from 'vitest';
+import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
+import { typecheckSample } from '../helpers/lint-tree.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface TsConfig {
   include: string[];
@@ -52,39 +41,7 @@ describe('FND-11 as migrações entram no typecheck e no lint do repositório', 
 // Pasta no tmpdir do sistema, e não no repositório (mesma razão do AI-20): um lint paralelo ou uma
 // execução interrompida esbarraria no arquivo de amostra.
 describe('FND-11 uma migração com erro de tipo reprova o typecheck', () => {
-  let tree: string;
-
-  beforeEach(() => {
-    tree = mkdtempSync(path.join(tmpdir(), 'fnd11-tsc-'));
-    // O `import 'kysely'` da migração resolve pelo node_modules do repositório.
-    symlinkSync(
-      path.join(root, 'node_modules'),
-      path.join(tree, 'node_modules'),
-      'dir',
-    );
-    // Fora do repositório não há o `"type": "module"` da raiz, e o `export` da amostra seria lido como CommonJS.
-    writeFileSync(
-      path.join(tree, 'package.json'),
-      JSON.stringify({ type: 'module' }),
-    );
-    // Herda as opções do repositório por caminho absoluto; `include` é refeito porque o herdado valeria
-    // para as pastas do repositório, e `typeRoots` aponta para o repositório porque, fora dele, os tipos
-    // do Node não são achados.
-    writeFileSync(
-      path.join(tree, 'tsconfig.json'),
-      JSON.stringify({
-        extends: path.join(root, 'tsconfig.json'),
-        compilerOptions: {
-          typeRoots: [path.join(root, 'node_modules', '@types')],
-        },
-        include: ['*.ts'],
-      }),
-    );
-  });
-
-  afterEach(() => {
-    rmSync(tree, { recursive: true, force: true });
-  });
+  afterEach(cleanupTempDirs);
 
   function typecheck(columnType: string): {
     status: number | null;
@@ -100,16 +57,7 @@ export async function down(db: Kysely<any>): Promise<void> {
   await db.schema.dropTable('amostra').execute();
 }
 `;
-    writeFileSync(path.join(tree, '20260101000000_amostra.ts'), source);
-    const result = spawnSync(
-      path.join(root, 'node_modules', '.bin', 'tsc'),
-      ['--noEmit', '-p', path.join(tree, 'tsconfig.json')],
-      { cwd: root, encoding: 'utf8' },
-    );
-    return {
-      status: result.status,
-      output: `${result.stdout}${result.stderr}`,
-    };
+    return typecheckSample('fnd11-tsc-', source);
   }
 
   it('FND-11 um tipo de coluna que o construtor de esquema do Kysely não conhece reprova no tsc', () => {
@@ -117,7 +65,7 @@ export async function down(db: Kysely<any>): Promise<void> {
 
     expect(result.status).not.toBe(0);
     expect(result.status).not.toBeNull();
-    expect(result.output).toContain('20260101000000_amostra.ts');
+    expect(result.output).toContain('amostra.ts');
     expect(result.output).toContain('inteiro_inexistente');
   }, 60_000);
 

@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -7,11 +6,12 @@ import {
   makeTempDir,
   writeFileIn,
 } from '../helpers/git-sandbox.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-38: todo teste (`it` e `test`) começa pelo ID do critério (`vitest/valid-title` com `mustMatch` no
 // .oxlintrc.json); um nome sem ID reprova o `npm run lint`. Como no AI-02, a amostra fica na pasta temporária
 // do sistema e a configuração do projeto entra por caminho absoluto.
-const root = join(import.meta.dirname, '..', '..');
 const oxlintBin = join(root, 'node_modules', '.bin', 'oxlint');
 
 afterAll(cleanupTempDirs);
@@ -67,10 +67,10 @@ describe('AI-38 controle negativo: oxlint com a configuração do projeto reprov
       'amostra.test.ts',
       `import { ${names.join(', ')} } from 'vitest';\n\n${body}\n`,
     );
-    const result = spawnSync(
+    const result = runCommand(
       oxlintBin,
       ['-c', join(root, '.oxlintrc.json'), join(dir, 'amostra.test.ts')],
-      { cwd: root, encoding: 'utf8' },
+      { cwd: root },
     );
     return { status: result.status, out: `${result.stdout}${result.stderr}` };
   }

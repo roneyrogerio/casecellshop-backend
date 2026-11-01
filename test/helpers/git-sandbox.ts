@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -8,6 +7,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { runCommand } from './run-node.ts';
 
 // Repositórios git temporários, offline, para os testes dos trilhos da fábrica (AI-08, AI-11, AI-12).
 // O git roda sem hooks, sem assinatura e com identidade fixa, para a configuração da máquina não interferir.
@@ -38,10 +38,7 @@ export function cleanupTempDirs(): void {
 }
 
 export function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync('git', [...GIT_FLAGS, ...args], {
-    cwd,
-    encoding: 'utf8',
-  });
+  const result = runCommand('git', [...GIT_FLAGS, ...args], { cwd });
   if (result.status !== 0)
     throw new Error(`git ${args.join(' ')} falhou: ${result.stderr}`);
   return result.stdout;

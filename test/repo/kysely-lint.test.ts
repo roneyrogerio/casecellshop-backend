@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs, writeFileIn } from '../helpers/git-sandbox.ts';
@@ -7,6 +6,8 @@ import {
   oxlintBin,
   typecheckSample,
 } from '../helpers/lint-tree.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-19: a conferência do Kysely é parte do `npm run lint`. Aqui o oxlint roda com o .oxlintrc.json do projeto
 // sobre uma árvore temporária que tem uma pasta src/, com cwd nela. Os `files` dos overrides (src/**) casam pelo
@@ -26,17 +27,15 @@ const KYSELY_RULE = /kysely|no-restricted-properties/;
 
 afterAll(cleanupTempDirs);
 
-const root = join(import.meta.dirname, '..', '..');
-
 function newTree(): string {
   return newLintTree('ai19-lint-');
 }
 
 function lintJson(cwd: string, paths: string[]): Diagnostic[] {
-  const result = spawnSync(
+  const result = runCommand(
     oxlintBin,
     ['-c', join(cwd, '.oxlintrc.json'), '-f', 'json', ...paths],
-    { cwd, encoding: 'utf8' },
+    { cwd },
   );
   const parsed = JSON.parse(result.stdout) as { diagnostics: Diagnostic[] };
   return parsed.diagnostics;
@@ -469,10 +468,10 @@ describe('AI-19 o oxlint como processo: saída e código de saída', () => {
     const dir = newTree();
     for (const [file, body] of Object.entries(files))
       writeFileIn(dir, file, body);
-    const result = spawnSync(
+    const result = runCommand(
       oxlintBin,
       ['-c', join(dir, '.oxlintrc.json'), 'src'],
-      { cwd: dir, encoding: 'utf8' },
+      { cwd: dir },
     );
     return { status: result.status, out: `${result.stdout}${result.stderr}` };
   }

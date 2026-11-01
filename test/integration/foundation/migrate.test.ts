@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type { Socket } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Kysely, PostgresDialect } from 'kysely';
 import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import pg from 'pg';
@@ -9,6 +8,10 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MIGRATION_FOLDERS, migrate } from '../../../src/db/migrate.ts';
 import { createMigrationPool, createPool } from '../../../src/db/pool.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
+import { captureUncaught } from '../../helpers/uncaught.ts';
+import { createTestPool } from '../../helpers/pool.ts';
+import { repoRoot } from '../../helpers/repo-root.ts';
 import {
   appliedMigrations,
   fixtureFolder,
@@ -28,11 +31,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await container?.stop();
 });
-
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 
 describe('FND-11 migrate aplica as pastas pelo Migrator do Kysely', () => {
   it('FND-11 as duas pastas do repositório são o padrão, a da loja antes e o erp_sim depois', () => {
@@ -359,7 +357,7 @@ async function runOverlapped<T>(
         if (finishedEarly) return;
         expect(await advisoryWaiters(database.pool, minWaitSeconds)).toBe(2);
       },
-      { timeout: 30_000, interval: 100 },
+      { timeout: WAIT_GUARD_MS, interval: 100 },
     );
     await barrier.release();
     return await outcomes;
@@ -391,9 +389,7 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
       'sobre um pool sem statement_timeout nem lock_timeout',
       0,
       (uri: string): pg.Pool => {
-        const bare = new pg.Pool({ connectionString: uri, max: 10 });
-        bare.on('error', noop);
-        return bare;
+        return createTestPool(uri, { max: 10 });
       },
     ],
     [
@@ -526,23 +522,14 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
   const SLEEP_MARKER = '%pg_sleep(37)%';
 
   // Destrói o socket da conexão que roda o pg_sleep da fixture e devolve o que `run` fez e as
-  // uncaughtException do processo. O vitest ouve uncaughtException e reprovaria a execução inteira por
-  // causa do controle negativo: os ouvintes dele saem durante o cenário e voltam depois.
+  // uncaughtException do processo (captureUncaught tira os ouvintes do vitest durante o cenário).
   async function destroySocketDuringSlowMigration(
     database: ScratchDatabase,
     run: (pool: pg.Pool) => Promise<unknown>,
   ): Promise<{ outcome: unknown; uncaught: Error[] }> {
-    const uncaught: Error[] = [];
-    const onUncaught = (error: Error): void => {
-      uncaught.push(error);
-    };
-    const previous = process.listeners('uncaughtException');
-    process.removeAllListeners('uncaughtException');
-    process.on('uncaughtException', onUncaught);
+    const { errors: uncaught, restore } = captureUncaught();
     const clients: pg.PoolClient[] = [];
-    const pool = new pg.Pool({ connectionString: database.uri, max: 4 });
-    // Um erro de conexão ociosa não pode derrubar o processo do teste.
-    pool.on('error', noop);
+    const pool = createTestPool(database.uri, { max: 4 });
     pool.on('connect', (client) => clients.push(client));
     try {
       const pending = run(pool).then(
@@ -561,7 +548,7 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
           expect(active.rows).toHaveLength(1);
           sleepingPid = active.rows[0]?.pid ?? -1;
         },
-        { timeout: 20_000 },
+        { timeout: WAIT_GUARD_MS },
       );
       const victim = clients.find(
         (client) =>
@@ -578,9 +565,7 @@ describe('FND-10 o migrate monta o Kysely sobre o adaptador do pool', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       return { outcome, uncaught };
     } finally {
-      process.removeAllListeners('uncaughtException');
-      for (const listener of previous)
-        process.on('uncaughtException', listener);
+      restore();
       // O servidor continua no pg_sleep depois de o cliente cair; encerra o backend para não segurar o lock.
       await database.pool.query(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE $1`,

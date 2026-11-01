@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir, writeFileIn } from './git-sandbox.ts';
 import { repoRoot } from './repo-root.ts';
+import { runCommand } from './run-node.ts';
 
 // Árvore temporária com o .oxlintrc.json e o plugin do projeto, por link e sem cópia: o oxlint resolve o plugin
 // (jsPlugins) e os `files` dos overrides a partir da pasta da configuração, então a mesma configuração vale na árvore,
@@ -42,10 +42,10 @@ export function typecheckSample(
     }),
   );
   writeFileIn(tree, 'amostra.ts', content);
-  const result = spawnSync(
+  const result = runCommand(
     join(repoRoot, 'node_modules', '.bin', 'tsc'),
     ['--noEmit', '-p', join(tree, 'tsconfig.json')],
-    { cwd: repoRoot, encoding: 'utf8' },
+    { cwd: repoRoot },
   );
   return { status: result.status, output: result.stdout + result.stderr };
 }
@@ -60,9 +60,6 @@ export function lintSampleFile(
 ): { status: number | null; output: string } {
   const tree = newLintTree(prefix);
   writeFileIn(tree, 'lib/x.ts', content);
-  const result = spawnSync(oxlintBin, ['lib/x.ts'], {
-    cwd: tree,
-    encoding: 'utf8',
-  });
+  const result = runCommand(oxlintBin, ['lib/x.ts'], { cwd: tree });
   return { status: result.status, output: result.stdout + result.stderr };
 }

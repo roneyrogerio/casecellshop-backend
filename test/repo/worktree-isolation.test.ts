@@ -1,14 +1,9 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // O frontmatter de um agente como mapa; um arquivo sem frontmatter válido dá um mapa vazio, e o teste falha na asserção.
 function frontmatterOf(raw: string): Record<string, unknown> {
@@ -29,7 +24,7 @@ function agentFrontmatter(name: string): Record<string, unknown> {
 
 // `git check-ignore -q` sai com 0 quando o caminho é ignorado e com 1 quando não é; o caminho não precisa existir.
 function isIgnored(file: string): boolean {
-  const result = spawnSync('git', ['check-ignore', '-q', '--', file], {
+  const result = runCommand('git', ['check-ignore', '-q', '--', file], {
     cwd: root,
   });
   return result.status === 0;

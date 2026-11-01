@@ -1,10 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
 import { lintSampleFile } from '../helpers/lint-tree.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 afterAll(cleanupTempDirs);
 
@@ -64,9 +64,8 @@ function isScannedSource(file: string): boolean {
 }
 
 function trackedSources(): string[] {
-  const result = spawnSync('git', ['ls-files', '--', ...SCANNED_DIRS], {
+  const result = runCommand('git', ['ls-files', '--', ...SCANNED_DIRS], {
     cwd: repoRoot,
-    encoding: 'utf8',
   });
   if (result.status !== 0)
     throw new Error(`git ls-files falhou: ${result.stderr}`);

@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
-const root = join(import.meta.dirname, '..', '..');
 const FIXED_ACCOUNT = /honeyforge/i;
 
 // Código de produção dos trilhos: scripts e hooks, fora os testes.
@@ -15,13 +15,10 @@ function isProductionRail(file: string): boolean {
 
 // Arquivos rastreados e também os novos ainda não adicionados, para o teste valer antes do commit.
 function railFiles(): string[] {
-  const result = spawnSync(
+  const result = runCommand(
     'git',
     ['ls-files', '--cached', '--others', '--exclude-standard'],
-    {
-      cwd: root,
-      encoding: 'utf8',
-    },
+    { cwd: root },
   );
   return result.stdout
     .split('\n')

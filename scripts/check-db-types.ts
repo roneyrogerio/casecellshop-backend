@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Cli } from 'kysely-codegen';
 import pg from 'pg';
+import { parse } from 'yaml';
 import {
   MIGRATION_FOLDERS,
   migrate,
@@ -129,7 +130,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   // Só aqui, para importar o módulo nos testes não exigir o Testcontainers.
   const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
   const write = process.argv.includes('--write');
-  const container = await new PostgreSqlContainer('postgres:18.6').start();
+  // A mesma imagem do compose.yaml, que é o único lugar da versão.
+  const compose = parse(
+    readFileSync(new URL('../compose.yaml', import.meta.url), 'utf8'),
+  ) as { services: { postgres: { image: string } } };
+  const container = await new PostgreSqlContainer(
+    compose.services.postgres.image,
+  ).start();
   try {
     const divergences = await checkDbTypes({
       databaseUrl: container.getConnectionUri(),

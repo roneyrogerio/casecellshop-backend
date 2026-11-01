@@ -4,7 +4,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from '../test/helpers/git-sandbox.ts';
 import {
   makeScriptsSandbox,
-  runScript,
+  runIsolatedScript,
 } from '../test/helpers/identity-sandbox.ts';
 
 interface CredentialModule {
@@ -121,7 +121,7 @@ describe('AI-08 o credential helper (CLI) sem identidade configurada', () => {
   it('AI-08 sem identidade, para https://github.com, responde quit=1', () => {
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'git-credential-bot.ts', ['get'], {
+    const result = runIsolatedScript(dir, 'git-credential-bot.ts', ['get'], {
       input: request('protocol=https', 'host=github.com'),
     });
 
@@ -132,7 +132,7 @@ describe('AI-08 o credential helper (CLI) sem identidade configurada', () => {
   it('AI-08 sem identidade, para outro host, continua sem resposta', () => {
     const dir = makeScriptsSandbox();
 
-    const result = runScript(dir, 'git-credential-bot.ts', ['get'], {
+    const result = runIsolatedScript(dir, 'git-credential-bot.ts', ['get'], {
       input: request('protocol=https', 'host=gitlab.com'),
     });
 

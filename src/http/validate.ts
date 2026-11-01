@@ -31,20 +31,21 @@ function messageFor(issue: z.core.$ZodIssue): string {
 }
 
 function collect(origin: string, error: z.ZodError, into: ProblemErrors): void {
+  // O zod pode apontar mais de um problema no mesmo campo (ex.: limite de inteiro seguro e
+  // mínimo do Cents); a resposta 400 traz só o primeiro de cada caminho, na ordem original.
+  const seen = new Set(into.map((e) => e.path));
+  const add = (path: string, issue: z.core.$ZodIssue): void => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    into.push({ path, message: messageFor(issue) });
+  };
   for (const issue of error.issues) {
+    const base = [origin, ...issue.path.map(String)];
     if (issue.code === 'unrecognized_keys') {
       // Um erro por chave desconhecida, com o nome dela no caminho (FND-03).
-      for (const key of issue.keys) {
-        into.push({
-          path: [origin, ...issue.path.map(String), key].join('.'),
-          message: messageFor(issue),
-        });
-      }
+      for (const key of issue.keys) add([...base, key].join('.'), issue);
     } else {
-      into.push({
-        path: [origin, ...issue.path.map(String)].join('.'),
-        message: messageFor(issue),
-      });
+      add(base.join('.'), issue);
     }
   }
 }

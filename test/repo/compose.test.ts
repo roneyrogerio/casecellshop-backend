@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface ComposeService {
   image?: string;
@@ -9,14 +10,15 @@ interface ComposeService {
   environment?: Record<string, unknown> | string[];
   depends_on?: Record<string, unknown> | string[];
   volumes?: unknown[];
+  profiles?: unknown;
+  command?: unknown;
+  ports?: unknown;
 }
 
 interface ComposeFile {
   services?: Record<string, ComposeService>;
   volumes?: Record<string, unknown>;
 }
-
-const root = join(import.meta.dirname, '..', '..');
 
 // Endereços que obrigam o pg_isready a usar TCP. Um caminho (começa por `/`) escolhe o socket Unix.
 const TCP_HOSTS = new Set(['localhost', '127.0.0.1']);
@@ -146,8 +148,12 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
   const elasticmq = compose.services?.['elasticmq'];
   const worker = compose.services?.['worker'];
 
-  it('FND-01 o serviço elasticmq usa a imagem nativa fixada em softwaremill/elasticmq-native:1.7.1', () => {
-    expect(elasticmq?.image).toBe('softwaremill/elasticmq-native:1.7.1');
+  // A versão mora só no compose.yaml (os testes de integração a leem de lá, em test/helpers/compose-image.ts): aqui se
+  // confere a imagem nativa e a versão fixada, sem repetir o número.
+  it('FND-01 o serviço elasticmq usa a imagem nativa softwaremill/elasticmq-native fixada em versão X.Y.Z, nunca latest', () => {
+    expect(elasticmq?.image).toMatch(
+      /^softwaremill\/elasticmq-native:\d+\.\d+\.\d+$/,
+    );
   });
 
   it('FND-01 as mensagens do elasticmq ficam num volume nomeado declarado no compose, para sobreviver ao reinício', () => {
@@ -213,5 +219,385 @@ describe('FND-01 ElasticMQ no compose (M3, AD-021)', () => {
     // O SDK exige alguma credencial na cadeia padrão; o ElasticMQ a ignora.
     expect(environment['AWS_ACCESS_KEY_ID']).toBeTruthy();
     expect(environment['AWS_SECRET_ACCESS_KEY']).toBeTruthy();
+  });
+});
+
+// --- FND-16: o serviço schemathesis (fuzzing guiado pelo contrato) ----------------------------------------------------
+
+const FUZZ_CHECKS = [
+  'not_a_server_error',
+  'status_code_conformance',
+  'content_type_conformance',
+  'response_headers_conformance',
+  'response_schema_conformance',
+  'negative_data_rejection',
+];
+const FUZZ_IMAGE =
+  /^ghcr\.io\/schemathesis\/schemathesis:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
+const SCHEMA_MOUNT = './openapi.yaml:/schema/openapi.yaml:ro';
+const REPORT_MOUNT = './schemathesis-report:/reports';
+
+// Uma opção da linha de comando, na forma `--opcao valor` ou `--opcao=valor`.
+function optionValue(args: string[], name: string): string | undefined {
+  const at = args.indexOf(name);
+  if (at !== -1) return args[at + 1];
+  const prefix = `${name}=`;
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+function fuzzCommandViolations(command: unknown): string[] {
+  if (!Array.isArray(command) || command.some((c) => typeof c !== 'string'))
+    return ['o command não é uma lista de textos'];
+  const args = command as string[];
+  const violations: string[] = [];
+  if (args[0] !== 'run') violations.push('o command não começa por run');
+  if (args[1] !== '/schema/openapi.yaml')
+    violations.push('o segundo argumento não é /schema/openapi.yaml');
+  const expected: [string, string][] = [
+    ['--url', 'http://api:3000'],
+    ['--seed', '${FUZZ_SEED:-20261101}'],
+    ['--max-examples', '${FUZZ_MAX_EXAMPLES:-50}'],
+    ['--report', 'junit'],
+    ['--report-dir', '/reports'],
+  ];
+  for (const [name, value] of expected)
+    if (optionValue(args, name) !== value)
+      violations.push(
+        `${name} é ${String(optionValue(args, name))}, esperado ${value}`,
+      );
+  const checks = (optionValue(args, '--checks') ?? '').split(',');
+  if (
+    JSON.stringify([...checks].sort()) !==
+    JSON.stringify([...FUZZ_CHECKS].sort())
+  )
+    violations.push(
+      `--checks é ${checks.join(',')}, esperado as seis checagens`,
+    );
+  return violations;
+}
+
+function fuzzServiceViolations(compose: ComposeFile): string[] {
+  const service = compose.services?.['schemathesis'];
+  if (service === undefined) return ['falta o serviço schemathesis'];
+  const violations: string[] = [];
+  if (JSON.stringify(service.profiles) !== '["fuzz"]')
+    violations.push('profiles não é só [fuzz]');
+  if (!FUZZ_IMAGE.test(service.image ?? ''))
+    violations.push(
+      `image ${String(service.image)} não é a oficial fixada por versão X.Y.Z e digest sha256`,
+    );
+  const depends = service.depends_on;
+  const api =
+    depends !== undefined && !Array.isArray(depends)
+      ? (depends['api'] as { condition?: unknown } | undefined)
+      : undefined;
+  if (api?.condition !== 'service_healthy')
+    violations.push('não espera a api com condition: service_healthy');
+  const volumes = service.volumes ?? [];
+  if (!volumes.includes(SCHEMA_MOUNT))
+    violations.push(`falta o volume ${SCHEMA_MOUNT} (só leitura)`);
+  if (!volumes.includes(REPORT_MOUNT))
+    violations.push(`falta o volume ${REPORT_MOUNT}`);
+  if (service.ports !== undefined)
+    violations.push('publica portas: deve falar pela rede do compose');
+  return [...violations, ...fuzzCommandViolations(service.command)];
+}
+
+// Fora do perfil `fuzz` o `docker compose up` deve subir tudo menos o schemathesis: nenhum outro serviço tem perfil.
+function profiledOthers(compose: ComposeFile): string[] {
+  return Object.entries(compose.services ?? {})
+    .filter(
+      ([name, svc]) => name !== 'schemathesis' && svc.profiles !== undefined,
+    )
+    .map(([name]) => name);
+}
+
+function goodFuzzCompose(): ComposeFile {
+  return {
+    services: {
+      api: { image: 'api:1' },
+      schemathesis: {
+        profiles: ['fuzz'],
+        image: `ghcr.io/schemathesis/schemathesis:4.2.0@sha256:${'a'.repeat(64)}`,
+        depends_on: { api: { condition: 'service_healthy' } },
+        volumes: [SCHEMA_MOUNT, REPORT_MOUNT],
+        command: [
+          'run',
+          '/schema/openapi.yaml',
+          '--url',
+          'http://api:3000',
+          '--checks',
+          FUZZ_CHECKS.join(','),
+          '--seed',
+          '${FUZZ_SEED:-20261101}',
+          '--max-examples',
+          '${FUZZ_MAX_EXAMPLES:-50}',
+          '--report',
+          'junit',
+          '--report-dir',
+          '/reports',
+        ],
+      },
+    },
+  };
+}
+
+function fuzzed(change: (service: ComposeService) => void): ComposeFile {
+  const compose = goodFuzzCompose();
+  const service = compose.services?.['schemathesis'];
+  if (service === undefined) throw new Error('linha de base sem o serviço');
+  change(service);
+  return compose;
+}
+
+function swapArg(service: ComposeService, from: string, to: string): void {
+  const command = service.command as string[];
+  const at = command.indexOf(from);
+  expect(at, `a linha de base não tem o argumento ${from}`).toBeGreaterThan(-1);
+  command[at] = to;
+}
+
+describe('FND-16 as conferências do serviço schemathesis enxergam o que procuram (controle negativo)', () => {
+  it('FND-16 o serviço correto passa (controle positivo)', () => {
+    const compose = goodFuzzCompose();
+
+    expect(fuzzServiceViolations(compose)).toEqual([]);
+    expect(profiledOthers(compose)).toEqual([]);
+  });
+
+  it('FND-16 sem o serviço, reprova', () => {
+    expect(fuzzServiceViolations({ services: {} })).toEqual([
+      'falta o serviço schemathesis',
+    ]);
+  });
+
+  it.each<[string, (service: ComposeService) => void]>([
+    [
+      'sem o perfil fuzz',
+      (s) => {
+        delete s.profiles;
+      },
+    ],
+    [
+      'em outro perfil',
+      (s) => {
+        s.profiles = ['dev'];
+      },
+    ],
+    [
+      'em dois perfis',
+      (s) => {
+        s.profiles = ['fuzz', 'dev'];
+      },
+    ],
+    [
+      'com a imagem só por tag',
+      (s) => {
+        s.image = 'ghcr.io/schemathesis/schemathesis:4.2.0';
+      },
+    ],
+    [
+      'com a imagem latest',
+      (s) => {
+        s.image = 'ghcr.io/schemathesis/schemathesis:latest';
+      },
+    ],
+    [
+      'com latest e digest',
+      (s) => {
+        s.image = `ghcr.io/schemathesis/schemathesis:latest@sha256:${'a'.repeat(64)}`;
+      },
+    ],
+    [
+      'com a imagem sem tag, só o digest',
+      (s) => {
+        s.image = `ghcr.io/schemathesis/schemathesis@sha256:${'a'.repeat(64)}`;
+      },
+    ],
+    [
+      'com o digest curto',
+      (s) => {
+        s.image = `ghcr.io/schemathesis/schemathesis:4.2.0@sha256:${'a'.repeat(63)}`;
+      },
+    ],
+    [
+      'com a imagem de outro registro',
+      (s) => {
+        s.image = `docker.io/schemathesis/schemathesis:4.2.0@sha256:${'a'.repeat(64)}`;
+      },
+    ],
+    [
+      'sem depends_on',
+      (s) => {
+        delete s.depends_on;
+      },
+    ],
+    [
+      'com depends_on em lista, sem a condição',
+      (s) => {
+        s.depends_on = ['api'];
+      },
+    ],
+    [
+      'esperando a api só iniciar',
+      (s) => {
+        s.depends_on = { api: { condition: 'service_started' } };
+      },
+    ],
+    [
+      'esperando outro serviço',
+      (s) => {
+        s.depends_on = { migrate: { condition: 'service_healthy' } };
+      },
+    ],
+    [
+      'com o contrato montado sem :ro',
+      (s) => {
+        s.volumes = ['./openapi.yaml:/schema/openapi.yaml', REPORT_MOUNT];
+      },
+    ],
+    [
+      'sem o volume do contrato',
+      (s) => {
+        s.volumes = [REPORT_MOUNT];
+      },
+    ],
+    [
+      'sem o volume do relatório',
+      (s) => {
+        s.volumes = [SCHEMA_MOUNT];
+      },
+    ],
+    [
+      'com o relatório em outro diretório do host',
+      (s) => {
+        s.volumes = [SCHEMA_MOUNT, './report:/reports'];
+      },
+    ],
+    [
+      'publicando uma porta no host',
+      (s) => {
+        s.ports = ['3000:3000'];
+      },
+    ],
+    [
+      'com a URL publicada no host',
+      (s) => {
+        swapArg(s, 'http://api:3000', 'http://localhost:3000');
+      },
+    ],
+    [
+      'com a URL da API sem a porta',
+      (s) => {
+        swapArg(s, 'http://api:3000', 'http://api');
+      },
+    ],
+    [
+      'com uma checagem a menos',
+      (s) => {
+        swapArg(s, FUZZ_CHECKS.join(','), FUZZ_CHECKS.slice(1).join(','));
+      },
+    ],
+    [
+      'sem a negative_data_rejection',
+      (s) => {
+        swapArg(s, FUZZ_CHECKS.join(','), FUZZ_CHECKS.slice(0, 5).join(','));
+      },
+    ],
+    [
+      'com uma checagem a mais',
+      (s) => {
+        swapArg(
+          s,
+          FUZZ_CHECKS.join(','),
+          [...FUZZ_CHECKS, 'ignored_auth'].join(','),
+        );
+      },
+    ],
+    [
+      'com --checks all',
+      (s) => {
+        swapArg(s, FUZZ_CHECKS.join(','), 'all');
+      },
+    ],
+    [
+      'com a semente fixa, sem vir do ambiente',
+      (s) => {
+        swapArg(s, '${FUZZ_SEED:-20261101}', '20261101');
+      },
+    ],
+    [
+      'com outro padrão de semente',
+      (s) => {
+        swapArg(s, '${FUZZ_SEED:-20261101}', '${FUZZ_SEED:-1}');
+      },
+    ],
+    [
+      'com o número de exemplos fixo',
+      (s) => {
+        swapArg(s, '${FUZZ_MAX_EXAMPLES:-50}', '50');
+      },
+    ],
+    [
+      'com outro padrão de exemplos',
+      (s) => {
+        swapArg(s, '${FUZZ_MAX_EXAMPLES:-50}', '${FUZZ_MAX_EXAMPLES:-5}');
+      },
+    ],
+    [
+      'sem o relatório junit',
+      (s) => {
+        swapArg(s, 'junit', 'cassettes');
+      },
+    ],
+    [
+      'com o relatório fora de /reports',
+      (s) => {
+        swapArg(s, '/reports', '/tmp/reports');
+      },
+    ],
+    [
+      'sem o subcomando run',
+      (s) => {
+        swapArg(s, 'run', 'test');
+      },
+    ],
+    [
+      'lendo outro arquivo de contrato',
+      (s) => {
+        swapArg(s, '/schema/openapi.yaml', '/openapi.yaml');
+      },
+    ],
+    [
+      'com o command em texto',
+      (s) => {
+        s.command = 'run /schema/openapi.yaml --url http://api:3000';
+      },
+    ],
+  ])('FND-16 o serviço %s reprova', (_label, change) => {
+    expect(fuzzServiceViolations(fuzzed(change))).not.toEqual([]);
+  });
+
+  it('FND-16 outro serviço com perfil também reprova: o docker compose up deixaria de subir tudo', () => {
+    const compose = goodFuzzCompose();
+    const api = compose.services?.['api'];
+    if (api !== undefined) api.profiles = ['fuzz'];
+
+    expect(profiledOthers(compose)).toEqual(['api']);
+  });
+});
+
+describe('FND-16 o serviço schemathesis do compose.yaml', () => {
+  const compose = parse(
+    readFileSync(join(root, 'compose.yaml'), 'utf8'),
+  ) as ComposeFile;
+
+  it('FND-16 usa o perfil fuzz, a imagem oficial por versão e digest, a API saudável, o contrato só para leitura e a rede do compose', () => {
+    expect(fuzzServiceViolations(compose)).toEqual([]);
+  });
+
+  it('FND-16 só o schemathesis tem perfil: o docker compose up sem perfil sobe os demais serviços e deixa o fuzzing de fora', () => {
+    expect(compose.services?.['schemathesis']?.profiles).toEqual(['fuzz']);
+    expect(profiledOthers(compose)).toEqual([]);
   });
 });

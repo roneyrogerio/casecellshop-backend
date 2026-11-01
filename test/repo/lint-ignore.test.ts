@@ -1,10 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs, writeFileIn } from '../helpers/git-sandbox.ts';
 import { newLintTree, oxlintBin } from '../helpers/lint-tree.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
+import { runCommand } from '../helpers/run-node.ts';
 
 // AI-48: o lint lê os arquivos ignorados só do .gitignore (`oxlint --ignore-path .gitignore`). O .eslintignore, que o
 // oxlint leria por padrão, não pode calar o lint: a guarda o nega ao implementer (AI-04), e mesmo assim o script
@@ -30,7 +30,7 @@ function lintTree(eslintignore: string | null, args: string[]): Run {
   // Um arquivo limpo fora de src/: sem ele, o controle com tudo ignorado sairia com "nenhum arquivo para o lint".
   writeFileIn(tree, 'lib/ok.ts', 'export const ok = 1;\n');
   if (eslintignore !== null) writeFileIn(tree, '.eslintignore', eslintignore);
-  const result = spawnSync(oxlintBin, args, { cwd: tree, encoding: 'utf8' });
+  const result = runCommand(oxlintBin, args, { cwd: tree });
   return { status: result.status, output: result.stdout + result.stderr };
 }
 

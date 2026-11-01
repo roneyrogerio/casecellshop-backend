@@ -14,6 +14,7 @@ import { logContext } from '../../src/shared/logging.ts';
 import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import { expectMatchesContract } from './contract.ts';
 import type { TestDatabase } from './database.ts';
+import { createTestPool } from './pool.ts';
 
 // Tamanho fixo do pool da API nos testes de concorrência, o mesmo de produção (design.md, "Parâmetros").
 export const APP_POOL_SIZE = 10;
@@ -45,15 +46,12 @@ export function createAppPool(
   max: number = APP_POOL_SIZE,
   limits: PoolLimits = {},
 ): pg.Pool {
-  const pool = new pg.Pool({
-    connectionString: uri,
+  return createTestPool(uri, {
     max,
     connectionTimeoutMillis: 15_000,
     statement_timeout: limits.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS,
     lock_timeout: limits.lockTimeoutMs ?? LOCK_TIMEOUT_MS,
   });
-  pool.on('error', () => undefined);
-  return pool;
 }
 
 export interface CheckoutHarness {
@@ -67,12 +65,19 @@ export interface CheckoutHarness {
   close(): Promise<void>;
 }
 
+export interface HarnessOptions {
+  // Troca o pool que o app recebe (o harness continua dono, e fecha, o pool original). É o ponto de
+  // injeção do controle negativo do CHK-02: a rota real, com a reserva ingênua no limite do pool.
+  decoratePool?: (pool: pg.Pool) => pg.Pool;
+}
+
 // Monta o app como o main/api.ts, com o logger do mesmo formato (nível em texto e correlationId
 // pelo AsyncLocalStorage) escrevendo em memória e os spans no exportador em memória.
 export async function startCheckoutHarness(
   database: TestDatabase,
   poolSize: number = APP_POOL_SIZE,
   limits: PoolLimits = {},
+  options: HarnessOptions = {},
 ): Promise<CheckoutHarness> {
   const logLines: Record<string, unknown>[] = [];
   const sink = new Writable({
@@ -102,7 +107,11 @@ export async function startCheckoutHarness(
   const exporter = new InMemorySpanExporter();
   const telemetry = createTelemetry({ spanExporter: exporter });
   const pool = createAppPool(database.uri, poolSize, limits);
-  const app = createApp({ pool, logger, telemetry });
+  const app = createApp({
+    pool: options.decoratePool?.(pool) ?? pool,
+    logger,
+    telemetry,
+  });
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 

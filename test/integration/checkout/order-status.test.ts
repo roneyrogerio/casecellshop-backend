@@ -13,6 +13,7 @@ import {
 } from '../../../src/contract/index.ts';
 import { createLogger } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import {
   startMigratedDatabase,
@@ -275,15 +276,18 @@ describe('CHK-11 defeito do código no status do pedido responde 500; a falha do
       expect(res.text).not.toContain(detail);
       expect(res.text).not.toMatch(/TypeError|stack/);
 
-      await vi.waitFor(() => {
-        const unhandled = logLines.filter(
-          (line) =>
-            line['event'] === 'unhandled_error' &&
-            line['correlationId'] === correlationId,
-        );
-        expect(unhandled).toHaveLength(1);
-        expect(unhandled[0]?.['level']).toBe('error');
-      });
+      await vi.waitFor(
+        () => {
+          const unhandled = logLines.filter(
+            (line) =>
+              line['event'] === 'unhandled_error' &&
+              line['correlationId'] === correlationId,
+          );
+          expect(unhandled).toHaveLength(1);
+          expect(unhandled[0]?.['level']).toBe('error');
+        },
+        { timeout: WAIT_GUARD_MS },
+      );
       // O defeito não é a indisponibilidade do banco: o evento de 503 não sai.
       expect(
         logLines.filter(
@@ -350,17 +354,20 @@ describe('OBS-01 orderId no log do status', () => {
     expect(res.status).toBe(200);
 
     // O log sai no fim da resposta, que pode correr um instante depois de o cliente ler o corpo.
-    await vi.waitFor(() => {
-      const entry = logLines.find(
-        (line) =>
-          line['event'] === 'http_request' &&
-          line['correlationId'] === correlationId,
-      );
-      expect(entry).toBeDefined();
-      expect(entry?.['orderId']).toBe(orderId);
-      expect(entry?.['status']).toBe(200);
-      expect(entry?.['route']).toBe('/orders/{orderId}/status');
-    });
+    await vi.waitFor(
+      () => {
+        const entry = logLines.find(
+          (line) =>
+            line['event'] === 'http_request' &&
+            line['correlationId'] === correlationId,
+        );
+        expect(entry).toBeDefined();
+        expect(entry?.['orderId']).toBe(orderId);
+        expect(entry?.['status']).toBe(200);
+        expect(entry?.['route']).toBe('/orders/{orderId}/status');
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 
   it('OBS-01 o orderId do log é o do pedido consultado, não o de outro', async () => {
@@ -376,14 +383,17 @@ describe('OBS-01 orderId no log do status', () => {
       .get(`/orders/${second}/status`)
       .set('X-Request-Id', secondCorrelation);
 
-    await vi.waitFor(() => {
-      const byCorrelation = (id: string) =>
-        logLines.find(
-          (line) =>
-            line['event'] === 'http_request' && line['correlationId'] === id,
-        );
-      expect(byCorrelation(firstCorrelation)?.['orderId']).toBe(first);
-      expect(byCorrelation(secondCorrelation)?.['orderId']).toBe(second);
-    });
+    await vi.waitFor(
+      () => {
+        const byCorrelation = (id: string) =>
+          logLines.find(
+            (line) =>
+              line['event'] === 'http_request' && line['correlationId'] === id,
+          );
+        expect(byCorrelation(firstCorrelation)?.['orderId']).toBe(first);
+        expect(byCorrelation(secondCorrelation)?.['orderId']).toBe(second);
+      },
+      { timeout: WAIT_GUARD_MS },
+    );
   });
 });

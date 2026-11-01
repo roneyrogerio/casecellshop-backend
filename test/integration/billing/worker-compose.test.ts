@@ -1,12 +1,5 @@
-import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-import {
-  DockerComposeEnvironment,
-  type StartedDockerComposeEnvironment,
-} from 'testcontainers';
+import type { StartedDockerComposeEnvironment } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CheckoutAccepted, OrderStatus } from '../../../src/contract/index.ts';
 import {
@@ -15,13 +8,16 @@ import {
   observeFetchResponse,
   type ObservedResponse,
 } from '../../helpers/contract.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
+import {
+  publishedPort,
+  runCompose,
+  upComposeProject,
+} from '../../helpers/compose.ts';
 import { parseExposition, valueOf } from '../../helpers/metrics.ts';
 import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
 // ORD-19 no sistema subido pelo `docker compose`: um checkout chega a invoiced pelo worker.
-
-const root = fileURLToPath(new URL('../../..', import.meta.url));
-const execFileAsync = promisify(execFile);
 
 // Credenciais locais do compose.yaml.
 const DB_USER = 'casecellshop';
@@ -37,36 +33,11 @@ const METRICS_PRICE_CENTS = 2990;
 
 let environment: StartedDockerComposeEnvironment;
 let projectName: string;
+// Lida do Docker depois do `up`: a porta do host é escolhida por ele (API_PORT=0), sem janela de corrida.
 let apiPort: number;
-let jaegerUiPort: number;
 
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function composeCli(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync(
-    'docker',
-    ['compose', '-p', projectName, '-f', 'compose.yaml', ...args],
-    {
-      cwd: root,
-      env: {
-        ...process.env,
-        API_PORT: String(apiPort),
-        JAEGER_UI_PORT: String(jaegerUiPort),
-      },
-      maxBuffer: 32 * 1024 * 1024,
-    },
-  );
-  return `${stdout}${stderr}`;
+function composeCli(args: string[]): Promise<string> {
+  return runCompose(projectName, args);
 }
 
 async function collectServiceLogs(): Promise<string> {
@@ -111,30 +82,13 @@ async function psql(sql: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  apiPort = await freePort();
-  jaegerUiPort = await freePort();
   projectName = `ccs-ord19-${randomBytes(4).toString('hex')}`;
-  try {
-    environment = await new DockerComposeEnvironment(root, 'compose.yaml')
-      .withProjectName(projectName)
-      .withEnvironment({
-        API_PORT: String(apiPort),
-        JAEGER_UI_PORT: String(jaegerUiPort),
-      })
-      .withBuild()
-      .withStartupTimeout(240_000)
-      .up();
-  } catch (error) {
-    const logs = await collectServiceLogs();
-    await composeCli(['down', '--volumes', '--timeout', '5']).catch(
-      () => undefined,
-    );
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `${reason}\n\n--- logs dos serviços (migrate, postgres, api, worker; últimas 200 linhas) ---\n${logs}`,
-      { cause: error },
-    );
-  }
+  environment = await upComposeProject(
+    projectName,
+    'logs dos serviços (migrate, postgres, api, worker; últimas 200 linhas)',
+    collectServiceLogs,
+  );
+  apiPort = publishedPort(environment, 'api-1', 3000);
   for (const [sku, name, price] of [
     [SKU, 'Capa Moto G84 antichoque', PRICE_CENTS],
     [METRICS_SKU, 'Cabo USB-C de 1 m', METRICS_PRICE_CENTS],
@@ -195,7 +149,7 @@ async function awaitInvoiced(orderId: string): Promise<void> {
         status: 'invoiced',
       });
     },
-    { timeout: 90_000, interval: 500 },
+    { timeout: 2 * WAIT_GUARD_MS, interval: 500 },
   );
 }
 
@@ -245,7 +199,7 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
           notVisible: 0,
         });
       },
-      { timeout: 30_000, interval: 500 },
+      { timeout: WAIT_GUARD_MS, interval: 500 },
     );
   }, 120_000);
 

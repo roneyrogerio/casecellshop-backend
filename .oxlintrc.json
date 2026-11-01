@@ -1,7 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "oxc", "unicorn", "vitest", "import", "node"],
-  "jsPlugins": ["./scripts/lint-rules/kysely.ts"],
+  "jsPlugins": [
+    "./scripts/lint-rules/kysely.ts",
+    "./scripts/lint-rules/test-waits.ts"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -35,7 +38,11 @@
     "typescript/unbound-method": "error",
     "typescript/ban-ts-comment": [
       "error",
-      { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }
+      {
+        "ts-expect-error": true,
+        "ts-ignore": true,
+        "ts-nocheck": true
+      }
     ],
     "typescript/no-array-constructor": "error",
     "typescript/no-duplicate-enum-values": "error",
@@ -430,6 +437,160 @@
         "kysely/no-sql-command": "off",
         "kysely/no-sql-column": "off",
         "kysely/no-direct-query": "off"
+      }
+    },
+    {
+      "files": ["test/integration/**/*.ts", "test/helpers/**/*.ts"],
+      "rules": {
+        "test-waits/no-fixed-step": "error",
+        "test-waits/wait-guard": "error",
+        "test-waits/no-port-before-up": "error"
+      }
+    },
+    {
+      "files": ["test/integration/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer", "default"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/helpers/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer", "default"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              },
+              {
+                "name": "node:child_process",
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/repo/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "test/helpers/compose.ts",
+        "test/helpers/elasticmq-container.ts",
+        "test/helpers/migration-database.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:child_process",
+                "importNames": [
+                  "spawnSync",
+                  "execSync",
+                  "execFileSync",
+                  "default"
+                ],
+                "message": "Processo filho dos testes passa pelo runCommand de test/helpers/run-node.ts, que sempre leva timeout (FND-13)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["test/helpers/run-node.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@testcontainers/postgresql",
+                "importNames": ["PostgreSqlContainer", "default"],
+                "message": "O PostgreSQL dos testes é o da rodada (test/integration/global-setup.ts); cada arquivo clona o próprio banco pelo startMigratedDatabase (FND-14)."
+              },
+              {
+                "name": "testcontainers",
+                "importNames": [
+                  "GenericContainer",
+                  "DockerComposeEnvironment",
+                  "default"
+                ],
+                "message": "Os contêineres dos testes sobem por rodada no globalSetup, e o compose pelo upComposeProject (FND-14)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "test/integration/global-setup.ts",
+        "test/integration/foundation/container-shutdown.test.ts",
+        "test/integration/foundation/api-fuzz-negative-control.test.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
       }
     }
   ]

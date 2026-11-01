@@ -1,13 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // Limites do FND-06 para cada regra de .claude/rules/.
 const MAX_RULE_LINES = 200;

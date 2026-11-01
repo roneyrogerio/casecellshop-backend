@@ -1,13 +1,13 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CheckoutAccepted, Problem } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   APP_POOL_SIZE,
   checkoutBody,
   countKeyRows,
   countOrdersWithSku,
   countOutboxWithSku,
-  createAppPool,
   footprint,
   header,
   line,
@@ -110,51 +110,119 @@ describe('CHK-01 reserva atômica sob concorrência', () => {
   });
 });
 
-describe('CHK-02 controle negativo da reserva', () => {
-  // Repositório ingênuo: lê o disponível, espera todos lerem (a janela forçada) e grava sem condição.
-  async function naiveReserve(
-    pool: pg.Pool,
-    sku: string,
-    quantity: number,
-    barrier: { arrive(): Promise<void> },
-  ): Promise<boolean> {
-    const read = await pool.query<{ available: number }>(
+// Reserva ingênua no limite do pool, para a rota real do checkout (CHK-02). O UPDATE condicional da reserva
+// (`reserved + $1 ... where sku = $2 and on_hand - reserved >= $3`) é trocado por: ler o disponível, esperar na
+// barreira (a janela forçada) e gravar sem condição. Todas as consultas rodam no PostgreSQL real, sobre a mesma
+// conexão e a mesma transação da rota; só o texto da reserva muda. Sem disponível, a consulta original segue e
+// a rota devolve o 409 de sempre.
+const RESERVE_UPDATE =
+  /^\s*update "inventory" set "reserved" = "reserved" \+ \$1 where "sku" = \$2 /i;
+
+type RawQuery = (...args: unknown[]) => Promise<pg.QueryResult>;
+
+interface NaiveStats {
+  // Quantas reservas passaram pela versão ingênua: prova que a injeção disparou.
+  intercepted: number;
+}
+
+function makeNaive(
+  client: pg.PoolClient,
+  barrier: { arrive(): Promise<void> },
+  stats: NaiveStats,
+): pg.PoolClient {
+  const raw = client as unknown as { query: RawQuery };
+  const original = raw.query.bind(client);
+  raw.query = async (...args) => {
+    const [text, values] = args;
+    if (typeof text !== 'string' || !RESERVE_UPDATE.test(text))
+      return original(...args);
+    const [quantity, sku] = values as [number, string];
+    const read = await original(
       'select on_hand - reserved as available from inventory where sku = $1',
       [sku],
     );
-    if ((read.rows[0]?.available ?? 0) < quantity) return false;
+    const available = (read.rows[0] as { available: number } | undefined)
+      ?.available;
+    if ((available ?? 0) < quantity) return original(...args);
+    stats.intercepted += 1;
     await barrier.arrive();
-    await pool.query(
+    return original(
       'update inventory set reserved = reserved + $2 where sku = $1',
       [sku, quantity],
     );
-    return true;
-  }
+  };
+  return client;
+}
 
-  it('CHK-02 a versão ingênua, com a janela forçada entre ler e gravar, vende além do estoque no mesmo cenário do CHK-01', async () => {
+function withNaiveReservation(
+  pool: pg.Pool,
+  barrier: { arrive(): Promise<void> },
+  stats: NaiveStats,
+): pg.Pool {
+  const patched = new WeakSet<pg.PoolClient>();
+  return new Proxy(pool, {
+    get(target, property) {
+      if (property === 'connect') {
+        return async () => {
+          const client = await target.connect();
+          if (patched.has(client)) return client;
+          patched.add(client);
+          return makeNaive(client, barrier, stats);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
+describe('CHK-02 controle negativo da reserva', () => {
+  it('CHK-02 a versão ingênua, com a janela forçada entre ler e gravar, vende além do estoque pela rota POST /checkout, no mesmo cenário do CHK-01', async () => {
     const product = await seedProduct(database.pool, {
       priceCents: 1990,
       onHand: STOCK,
     });
-    const naivePool = createAppPool(database.uri, APP_POOL_SIZE);
+    // A janela cabe no pool: cada requisição segura a conexão até a barreira abrir, então a barreira
+    // espera tantas requisições quantas conexões há (APP_POOL_SIZE) e as demais entram depois.
+    const barrier = createBarrier(APP_POOL_SIZE);
+    const stats: NaiveStats = { intercepted: 0 };
+    // Os limites pacientes (FND-13): com o lock_timeout de produção (2 s), as 50 requisições sobre 10 conexões
+    // estouravam o prazo do banco numa máquina carregada, e a venda além do estoque medida não vinha da janela.
+    const naive = await startCheckoutHarness(
+      database,
+      APP_POOL_SIZE,
+      PATIENT_LIMITS,
+      {
+        decoratePool: (pool) => withNaiveReservation(pool, barrier, stats),
+      },
+    );
     try {
-      const barrier = createBarrier(SIMULTANEOUS);
+      expect(naive.pool.options).toMatchObject({
+        lock_timeout: PATIENT_LOCK_TIMEOUT_MS,
+      });
 
-      const outcomes = await Promise.all(
+      const responses = await Promise.all(
         Array.from({ length: SIMULTANEOUS }, () =>
-          naiveReserve(naivePool, product.sku, 1, barrier),
+          postCheckout(naive.server, checkoutBody(line(product))),
         ),
       );
 
-      const sold = outcomes.filter(Boolean).length;
+      // A injeção disparou: ao menos as requisições que seguraram a conexão até a barreira.
+      expect(stats.intercepted).toBeGreaterThanOrEqual(APP_POOL_SIZE);
+      const accepted = responses.filter((res) => res.status === 202);
       const inventory = await readInventory(database.pool, product.sku);
-      // Todos leram 5 disponíveis antes de qualquer gravação: a ingênua aceita mais do que há.
-      expect(sold).toBeGreaterThan(STOCK);
+      // As primeiras leram 5 disponíveis antes de qualquer gravação: a ingênua aceita mais do que há.
+      expect(accepted.length).toBeGreaterThan(STOCK);
+      expect(
+        await countOrdersWithSku(database.pool, product.sku),
+      ).toBeGreaterThan(STOCK);
       expect(inventory.reserved).toBeGreaterThan(inventory.onHand);
       // A mesma conferência que o CHK-01 exige vazia acusa a violação.
       expect(stockViolations(inventory)).not.toEqual([]);
     } finally {
-      await naivePool.end();
+      await naive.close();
     }
   });
 });
@@ -307,6 +375,28 @@ async function waitingOnLock(excludePid: number): Promise<number> {
   return result.rows[0]?.n ?? 0;
 }
 
+// Dispara o checkout e espera por condição que ele esteja de fato parado num lock do banco, segurado pelo teste.
+async function startCheckoutBlockedOnLock(
+  product: Parameters<typeof line>[0],
+  key: string,
+  holderPid: number,
+) {
+  const startedAt = Date.now();
+  const pending = postCheckout(
+    productionHarness.server,
+    checkoutBody(line(product)),
+    { key },
+  );
+  // Se o teste falhar antes do await, a promessa solta não pode virar rejeição sem dono.
+  void pending.catch(() => undefined);
+  await vi.waitFor(
+    async () =>
+      expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
+    { timeout: WAIT_GUARD_MS, interval: 50 },
+  );
+  return { pending, startedAt };
+}
+
 async function backendPid(client: pg.Client): Promise<number> {
   const result = await client.query<{ pid: number }>(
     'select pg_backend_pid() as pid',
@@ -331,19 +421,10 @@ describe('CHK-08 lock_timeout', () => {
       ]);
       const holderPid = await backendPid(holder);
 
-      const startedAt = Date.now();
-      const pending = postCheckout(
-        productionHarness.server,
-        checkoutBody(line(product)),
-        { key },
-      );
-      // Se o teste falhar antes do await, a promessa solta não pode virar rejeição sem dono.
-      void pending.catch(() => undefined);
-      // Espera por condição: o checkout está de fato parado num lock do banco.
-      await vi.waitFor(
-        async () =>
-          expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
-        { timeout: 5_000, interval: 50 },
+      const { pending, startedAt } = await startCheckoutBlockedOnLock(
+        product,
+        key,
+        holderPid,
       );
 
       const res = await pending;
@@ -394,17 +475,10 @@ describe('CHK-08 lock_timeout', () => {
       // O que a transação do teste ainda não confirmou não aparece para os outros.
       before = await footprint(database.pool);
 
-      const startedAt = Date.now();
-      const pending = postCheckout(
-        productionHarness.server,
-        checkoutBody(line(product)),
-        { key },
-      );
-      void pending.catch(() => undefined);
-      await vi.waitFor(
-        async () =>
-          expect(await waitingOnLock(holderPid)).toBeGreaterThanOrEqual(1),
-        { timeout: 5_000, interval: 50 },
+      const { pending, startedAt } = await startCheckoutBlockedOnLock(
+        product,
+        key,
+        holderPid,
       );
 
       const res = await pending;

@@ -1,10 +1,11 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { repoRoot } from '../helpers/repo-root.ts';
 
 // AI-40: na raiz de src/ só fica o app.ts; todo outro arquivo vai na pasta da capacidade ou da fronteira que serve
 // (AD-025). A função que decide recebe os nomes que estão na raiz e devolve os que sobram.
-const srcDir = join(import.meta.dirname, '..', '..', 'src');
+const srcDir = join(repoRoot, 'src');
 const ALLOWED_ROOT_FILES = ['app.ts'];
 
 function strayRootFiles(rootFiles: string[]): string[] {

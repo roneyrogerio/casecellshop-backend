@@ -1,7 +1,9 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-// Sem globalSetup: cada teste de integração sobe o próprio contêiner,
-// para que as pastas rodem isoladas e em qualquer ordem.
+// O projeto integration sobe um PostgreSQL e um ElasticMQ por rodada, no
+// globalSetup; cada arquivo clona o próprio banco do modelo migrado e usa
+// filas com prefixo próprio, então as pastas seguem isoladas e em qualquer
+// ordem (FND-14).
 export default defineConfig({
   test: {
     // AI-37: só vale com --coverage, que o CI passa na perna do .nvmrc. Os
@@ -31,6 +33,13 @@ export default defineConfig({
             'test/integration/**',
             '.claude/worktrees/**',
           ],
+          // AI-52: o unit roda antes do integration, na mesma execução e no
+          // mesmo relatório. Os testes de hooks abrem centenas de processos git
+          // e node, e não disputam a CPU com os prazos da integração (FND-13).
+          sequence: { groupOrder: 1 },
+          // FND-15: a semente e o número de casos do fast-check, fixos no PR e
+          // vindos do ambiente no agendado.
+          setupFiles: ['./test/helpers/property-setup.ts'],
         },
       },
       {
@@ -39,6 +48,12 @@ export default defineConfig({
           include: ['test/integration/**/*.test.ts'],
           testTimeout: 60_000,
           hookTimeout: 120_000,
+          sequence: { groupOrder: 2 },
+          globalSetup: ['./test/integration/global-setup.ts'],
+          // Com um contêiner por arquivo, mais de 4 arquivos ao mesmo tempo
+          // derrubaram um banco no Docker de 4 CPUs e 6 GB (FND-13). Com os
+          // contêineres da rodada (FND-14), o limite é revisto pela medição.
+          maxWorkers: 4,
         },
       },
     ],

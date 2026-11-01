@@ -15,7 +15,7 @@ import {
   createTelemetry,
   type Telemetry,
 } from '../../../src/shared/telemetry.ts';
-import { settle } from '../../helpers/async.ts';
+import { settle, WAIT_GUARD_MS, waitAdvancing } from '../../helpers/async.ts';
 import { readInventory } from '../../helpers/checkout.ts';
 import {
   buildReconciler,
@@ -44,6 +44,7 @@ import {
   readOutbox,
   startWorkerSuite,
   submitOrder,
+  untilInvoiced,
   waitForDlq,
   createGate,
   type AcceptedOrder,
@@ -452,27 +453,23 @@ describe('ORD-14 o laço da reconciliação', () => {
 
     void rig.reconciler.start();
     try {
-      await vi.waitFor(
-        async () => {
-          world.clock.advance(1_000);
-          expect((await readOrder(suite.pool, order.orderId)).status).toBe(
-            'invoiced',
-          );
-          const summaries = rig.logs
-            .eventsOf('outbox.reconciled')
-            .filter((line) => line['invoiced'] === 1);
-          expect(summaries).toHaveLength(1);
-          expect(summaries[0]).toMatchObject({
-            level: 'info',
-            seen: 1,
-            invoiced: 1,
-            closed: 0,
-          });
-        },
-        { timeout: 20_000, interval: 25 },
-      );
+      await waitAdvancing(world.advanceIdle, async () => {
+        expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+          'invoiced',
+        );
+        const summaries = rig.logs
+          .eventsOf('outbox.reconciled')
+          .filter((line) => line['invoiced'] === 1);
+        expect(summaries).toHaveLength(1);
+        expect(summaries[0]).toMatchObject({
+          level: 'info',
+          seen: 1,
+          invoiced: 1,
+          closed: 0,
+        });
+      });
     } finally {
-      await driveClock(rig.reconciler.stop(), world.clock);
+      await driveClock(rig.reconciler.stop(), world);
     }
 
     expect(rig.sleeps).toContain(1_000);
@@ -487,10 +484,10 @@ describe('ORD-14 o laço da reconciliação', () => {
     try {
       await vi.waitFor(
         () => expect(rig.sleeps.length).toBeGreaterThanOrEqual(1),
-        { timeout: 20_000, interval: 25 },
+        { timeout: WAIT_GUARD_MS, interval: 25 },
       );
     } finally {
-      await driveClock(rig.reconciler.stop(), world.clock, 60_000);
+      await driveClock(rig.reconciler.stop(), world);
     }
 
     expect(rig.sleeps).toContain(300_000);
@@ -505,17 +502,9 @@ describe('ORD-14 o laço da reconciliação', () => {
 
     void rig.reconciler.start();
     try {
-      await vi.waitFor(
-        async () => {
-          world.clock.advance(1_000);
-          expect((await readOrder(suite.pool, order.orderId)).status).toBe(
-            'invoiced',
-          );
-        },
-        { timeout: 20_000, interval: 25 },
-      );
+      await untilInvoiced(world, order.orderId);
     } finally {
-      await driveClock(rig.reconciler.stop(), world.clock);
+      await driveClock(rig.reconciler.stop(), world);
     }
 
     expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
@@ -531,14 +520,10 @@ describe('ORD-14 o laço da reconciliação', () => {
     await seedDead(rig, [{}]);
 
     void rig.reconciler.start();
-    await vi.waitFor(
-      () => {
-        world.clock.advance(1_000);
-        expect(rig.dlq.receives.length).toBeGreaterThanOrEqual(1);
-      },
-      { timeout: 20_000, interval: 25 },
-    );
-    await driveClock(rig.reconciler.stop(), world.clock);
+    await waitAdvancing(world.advanceIdle, () => {
+      expect(rig.dlq.receives.length).toBeGreaterThanOrEqual(1);
+    });
+    await driveClock(rig.reconciler.stop(), world);
     const receivesAtStop = rig.dlq.receives.length;
 
     for (let tick = 0; tick < 5; tick += 1) {
@@ -549,6 +534,30 @@ describe('ORD-14 o laço da reconciliação', () => {
     expect(rig.dlq.receives).toHaveLength(receivesAtStop);
   });
 });
+
+// Redrive da mensagem do pedido para a fila de origem; o worker a recebe com o ERP fora, toma a permissão (o que
+// zera o dead_at) e a mensagem volta à DLQ pelo limite de recebimentos, pronta para a reconciliação ver de novo.
+async function redriveAndDieAgain(rig: Rig, orderId: string): Promise<void> {
+  const { world } = rig;
+  await releaseFromDlq(world, rig.dlq, orderId);
+  await startRedrive(world.queues.client, world.queues.dlqUrl);
+  await vi.waitFor(
+    async () => expect(await world.queues.queue.approximateCount()).toBe(1),
+    { timeout: WAIT_GUARD_MS, interval: 50 },
+  );
+  world.sim.script.setDefault({ mode: 'unavailable' });
+  await ageLastCall(suite.pool, orderId);
+  const worker = buildWorker(world);
+  expect(await worker.pollOnce()).toBe(1);
+  expect(
+    (await readOutbox(suite.pool, orderId)).deadAt,
+    'a permissão do worker zera o dead_at',
+  ).toBeNull();
+  await makeClaimable(world, orderId);
+  expect(await worker.pollOnce()).toBe(0);
+  await waitForDlq(world, 1);
+  await ageLastCall(suite.pool, orderId);
+}
 
 interface InterruptedRound {
   inFlight: AcceptedOrder;
@@ -716,25 +725,7 @@ describe('OBS-01 outbox.dead, uma vez por chegada da mensagem à DLQ', () => {
     expect(again.seen, 'a mesma mensagem foi vista na segunda rodada').toBe(1);
     expect(rig.logs.eventsOf('outbox.dead', id)).toHaveLength(1);
 
-    // Redrive; o worker toma a permissão (o que zera o dead_at) e o ERP segue fora, até a DLQ de novo.
-    await releaseFromDlq(world, rig.dlq, id);
-    await startRedrive(world.queues.client, world.queues.dlqUrl);
-    await vi.waitFor(
-      async () => expect(await world.queues.queue.approximateCount()).toBe(1),
-      { timeout: 20_000, interval: 50 },
-    );
-    world.sim.script.setDefault({ mode: 'unavailable' });
-    await ageLastCall(suite.pool, id);
-    const worker = buildWorker(world);
-    expect(await worker.pollOnce()).toBe(1);
-    expect(
-      (await readOutbox(suite.pool, id)).deadAt,
-      'a permissão do worker zera o dead_at',
-    ).toBeNull();
-    await makeClaimable(world, id);
-    expect(await worker.pollOnce()).toBe(0);
-    await waitForDlq(world, 1);
-    await ageLastCall(suite.pool, id);
+    await redriveAndDieAgain(rig, id);
 
     await rig.reconciler.reconcileOnce();
 
@@ -825,27 +816,13 @@ describe('OBS-02 dead em outbox_attempt_outcome_total', () => {
 
   it('OBS-02 depois de um redrive e de a permissão do worker zerar o dead_at, a nova chegada à DLQ soma dead de novo', async () => {
     const rig = await createRig();
-    const { world } = rig;
     const [order] = await seedDead(rig, [{}]);
     if (!order) throw new Error('pedido não semeado');
     const id = order.orderId;
     await rig.reconciler.reconcileOnce();
     expect(await outcomeCount(rig, 'dead')).toBe(1);
 
-    await releaseFromDlq(world, rig.dlq, id);
-    await startRedrive(world.queues.client, world.queues.dlqUrl);
-    await vi.waitFor(
-      async () => expect(await world.queues.queue.approximateCount()).toBe(1),
-      { timeout: 20_000, interval: 50 },
-    );
-    world.sim.script.setDefault({ mode: 'unavailable' });
-    await ageLastCall(suite.pool, id);
-    const worker = buildWorker(world);
-    expect(await worker.pollOnce()).toBe(1);
-    await makeClaimable(world, id);
-    expect(await worker.pollOnce()).toBe(0);
-    await waitForDlq(world, 1);
-    await ageLastCall(suite.pool, id);
+    await redriveAndDieAgain(rig, id);
 
     await rig.reconciler.reconcileOnce();
 

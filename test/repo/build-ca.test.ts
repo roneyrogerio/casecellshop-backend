@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
-const root = join(import.meta.dirname, '..', '..');
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
 
 // Divide o Dockerfile em estágios, cada um começando no seu FROM.

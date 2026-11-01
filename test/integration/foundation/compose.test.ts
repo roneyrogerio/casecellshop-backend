@@ -1,10 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
-  DockerComposeEnvironment,
   getContainerRuntimeClient,
   type StartedDockerComposeEnvironment,
 } from 'testcontainers';
@@ -19,30 +16,24 @@ import {
   vi,
 } from 'vitest';
 import { HealthStatus } from '../../../src/contract/index.ts';
+import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   expectMatchesContract,
   findRoute,
   observeFetchResponse,
 } from '../../helpers/contract.ts';
-
-const root = fileURLToPath(new URL('../../..', import.meta.url));
+import {
+  EPHEMERAL_PORT_ENV,
+  publishedPort,
+  runCompose,
+  upComposeProject,
+} from '../../helpers/compose.ts';
+import { repoRoot as root } from '../../helpers/repo-root.ts';
 
 let environment: StartedDockerComposeEnvironment;
 let projectName: string;
+// Lida do Docker depois do `up`: a porta do host é escolhida por ele (API_PORT=0), sem janela de corrida.
 let apiPort: number;
-let jaegerUiPort: number;
-
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 type ComposeContainer = ReturnType<
   StartedDockerComposeEnvironment['getContainer']
@@ -55,20 +46,20 @@ async function inspect(container: ComposeContainer) {
 
 // Espera, com prazo e intervalo curto, o serviço estar em execução. Confere o estado no Docker a cada
 // tentativa, sem pausa fixa: termina assim que o contêiner sobe e falha com o nome do serviço se o prazo acaba.
-const WAIT_TIMEOUT_MS = 60_000;
+// O prazo é o WAIT_GUARD_MS (FND-13): serve só para a espera não ser eterna.
 
 // O prazo do onTestFinished do restart cobre as duas esperas em sequência (elasticmq e worker), cada uma com o
 // prazo padrão, mais a folga de inspecionar e ligar o contêiner antes de cada espera. Igual à soma, ele cortaria a
 // restauração no pior caso e deixaria o ambiente parado para os testes seguintes do arquivo embaralhado.
-const RESTORE_TIMEOUT_MS = 2 * WAIT_TIMEOUT_MS + 30_000;
+const RESTORE_TIMEOUT_MS = 2 * WAIT_GUARD_MS + 30_000;
 
-async function waitUntilRunning(service: string, timeout = WAIT_TIMEOUT_MS) {
+async function waitUntilRunning(service: string) {
   await vi.waitFor(
     async () => {
       const { State } = await inspect(environment.getContainer(service));
       expect(State.Running, `${service} deveria estar rodando`).toBe(true);
     },
-    { timeout, interval: 250 },
+    { timeout: WAIT_GUARD_MS, interval: 250 },
   );
 }
 
@@ -106,21 +97,8 @@ async function inspectOneShot(service: string) {
 const execFileAsync = promisify(execFile);
 
 // Mesmo projeto, arquivo e variáveis do up, para o CLI achar os contêineres do teste.
-async function composeCli(args: string[]): Promise<string> {
-  const { stdout, stderr } = await execFileAsync(
-    'docker',
-    ['compose', '-p', projectName, '-f', 'compose.yaml', ...args],
-    {
-      cwd: root,
-      env: {
-        ...process.env,
-        API_PORT: String(apiPort),
-        JAEGER_UI_PORT: String(jaegerUiPort),
-      },
-      maxBuffer: 32 * 1024 * 1024,
-    },
-  );
-  return `${stdout}${stderr}`;
+function composeCli(args: string[]): Promise<string> {
+  return runCompose(projectName, args);
 }
 
 // Os logs dos serviços do projeto, menos o do Jaeger, que só enche a saída. Os nomes vêm do próprio
@@ -177,43 +155,28 @@ function watchServiceLogs(): { latest(): string; stop(): Promise<void> } {
 }
 
 beforeAll(async () => {
-  apiPort = await freePort();
-  jaegerUiPort = await freePort();
   projectName = `ccs-fnd01-${randomBytes(4).toString('hex')}`;
   const watcher = watchServiceLogs();
-  try {
-    // Nome de projeto próprio e portas livres (API e interface do Jaeger): não conflita com o compose de desenvolvimento.
-    environment = await new DockerComposeEnvironment(root, 'compose.yaml')
-      .withProjectName(projectName)
-      .withEnvironment({
-        API_PORT: String(apiPort),
-        JAEGER_UI_PORT: String(jaegerUiPort),
-      })
-      .withBuild()
-      .withStartupTimeout(240_000)
-      .up();
-    await watcher.stop();
-  } catch (error) {
-    await watcher.stop();
-    // O afterAll não derruba nada se o up lançou (environment fica indefinido): os logs são lidos
-    // e o projeto é derrubado aqui, para não deixar contêineres e volume para trás. Dois caminhos:
-    // o `up` do compose falhou (migrate com código diferente de 0): os contêineres seguem de pé e o
-    // `logs` os lê; ou a espera falhou depois do `up`: o Testcontainers já fez o `down`, e vale o
-    // último instantâneo do observador.
-    const fresh = await readServiceLogs().catch(() => '');
-    const logs =
-      fresh.trim() !== ''
+  // Nome de projeto próprio e portas do host escolhidas pelo Docker (API e interface do Jaeger): não conflita
+  // com o compose de desenvolvimento nem com outro processo da máquina.
+  environment = await upComposeProject(
+    projectName,
+    'logs dos serviços (últimas 200 linhas de cada)',
+    async () => {
+      await watcher.stop();
+      // O afterAll não derruba nada se o up lançou (environment fica indefinido): os logs são lidos
+      // e o projeto é derrubado pelo helper, para não deixar contêineres e volume para trás. Dois caminhos:
+      // o `up` do compose falhou (migrate com código diferente de 0): os contêineres seguem de pé e o
+      // `logs` os lê; ou a espera falhou depois do `up`: o Testcontainers já fez o `down`, e vale o
+      // último instantâneo do observador.
+      const fresh = await readServiceLogs().catch(() => '');
+      return fresh.trim() !== ''
         ? fresh
         : `(instantâneo anterior ao down do Testcontainers)\n${watcher.latest()}`;
-    await composeCli(['down', '--volumes', '--timeout', '5']).catch(
-      () => undefined,
-    );
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `${reason}\n\n--- logs dos serviços (últimas 200 linhas de cada) ---\n${logs}`,
-      { cause: error },
-    );
-  }
+    },
+  );
+  await watcher.stop();
+  apiPort = publishedPort(environment, 'api-1', 3000);
 }, 480_000);
 
 // Terceiro caminho: o up e a espera passam e uma asserção falha. Os contêineres ainda estão de pé
@@ -308,11 +271,7 @@ async function runInWorkerImage(
     ],
     {
       cwd: root,
-      env: {
-        ...process.env,
-        API_PORT: String(apiPort),
-        JAEGER_UI_PORT: String(jaegerUiPort),
-      },
+      env: { ...process.env, ...EPHEMERAL_PORT_ENV },
       maxBuffer: 32 * 1024 * 1024,
     },
   );

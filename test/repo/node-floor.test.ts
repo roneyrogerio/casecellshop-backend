@@ -12,13 +12,14 @@ import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { runCompose } from '../helpers/compose.ts';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // FND-12: a versão do Node é imposta, não só declarada (AD-011). O `devEngines.runtime` com `onFail: error` faz o
 // npm parar abaixo do piso, e a perna do piso do CI deixa de fora só os testes que sobem o `docker compose`, porque a
 // imagem tem o Node do Dockerfile nas duas pernas.
 
 const execFileAsync = promisify(execFile);
-const root = join(import.meta.dirname, '..', '..');
 
 interface DevEnginesRuntime {
   name?: unknown;
@@ -88,9 +89,12 @@ function devEnginesViolations(pkg: Pkg): string[] {
 // --- testes que sobem o docker compose --------------------------------------------------------------------------
 
 // Achados pelo código-fonte, e não por uma lista fixa, para um teste de compose novo entrar sozinho: o ambiente do
-// Testcontainers ou o comando `docker compose` rodado como processo. Uma menção em comentário não conta.
+// Testcontainers, o helper `upComposeProject` (test/helpers/compose.ts, que embrulha o ambiente) ou o comando
+// `docker compose` rodado como processo. Uma menção em comentário não conta, e importar o helper sem chamar
+// `upComposeProject(` também não: só quem sobe o projeto precisa da imagem do Dockerfile.
 const COMPOSE_USAGE = [
   /\bDockerComposeEnvironment\b/,
+  /\bupComposeProject\s*\(/,
   /['"`]docker['"`]\s*,\s*\[\s*['"`]compose['"`]/,
   /\b(?:exec|execFile|execSync|execFileSync|spawn|spawnSync)\w*\(\s*['"`]docker compose\b/,
 ];
@@ -438,6 +442,19 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
         'test/integration/d/plain.test.ts',
         "import { PostgreSqlContainer } from '@testcontainers/postgresql';\n",
       );
+      // O helper de compose: chamar `upComposeProject(` conta; importá-lo (ou só o `runCompose`) sem subir não conta.
+      write(
+        'test/integration/e/helper.test.ts',
+        "import { upComposeProject } from '../../helpers/compose.ts';\nawait upComposeProject('p', 'logs', async () => '');\n",
+      );
+      write(
+        'test/integration/f/import-only.test.ts',
+        "import { runCompose, upComposeProject } from '../../helpers/compose.ts';\nexport const unused = [runCompose, upComposeProject];\n",
+      );
+      write(
+        'test/integration/g/helper-comment.test.ts',
+        '// chama upComposeProject( para subir\nexport {};\n',
+      );
       write(
         'test/repo/outside.test.ts',
         "import { DockerComposeEnvironment } from 'testcontainers';\n",
@@ -445,11 +462,24 @@ describe('FND-12 os testes que sobem o docker compose são achados pelo código-
       expect(composeTestsUnder(dir)).toEqual([
         'test/integration/a/env.test.ts',
         'test/integration/b/cli.test.ts',
+        'test/integration/e/helper.test.ts',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // O detector só enxerga `upComposeProject(`. Um teste que subisse o projeto por `runCompose(p, ['up', …])` escaparia
+  // dele e rodaria na perna do piso, sem a imagem do Dockerfile. Por isso o helper recusa o `up`: subir o projeto
+  // só é possível por quem o detector acha. A recusa vem antes de qualquer chamada ao Docker.
+  it.each([[['up', '-d']], [['--profile', 'app', 'up', '--wait']], [['up']]])(
+    'FND-12 controle negativo: o runCompose recusa %j, então o up só passa por upComposeProject, que o detector acha',
+    async (args) => {
+      await expect(runCompose('node-floor-control', args)).rejects.toThrow(
+        /upComposeProject/,
+      );
+    },
+  );
 });
 
 describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker compose', () => {

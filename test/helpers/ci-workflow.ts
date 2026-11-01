@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import { parse } from 'yaml';
+import { repoRoot } from './repo-root.ts';
 
 // Leitura dos workflows (.github/workflows/) e do dependabot.yml para os testes de test/repo/ que conferem os
 // passos do CI e a configuração do GitHub.
@@ -36,7 +37,6 @@ export interface CiWorkflow {
   jobs?: Record<string, CiJob>;
 }
 
-export const repoRoot = join(import.meta.dirname, '..', '..');
 export const workflowsDir = join(repoRoot, '.github', 'workflows');
 
 export function parseYaml<T>(text: string): T {
@@ -127,6 +127,65 @@ export function runsBinary(workflow: CiWorkflow, binary: string): CiStep[] {
   );
 }
 
+// Os passos do ci.yml que rodam o binário da ferramenta direto (AI-05); nenhum a chama por `npm run`.
+export function expectCiRunsBinary(tool: string): CiStep[] {
+  const ci = readCi();
+  const steps = runsBinary(ci, tool);
+  expect(steps.length).toBeGreaterThan(0);
+  expect(runsToolThroughNpm(ci, tool)).toHaveLength(0);
+  return steps;
+}
+
+// O leitor do ci.yml acha o binário (`binaryCall`), recusa o script do package.json (`scriptCall`) e o `npx`, e
+// vê o `npm run <ferramenta>` como chamada por npm.
+export function expectBinaryReader(
+  tool: string,
+  binaryCall: string,
+  scriptCall: string,
+): void {
+  expect(runsBinary(workflowOf(binaryCall), tool)).toHaveLength(1);
+  expect(runsBinary(workflowOf(scriptCall), tool)).toHaveLength(0);
+  expect(runsBinary(workflowOf(`npx ${tool}`), tool)).toHaveLength(0);
+  expect(runsToolThroughNpm(workflowOf(`npm run ${tool}`), tool)).toHaveLength(
+    1,
+  );
+}
+
+// Os arquivos de configuração existem na raiz e são JSON válido.
+export function expectValidJsonFiles(...names: string[]): void {
+  for (const name of names) {
+    const file = join(repoRoot, name);
+
+    expect(existsSync(file), name).toBe(true);
+    expect(() => {
+      JSON.parse(readFileSync(file, 'utf8'));
+    }, name).not.toThrow();
+  }
+}
+
+// Um só script do package.json chama a ferramenta (`<ferramenta> ...`), e o verify e o verify:full rodam esse script.
+export function expectToolScriptInVerify(tool: string): {
+  name: string;
+  body: string;
+} {
+  const { scripts } = JSON.parse(
+    readFileSync(join(repoRoot, 'package.json'), 'utf8'),
+  ) as { scripts: Record<string, string> };
+  const entries = Object.entries(scripts).filter(([, body]) =>
+    new RegExp(`^${tool}(\\s|$)`).test(body.trim()),
+  );
+
+  expect(entries).toHaveLength(1);
+  const [name, body] = entries[0] ?? ['', ''];
+  for (const script of ['verify', 'verify:full']) {
+    const steps = (scripts[script] ?? '')
+      .split('&&')
+      .map((step) => step.trim());
+    expect(steps, script).toContain(`npm run ${name}`);
+  }
+  return { name, body };
+}
+
 // Passos que citam a ferramenta e a chamam por `npm run`.
 export function runsToolThroughNpm(
   workflow: CiWorkflow,
@@ -140,6 +199,19 @@ export function runsToolThroughNpm(
 
 export function same(value: unknown, expected: unknown): boolean {
   return JSON.stringify(value) === JSON.stringify(expected);
+}
+
+// `if` de um passo que roda mesmo depois de uma falha, mas não depois do cancelamento (o upload do relatório).
+export const NOT_CANCELLED = /^(?:\$\{\{\s*)?!cancelled\(\)(?:\s*\}\})?$/;
+
+// Valor de env ou with como texto; um objeto aninhado vira JSON e nunca casa com o esperado.
+export function text(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+export function tokensOf(run: string): string[] {
+  return run.split(/\s+/);
 }
 
 const SEMVER = /^\d+\.\d+\.\d+$/;

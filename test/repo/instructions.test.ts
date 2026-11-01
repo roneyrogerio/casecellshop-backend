@@ -8,14 +8,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 function read(relative: string): string {
   return readFileSync(path.join(root, relative), 'utf8');

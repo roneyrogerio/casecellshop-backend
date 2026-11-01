@@ -7,13 +7,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
 const REVIEWER = '.claude/agents/reviewer.md';
 const MARCO = '.claude/skills/marco/SKILL.md';
 const MAX_SKILL_BYTES = 12_000;

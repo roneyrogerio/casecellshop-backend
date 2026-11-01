@@ -1,13 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-
-const root = fileURLToPath(new URL('../..', import.meta.url)).replace(
-  /\/$/,
-  '',
-);
+import { repoRoot as root } from '../helpers/repo-root.ts';
 
 // Referência do Claude Code (conferida em 30/10/2026). O Claude Code ignora campo
 // desconhecido e pula o agente cujo YAML não abre, sem avisar; por isso a conferência é aqui.
