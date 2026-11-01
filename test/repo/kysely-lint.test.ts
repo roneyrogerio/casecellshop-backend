@@ -2,7 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanupTempDirs, writeFileIn } from '../helpers/git-sandbox.ts';
-import { newLintTree, oxlintBin } from '../helpers/lint-tree.ts';
+import {
+  newLintTree,
+  oxlintBin,
+  typecheckSample,
+} from '../helpers/lint-tree.ts';
 
 // AI-19: a conferência do Kysely é parte do `npm run lint`. Aqui o oxlint roda com o .oxlintrc.json do projeto
 // sobre uma árvore temporária que tem uma pasta src/, com cwd nela. Os `files` dos overrides (src/**) casam pelo
@@ -87,6 +91,44 @@ const NATIVE: [string, string][] = [
     'getExecutor',
     'declare const db: { getExecutor: () => unknown };\nexport const e = db.getExecutor();\n',
   ],
+  // A11 do #21: o executeQuery desestruturado, sozinho e com o CompiledQuery.raw dentro (a forma do critério).
+  [
+    'executeQuery desestruturado',
+    'declare const db: { executeQuery: (q: unknown) => unknown };\ndeclare const compiled: unknown;\nconst { executeQuery } = db;\nexport const r = executeQuery(compiled);\n',
+  ],
+  [
+    'executeQuery desestruturado com CompiledQuery.raw',
+    "declare const db: { executeQuery: (q: unknown) => unknown };\ndeclare const CompiledQuery: { raw: (t: string) => unknown };\nconst { executeQuery } = db;\nexport const r = executeQuery(CompiledQuery.raw('select 1'));\n",
+  ],
+  [
+    'executeQuery desestruturado com outro nome',
+    'declare const db: { executeQuery: (q: unknown) => unknown };\ndeclare const compiled: unknown;\nconst { executeQuery: run } = db;\nexport const r = run(compiled);\n',
+  ],
+];
+
+// Revisão 2 do #21: o encadeamento opcional também reprova. Basta uma regra do Kysely acusar o arquivo (o
+// no-restricted-properties ou a regra local), então o teste não fixa qual.
+const OPTIONAL_CHAIN: [string, string][] = [
+  [
+    'sql?.raw',
+    "declare const sql: { raw: (t: string) => unknown } | undefined;\nexport const q = sql?.raw('x');\n",
+  ],
+  [
+    'sql?.lit',
+    'declare const sql: { lit: (v: number) => unknown } | undefined;\nexport const q = sql?.lit(1);\n',
+  ],
+  [
+    'sql?.table',
+    "declare const sql: { table: (t: string) => unknown } | undefined;\nexport const q = sql?.table('inventory');\n",
+  ],
+  [
+    'db?.dynamic',
+    'declare const db: { dynamic: { ref: (c: string) => unknown } } | undefined;\nexport const q = db?.dynamic.ref("a");\n',
+  ],
+  [
+    'db?.getExecutor',
+    'declare const db: { getExecutor: () => unknown } | undefined;\nexport const e = db?.getExecutor();\n',
+  ],
 ];
 
 // As formas da regra local: o corpo, o nome da regra que acusa.
@@ -119,6 +161,33 @@ const PLUGIN: [string, string, string][] = [
   [
     'sql importado com outro nome',
     "import { sql as s } from 'kysely';\nexport const q = s`now()`;\n",
+    'no-sql-alias',
+  ],
+  // A13 e A14 do #21: as formas novas da no-sql-alias chegam à regra pelo .oxlintrc.json do projeto.
+  [
+    'sql guardado por bind',
+    "import { sql } from 'kysely';\nexport const b = sql.bind(null);\n",
+    'no-sql-alias',
+  ],
+  [
+    'sql chamado por call',
+    "import { sql } from 'kysely';\nexport const c = sql.call(null, ['x']);\n",
+    'no-sql-alias',
+  ],
+  [
+    'sql chamado por apply',
+    "import { sql } from 'kysely';\nexport const a = sql.apply(null, [['x']]);\n",
+    'no-sql-alias',
+  ],
+  [
+    'sql importado com outro nome de um módulo nosso',
+    "import { sql as q } from './outro-modulo.ts';\nexport { q };\n",
+    'no-sql-alias',
+  ],
+  ['reexport em bloco do kysely', "export * from 'kysely';\n", 'no-sql-alias'],
+  [
+    'sql lido do namespace do import dinâmico',
+    "const k = await import('kysely');\nexport const q = k.sql`now()`;\n",
     'no-sql-alias',
   ],
 ];
@@ -168,6 +237,11 @@ const REJECTED: [string, string, string][] = [
       `${dir}/plugin-${i}.ts`,
       body,
     ]),
+    ...OPTIONAL_CHAIN.map(([label, body], i): [string, string, string] => [
+      `${label} em ${dir}`,
+      `${dir}/chain-${i}.ts`,
+      body,
+    ]),
   ]),
   // .query(), .transaction() e .startTransaction() fora de src/db/ (também nas pastas que só começam com db).
   ...['src/checkout', 'src/health', 'src/dbx', 'src/database'].flatMap(
@@ -185,6 +259,17 @@ const REJECTED: [string, string, string][] = [
 const ACCEPTED: [string, string, string][] = [
   ['as formas permitidas em src/checkout', 'src/checkout/ok.ts', CLEAN_BODY],
   ['as formas permitidas em src/db', 'src/db/ok.ts', CLEAN_BODY],
+  // Controle do A13 e do A14 do #21: o sql como tag, o import normal e o namespace sem o sql passam.
+  [
+    'o sql importado do kysely, como tag e como membro do Kysely, em src/checkout',
+    'src/checkout/sql-ok.ts',
+    "import { Kysely, sql } from 'kysely';\nexport const a = sql`now()`;\nexport const b = sql.join([a, a]);\nexport const c = new Kysely<never>({} as never);\n",
+  ],
+  [
+    'o namespace do import dinâmico lido para outro nome que não o sql, em src/checkout',
+    'src/checkout/dynamic-ok.ts',
+    "const k = await import('kysely');\nexport const c = k.Kysely;\n",
+  ],
   ['.query( do pg em src/db/', 'src/db/pool.ts', QUERY_BODY],
   ['.query( do pg em src/db/sub/', 'src/db/sub/pool.ts', QUERY_BODY],
   ['.transaction( em src/db/', 'src/db/transaction.ts', TRANSACTION_BODY],
@@ -258,6 +343,17 @@ describe('AI-19 o oxlint com o .oxlintrc.json do projeto aplica as formas do Kys
     },
   );
 
+  it.each(
+    REJECTED.filter(([, file]) => /chain-\d+\.ts$/.test(file)).map(
+      ([label, file]) => [label, file] as const,
+    ),
+  )(
+    'AI-19 reprova %s (encadeamento opcional, por qualquer regra do Kysely)',
+    (_label, file) => {
+      expect(kyselyCodesOf(diagnostics, file)).not.toEqual([]);
+    },
+  );
+
   it('AI-19 reprova .set((eb) => …) em src/ pela regra no-callback-values', () => {
     expect(
       kyselyCodesOf(diagnostics, 'src/checkout/plugin-0.ts').join(' '),
@@ -304,6 +400,38 @@ describe('AI-19 o oxlint com o .oxlintrc.json do projeto aplica as formas do Kys
     expect(kyselyCodesOf(diagnostics, 'src/checkout/ok.ts')).toEqual([]);
     expectLoaded();
   });
+});
+
+// O critério deixa para o typecheck as formas do TypeScript que não são apagáveis (erasableSyntaxOnly): a regra
+// local não precisa vê-las.
+describe('AI-19 as formas não apagáveis do sql reprovam no typecheck pelo erasableSyntaxOnly', () => {
+  it.each([
+    ['export = sql', "import { sql } from 'kysely';\nexport = sql;\n"],
+    [
+      'import s = sql',
+      "import { sql } from 'kysely';\nimport s = sql;\nexport const q = s`now()`;\n",
+    ],
+  ])(
+    'AI-19 %s reprova no tsc do projeto',
+    (_label, source) => {
+      const result = typecheckSample('ai19-tsc-', source);
+
+      expect(result.status).not.toBe(0);
+      expect(result.status).not.toBeNull();
+      expect(result.output).toContain('erasableSyntaxOnly');
+    },
+    60_000,
+  );
+
+  it('AI-19 o mesmo arquivo com o import normal e o sql como tag passa no tsc', () => {
+    const result = typecheckSample(
+      'ai19-tsc-',
+      "import { sql } from 'kysely';\nexport const q = sql`now()`;\n",
+    );
+
+    expect(result.output).toBe('');
+    expect(result.status).toBe(0);
+  }, 60_000);
 });
 
 describe('AI-19 o oxlint como processo: saída e código de saída', () => {
