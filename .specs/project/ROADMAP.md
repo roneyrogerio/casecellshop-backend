@@ -130,7 +130,7 @@ Entrou pelos PRs #37 (as respostas de cache e de observabilidade) e #40 (a vitri
   - um runbook por alerta: DLQ (reprocessar em lote, ou cancelar depois de consultar o ERP), ERP fora ou com erro de configuração, furo de estoque e sincronização parada;
   - tabela de modos de falha (falha → detecção → mitigação → teste), cobrindo pelo menos: ERP lento, fora e fora além da janela de retry; fatura sem resposta e depois do timeout; worker que morre e mensagem que derruba o processo; banco indisponível e SKU disputado; origem do cache em erro; sincronização parada; venda em outro canal; preço alterado entre a vitrine e o checkout.
 
-Entrou pelos PRs #39 (as métricas de fila, de outbox, de pedidos sem desfecho e de estoque, com os spans do `ErpClient` e do relay) e #38 (a operação e o README de entrada). Nos alertas do README, o counter ausente antes do primeiro registro quer dizer "nada aconteceu", e os gauges que precisam existir têm um `absent` próprio; o primeiro registro que o `increase` não conta está declarado lá.
+Entrou pelos PRs #39 (as métricas de fila, de outbox, de pedidos sem desfecho e de estoque, com os spans do `ErpClient` e do relay) e #38 (a operação e o README de entrada). Nos alertas do README, os gauges que precisam existir têm um `absent` próprio. Os counters de lista fechada passaram a nascer em 0 na subida no PR #43 (`OBS-08`), e o `increase` conta o primeiro evento.
 
 **Pronto quando:** `OBS-*` passam e o README traz a operação completa.
 
