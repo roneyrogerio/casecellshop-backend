@@ -54,6 +54,19 @@ export const CATALOG_METRICS = {
       'Idade da última rodada completa da sincronização com o ERP; base do alerta de ERP fora.',
     attributes: {},
   },
+  'casecellshop.catalog.gauge.read_failures': {
+    instrument: 'counter',
+    unit: '{read}',
+    description:
+      'Leituras de gauge da vitrine e da sincronização que falharam no scrape; o gauge segue com o último valor lido.',
+    attributes: {
+      'casecellshop.gauge.name': {
+        description: 'Gauge cuja leitura falhou.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['catalog_sync_age'] },
+      },
+    },
+  },
   'casecellshop.catalog.sync.corrections': {
     instrument: 'counter',
     unit: '{correction}',
@@ -100,10 +113,10 @@ export const CATALOG_LOG_EVENTS = {
       'Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado.',
     fields: ['cause', 'page', 'err'],
   },
-  'casecellshop.catalog.sync.state.load_failed': {
-    levels: ['warn'],
+  'casecellshop.catalog.gauge.read_failed': {
+    levels: ['error'],
     description:
-      'A leitura da última rodada completa falhou na subida: o gauge da idade fica sem valor até a primeira rodada completa e as rodadas seguem.',
-    fields: ['err'],
+      'A leitura de um gauge da sincronização falhou no scrape; o gauge segue com o último valor lido.',
+    fields: ['gauge', 'err'],
   },
 } as const satisfies Record<string, LogEventSpec>;

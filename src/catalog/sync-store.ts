@@ -147,17 +147,3 @@ export async function markCompleted(
     )
     .execute();
 }
-
-// Idade, em ms, da última rodada completa gravada, pelo relógio do banco; `undefined` se nunca houve.
-export async function readStoredAgeMs(
-  db: Kysely<StoreDb>,
-): Promise<number | undefined> {
-  const row = await db
-    .selectFrom('sync_state')
-    .select(['last_completed_at', sql<Date>`now()`.as('now')])
-    .executeTakeFirst();
-  if (!row?.last_completed_at) return undefined;
-  return (
-    new Date(row.now).getTime() - new Date(row.last_completed_at).getTime()
-  );
-}

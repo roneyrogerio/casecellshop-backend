@@ -13,7 +13,6 @@ import type { CatalogSyncConfig } from './config.ts';
 import {
   markCompleted,
   readSnapshot,
-  readStoredAgeMs,
   upsertInventory,
   upsertProduct,
   zeroMissing,
@@ -52,8 +51,6 @@ export interface CatalogSync {
 
 interface Context extends CatalogSyncDependencies {
   db: Kysely<StoreDb>;
-  // O início da última rodada completa no relógio do processo; base do gauge de idade.
-  completedMark: { value: number | undefined };
 }
 
 type CatalogRead =
@@ -188,7 +185,6 @@ async function roundBody(ctx: Context): Promise<SyncRoundResult> {
     return { complete: false, skuCount: read.items.length, missingCount: 0 };
   }
   // Depois de gravar: quem vê o evento já encontra o banco no estado final.
-  ctx.completedMark.value = startedAt;
   events.info(
     'casecellshop.catalog.sync.round.completed',
     {
@@ -199,25 +195,6 @@ async function roundBody(ctx: Context): Promise<SyncRoundResult> {
     'rodada de sincronização concluída',
   );
   return { complete: true, skuCount: read.items.length, missingCount };
-}
-
-// Antes da primeira rodada: com o ERP fora desde a subida, a idade parte da última rodada gravada.
-async function seedCompletedMark(ctx: Context): Promise<void> {
-  if (ctx.completedMark.value !== undefined) return;
-  let ageMs: number | undefined;
-  try {
-    ageMs = await readStoredAgeMs(ctx.db);
-  } catch (err) {
-    // Banco fora na subida não pode derrubar o start: o gauge fica sem valor até a primeira rodada completa.
-    eventLogger(ctx.logger, CATALOG_LOG_EVENTS).warn(
-      'casecellshop.catalog.sync.state.load_failed',
-      { err },
-      'falha do banco ao ler a última rodada completa',
-    );
-    return;
-  }
-  if (ageMs !== undefined && ctx.completedMark.value === undefined)
-    ctx.completedMark.value = ctx.clock.now() - ageMs;
 }
 
 function createRoundLoop(
@@ -241,19 +218,7 @@ function createRoundLoop(
 }
 
 export function createCatalogSync(deps: CatalogSyncDependencies): CatalogSync {
-  const ctx: Context = {
-    ...deps,
-    db: createDb(deps.pool),
-    completedMark: { value: undefined },
-  };
-  // Sem rodada completa conhecida o gauge não grava: o alerta de ERP fora lê a ausência.
-  const removeAgeGauge = catalogMetrics(deps.telemetry).observe(
-    'casecellshop.catalog.sync.age',
-    (observe) => {
-      if (ctx.completedMark.value !== undefined)
-        observe((deps.clock.now() - ctx.completedMark.value) / 1000);
-    },
-  );
+  const ctx: Context = { ...deps, db: createDb(deps.pool) };
 
   // Rodadas encadeadas: nunca duas ao mesmo tempo no processo, venham do laço ou de uma chamada direta.
   let tail: Promise<unknown> = Promise.resolve();
@@ -273,11 +238,9 @@ export function createCatalogSync(deps: CatalogSyncDependencies): CatalogSync {
 
   return {
     async start() {
-      await seedCompletedMark(ctx);
       await runner.start();
     },
     async stop() {
-      removeAgeGauge();
       await runner.stop();
     },
     runRound,
