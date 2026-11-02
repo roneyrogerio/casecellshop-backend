@@ -37,9 +37,10 @@ type Stuck = 'erp_page' | 'between_commands';
 
 // Prende a rodada, faz um checkout dos dois SKUs enquanto ela está presa e solta a rodada.
 async function checkoutWhileRoundIsStuck(stuck: Stuck, factory?: SyncFactory) {
+  // A loja guarda 8 e o ERP diz 10: a rodada só grava o SKU que difere, e o teste precisa dos dois comandos de estoque.
   await seedCatalog(
     db.pool,
-    PRODUCTS.map((product) => ({ ...product, onHand: 10 })),
+    PRODUCTS.map((product) => ({ ...product, onHand: 8 })),
   );
   await putErpProducts(
     db.erpPool,

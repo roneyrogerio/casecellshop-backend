@@ -95,7 +95,9 @@ describe('CAT-07 um SKU com vendas durante a rodada é atualizado nela, sem devo
   });
 
   it('CAT-07 um SKU que vende em toda rodada é atualizado em todas, em vez de ser pulado', async () => {
-    await seedCatalog(db.pool, [{ sku: 'S-004', onHand: 10, reserved: 3 }]);
+    // A loja guarda 12 e o ERP diz 10: o SKU difere em t0 em toda rodada, e é por isso que a sincronização o grava
+    // (um SKU igual ao ERP não recebe comando, ver sync-changed-only.test.ts).
+    await seedCatalog(db.pool, [{ sku: 'S-004', onHand: 12, reserved: 3 }]);
     await putErpProducts(db.erpPool, [{ sku: 'S-004', onHand: 10 }]);
     const rig = db.rig();
     let previousSyncedAt = (await readStoreRow(db.pool, 'S-004'))
@@ -145,7 +147,11 @@ describe('CAT-07 um SKU com vendas durante a rodada é atualizado nela, sem devo
 
   it('CAT-07 o t0 é guardado antes da leitura do ERP, e o synced_at de toda linha e o last_completed_at valem o t0', async () => {
     await seedCatalog(db.pool, [{ sku: 'S-006' }, { sku: 'S-007' }]);
-    await putErpProducts(db.erpPool, [{ sku: 'S-006' }, { sku: 'S-007' }]);
+    // Estoque diferente do guardado (10): só o SKU que difere é gravado, e só a linha gravada leva o t0.
+    await putErpProducts(db.erpPool, [
+      { sku: 'S-006', onHand: 11, priceCents: 5990 },
+      { sku: 'S-007', onHand: 11, priceCents: 5990 },
+    ]);
     const rig = db.rig();
     let readAt = '';
     afterNextErpPage(rig.world, async () => {

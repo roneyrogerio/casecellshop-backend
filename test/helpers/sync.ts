@@ -130,6 +130,41 @@ export async function readStoreRow(
   };
 }
 
+// A versão física das linhas de um SKU em cada tabela (o `xmin` do PostgreSQL): troca a cada UPDATE que grava a
+// linha, mesmo quando o valor gravado é igual ao que já estava. É o que distingue "a rodada gravou o SKU" de "a
+// rodada o deixou como estava", sem depender dos valores nem do `synced_at`.
+export interface RowVersions {
+  product: string;
+  inventory: string;
+}
+
+export async function readRowVersions(
+  pool: pg.Pool,
+  skus: readonly string[],
+): Promise<Record<string, RowVersions>> {
+  const result = await pool.query<{
+    sku: string;
+    product_xmin: string;
+    inventory_xmin: string;
+  }>(
+    `select p.sku, p.xmin::text as product_xmin, i.xmin::text as inventory_xmin
+       from products p join inventory i on i.sku = p.sku
+      where p.sku = any($1::text[])`,
+    [skus],
+  );
+  return Object.fromEntries(
+    result.rows.map((row) => [
+      row.sku,
+      { product: row.product_xmin, inventory: row.inventory_xmin },
+    ]),
+  );
+}
+
+// Os comandos de escrita da rodada nas tabelas do catálogo (o INSERT … ON CONFLICT e o UPDATE de products e de
+// inventory, o do SKU ausente inclusive); o SELECT do estado guardado e o UPDATE do sync_state ficam de fora.
+export const CATALOG_WRITES =
+  /(update|insert\s+into)\s+"(products|inventory)"/i;
+
 // A baixa que o worker de faturamento faz (src/billing/conclude.ts): o on_hand desce com piso em zero, a reserva
 // vira venda e o sold_total sobe.
 export async function billLocally(
