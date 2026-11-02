@@ -6,11 +6,17 @@ import {
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
 import { settle, track } from '../../test/helpers/async.ts';
+import {
+  countingInvoices,
+  hangingInvoices,
+  rejectingInvoices,
+} from '../../test/helpers/invoice-reader.ts';
 import { createTelemetry } from '../shared/telemetry.ts';
 import { createErpClient } from './acl.ts';
 import type { ErpClient, ErpOrderRequest } from './erp-client.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpRequest,
   type ErpResponse,
   type ErpTransport,
@@ -87,10 +93,15 @@ const hanging = () =>
       }),
   );
 
-function clientOver(transport: ErpTransport, withTelemetry = true) {
+function clientOver(
+  transport: ErpTransport,
+  withTelemetry = true,
+  invoiceReader: ErpInvoiceReader = countingInvoices(),
+) {
   const clock = createManualClock();
   const client = createErpClient({
     transport,
+    invoiceReader,
     clock,
     timeoutMs: TIMEOUT_MS,
     ...(withTelemetry ? { telemetry } : {}),
@@ -350,4 +361,94 @@ describe('OBS-05 span de cada chamada do ErpClient', () => {
       expect(span.attributes['error.type']).toBe('RangeError');
     },
   );
+});
+
+describe('ORD-21 span erp.count_invoices da contagem de faturas (AD-031)', () => {
+  const reference = orderRequest.reference;
+
+  it('ORD-21 a contagem conclusiva abre um span CLIENT erp.count_invoices com a operação e o desfecho ok, sem erro', async () => {
+    const { client } = clientOver(responding(500), true, countingInvoices(2));
+
+    expect(await client.countInvoicesByReference(reference)).toEqual({
+      kind: 'ok',
+      count: 2,
+    });
+
+    const span = await onlySpanNamed('erp.count_invoices');
+    expect(span.kind).toBe(SpanKind.CLIENT);
+    expect(span.attributes['casecellshop.erp.operation']).toBe(
+      'count_invoices',
+    );
+    expect(span.attributes['casecellshop.erp.outcome']).toBe('ok');
+    expect(span.status.code).toBe(SpanStatusCode.UNSET);
+    expect(span.attributes['error.type']).toBeUndefined();
+  });
+
+  it('ORD-21 a leitura que rejeita fecha o span com o desfecho transient, status de erro e error.type transient', async () => {
+    const { client } = clientOver(
+      responding(500),
+      true,
+      rejectingInvoices(new Error('mysql: connection refused')),
+    );
+
+    expect((await client.countInvoicesByReference(reference)).kind).toBe(
+      'transient',
+    );
+
+    const span = await onlySpanNamed('erp.count_invoices');
+    expect(span.attributes['casecellshop.erp.outcome']).toBe('transient');
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span.attributes['error.type']).toBe('transient');
+  });
+
+  it('ORD-21 o span dura a contagem inteira, inclusive até o timeout', async () => {
+    const { client, clock } = clientOver(
+      responding(500),
+      true,
+      hangingInvoices(),
+    );
+
+    const call = track(client.countInvoicesByReference(reference));
+    await settle();
+    expect(
+      (await spansNamed('erp.count_invoices')).length,
+      'o span ainda está aberto enquanto a leitura espera',
+    ).toBe(0);
+
+    clock.advance(TIMEOUT_MS);
+    await settle();
+    expect(call.settled).toBe(true);
+
+    const span = await onlySpanNamed('erp.count_invoices');
+    expect(span.attributes['casecellshop.erp.outcome']).toBe('transient');
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  it('ORD-21 o span da contagem é filho do span ativo e fica no trace dele', async () => {
+    const { client } = clientOver(responding(500), true, countingInvoices(1));
+
+    await telemetry.tracer.startActiveSpan('late_check', async (parent) => {
+      try {
+        await client.countInvoicesByReference(reference);
+      } finally {
+        parent.end();
+      }
+    });
+
+    const parent = await onlySpanNamed('late_check');
+    const span = await onlySpanNamed('erp.count_invoices');
+    expect(span.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
+    expect(span.spanContext().traceId).toBe(parent.spanContext().traceId);
+  });
+
+  it('ORD-21 sem telemetry nas opções a contagem não abre span', async () => {
+    const { client } = clientOver(responding(500), false, countingInvoices(1));
+
+    expect(await client.countInvoicesByReference(reference)).toEqual({
+      kind: 'ok',
+      count: 1,
+    });
+
+    expect(await spansNamed('erp.count_invoices')).toEqual([]);
+  });
 });

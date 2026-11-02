@@ -114,6 +114,9 @@ A maior parte da suíte confere o próprio repositório (CI, hooks, contrato, te
 | [`products-cache.test.ts`](test/integration/catalog/products-cache.test.ts) e [`cache.test.ts`](src/cache/cache.test.ts) | N leituras com a entrada expirada fazem 1 consulta ao banco; a entrada expira no TTL; com o banco em erro, a vitrine serve a última página até 60 s |
 | [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) | uma fatura por pedido com mensagem duplicada, worker morto no meio da chamada ou ERP que fatura sem responder |
 | [`call-permit.test.ts`](test/integration/billing/call-permit.test.ts) | no máximo uma chamada ao ERP por pedido a cada 45 s: tomadas simultâneas do mesmo pedido concedem uma só, e uma versão ingênua concede duas (controle negativo) |
+| [`late-check.test.ts`](test/integration/billing/late-check.test.ts) | sem a H1b e acima da H4, a fatura duplicada e a fatura de pedido falho são achadas uma vez por pedido, depois da janela de assentamento, sem mudar o pedido; um pedido com um envio só e resposta conclusiva nunca é consultado |
+| [`worker-refusal.test.ts`](test/integration/billing/worker-refusal.test.ts) | a recusa do ERP que vem depois de um envio sem resposta espera a janela e decide pela consulta, sem criar de novo; a recusa no primeiro envio conclui na hora |
+| [`runbook.test.ts`](test/integration/billing/runbook.test.ts) | o cancelamento manual é recusado dentro da janela contada da última criação, também depois de uma criação abandonada no meio, e as consultas da reconciliação não a reabrem |
 | [`reconciliation.test.ts`](test/integration/billing/reconciliation.test.ts) | com o ERP fora além da janela de retry, os pedidos esperam na DLQ com a reserva; quando ele volta, a reconciliação fatura os que ele já tem |
 
 ## Conferir
@@ -144,7 +147,7 @@ Tudo o que o desafio pede está pronto. A última coluna diz o que o teste prova
 | Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | 50 checkouts simultâneos com estoque 5 aceitam 5, e uma versão ingênua vende além, no mesmo arquivo: [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) (`CHK-01`, `CHK-02`) |
 | Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | a mesma chave repetida depois de o estoque acabar, ou com os campos em outra ordem, devolve o mesmo pedido: [`checkout.test.ts`](test/integration/checkout/checkout.test.ts) (`CHK-04`, `CHK-05`); em paralelo, cria um pedido só: [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) (`CHK-03`) |
 | Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | uma fatura por pedido com mensagem duplicada, worker morto ou ERP lento: [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) (`ORD-01` a `ORD-22`) |
-| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | os arquivos de domínio estão em [Testar](#testar) (regra de negócio: `CHK-03` a `CHK-12`, `ORD-01` a `ORD-22`; cache: `CAT-01` a `CAT-05`; concorrência: `CHK-01`, `CHK-02`, `CHK-07`); a tabela critério × teste sai em cada execução do CI |
+| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | os arquivos de domínio estão em [Testar](#testar) (regra de negócio: `CHK-03` a `CHK-12`, `ORD-01` a `ORD-27`; cache: `CAT-01` a `CAT-05`; concorrência: `CHK-01`, `CHK-02`, `CHK-07`); a tabela critério × teste sai em cada execução do CI |
 | Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | conferidos na revisão: as garantias e os modos de falha, cada um com o teste que o prova (`DOC-OPS-01`), e o índice das cinco perguntas (`DOC-IDX-01`) |
 
 ## As cinco perguntas
@@ -202,6 +205,8 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | Estoque baixado uma vez só, mesmo com conclusões simultâneas | o banco da loja | `ORD-17` |
 | Reserva liberada quando o ERP recusa o pedido | H2 | `ORD-08` |
 | Todo pedido aceito termina faturado, falho ou na DLQ, de onde sai pela reconciliação ou pelo runbook | H1a | `ORD-13`, `ORD-14`, `ORD-15` |
+| Fatura duplicada, ou fatura de pedido falho, detectada em até ~20 min depois da última chamada ao ERP, com alerta uma vez por pedido | H1a e a leitura do MySQL do ERP (AD-031) | `ORD-06`, `ORD-23`, `ORD-24`, `ORD-25` |
+| O cancelamento manual e a recusa depois de um envio sem resposta só concluem depois da janela de assentamento e da consulta ao ERP | H1a | `ORD-26`, `ORD-27` |
 | Vitrine sem preço ou disponibilidade defasados além do limite da meta 2 | a sincronização com o ERP | `CAT-06`, `CAT-07` |
 | Um pedido sem desfecho em 60 s é contado uma vez, com várias réplicas da API | o banco da loja | `OBS-04` |
 
@@ -213,7 +218,7 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | ERP com credencial ou rota errada | desfecho `config_error`; alerta [ERP com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) | o pedido não falha: a mensagem volta à fila e, depois de 12 recebimentos (cerca de 23 min), vai para a DLQ com a reserva; corrigida a configuração, o `redrive` a reprocessa | `ORD-09`, `ORD-10` |
 | ERP que fatura e não responde | timeout ou `502` na chamada | a próxima tentativa consulta pela referência antes de criar | `ORD-03`, `ORD-05` |
 | ERP que fatura depois do timeout | timeout na chamada | a próxima tentativa só sai depois do atraso mínimo (H4) e consulta antes de criar | `ORD-04` |
-| ERP acima do limite da H4 e sem a H1b | não detectável pela loja | duas faturas, ou o pedido falho com uma fatura que aparece depois; demonstrado no teste e declarado como risco (R6) | `ORD-06` |
+| ERP acima do limite da H4 e sem a H1b | verificação tardia, depois da janela de assentamento de 15 min: consulta pela referência e contagem de faturas no MySQL do ERP; alerta [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) | a loja não evita a segunda fatura nem a fatura de pedido falho, porque o ERP não deduplica (R6); detecta cada caso uma vez, sem mudar o pedido, e o runbook corrige; a recusa depois de um envio sem resposta e o cancelamento manual esperam a janela e consultam o ERP antes de concluir | `ORD-06`, `ORD-23` a `ORD-27` |
 | Worker morre no meio da chamada | a mensagem volta a ficar visível no SQS | nova tentativa só depois do atraso mínimo, contado do início da chamada abandonada | `ORD-02` |
 | Mensagem que derruba o processo ou fora do schema | contagem de recebimentos do SQS; log `casecellshop.outbox.message.rejected` | vai sozinha para a DLQ, e as outras do lote seguem | `ORD-12` |
 | Banco indisponível no checkout | `lock_timeout` ou falha de conexão; burn rate do checkout | `503` com `Retry-After`, sem reserva parcial | `CHK-08` |
@@ -230,7 +235,7 @@ O que as garantias não cobrem e como aparece na operação. A lista completa, c
 
 | Risco | Como é detectado | O que resta |
 | --- | --- | --- |
-| Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | não é detectável pela loja; demonstrado no `ORD-06` | conferir as faturas no ERP real antes de confiar na H4 |
+| Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | verificação tardia em até ~20 min depois da última chamada ao ERP, alerta [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada); a duplicata e a detecção são demonstradas em [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) (`ORD-06`) e [`late-check.test.ts`](test/integration/billing/late-check.test.ts) (`ORD-23`, `ORD-24`) | a loja não evita a fatura a mais, porque o ERP não deduplica; o estorno é manual, pelo runbook; uma fatura que aparece depois da verificação (mais de 15 min além da H4) não é vista; a contagem lê uma tabela interna do MySQL do ERP, que pode mudar numa atualização dele, e a falha dessa leitura tem alerta próprio (AD-031) |
 | O ERP fatura sem estoque e fica negativo, contra a H2 (R9) | a sincronização grava zero e registra o caso em log | a loja para de vender o SKU até o estoque voltar |
 | Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
 | Cache por instância: com N réplicas da API, uma expiração gera até N consultas à origem | cargas da origem no dashboard | aceito enquanto a origem é o banco da loja (AD-005) |
@@ -410,6 +415,9 @@ histogram_quantile(0.99, sum by (le) (rate(casecellshop_order_accept_to_invoice_
 
 # Fila: pedidos sem desfecho em 60 s, na última hora
 sum(increase(casecellshop_order_stuck_total[1h]))
+
+# Fila: achados da verificação tardia por causa (fatura de pedido falho, fatura duplicada), nas últimas 24 h
+sum by (casecellshop_late_invoice_cause) (increase(casecellshop_order_late_invoices_total[24h]))
 ```
 
 ```promql
@@ -471,6 +479,8 @@ Cada regra traz a severidade (`page` acorda alguém; `ticket` vai para a fila do
 | `CasecellshopMetricasDaFilaAusentes` | o gauge da fila some, por 10 min | `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
 | `CasecellshopDLQ` | há mensagem na DLQ, ou a leitura da fila falha, por 10 min | `ticket` | [DLQ](#dlq) |
 | `CasecellshopFuroDeEstoque` | um SKU com `reserved > on_hand`, uma rejeição do ERP por falta de estoque, ou a leitura do estoque falha | `page` | [Furo de estoque](#furo-de-estoque) |
+| `CasecellshopVerificacaoTardiaSemLeitura` | a contagem de faturas pela leitura do banco do ERP falhou na última hora, por 15 min | `ticket` | [Verificação tardia sem leitura do ERP](#verificação-tardia-sem-leitura-do-erp) |
+| `CasecellshopFaturaTardia` | a verificação tardia achou uma fatura de pedido falho ou uma fatura duplicada | `page` | [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) |
 | `CasecellshopErpErroDeConfiguracao` | uma chamada ao ERP com `config_error` | `page` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
 | `CasecellshopErpFalhando` | mais da metade das chamadas `transient` ou `ambiguous`, por 10 min | `ticket` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
 | `CasecellshopSincronizacaoParada` | a última rodada completa tem mais de 3 min, a série some, ou a leitura dela falha, por 5 min | `page` | [Sincronização parada](#sincronização-parada) |
@@ -701,6 +711,24 @@ groups:
         annotations:
           summary: SKU com reserved > on_hand, o ERP recusou um pedido por falta de estoque, ou a leitura do estoque falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#furo-de-estoque
+      - alert: CasecellshopVerificacaoTardiaSemLeitura
+        expr: |
+          sum(increase(casecellshop_erp_client_operation_duration_count{casecellshop_erp_operation="count_invoices",casecellshop_erp_outcome="transient"}[1h])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: A verificação tardia não consegue contar as faturas no banco do ERP
+          runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#verificação-tardia-sem-leitura-do-erp
+      - alert: CasecellshopFaturaTardia
+        expr: |
+          sum(increase(casecellshop_order_late_invoices_total[1h])) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: O ERP tem uma fatura de pedido falho ou mais de uma fatura para o mesmo pedido
+          runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#fatura-tardia-ou-duplicada
       - alert: CasecellshopErpErroDeConfiguracao
         expr: |
           sum(increase(casecellshop_erp_config_errors_total[5m])) > 0
@@ -829,14 +857,65 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    select o.id from orders o join outbox x on x.order_id = o.id where o.status = 'pending' and x.dead_at is not null;
    ```
 
-5. Cancele só o pedido que o ERP não tem e que não deve mais ser faturado:
+5. Cancele só o pedido que o ERP não tem e que não deve mais ser faturado. O comando confere as duas coisas antes (AD-031):
 
    ```sh
    docker compose exec worker node src/main/runbook.ts cancel <orderId>
    ```
 
-   O pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`). O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Se o ERP tem o pedido, não cancele: use o `redrive` ou espere a reconciliação.
+   - o pedido já tem desfecho: nada muda, sem consultar o ERP, e o comando sai com 0;
+   - última criação enviada ao ERP há menos de 15 min (a janela de assentamento), ou outra tentativa chamando o ERP agora: recusa e diz quanto falta, porque uma criação em dúvida ainda pode virar fatura; rode de novo depois. As consultas da reconciliação não reabrem a janela;
+   - o ERP tem o pedido: recusa, porque ele já foi faturado; use o `redrive` ou espere a reconciliação;
+   - a consulta ao ERP falhou: recusa sem mudar o pedido; rode de novo com o ERP respondendo, depois do atraso mínimo de 45 s entre chamadas;
+   - o ERP responde que não tem o pedido: o pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`, `ORD-26`).
+
+   Nas recusas o comando sai com código 1. O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Um pedido cancelado depois de um envio sem resposta entra na verificação tardia: se a fatura aparecer no ERP mesmo assim, o alerta [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) dispara.
 6. Uma mensagem com o corpo fora do schema fica na DLQ: a reconciliação a deixa para o runbook sem consultar o ERP (`ORD-14`), e um `redrive` só a devolve à DLQ, porque o worker a rejeita de novo (`ORD-12`). Se o corpo traz o `orderId`, trate o pedido pelos passos 3 e 5. O runbook ainda não tem um comando que apague uma mensagem da DLQ; até ter, silencie o alerta `CasecellshopDLQ` no Alertmanager com uma expiração curta e, antes de renovar o silêncio, confira no dashboard que `casecellshop_queue_messages{casecellshop_queue_name="dlq"}` ainda é 1, para não esconder uma mensagem que chegue depois.
+
+#### Fatura tardia ou duplicada
+
+A verificação tardia do worker (AD-031) revisita, 15 min depois da última chamada ao ERP, os pedidos com mais de um envio ou com um envio sem resposta seguido de cancelamento. Ela não muda o pedido nem o estoque: cada achado precisa de decisão. Cada achado também quer dizer que o ERP real não cumpre a H4 (conclui ou abandona uma criação em até 40 s) nem a H1b (`ORD-06`, `ORD-23`, `ORD-24`).
+
+1. Ache os pedidos: o log `casecellshop.order.late_invoice.detected` traz o `orderId` e a causa. A marca fica no banco, também depois de o alerta resolver:
+
+   ```sql
+   select order_id, late_finding, late_checked_at from outbox where late_finding is not null order by late_checked_at desc;
+   ```
+
+2. Confira no ERP as faturas da referência, que é o `orderId` (H1a), e o pedido na loja. No ERP simulado:
+
+   ```sql
+   select id, reference, total_cents, created_at from erp_sim.invoices where reference = '<orderId>' order by id;
+   select status, failure_reason, outcome_at from orders where id = '<orderId>';
+   ```
+
+3. `duplicate` (pedido `invoiced` com mais de uma fatura): mantenha a fatura mais antiga, que é a que a consulta pela referência devolve, e estorne ou cancele as outras no ERP, pelo procedimento financeiro dele, citando o `orderId`. Na loja, o pedido e o estoque já estão certos: a venda foi baixada uma vez. O estorno devolve o estoque no ERP, e a próxima rodada da sincronização o traz para a loja.
+4. `failed_order` (pedido `failed` que o ERP faturou): o cliente viu o pedido falhar. Combine com o atendimento:
+   - **padrão, desfazer a fatura:** estorne ou cancele a fatura no ERP. O pedido segue `failed`, e a reserva já foi liberada; o estorno devolve o estoque no ERP, e a sincronização o traz;
+   - **honrar o pedido** (o cliente confirma a compra): mantenha a fatura e acerte a loja numa transação, na ordem de lock (outbox, pedido, estoque por SKU, um `UPDATE` por linha). O estoque só muda se o pedido mudou:
+
+     ```sql
+     begin;
+     select order_id from outbox where order_id = '<orderId>' for update;
+     update orders set status = 'invoiced', failure_reason = null, outcome_at = now()
+       where id = '<orderId>' and status = 'failed' returning id;
+     -- só se o UPDATE acima devolveu a linha; um UPDATE por item, em ordem de SKU:
+     select sku, quantity from order_items where order_id = '<orderId>' order by sku;
+     update inventory set on_hand = greatest(on_hand - <quantity>, 0), sold_total = sold_total + <quantity>
+       where sku = '<sku>';
+     commit;
+     ```
+
+5. Reveja a H4: compare o `created_at` das faturas com o `last_call_at` do pedido na outbox. Se o ERP demora mais que 40 s para concluir uma criação, aumente o atraso mínimo e a visibilidade da mensagem numa decisão nova (`design.md`, "Parâmetros"), antes que o caso se repita.
+
+#### Verificação tardia sem leitura do ERP
+
+A contagem de faturas da verificação tardia lê o banco do ERP (MySQL, acesso de leitura), fora da API (AD-031). Enquanto essa leitura falha, a fatura duplicada não é detectada; os pedidos ficam sem a marca e voltam a cada rodada, então nada se perde quando a leitura volta.
+
+1. Veja o desfecho `transient` no histograma do ERP com a operação `count_invoices` e, no Jaeger, os spans `erp.count_invoices` com erro (`error.type` = `transient`): a camada anticorrupção classifica a falha da leitura e não a repassa ao log.
+2. Credencial vencida ou permissão retirada: renove o usuário de leitura do banco do ERP na configuração do worker e reinicie o worker (`docker compose restart worker`).
+3. Tabela de faturas mudada numa atualização do ERP: a contagem depende dela (AD-031); ajuste o adaptador da leitura antes de confiar de novo na detecção da fatura duplicada.
+4. Quando a leitura volta, a rodada seguinte da verificação tardia confere os pedidos que ficaram para trás.
 
 #### ERP falhando ou com erro de configuração
 

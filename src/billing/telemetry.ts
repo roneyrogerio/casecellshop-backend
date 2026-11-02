@@ -55,6 +55,19 @@ export const BILLING_METRICS = {
       'Pedidos sem desfecho em 60 s do aceite, contados uma vez pela marca no banco, mesmo com várias réplicas da API.',
     attributes: {},
   },
+  'casecellshop.order.late_invoices': {
+    instrument: 'counter',
+    unit: '{order}',
+    description:
+      'Achados da verificação tardia (AD-031): fatura de pedido falho ou fatura duplicada no ERP, um por pedido.',
+    attributes: {
+      'casecellshop.late_invoice.cause': {
+        description: 'O que a verificação tardia achou no ERP.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['failed_order', 'duplicate'] },
+      },
+    },
+  },
   'casecellshop.queue.messages': {
     instrument: 'gauge',
     unit: '{message}',
@@ -216,6 +229,23 @@ export const BILLING_LOG_EVENTS = {
     levels: ['error'],
     description:
       'A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo.',
+    fields: ['err'],
+  },
+  'casecellshop.order.late_invoice.detected': {
+    levels: ['error'],
+    description:
+      'A verificação tardia achou no ERP uma fatura de pedido falho ou uma fatura duplicada; `cause` diz qual.',
+    fields: ['cause'],
+  },
+  'casecellshop.order.late_check.completed': {
+    levels: ['info'],
+    description: 'Uma rodada da verificação tardia terminou.',
+    fields: ['checked', 'found'],
+  },
+  'casecellshop.order.late_check.failed': {
+    levels: ['warn'],
+    description:
+      'A verificação tardia de um pedido, ou a rodada inteira, falhou; o pedido volta na rodada seguinte.',
     fields: ['err'],
   },
   'casecellshop.billing.gauge.read_failed': {

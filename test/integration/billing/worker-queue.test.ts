@@ -1,23 +1,11 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createSemaphore,
   type Semaphore,
 } from '../../../src/shared/semaphore.ts';
 import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { createAppPool, readInventory } from '../../helpers/checkout.ts';
-import {
-  countInvoices,
-  ERP_TIMEOUT_MS,
-  MIN_RETRY_DELAY_MS,
-} from '../../helpers/erp.ts';
+import { ERP_TIMEOUT_MS, MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 import { captureLogs } from '../../helpers/logs.ts';
 import {
   acceptOrder,
@@ -30,16 +18,17 @@ import {
   expectOneInFlight,
   expectQueuesEmpty,
   interceptPool,
+  invoiceCounter,
   ledgerViolations,
   makeClaimable,
   readOrder,
   retrySeconds,
   snapshotQueues,
   startPoll,
-  startWorkerSuite,
   stopAdvancing,
   submitOrder,
   untilState,
+  useWorkerSuite,
   waitForDlq,
   within,
   type AcceptedOrder,
@@ -49,23 +38,14 @@ import {
 
 // Fila, DLQ, falha do banco e concorrência do envio sobre o SQS (ORD-12, ORD-13, ORD-16, ORD-17, ORD-20).
 
+const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
 
-beforeAll(async () => {
-  suite = await startWorkerSuite();
-}, 180_000);
-
-afterAll(async () => {
-  await suite?.stop();
+beforeEach(() => {
+  suite = suiteOf();
 });
 
-afterEach(() => {
-  suite.releaseWorlds();
-});
-
-function invoices(orderId: string): Promise<number> {
-  return countInvoices(suite.database.pool, orderId);
-}
+const invoices = invoiceCounter(suiteOf);
 
 // Chamadas de criação desta referência que chegaram ao transporte.
 function createsFor(world: QueueWorld, reference: string): number {

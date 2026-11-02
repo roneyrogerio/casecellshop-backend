@@ -146,6 +146,14 @@ export function diagnose(facts: Facts): Diagnosis[] {
       fix: 'Use o remoto HTTPS: git remote set-url origin https://github.com/roneyrogerio/casecellshop-backend.git',
     },
     ...identityItems(facts),
+    // O commit também sai da sessão na nuvem: sem o hook, um cabeçalho fora da regra só aparece no CI (L-009).
+    {
+      item: 'Hook commit-msg do commitlint instalado',
+      ok: facts.commitHookInstalled,
+      fix: facts.remote
+        ? 'Rode git config --local core.hooksPath .githooks (o início de sessão faz isso sozinho).'
+        : 'Rode npm run setup:local (aponta o core.hooksPath deste clone para .githooks/; o início de sessão faz isso sozinho).',
+    },
   ];
   // Na nuvem, o git e o MCP vêm do proxy da sessão; essas duas peças só existem na máquina.
   if (!facts.remote) {
@@ -163,18 +171,11 @@ export function diagnose(facts: Facts): Diagnosis[] {
         fix: 'O credential helper do projeto ainda está neste clone: rode npm run setup:local -- --identity self, que o tira.',
       });
     }
-    results.push(
-      {
-        item: 'Hook commit-msg do commitlint instalado',
-        ok: facts.commitHookInstalled,
-        fix: 'Rode npm run setup:local (aponta o core.hooksPath deste clone para .githooks/; o início de sessão faz isso sozinho).',
-      },
-      {
-        item: 'Servidor github declarado no .mcp.json',
-        ok: facts.mcpRegistered,
-        fix: 'O .mcp.json do repositório não declara o servidor github: restaure-o com git checkout -- .mcp.json e rode npm run setup:local. Se o Claude Code perguntar, aceite a confiança da pasta e o servidor github.',
-      },
-    );
+    results.push({
+      item: 'Servidor github declarado no .mcp.json',
+      ok: facts.mcpRegistered,
+      fix: 'O .mcp.json do repositório não declara o servidor github: restaure-o com git checkout -- .mcp.json e rode npm run setup:local. Se o Claude Code perguntar, aceite a confiança da pasta e o servidor github.',
+    });
   }
   return results.map((result) =>
     result.ok && !result.notice ? { item: result.item, ok: true } : result,
@@ -244,7 +245,7 @@ export async function collectFacts(root: string): Promise<Facts> {
   const remote = process.env.CLAUDE_CODE_REMOTE === 'true';
   const identity = readIdentity(root);
   const tokenStore = readTokenStore(root);
-  if (!remote && !commitHookInstalled(root)) installCommitHook(root);
+  if (!commitHookInstalled(root)) installCommitHook(root);
   let login = await githubLogin(
     remote,
     remote ? undefined : readToken(identity, root),
@@ -281,7 +282,7 @@ export async function collectFacts(root: string): Promise<Facts> {
         ? 'ok'
         : keychainStatus(),
     mcpRegistered: declaresGithubServer(root),
-    commitHookInstalled: remote || commitHookInstalled(root),
+    commitHookInstalled: commitHookInstalled(root),
   };
 }
 

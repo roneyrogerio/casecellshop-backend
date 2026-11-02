@@ -6,7 +6,20 @@ import {
 } from '../shared/telemetry-instruments.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 
-const ERP_OPERATIONS = ['create_order', 'find_order', 'list_catalog'] as const;
+const ERP_OPERATIONS = [
+  'create_order',
+  'find_order',
+  'list_catalog',
+  'count_invoices',
+] as const;
+
+// O counter de erro de configuração alerta sobre as operações da API; a contagem de faturas é só do
+// painel interno e fica de fora (A14), embora o histograma de duração a meça como as demais.
+const ERP_API_OPERATIONS = [
+  'create_order',
+  'find_order',
+  'list_catalog',
+] as const;
 
 const ERP_OUTCOMES = [
   'ok',
@@ -56,7 +69,7 @@ export const ERP_METRICS = {
       'casecellshop.erp.operation': {
         description: 'Operação da porta ErpClient.',
         requirement: 'required',
-        values: { kind: 'enum', values: ERP_OPERATIONS },
+        values: { kind: 'enum', values: ERP_API_OPERATIONS },
       },
     },
   },

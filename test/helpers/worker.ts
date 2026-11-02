@@ -46,7 +46,7 @@ import {
 import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
 import { createManualClock, type ManualClock } from './clock.ts';
 import { startMigratedDatabase, type TestDatabase } from './database.ts';
-import { ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
+import { countInvoices, ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
 import {
   countsOf,
   observeQueue,
@@ -333,6 +333,7 @@ export function createErpWorld(
   // Com a telemetria, a camada anticorrupção produz as métricas do ERP (OBS-02, M3); os spans da tentativa são do worker, não dela.
   const erp = createErpClient({
     transport,
+    invoiceReader: sim.invoiceReader,
     clock,
     timeoutMs: ERP_TIMEOUT_MS,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
@@ -417,6 +418,13 @@ export function useWorkerSuite(): () => WorkerSuite {
     if (!started) throw new Error('a suíte do worker ainda não subiu');
     return started;
   };
+}
+
+// Conta as faturas do pedido no erp_sim pela referência; a suíte é lida só na chamada, depois de subir.
+export function invoiceCounter(
+  suiteOf: () => WorkerSuite,
+): (orderId: string) => Promise<number> {
+  return (orderId) => countInvoices(suiteOf().database.pool, orderId);
 }
 
 // ---------------------------------------------------------------- mundo de um teste: ERP, filas e relógio
@@ -836,6 +844,19 @@ export async function ageLastCall(
 ): Promise<void> {
   await pool.query(
     'update outbox set last_call_at = now() - make_interval(secs => $2) where order_id = $1 and last_call_at is not null',
+    [orderId, seconds],
+  );
+}
+
+// O início da última criação enviada ao ERP (`last_create_at`, AD-031) fica velho: é por ele que o cancel mede a
+// janela de assentamento. Semeado à parte do `last_call_at`, que as consultas da reconciliação regravam.
+export async function ageLastCreate(
+  pool: pg.Pool,
+  orderId: string,
+  seconds: number,
+): Promise<void> {
+  await pool.query(
+    'update outbox set last_create_at = now() - make_interval(secs => $2) where order_id = $1',
     [orderId, seconds],
   );
 }

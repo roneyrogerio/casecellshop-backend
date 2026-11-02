@@ -17,6 +17,7 @@ import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
 import { seedErpProduct } from '../../helpers/erp.ts';
+import { buildLateCheck } from '../../helpers/late-check.ts';
 import {
   parseExposition,
   parseUnits,
@@ -218,6 +219,15 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'api',
   },
+  // A verificação tardia (AD-031) roda no worker: o counter nasce com 0 para as duas causas no `start()`.
+  'casecellshop.order.late_invoices': {
+    exported: 'casecellshop_order_late_invoices_total',
+    type: 'counter',
+    unit: '{order}',
+    labels: ['casecellshop_late_invoice_cause'],
+    optionalLabels: [],
+    process: 'worker',
+  },
   'casecellshop.queue.messages': {
     exported: 'casecellshop_queue_messages',
     type: 'gauge',
@@ -273,6 +283,8 @@ const ENTRIES = Object.entries(EXPECTED) as [MetricName, ExportedMetric][];
 const EXPORTER_OWN = ['target_info'];
 
 let suite: WorkerSuite;
+let lateCheckStarted = false;
+let lateCheckStartError: unknown;
 let apiText: string;
 let workerText: string;
 let api: Exposition;
@@ -355,12 +367,22 @@ async function startQueueLoops(
 ): Promise<{ stop(): Promise<void> }> {
   const worker = buildWorker(world, { config: { receiveWaitSeconds: 1 } });
   const { reconciler } = buildReconciler(world, { telemetry: workerTelemetry });
+  const lateCheck = buildLateCheck(world, { telemetry: workerTelemetry });
   await worker.start();
   await reconciler.start();
+  // O counter da verificação tardia nasce no `start()`. O erro fica guardado e é afirmado num teste próprio, para
+  // a falta do comportamento reprovar a tabela dos nomes por asserção e não derrubar o arranjo de todos os testes.
+  try {
+    await lateCheck.start();
+    lateCheckStarted = true;
+  } catch (error) {
+    lateCheckStartError = error;
+  }
   return {
     async stop() {
       await stopAdvancing(worker, world);
       await driveClock(reconciler.stop(), world);
+      if (lateCheckStarted) await driveClock(lateCheck.stop(), world);
     },
   };
 }
@@ -565,6 +587,23 @@ describe('OBS-07 nomes que o /metrics exporta, traduzidos pelo exportador do Pro
         expect(expectedUnits.get(name), `unidade de ${name}`).toBe(unit);
       }
     }
+  });
+
+  it('OBS-02 o start() da verificação tardia sobe sem erro e deixa o counter casecellshop_order_late_invoices_total com 0 para as duas causas, sem orderId', () => {
+    expect(lateCheckStartError, 'erro do start() da verificação tardia').toBe(
+      undefined,
+    );
+    const samples = worker.get(
+      'casecellshop_order_late_invoices_total',
+    )?.samples;
+    const byCause: Record<string, number> = {};
+    for (const sample of samples ?? [])
+      byCause[sample.labels['casecellshop_late_invoice_cause'] ?? ''] =
+        sample.value;
+    expect(byCause).toEqual({ failed_order: 0, duplicate: 0 });
+    expect(
+      (samples ?? []).flatMap((sample) => Object.keys(sample.labels)),
+    ).not.toContain('orderId');
   });
 
   it('OBS-02 o /metrics da API e o do worker juntos expõem toda métrica do catálogo, cada uma no processo que a produz', () => {

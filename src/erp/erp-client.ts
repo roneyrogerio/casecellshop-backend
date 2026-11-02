@@ -59,6 +59,9 @@ export type FindOrderResult =
   | ErpTransient
   | ErpConfigError;
 
+// A contagem vem da leitura do banco do ERP, não da API: falha só como transitória (AD-031).
+export type CountInvoicesResult = { kind: 'ok'; count: number } | ErpTransient;
+
 export type ListCatalogResult =
   { kind: 'ok'; page: ErpCatalogPage } | ErpTransient | ErpConfigError;
 
@@ -70,4 +73,6 @@ export interface ErpClient {
   createOrder(request: ErpOrderRequest): Promise<CreateOrderResult>;
   // H1a: consulta pela referência externa (o orderId da loja).
   findOrderByReference(reference: string): Promise<FindOrderResult>;
+  // Faturas da referência, lidas do MySQL do ERP: a única operação fora da API (AD-031).
+  countInvoicesByReference(reference: string): Promise<CountInvoicesResult>;
 }

@@ -1,9 +1,12 @@
 // Linha de comando do runbook da DLQ: `node src/main/runbook.ts redrive` e
 // `node src/main/runbook.ts cancel <orderId>` (design.md, "Worker:
 // reconciliação e runbook").
-import { cancelOrder, redriveDlq } from '../billing/runbook.ts';
+import { cancelOrder, describeCancel, redriveDlq } from '../billing/runbook.ts';
+import { DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
 import { OrderId } from '../contract/orders.ts';
 import { createPool } from '../db/pool.ts';
+import { createErpClient } from '../erp/acl.ts';
+import { createSimulatedErp } from '../erp/sim/index.ts';
 import { systemClock } from '../shared/clock.ts';
 import { requireEnv } from '../shared/config.ts';
 import { createLogger } from '../shared/logging.ts';
@@ -48,12 +51,20 @@ try {
   } else {
     const pool = createPool(requireEnv('DATABASE_URL'), logger);
     try {
-      const { changed } = await cancelOrder(pool, orderId);
-      process.stdout.write(
-        changed
-          ? `pedido ${orderId} cancelado\n`
-          : `pedido ${orderId} não mudou: já tinha desfecho\n`,
+      // O ERP simulado e a camada anticorrupção, como no worker: o cancelamento consulta o ERP antes (AD-031).
+      const sim = createSimulatedErp({ pool, clock: systemClock });
+      const erp = createErpClient({
+        transport: sim.transport,
+        invoiceReader: sim.invoiceReader,
+        clock: systemClock,
+        timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs,
+      });
+      const { message, failed } = describeCancel(
+        orderId,
+        await cancelOrder({ pool, erp }, orderId),
       );
+      process.stdout.write(`${message}\n`);
+      if (failed) exitCode = 1;
     } finally {
       await pool.end();
     }

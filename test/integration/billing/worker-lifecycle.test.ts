@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settle, WAIT_GUARD_MS, waitAdvancing } from '../../helpers/async.ts';
 import {
   buildWorker,
@@ -15,10 +7,10 @@ import {
   expectInvoiced,
   expectOneInFlight,
   readOrder,
-  startWorkerSuite,
   stopAdvancing,
   submitOrder,
   untilInvoiced,
+  useWorkerSuite,
   within,
   type Gate,
   type QueueWorld,
@@ -29,18 +21,11 @@ import {
 // receber, e em qualquer sequência de start() e stop() o stop() que resolve por último deixa o worker parado
 // (um estado só: parado, rodando ou parando).
 
+const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
 
-beforeAll(async () => {
-  suite = await startWorkerSuite();
-}, 180_000);
-
-afterAll(async () => {
-  await suite?.stop();
-});
-
-afterEach(() => {
-  suite.releaseWorlds();
+beforeEach(() => {
+  suite = suiteOf();
 });
 
 // O laço do start() usa o long polling de 1 s do design; sem ele giraria sem parar contra o ElasticMQ.

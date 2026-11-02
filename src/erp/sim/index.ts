@@ -4,11 +4,12 @@ import type { Clock } from '../../shared/clock.ts';
 import { createErpDb, type ErpSimDb } from '../../db/database.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpRequest,
   type ErpResponse,
   type ErpTransport,
 } from '../transport.ts';
-import { createOrder, handle } from './store.ts';
+import { countInvoices, createOrder, handle } from './store.ts';
 
 export interface SimulatedErpOptions {
   pool: Pool;
@@ -18,7 +19,8 @@ export interface SimulatedErpOptions {
   withoutH1b?: boolean;
 }
 
-export type ErpSimOperation = ErpRequest['op'];
+// `countInvoices` é a leitura do banco do ERP, fora do transporte (AD-031).
+export type ErpSimOperation = ErpRequest['op'] | 'countInvoices';
 
 // Cada comportamento vale para uma chamada só (design.md, "Roteiro do ERP simulado").
 export type ErpSimBehavior =
@@ -34,7 +36,7 @@ export type ErpSimBehavior =
 
 export interface ErpSimMatch {
   op?: ErpSimOperation;
-  // Só na criação e na consulta, que têm referência.
+  // Só na criação, na consulta e na contagem, que têm referência.
   reference?: string;
 }
 
@@ -48,6 +50,8 @@ export interface ErpSimScript {
 
 export interface SimulatedErp {
   transport: ErpTransport;
+  // Faz o papel do acesso de leitura ao MySQL do ERP: conta as linhas de erp_sim.invoices.
+  invoiceReader: ErpInvoiceReader;
   script: ErpSimScript;
 }
 
@@ -91,16 +95,14 @@ function trackWrite({ writes }: Sim, write: Promise<unknown>): void {
   writes.add(tracked);
 }
 
-function nextBehavior(sim: Sim, request: ErpRequest): ErpSimBehavior {
-  const reference =
-    request.op === 'createOrder'
-      ? request.body.reference
-      : request.op === 'findOrder'
-        ? request.reference
-        : undefined;
+function nextBehavior(
+  sim: Sim,
+  op: ErpSimOperation,
+  reference: string | undefined,
+): ErpSimBehavior {
   const index = sim.queue.findIndex(
     ({ match }) =>
-      (match.op === undefined || match.op === request.op) &&
+      (match.op === undefined || match.op === op) &&
       (match.reference === undefined || match.reference === reference),
   );
   if (index < 0) return sim.defaultBehavior;
@@ -188,12 +190,33 @@ function sendFaulty(
   }
 }
 
+function referenceOf(request: ErpRequest): string | undefined {
+  if (request.op === 'createOrder') return request.body.reference;
+  return request.op === 'findOrder' ? request.reference : undefined;
+}
+
+// A leitura do banco segue o roteiro só nos comportamentos que fazem sentido para ela; os outros
+// valem como `normal`, porque a leitura não tem status nem criação.
+async function readInvoiceCount(
+  sim: Sim,
+  reference: string,
+  signal: AbortSignal,
+): Promise<number> {
+  const behavior = nextBehavior(sim, 'countInvoices', reference);
+  if (behavior.mode === 'slow')
+    await sleepUnlessAborted(sim.clock, behavior.delayMs, signal);
+  else if (behavior.mode === 'unavailable')
+    throw new ErpNetworkError('ECONNREFUSED');
+  else if (behavior.mode === 'hang') return abortedPromise(signal);
+  return countInvoices(sim, reference);
+}
+
 async function send(
   sim: Sim,
   request: ErpRequest,
   signal: AbortSignal,
 ): Promise<ErpResponse> {
-  const behavior = nextBehavior(sim, request);
+  const behavior = nextBehavior(sim, request.op, referenceOf(request));
   if (isFaulty(behavior)) return sendFaulty(sim, behavior, request, signal);
   switch (behavior.mode) {
     case 'normal':
@@ -244,6 +267,10 @@ export function createSimulatedErp({
 
   return {
     transport: { send: (request, signal) => send(sim, request, signal) },
+    invoiceReader: {
+      countInvoices: (reference, signal) =>
+        readInvoiceCount(sim, reference, signal),
+    },
     script,
   };
 }

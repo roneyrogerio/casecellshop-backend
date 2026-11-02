@@ -150,7 +150,7 @@ Seção: [Concorrência e idempotência](https://github.com/roneyrogerio/casecel
 
 ## 5. Mensageria, resiliência, contrato e IA
 
-Seção: [Mensageria e resiliência](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#mensageria-e-resiliência). Critérios: `DOC-MSG-01` a `DOC-MSG-04`; testes `ORD-01` a `ORD-22`.
+Seção: [Mensageria e resiliência](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#mensageria-e-resiliência). Critérios: `DOC-MSG-01` a `DOC-MSG-04`; testes `ORD-01` a `ORD-27`.
 
 **Publicar antes ou depois de gravar o pedido.** Nenhum dos dois: publicar antes gera mensagem fantasma se a gravação falha; publicar depois gera pedido fantasma se o processo cai entre os dois passos. A mensagem é uma linha da outbox, gravada na mesma transação do pedido, da chave e da reserva, e um *Message Relay* a publica no SQS depois do commit.
 
@@ -160,7 +160,7 @@ Seção: [Mensageria e resiliência](https://github.com/roneyrogerio/casecellsho
 - a consulta ao ERP pelo `orderId` antes de criar de novo, pela premissa de que a API do ERP aceita essa referência e permite consultá-la. A consulta só acontece 45 s depois do início da chamada anterior, pela premissa de que o ERP conclui ou abandona uma criação em até 40 s;
 - a premissa de que o ERP recusa uma segunda criação com a mesma referência.
 
-Limite declarado: se o ERP não recusar a criação repetida e passar dos 40 s, um pedido pode terminar com duas faturas, caso que um teste demonstra (`ORD-06`).
+Limite declarado: se o ERP não recusar a criação repetida e passar dos 40 s, um pedido pode terminar com duas faturas, ou falho com uma fatura que aparece depois, caso que um teste demonstra (`ORD-06`). A loja não evita esses casos, porque o ERP não deduplica, mas os detecta: 15 min depois da última chamada ao ERP, uma verificação no worker consulta pelo `orderId` os pedidos falhos e conta, pelo acesso de leitura ao MySQL do ERP, as faturas dos faturados. Cada caso dispara um alerta uma vez, com o runbook de estorno no README. O cancelamento manual e a recusa que vem depois de um envio sem resposta também esperam essa janela e consultam o ERP antes de concluir.
 
 **Retry, DLQ, OpenAPI e testes.** Cada resposta do ERP é classificada antes do retry: permanente, transitória, ambígua ou erro de configuração. O retry espera pelo menos 45 s, com *full jitter* sobre um exponencial, até 12 recebimentos, e depois vai para a DLQ do SQS, com o pedido ainda `pending` e a reserva feita. A reconciliação lê a DLQ a cada 5 min, e o runbook faz o *redrive* ou cancela. O cliente acompanha o pedido em `GET /orders/{orderId}/status`, com o [OpenAPI](https://github.com/roneyrogerio/casecellshop-backend/blob/main/openapi.yaml) gerado do mesmo contrato em zod que valida as respostas nos testes. Os testes contam faturas no ERP simulado, e não chamadas, contra o PostgreSQL e o ElasticMQ reais.
 

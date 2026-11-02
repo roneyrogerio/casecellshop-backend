@@ -5,16 +5,16 @@ import type { Clock } from '../shared/clock.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
 import type {
+  CountInvoicesResult,
   CreateOrderResult,
-  ErpCatalogItem,
-  ErpCatalogPage,
   ErpClient,
-  ErpOrder,
   FindOrderResult,
   ListCatalogResult,
 } from './erp-client.ts';
+import { bodyCode, isRecord, parseCatalogPage, parseOrder } from './parsing.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpRequest,
   type ErpResponse,
   type ErpTransport,
@@ -22,6 +22,8 @@ import {
 
 export interface ErpClientOptions {
   transport: ErpTransport;
+  // Leitura do banco do ERP para a contagem de faturas (AD-031).
+  invoiceReader: ErpInvoiceReader;
   // O timeout aborta a chamada pelo clock.sleep, para o teste controlar o tempo.
   clock: Clock;
   timeoutMs: number;
@@ -39,50 +41,25 @@ type Outcome =
   // Rejeição que não é de rede nem o aborto do timeout: pode ter chegado ao ERP.
   | { kind: 'transport_error' };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function bodyCode(body: unknown): unknown {
-  return isRecord(body) ? body['code'] : undefined;
-}
-
-function parseOrder(body: unknown): ErpOrder | undefined {
-  if (!isRecord(body)) return undefined;
-  const { erpOrderId, reference } = body;
-  if (typeof erpOrderId !== 'string' || typeof reference !== 'string')
-    return undefined;
-  return { erpOrderId, reference };
-}
-
-function parseCatalogItem(value: unknown): ErpCatalogItem | undefined {
-  if (!isRecord(value)) return undefined;
-  const { sku, name, priceCents, onHand } = value;
-  if (
-    typeof sku !== 'string' ||
-    typeof name !== 'string' ||
-    // Dinheiro em centavos inteiros e estoque nunca negativo: um valor fora disso é contrato quebrado.
-    typeof priceCents !== 'number' ||
-    typeof onHand !== 'number' ||
-    !Number.isSafeInteger(priceCents) ||
-    !Number.isSafeInteger(onHand) ||
-    priceCents < 0 ||
-    onHand < 0
-  ) {
-    return undefined;
-  }
-  return { sku, name, priceCents, onHand };
-}
-
 // 400, 401, 403: erro do adaptador ou credencial vencida, em toda operação.
 function isConfigStatus(status: number): boolean {
   return status === 400 || status === 401 || status === 403;
 }
 
-async function call(
-  { transport, clock, timeoutMs }: ErpClientOptions,
-  request: ErpRequest,
-): Promise<Outcome> {
+// Como cada chamada traduz o que a corrida devolve; a tradução roda dentro da mesma função assíncrona
+// da corrida, para não somar passos de microtarefa que os testes de tempo do roteiro percebem.
+interface RaceMapping<T, R> {
+  value: (value: T) => R;
+  timeout: () => R;
+  rejected: (error: unknown) => R;
+}
+
+// Aplica o timeout a qualquer chamada ao ERP (a API ou a leitura do banco), pelo relógio injetável.
+async function raceWithTimeout<T, R>(
+  { clock, timeoutMs }: ErpClientOptions,
+  run: (signal: AbortSignal) => Promise<T>,
+  map: RaceMapping<T, R>,
+): Promise<R> {
   const controller = new AbortController();
   let timedOut = false;
   // O sleep do relógio injetável não se cancela: se a chamada termina antes, o abort
@@ -103,19 +80,48 @@ async function call(
     );
   });
   try {
-    return {
-      kind: 'response',
-      response: await Promise.race([
-        transport.send(request, controller.signal),
-        aborted,
-      ]),
-    };
+    return map.value(await Promise.race([run(controller.signal), aborted]));
   } catch (error) {
-    if (timedOut) return { kind: 'timeout' };
-    if (error instanceof ErpNetworkError)
-      return { kind: 'network', code: error.code };
-    return { kind: 'transport_error' };
+    return timedOut ? map.timeout() : map.rejected(error);
   }
+}
+
+function call(
+  options: ErpClientOptions,
+  request: ErpRequest,
+): Promise<Outcome> {
+  return raceWithTimeout<ErpResponse, Outcome>(
+    options,
+    (signal) => options.transport.send(request, signal),
+    {
+      value: (response) => ({ kind: 'response', response }),
+      timeout: () => ({ kind: 'timeout' }),
+      rejected: (error) =>
+        error instanceof ErpNetworkError
+          ? { kind: 'network', code: error.code }
+          : { kind: 'transport_error' },
+    },
+  );
+}
+
+// A leitura do banco do ERP não tem status HTTP: qualquer falha, o timeout ou uma contagem que não
+// seja inteiro não negativo é transitória, e a contagem nunca vira `ok` por engano (AD-031).
+function countInvoices(
+  options: ErpClientOptions,
+  reference: string,
+): Promise<CountInvoicesResult> {
+  return raceWithTimeout(
+    options,
+    (signal) => options.invoiceReader.countInvoices(reference, signal),
+    {
+      value: (count: unknown): CountInvoicesResult =>
+        typeof count === 'number' && Number.isSafeInteger(count) && count >= 0
+          ? { kind: 'ok', count }
+          : { kind: 'transient', cause: 'invalid_count' },
+      timeout: () => ({ kind: 'transient', cause: 'timeout' }),
+      rejected: () => ({ kind: 'transient', cause: 'reader_error' }),
+    },
+  );
 }
 
 // Desfechos de falha técnica: marcam o span com erro. As recusas de negócio (`permanent`) e
@@ -171,7 +177,7 @@ async function observe<T extends { kind: ErpOutcome }>(
     metrics.add('casecellshop.erp.client.active_operations', -1);
     // Uma exceção inesperada não tem desfecho da lista fechada: só a duração fica sem registro.
     if (result) {
-      if (result.kind === 'config_error')
+      if (result.kind === 'config_error' && operation !== 'count_invoices')
         metrics.add('casecellshop.erp.config_errors', 1, {
           'casecellshop.erp.operation': operation,
         });
@@ -254,20 +260,6 @@ function classifyFind(outcome: Outcome): FindOrderResult {
   return { kind: 'transient', cause: `http_${status}` };
 }
 
-// Undefined quando o corpo não é uma página válida do catálogo.
-function parseCatalogPage(body: unknown): ErpCatalogPage | undefined {
-  if (
-    !isRecord(body) ||
-    !Array.isArray(body['items']) ||
-    typeof body['hasNext'] !== 'boolean'
-  )
-    return undefined;
-  const items = body['items'].map(parseCatalogItem);
-  if (!items.every((item): item is ErpCatalogItem => item !== undefined))
-    return undefined;
-  return { items, hasNext: body['hasNext'] };
-}
-
 function classifyList(outcome: Outcome): ListCatalogResult {
   if (outcome.kind !== 'response')
     return { kind: 'transient', cause: transientCause(outcome) };
@@ -308,6 +300,10 @@ export function createErpClient(options: ErpClientOptions): ErpClient {
     listCatalog: (page) =>
       observe(options, 'list_catalog', async () =>
         classifyList(await call(options, { op: 'listCatalog', page })),
+      ),
+    countInvoicesByReference: (reference) =>
+      observe(options, 'count_invoices', () =>
+        countInvoices(options, reference),
       ),
   };
 }

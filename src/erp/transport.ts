@@ -18,6 +18,12 @@ export interface ErpTransport {
   send(request: ErpRequest, signal: AbortSignal): Promise<ErpResponse>;
 }
 
+// Acesso de leitura ao banco do ERP (MySQL), só para contar as faturas de uma referência (AD-031).
+export interface ErpInvoiceReader {
+  // Rejeita quando a leitura falha, ou com o motivo do sinal quando ele aborta.
+  countInvoices(reference: string, signal: AbortSignal): Promise<number>;
+}
+
 // ECONNREFUSED e ENOTFOUND: a requisição não chegou. ECONNRESET: caiu depois do envio.
 export type ErpNetworkCode = 'ECONNREFUSED' | 'ENOTFOUND' | 'ECONNRESET';
 
