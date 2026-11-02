@@ -156,7 +156,7 @@ describe('ORD-12 mensagem que derruba o processo', () => {
     ],
     ['texto que não é JSON', 'isto nao e json'],
   ])(
-    'ORD-12 corpo com %s: o worker não chama o ERP, loga outbox.invalid_message, não responde ao SQS e a mensagem chega à DLQ pelo limite',
+    'ORD-12 corpo com %s: o worker não chama o ERP, loga casecellshop.outbox.message.rejected, não responde ao SQS e a mensagem chega à DLQ pelo limite',
     async (_label, body) => {
       const maxReceiveCount = 2;
       const world = await createWorld(suite, { maxReceiveCount });
@@ -190,7 +190,7 @@ describe('ORD-12 mensagem que derruba o processo', () => {
       expect(world.transport.sends).toHaveLength(1);
       expect(world.queue.deletes).toHaveLength(1);
       expect(world.queue.visibilityChanges).toEqual([]);
-      const invalid = logs.eventsOf('outbox.invalid_message');
+      const invalid = logs.eventsOf('casecellshop.outbox.message.rejected');
       expect(invalid).toHaveLength(maxReceiveCount);
       expect(invalid[0]).toMatchObject({ level: 'error' });
       const [dead] = await world.queues.dlq.receive({ max: 1, waitSeconds: 0 });
@@ -364,7 +364,8 @@ describe('ORD-16 falha do banco ao gravar o desfecho', () => {
     // A injeção disparou, e cada transação de conclusão tentada foi contada: o teto é 5.
     expect(probe.fired, 'transações de conclusão tentadas').toBe(5);
     expect(
-      logs.eventsOf('outbox.conclusion_failed', order.orderId).length,
+      logs.eventsOf('casecellshop.outbox.conclusion.failed', order.orderId)
+        .length,
     ).toBeGreaterThanOrEqual(1);
     // Esgotadas as repetições, a mensagem não é apagada, nem devolvida, nem vai para a DLQ.
     expect(world.queue.deletes).toEqual([]);

@@ -37,13 +37,13 @@ Write the evidence in Brazilian Portuguese. Keep each output trimmed to the line
    ```
 
 4. **Status:** poll the `Location` from inside the container until `invoiced` (up to 30 s), printing each response.
-5. **Worker metrics:** the port is not published, so read it inside the container:
+5. **Worker metrics:** the port is not published, so read it inside the container. The names are the Prometheus names from `.specs/features/casecellshop/telemetry.md` (OBS-07); the filter drops the histogram buckets:
 
    ```sh
-   dc exec -T worker node -e "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => console.log(t.split('\n').filter((l) => /^(outbox_|erp_|order_)/.test(l)).join('\n')))"
+   dc exec -T worker node -e "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => console.log(t.split('\n').filter((l) => /^casecellshop_/.test(l) && !/_bucket\{/.test(l)).join('\n')))"
    ```
 
-6. **Logs:** `dc logs --no-color api worker | grep <X-Request-Id>`. Check that the worker lines carry `correlationId`, `orderId`, `attempt`, `trace_id` and `span_id`.
+6. **Logs:** `dc logs --no-color api worker | grep <X-Request-Id>`. Check that the worker lines carry `correlationId`, `orderId`, `attempt`, `trace_id` and `span_id`, and that every `event` is a name from `telemetry.md` (`casecellshop.<domain>.<event>`).
 7. **Down:** `dc down -v`, also when a step fails.
 
 ## Report

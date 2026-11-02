@@ -2527,7 +2527,8 @@ const BASE_MUTATIONS: BaseMutation[] = [
   [
     'compara a base sem diferenciar maiúsculas',
     BASE_CONDITION,
-    ' && [ "${BASE_REF,,}" = "main" ]',
+    // tr em vez de ${BASE_REF,,}: a expansão é do bash 4 e quebra no 3.2 do macOS ("bad substitution")
+    ` && [ "$(printf '%s' "$BASE_REF" | tr '[:upper:]' '[:lower:]')" = "main" ]`,
     [BASE_CASE_LABEL],
   ],
   [

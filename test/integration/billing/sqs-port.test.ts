@@ -104,7 +104,7 @@ describe('ORD-22 porta do SQS: envio', () => {
     expect(bodies).toEqual(batch.map((message) => message.body).sort());
   });
 
-  it('ORD-22 send para uma fila que não existe rejeita: o erro do SQS chega a quem chama, que decide (o relay loga outbox.relay_error)', async () => {
+  it('ORD-22 send para uma fila que não existe rejeita: o erro do SQS chega a quem chama, que decide (o relay loga casecellshop.outbox.relay.failed)', async () => {
     const { client, queueUrl } = await fresh();
     const ghost = createQueue(client, `${queueUrl}-inexistente`);
 

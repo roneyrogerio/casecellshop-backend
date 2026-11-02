@@ -5,12 +5,9 @@ import {
   SpanKind,
   SpanStatusCode,
   type Attributes,
-  type Counter,
-  type Histogram,
   type Meter,
   type Span,
   type Tracer,
-  type UpDownCounter,
 } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
@@ -27,6 +24,7 @@ import {
 } from '@opentelemetry/sdk-trace';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { optionalEnv } from './config.ts';
+import type { LogEventSpec } from './telemetry-catalog.ts';
 import { logContext } from './logging.ts';
 import { resolveServiceIdentity } from './service-identity.ts';
 
@@ -38,22 +36,9 @@ export interface TelemetryOptions {
 
 export interface Telemetry {
   tracer: Tracer;
-  // Duração HTTP em segundos; labels: route (template), method e status_class.
-  httpRequestDuration: Histogram;
-  // Desfecho de cada checkout; único label: outcome, de lista fechada (OBS-02).
-  checkoutOutcome: Counter;
-  // Métricas do worker e da camada anticorrupção (design.md, "Nomes das métricas do worker").
-  // Labels de lista fechada; nunca orderId nem sku.
-  outboxAttemptOutcome: Counter;
-  outboxConclusionNoRow: Counter;
-  // Linhas da outbox que o relay publicou no SQS; sem label.
-  outboxPublished: Counter;
-  orderAcceptToInvoice: Histogram;
-  erpRequestDuration: Histogram;
-  erpRequestTotal: Counter;
-  erpRequestsInFlight: UpDownCounter;
-  erpConfigError: Counter;
-  erpOutOfStockRejection: Counter;
+  // Cada pasta obtém o Meter do próprio escopo e cria os instrumentos da própria declaração (metricsOf); o
+  // MeterProvider fica aqui para cada teste ter o seu e as séries não se misturarem.
+  meter(scope: string): Meter;
   // Abre um span ativo, o fecha ao fim da função e registra a falha, se houver.
   withSpan<T>(
     name: string,
@@ -64,17 +49,6 @@ export interface Telemetry {
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
-
-// Limiares dos SLOs (200 ms da vitrine, 500 ms do checkout) entram como fronteiras.
-const DURATION_BUCKETS_SECONDS = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2.5, 5, 10,
-];
-// A chamada ao ERP vai até o timeout de 10 s com folga; a última fronteira é 30.
-const ERP_DURATION_BUCKETS_SECONDS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30];
-// Do aceite ao faturamento pode levar minutos (H4, backoff): a fronteira em 60 separa o normal do lento.
-const ACCEPT_TO_INVOICE_BUCKETS_SECONDS = [
-  1, 5, 15, 30, 60, 120, 300, 600, 1800,
-];
 
 let contextManagerRegistered = false;
 
@@ -135,119 +109,6 @@ export function runConsumerSpan<T>(
   );
 }
 
-type Instruments = Pick<
-  Telemetry,
-  | 'httpRequestDuration'
-  | 'checkoutOutcome'
-  | 'outboxAttemptOutcome'
-  | 'outboxConclusionNoRow'
-  | 'outboxPublished'
-  | 'orderAcceptToInvoice'
-  | 'erpRequestDuration'
-  | 'erpRequestTotal'
-  | 'erpRequestsInFlight'
-  | 'erpConfigError'
-  | 'erpOutOfStockRejection'
->;
-
-function createInstruments(meter: Meter): Instruments {
-  return {
-    ...createHttpInstruments(meter),
-    ...createOutboxInstruments(meter),
-    ...createErpInstruments(meter),
-  };
-}
-
-function createHttpInstruments(
-  meter: Meter,
-): Pick<Instruments, 'httpRequestDuration' | 'checkoutOutcome'> {
-  return {
-    // O exportador Prometheus não acrescenta o sufixo da unidade: o nome já a carrega.
-    httpRequestDuration: meter.createHistogram(
-      'http_server_request_duration_seconds',
-      {
-        unit: 's',
-        description: 'Duração das requisições HTTP, base dos SLOs de latência.',
-        advice: { explicitBucketBoundaries: DURATION_BUCKETS_SECONDS },
-      },
-    ),
-    checkoutOutcome: meter.createCounter('checkout_outcome_total', {
-      description:
-        'Checkouts por desfecho: accepted, replay, out_of_stock, price_changed, invalid ou unavailable.',
-    }),
-  };
-}
-
-function createOutboxInstruments(
-  meter: Meter,
-): Pick<
-  Instruments,
-  | 'outboxAttemptOutcome'
-  | 'outboxConclusionNoRow'
-  | 'outboxPublished'
-  | 'orderAcceptToInvoice'
-> {
-  return {
-    outboxAttemptOutcome: meter.createCounter('outbox_attempt_outcome_total', {
-      description:
-        'Tentativas da outbox por desfecho: invoiced, failed, retry, dead, closed ou lease_short.',
-    }),
-    outboxConclusionNoRow: meter.createCounter(
-      'outbox_conclusion_no_row_total',
-      {
-        description:
-          'Conclusões que não afetaram linha porque o token já não valia.',
-      },
-    ),
-    outboxPublished: meter.createCounter('outbox_published_total', {
-      description: 'Linhas da outbox publicadas no SQS pelo relay.',
-    }),
-    orderAcceptToInvoice: meter.createHistogram(
-      'order_accept_to_invoice_seconds',
-      {
-        unit: 's',
-        description: 'Tempo do aceite do pedido até o faturamento no ERP.',
-        advice: { explicitBucketBoundaries: ACCEPT_TO_INVOICE_BUCKETS_SECONDS },
-      },
-    ),
-  };
-}
-
-function createErpInstruments(
-  meter: Meter,
-): Pick<
-  Instruments,
-  | 'erpRequestDuration'
-  | 'erpRequestTotal'
-  | 'erpRequestsInFlight'
-  | 'erpConfigError'
-  | 'erpOutOfStockRejection'
-> {
-  return {
-    erpRequestDuration: meter.createHistogram('erp_request_duration_seconds', {
-      unit: 's',
-      description: 'Duração das chamadas ao ERP, por operação e desfecho.',
-      advice: { explicitBucketBoundaries: ERP_DURATION_BUCKETS_SECONDS },
-    }),
-    erpRequestTotal: meter.createCounter('erp_request_total', {
-      description: 'Chamadas ao ERP por operação e desfecho.',
-    }),
-    erpRequestsInFlight: meter.createUpDownCounter('erp_requests_in_flight', {
-      description: 'Chamadas ao ERP em andamento.',
-    }),
-    erpConfigError: meter.createCounter('erp_config_error_total', {
-      description:
-        'Respostas do ERP que indicam erro de configuração, por operação.',
-    }),
-    erpOutOfStockRejection: meter.createCounter(
-      'erp_out_of_stock_rejection_total',
-      {
-        description: 'Pedidos que o ERP recusou por falta de estoque.',
-      },
-    ),
-  };
-}
-
 function createWithSpan(tracer: Tracer): Telemetry['withSpan'] {
   return (name, spanOptions, fn) =>
     tracer.startActiveSpan(name, spanOptions, async (span) => {
@@ -288,7 +149,7 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
 
   return {
     tracer,
-    ...createInstruments(meterProvider.getMeter('casecellshop')),
+    meter: (scope) => meterProvider.getMeter(scope),
     withSpan: createWithSpan(tracer),
     metricsHandler: (request, response) => {
       prometheus.getMetricsRequestHandler(request, response);
@@ -303,3 +164,28 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
     },
   };
 }
+
+// OBS-07 (AD-029): os eventos do encerramento do processo (lifecycle.ts), a telemetria declarada por esta pasta.
+export const PROCESS_LOG_EVENTS = {
+  'casecellshop.process.shutdown.started': {
+    levels: ['info'],
+    description: 'O processo recebeu o sinal e começou a encerrar.',
+    fields: ['signal'],
+  },
+  'casecellshop.process.shutdown.completed': {
+    levels: ['info'],
+    description: 'O processo encerrou no prazo.',
+    fields: [],
+  },
+  'casecellshop.process.shutdown.timed_out': {
+    levels: ['error'],
+    description:
+      'O encerramento passou do prazo e o processo saiu com código 1.',
+    fields: [],
+  },
+  'casecellshop.process.shutdown.failed': {
+    levels: ['error'],
+    description: 'O encerramento falhou.',
+    fields: ['err'],
+  },
+} as const satisfies Record<string, LogEventSpec>;

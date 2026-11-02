@@ -14,7 +14,12 @@ import {
   runCompose,
   upComposeProject,
 } from '../../helpers/compose.ts';
-import { parseExposition, valueOf } from '../../helpers/metrics.ts';
+import {
+  familyOf,
+  histogramCount,
+  metricValue,
+  parseExposition,
+} from '../../helpers/metrics.ts';
 import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
 // ORD-19 no sistema subido pelo `docker compose`: um checkout chega a invoiced pelo worker.
@@ -203,7 +208,7 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
     );
   }, 120_000);
 
-  it('OBS-02 o /metrics do processo do worker no compose expõe o desfecho invoiced e a chamada ao ERP depois do faturamento', async () => {
+  it('OBS-02 o /metrics do processo do worker no compose expõe o desfecho invoiced e a duração da chamada ao ERP depois do faturamento', async () => {
     await awaitInvoiced(await placeOrder(METRICS_SKU, 1, METRICS_PRICE_CENTS));
     // O worker não publica porta: a leitura sai de dentro do contêiner dele, na porta de métricas.
     const script =
@@ -214,20 +219,22 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
     expect(result.exitCode, result.output).toBe(0);
 
     const families = parseExposition(result.stdout);
-    expect(families.get('outbox_attempt_outcome_total')?.type).toBe('counter');
-    expect(
-      valueOf(families, 'outbox_attempt_outcome_total', {
-        outcome: 'invoiced',
-      }),
-    ).toBeGreaterThanOrEqual(1);
-    expect(
-      valueOf(families, 'erp_request_total', {
-        operation: 'create_order',
-        outcome: 'ok',
-      }),
-    ).toBeGreaterThanOrEqual(1);
-    expect(families.get('order_accept_to_invoice_seconds')?.type).toBe(
-      'histogram',
+    expect(familyOf(families, 'casecellshop.outbox.attempts')?.type).toBe(
+      'counter',
     );
+    expect(
+      metricValue(families, 'casecellshop.outbox.attempts', {
+        'casecellshop.outbox.attempt.outcome': 'invoiced',
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      histogramCount(families, 'casecellshop.erp.client.operation.duration', {
+        'casecellshop.erp.operation': 'create_order',
+        'casecellshop.erp.outcome': 'ok',
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      familyOf(families, 'casecellshop.order.accept_to_invoice.duration')?.type,
+    ).toBe('histogram');
   }, 60_000);
 });

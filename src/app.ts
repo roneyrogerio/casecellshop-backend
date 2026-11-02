@@ -1,6 +1,5 @@
 import express, { type Express } from 'express';
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import {
   checkoutRoute,
   healthRoute,
@@ -14,11 +13,12 @@ import { createOrdersRepository } from './orders/repository.ts';
 import { createOrdersRoutes } from './orders/routes.ts';
 import { createErrorHandler, notFoundHandler } from './http/problem.ts';
 import { requestContext } from './http/request-context.ts';
+import type { AppLogger } from './shared/logging.ts';
 import type { Telemetry } from './shared/telemetry.ts';
 
 export interface AppDependencies {
   pool: Pool;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
 }
 

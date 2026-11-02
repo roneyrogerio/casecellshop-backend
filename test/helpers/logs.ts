@@ -1,10 +1,9 @@
-import type { Logger } from 'pino';
-import { createLogger } from '../../src/shared/logging.ts';
+import { createLogger, type AppLogger } from '../../src/shared/logging.ts';
 
 export type LogLine = Record<string, unknown>;
 
 export interface CapturedLogs {
-  logger: Logger;
+  logger: AppLogger;
   lines: LogLine[];
   // Linhas de um evento, na ordem em que saíram.
   eventsOf(event: string, orderId?: string): LogLine[];

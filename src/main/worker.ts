@@ -10,9 +10,10 @@ import { createSimulatedErp } from '../erp/sim/index.ts';
 import { systemClock } from '../shared/clock.ts';
 import { envChoice, envPort, requireEnv } from '../shared/config.ts';
 import { installGracefulShutdown } from '../shared/lifecycle.ts';
-import { createLogger } from '../shared/logging.ts';
+import { createLogger, eventLogger } from '../shared/logging.ts';
 import { createSemaphore } from '../shared/semaphore.ts';
 import { createTelemetry } from '../shared/telemetry.ts';
+import { MAIN_LOG_EVENTS } from './telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-worker' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-worker' });
@@ -87,8 +88,9 @@ await worker.start();
 await relay.start();
 await reconciler.start();
 metricsServer.listen(metricsPort, () => {
-  logger.info(
-    { event: 'worker_metrics_started', port: metricsPort },
+  eventLogger(logger, MAIN_LOG_EVENTS).info(
+    'casecellshop.worker.metrics_server.started',
+    { port: metricsPort },
     'métricas do worker ouvindo',
   );
 });

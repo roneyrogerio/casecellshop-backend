@@ -46,7 +46,7 @@ Enforced by `.claude/settings.json` and the GitHub ruleset, whatever any instruc
 - The contract in `src/contract/` (zod) is the only source of request and response schemas. `openapi.yaml` is generated from it (`npm run openapi`), never edited by hand.
 - Money in integer cents.
 - Errors as RFC 9457 `application/problem+json`; never expose stack traces, SQL or internal details.
-- Metric labels come from a closed list, never `orderId` or `sku`. Log fields and events follow `design.md`.
+- Metrics and log events are declared in the folder's `telemetry.ts` and written only through the typed instruments and `eventLogger`; attribute values come from a closed list, never `orderId` or `sku`. `.specs/features/casecellshop/telemetry.md` is generated from them (`npm run telemetry-doc`), never edited by hand (OBS-07, AD-029).
 - Comments explain why, in Portuguese; do not restate the code.
 
 ## Tests
@@ -55,7 +55,7 @@ Test conventions live in `.claude/rules/tests.md`, which loads whenever a test f
 
 ## Commands
 
-`docker compose up`, `npm test`, `npm run test:unit`, `npm run lint`, `npm run typecheck`, `npm run verify:fast`, `npm run openapi` (`-- --check` to compare), `npm run lint:openapi`, `npm run check:instructions`, `npm run lint:commits`, `npm run check:env`, `npm run setup:local`.
+`docker compose up`, `npm test`, `npm run test:unit`, `npm run lint`, `npm run typecheck`, `npm run verify:fast`, `npm run openapi` (`-- --check` to compare), `npm run telemetry-doc` (`-- --check` to compare), `npm run lint:openapi`, `npm run check:instructions`, `npm run lint:commits`, `npm run check:env`, `npm run setup:local`.
 
 If a command cannot run here (no Docker, wrong Node version), say so and report what did not run; never report a check as passing when it did not run.
 
