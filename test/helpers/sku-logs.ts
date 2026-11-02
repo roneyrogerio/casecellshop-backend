@@ -4,8 +4,9 @@ import type { LogLine } from './logs.ts';
 import { labelNames, parseExposition, scrapeMetricsText } from './metrics.ts';
 
 // OBS-01 (os eventos com produto): o que uma linha de log pode levar além dos campos do evento. São os comuns do
-// design (time, level, service, env, version, msg, event, correlationId, trace_id, span_id) e os que o pino escreve
-// por padrão quando o teste monta o logger sem o `createLogger` (pid, hostname).
+// design (time, level, service, env, version, msg, event, correlationId, trace_id, span_id, trace_flags) e os que o
+// pino escreve por padrão quando o teste monta o logger sem o `createLogger` (pid, hostname). O trace_flags sai junto
+// de trace_id e span_id em toda linha escrita dentro de um span (`traceMixin`).
 export const COMMON_LOG_KEYS: readonly string[] = [
   'time',
   'level',
@@ -17,6 +18,7 @@ export const COMMON_LOG_KEYS: readonly string[] = [
   'correlationId',
   'trace_id',
   'span_id',
+  'trace_flags',
   'pid',
   'hostname',
 ];
