@@ -185,10 +185,10 @@ export async function readLateInvoices(
   const families = await scrapeMetrics(telemetry);
   return {
     failedOrder: metricValue(families, 'casecellshop.order.late_invoices', {
-      'casecellshop.order.late_invoice.cause': 'failed_order',
+      'casecellshop.late_invoice.cause': 'failed_order',
     }),
     duplicate: metricValue(families, 'casecellshop.order.late_invoices', {
-      'casecellshop.order.late_invoice.cause': 'duplicate',
+      'casecellshop.late_invoice.cause': 'duplicate',
     }),
   };
 }

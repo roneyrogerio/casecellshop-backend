@@ -224,7 +224,7 @@ const EXPECTED = {
     exported: 'casecellshop_order_late_invoices_total',
     type: 'counter',
     unit: '{order}',
-    labels: ['casecellshop_order_late_invoice_cause'],
+    labels: ['casecellshop_late_invoice_cause'],
     optionalLabels: [],
     process: 'worker',
   },
@@ -598,7 +598,7 @@ describe('OBS-07 nomes que o /metrics exporta, traduzidos pelo exportador do Pro
     )?.samples;
     const byCause: Record<string, number> = {};
     for (const sample of samples ?? [])
-      byCause[sample.labels['casecellshop_order_late_invoice_cause'] ?? ''] =
+      byCause[sample.labels['casecellshop_late_invoice_cause'] ?? ''] =
         sample.value;
     expect(byCause).toEqual({ failed_order: 0, duplicate: 0 });
     expect(
