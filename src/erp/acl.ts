@@ -14,6 +14,7 @@ import type {
 } from './erp-client.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpRequest,
   type ErpResponse,
   type ErpTransport,
@@ -21,6 +22,8 @@ import {
 
 export interface ErpClientOptions {
   transport: ErpTransport;
+  // Leitura do banco do ERP para a contagem de faturas (AD-031).
+  invoiceReader: ErpInvoiceReader;
   // O timeout aborta a chamada pelo clock.sleep, para o teste controlar o tempo.
   clock: Clock;
   timeoutMs: number;
@@ -301,5 +304,8 @@ export function createErpClient(options: ErpClientOptions): ErpClient {
       observe(options, 'list_catalog', async () =>
         classifyList(await call(options, { op: 'listCatalog', page })),
       ),
+    countInvoicesByReference: () => {
+      throw new Error('não implementado');
+    },
   };
 }

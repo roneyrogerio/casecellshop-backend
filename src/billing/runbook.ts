@@ -1,11 +1,8 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
-import { sql } from 'kysely';
 import type { Pool } from 'pg';
-import { createDb, runInTransaction } from '../db/database.ts';
+import type { ErpClient } from '../erp/erp-client.ts';
 import { createQueue, startRedrive } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
-import { outbox } from './call-permit.ts';
-import { applyConclusion } from './conclude.ts';
 
 // Runbook da DLQ (design.md, "Worker: reconciliação e runbook").
 
@@ -45,27 +42,37 @@ export async function redriveDlq({
   return { before, remaining };
 }
 
-// Cancela o pedido ainda pendente, depois de o operador confirmar no ERP que ele
-// não existe; devolve se o pedido mudou.
-export async function cancelOrder(
-  pool: Pool,
-  orderId: string,
-): Promise<{ changed: boolean }> {
-  const db = createDb(pool);
-  return runInTransaction(db, async (trx) => {
-    // Ordem de lock: a linha da outbox, o pedido e o estoque. Marcar a linha como publicada faz o
-    // relay parar de tentar uma linha que não passa no schema da mensagem (A12).
-    await trx
-      .updateTable('outbox')
-      .set({
-        published_at: outbox.fn.coalesce('published_at', sql<Date>`now()`),
-      })
-      .where('order_id', '=', orderId)
-      .execute();
-    const result = await applyConclusion(trx, orderId, {
-      kind: 'failed',
-      reason: 'cancelled',
-    });
-    return { changed: result.orderChanged };
-  });
+export interface CancelOrderDependencies {
+  pool: Pool;
+  erp: ErpClient;
+  // Padrão: SETTLE_WINDOW_MS; o teste pode encurtar.
+  settleWindowMs?: number;
+}
+
+// Resultado do cancelamento seguro (AD-031): só `cancelled` muda o pedido.
+export type CancelOrderResult =
+  | { kind: 'cancelled' }
+  // O pedido já tinha desfecho.
+  | { kind: 'unchanged' }
+  // A última chamada ao ERP é mais nova que a janela de assentamento.
+  | { kind: 'too_recent'; retryInMs: number }
+  | { kind: 'erp_has_order' }
+  | { kind: 'erp_unavailable' }
+  // Outra tentativa tomou a permissão de chamada entre a consulta e o cancelamento.
+  | { kind: 'permit_lost' };
+
+// Cancela o pedido ainda pendente que o ERP não tem, só fora da janela de assentamento (AD-031).
+export function cancelOrder(
+  _dependencies: CancelOrderDependencies,
+  _orderId: string,
+): Promise<CancelOrderResult> {
+  return Promise.reject(new Error('não implementado'));
+}
+
+// A mensagem ao operador de cada resultado, e se o comando sai com erro (as recusas).
+export function describeCancel(
+  _orderId: string,
+  _result: CancelOrderResult,
+): { message: string; failed: boolean } {
+  throw new Error('não implementado');
 }

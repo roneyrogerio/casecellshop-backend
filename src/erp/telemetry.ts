@@ -6,7 +6,12 @@ import {
 } from '../shared/telemetry-instruments.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 
-const ERP_OPERATIONS = ['create_order', 'find_order', 'list_catalog'] as const;
+const ERP_OPERATIONS = [
+  'create_order',
+  'find_order',
+  'list_catalog',
+  'count_invoices',
+] as const;
 
 const ERP_OUTCOMES = [
   'ok',
