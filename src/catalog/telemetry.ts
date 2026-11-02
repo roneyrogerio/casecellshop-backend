@@ -113,6 +113,18 @@ export const CATALOG_LOG_EVENTS = {
       'Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado.',
     fields: ['cause', 'page', 'err'],
   },
+  'casecellshop.catalog.sync.sku.corrected': {
+    levels: ['info'],
+    description:
+      'A sincronização corrigiu um SKU que divergia do ERP; `fields` lista os campos corrigidos (`price`, `name`, `on_hand`).',
+    fields: ['sku', 'fields'],
+  },
+  'casecellshop.catalog.sync.sku.zeroed': {
+    levels: ['warn'],
+    description:
+      'Um SKU com estoque ficou fora do ERP numa rodada completa e foi zerado.',
+    fields: ['sku'],
+  },
   'casecellshop.catalog.gauge.read_failed': {
     levels: ['error'],
     description:
