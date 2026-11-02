@@ -202,6 +202,14 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'worker',
   },
+  'casecellshop.erp.config_errors': {
+    exported: 'casecellshop_erp_config_errors_total',
+    type: 'counter',
+    unit: '{call}',
+    labels: ['casecellshop_erp_operation'],
+    optionalLabels: [],
+    process: 'worker',
+  },
   'casecellshop.order.stuck': {
     exported: 'casecellshop_order_stuck_total',
     type: 'counter',

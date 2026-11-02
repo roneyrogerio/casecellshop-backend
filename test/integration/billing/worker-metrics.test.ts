@@ -77,7 +77,9 @@ async function createRig(options: WorldOptions = {}): Promise<Rig> {
   };
 }
 
-// `dead` fica de fora: quem o conta é a reconciliação, ao ver a mensagem na DLQ (Fatia 3), e não o worker.
+// A lista fechada do desfecho da tentativa. `dead` está nela: com o OBS-08 a série nasce em 0 no worker,
+// mas quem a soma é a reconciliação, ao ver a mensagem na DLQ (Fatia 3), e não o worker. Por isso os
+// testes de valor exigem `dead` igual a 0 no worker, em vez de esperar a série ausente.
 const ATTEMPT_OUTCOMES = [
   'invoiced',
   'failed',
@@ -85,6 +87,7 @@ const ATTEMPT_OUTCOMES = [
   'closed',
   'lease_short',
   'deferred',
+  'dead',
 ];
 const ERP_OPERATIONS = ['create_order', 'find_order', 'list_catalog'];
 const ERP_OUTCOMES = [

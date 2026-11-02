@@ -59,7 +59,7 @@ export const BILLING_METRICS = {
     instrument: 'gauge',
     unit: '{message}',
     description:
-      'Mensagens visíveis na fila, pelo `ApproximateNumberOfMessages` do SQS.',
+      'Mensagens na fila, visíveis e em voo: `ApproximateNumberOfMessages` mais `ApproximateNumberOfMessagesNotVisible` do SQS.',
     attributes: {
       'casecellshop.queue.name': {
         description: 'Fila do faturamento ou a DLQ dela.',

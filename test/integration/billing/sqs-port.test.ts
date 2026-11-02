@@ -14,6 +14,7 @@ import {
 } from '../../../src/queue/sqs.ts';
 import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
+  countsOf,
   drain,
   observe,
   openBillingQueues,
@@ -349,8 +350,8 @@ describe('ORD-19 contagem pela API de consulta do SQS', () => {
   });
 });
 
-describe('ORD-22 porta do SQS: contagem', () => {
-  it('ORD-22 approximateCount reflete as mensagens visíveis: cai ao receber e não muda ao apagar', async () => {
+describe('OBS-09 porta do SQS: contagem', () => {
+  it('OBS-09 approximateCount soma as visíveis e as em voo: receber não a muda e apagar a recebida a reduz', async () => {
     const { queue, queueUrl } = await fresh();
     for (let index = 0; index < 3; index += 1)
       await sendRaw(emq, queueUrl, `m${index}`);
@@ -359,13 +360,34 @@ describe('ORD-22 porta do SQS: contagem', () => {
       async () => expect(await queue.approximateCount()).toBe(3),
       { timeout: WAIT_GUARD_MS },
     );
-    const [received] = await queue.receive({ max: 1, waitSeconds: 0 });
+    // Visibilidade longa: a mensagem recebida segue em voo durante o teste inteiro.
+    const [received] = await queue.receive({
+      max: 1,
+      waitSeconds: 0,
+      visibilitySeconds: 300,
+    });
+    expect(received).toBeDefined();
+    // Confere pelos atributos crus que a mensagem saiu das visíveis e está em voo, antes de afirmar a contagem.
     await vi.waitFor(
-      async () => expect(await queue.approximateCount()).toBe(2),
+      async () =>
+        expect(await countsOf(emq, queueUrl)).toEqual({
+          visible: 2,
+          notVisible: 1,
+        }),
       { timeout: WAIT_GUARD_MS },
     );
-    await queue.delete(received?.receiptHandle ?? '');
+    expect(await queue.approximateCount()).toBe(3);
 
+    expect(await queue.delete(received?.receiptHandle ?? '')).toBe('ok');
+
+    await vi.waitFor(
+      async () =>
+        expect(await countsOf(emq, queueUrl)).toEqual({
+          visible: 2,
+          notVisible: 0,
+        }),
+      { timeout: WAIT_GUARD_MS },
+    );
     expect(await queue.approximateCount()).toBe(2);
   });
 });
