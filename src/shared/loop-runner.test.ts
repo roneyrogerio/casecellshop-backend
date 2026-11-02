@@ -45,7 +45,8 @@ async function resolvedWithin(promise: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-// Relógio manual local: os testes de src/shared/ não importam test/helpers (AD-025). O tempo só anda em advance().
+// Relógio manual repetido aqui de test/helpers/clock.ts: a regra no-restricted-imports de .oxlintrc.json recusa em
+// src/shared/ todo import relativo que sobe de pasta (AD-026), inclusive ../../test/helpers. O tempo só anda em advance().
 function createManualClock(): Clock & { advance: (ms: number) => void } {
   let current = 0;
   const timers: { at: number; wake: () => void }[] = [];
