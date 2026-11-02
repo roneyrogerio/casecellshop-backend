@@ -22,6 +22,7 @@ const INSTRUMENT_LABEL: Record<InstrumentKind, string> = {
   counter: 'contador',
   histogram: 'histograma',
   up_down_counter: 'UpDownCounter',
+  observable_gauge: 'gauge observável',
 };
 
 const REQUIREMENT_LABEL: Record<AttributeSpec['requirement'], string> = {
@@ -30,7 +31,7 @@ const REQUIREMENT_LABEL: Record<AttributeSpec['requirement'], string> = {
 };
 
 // O nome que o exportador Prometheus do OpenTelemetry dá à métrica: ponto vira sublinhado, e o contador ganha
-// `_total` (o UpDownCounter sai como gauge, sem sufixo; o histograma ganha `_bucket`, `_sum` e `_count` na
+// `_total` (o UpDownCounter e o gauge observável saem como gauge, sem sufixo; o histograma ganha `_bucket`, `_sum` e `_count` na
 // exposição, e o nome base fica sem sufixo).
 export function prometheusName(
   name: string,

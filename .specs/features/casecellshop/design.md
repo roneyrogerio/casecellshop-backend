@@ -114,14 +114,18 @@ Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode
 
 ## Vitrine e cache (AD-005)
 
-- **Uma entrada com o catálogo inteiro,** atrás de uma porta `Cache`; as páginas são fatiadas dela. Todas as páginas de um TTL vêm do mesmo instantâneo, e há uma única chave a proteger contra stampede.
-- **TTL curto, com jitter.**
-- **Single-flight:** uma consulta à origem, mesmo com N requisições simultâneas; uma promessa rejeitada é descartada. Com N réplicas da API, uma expiração gera até N consultas.
-- ***Stale-if-error*:** com a origem em erro, a entrada expirada é servida até um teto de idade; depois de uma falha, a entrada antiga é servida direto por alguns segundos antes de tentar a origem de novo; sem entrada, `503` com `Retry-After`.
+- **Uma entrada com o catálogo inteiro,** atrás de uma porta `Cache` (`src/cache/`), genérica e sem telemetria; as páginas são fatiadas dela, em ordem de SKU. Todas as páginas de um TTL vêm do mesmo instantâneo, e há uma única chave a proteger contra stampede.
+- **TTL curto, com jitter:** cada entrada vale o TTL multiplicado por um fator sorteado entre 0,9 e 1,1, pelo `random` injetável. Numa instância, quem protege a chave é o single-flight; o jitter só dessincroniza as réplicas da API, que expirariam juntas.
+- **Single-flight:** uma consulta à origem, mesmo com N requisições simultâneas; quem chega durante a carga espera a mesma promessa, e uma promessa rejeitada é descartada. Com N réplicas da API, uma expiração gera até N consultas.
+- ***Stale-if-error*:** com a origem em erro, a entrada expirada é servida até um teto de idade, contada da carga que a gerou; depois de uma falha, a entrada antiga é servida direto durante a pausa, sem chamar a origem, e só depois dela a origem é tentada de novo; sem entrada, ou com a entrada acima do teto, `503` com `Retry-After`, também sem esperar a origem durante a pausa.
+- **Resultado de cada leitura:** `hit` (entrada dentro do TTL), `miss` (esperou uma carga que deu certo) ou `stale` (entrada expirada servida por erro ou pausa da origem). A idade da entrada servida vai para um histograma.
 - **Invalidação só por expiração.** O checkout decide pelo banco, nunca pelo cache.
-- **Disponibilidade em faixas:** "disponível", "últimas unidades" e "esgotado". A faixa muda menos que o número exato, então a defasagem do TTL aparece menos, e o estoque exato não é exposto.
-- **Antes da primeira sincronização completa,** `503`.
-- **`Cache-Control: no-store`** em toda resposta: sem o cabeçalho, um cache intermediário pode aplicar frescor heurístico (RFC 9111 §4.2.2).
+- **Origem:** o repositório lê o `sync_state` e, com a sincronização já completa uma vez, os produtos com o estoque, numa consulta em ordem de SKU. Antes da primeira sincronização completa, a carga devolve "não sincronizado", que fica na entrada como qualquer valor, e a rota responde `503`; a vitrine aparece no máximo um TTL depois da primeira rodada.
+- **Disponibilidade em faixas,** pelas unidades livres (`on_hand − reserved`): `out_of_stock` (esgotado) com nenhuma livre, `low_stock` ("últimas unidades") com até 5, `available` acima disso. A faixa muda menos que o número exato, então a defasagem do TTL aparece menos, e o estoque exato não é exposto.
+- **Página:** `?page=` de 1 a 999999, 50 itens; uma página além do fim volta vazia, com `hasNext: false`.
+- **`Cache-Control: no-store`** em toda resposta da rota, inclusive nos erros: sem o cabeçalho, um cache intermediário pode aplicar frescor heurístico (RFC 9111 §4.2.2).
+- **Trace:** o span da requisição é pai do `catalog.cache.get`, que é pai do `catalog.repository.list` quando a leitura disparou a carga.
+- **Parâmetros como padrão em `src/catalog/`:** o `createApp` recebe o relógio, o `random` e, opcionalmente, outros valores para os testes; o `src/main/api.ts` usa os padrões.
 
 ## Fila no SQS (AD-021, AD-024)
 
@@ -194,10 +198,10 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
 
 ## Sincronização (AD-009)
 
-- **Quando:** no worker, uma vez na subida (a carga inicial) e depois uma rodada por intervalo, uma de cada vez: a próxima começa um intervalo depois do início da anterior, ou logo ao fim dela. Ao terminar uma rodada completa, grava `last_completed_at`.
-- **Antes de ler o ERP:** guarda `t0`, pelo relógio do banco, e o `sold_total` de cada SKU.
-- **Leitura:** produtos, preço e estoque pelo `ErpClient`, página a página.
-- **Estoque:** um `UPDATE` por SKU, em ordem de SKU, cada um na sua transação curta:
+- **Quando:** no worker, uma vez na subida (a carga inicial) e depois uma rodada por intervalo, uma de cada vez: a próxima começa um intervalo depois do início da anterior, ou logo ao fim dela, se ela passou do intervalo. O encerramento do worker espera a rodada em andamento. Ao terminar uma rodada completa, grava `last_completed_at = t0` na linha única do `sync_state`, só se for mais novo que o gravado.
+- **Antes de ler o ERP:** guarda `t0`, pelo relógio do banco, e o `sold_total`, o `on_hand`, o preço e o nome de cada SKU.
+- **Leitura:** produtos, preço e estoque pelo `ErpClient`, página a página, cada chamada com uma permissão do semáforo de chamadas ao ERP do processo, o mesmo do envio e da reconciliação. Uma página com erro encerra a leitura: a rodada fica incompleta.
+- **Estoque:** um `UPDATE` por SKU lido, em ordem de SKU, cada um no seu comando, fora de transação longa:
 
   ```sql
   UPDATE inventory
@@ -207,9 +211,11 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
   ```
 
   Toda baixa local depois de `t0` é descontada do valor lido: se o ERP já a tinha visto, ela sai duas vezes (erro para menos); se não, o desconto é exato. O `SET` usa o `sold_total` da versão atual da linha. Uma leitura mais antiga nunca sobrescreve uma mais nova, e `reserved` nunca é tocado.
-- **Preço e catálogo:** mesma regra, com o `synced_at` de `products`; um SKU novo entra por `INSERT … ON CONFLICT`.
-- **SKU ausente:** depois de uma rodada completa, cada SKU que não veio fica com `on_hand = 0`, um a um e em ordem de SKU, pela mesma condição de `synced_at`. Uma rodada incompleta não mexe em nenhum ausente.
-- **ERP fora:** a loja segue com o último estoque conhecido; a idade da sincronização dispara alerta. O checkout continua, e os pedidos esperam na fila com a reserva feita.
+- **Preço e catálogo:** mesma regra, com o `synced_at` de `products`, antes do estoque do mesmo SKU; um SKU novo entra por `INSERT … ON CONFLICT`, em `products` e em `inventory` (com o `on_hand` do ERP).
+- **Rodada incompleta:** os SKUs já lidos são gravados, mas nenhum ausente é zerado e o `last_completed_at` não muda.
+- **SKU ausente:** depois de uma rodada completa, cada SKU da loja que não veio fica com `on_hand = 0`, um a um e em ordem de SKU, pela mesma condição de `synced_at`. Uma rodada incompleta não mexe em nenhum ausente.
+- **Telemetria:** o span `catalog.sync.round` por rodada, pai dos spans do `ErpClient`; uma correção por campo (`price`, `name`, `on_hand`) quando o valor do ERP difere do guardado em `t0` e o comando afetou a linha; um SKU ausente zerado conta uma vez; o gauge observável da idade da última rodada completa sai do `last_completed_at` lido na subida e do instante de cada rodada completa, sem valor antes da primeira.
+- **ERP fora:** a loja segue com o último estoque conhecido; a idade da sincronização dispara alerta. O checkout continua, e os pedidos esperam no SQS com a reserva feita.
 
 ## ERP simulado e camada anticorrupção (AD-004)
 
@@ -370,7 +376,7 @@ Ficam em configuração. Os que dependem de carga saem das premissas do [`PROJEC
 | TTL do cache | 5 s ± 10% | Defasagem aceitável; o checkout decide pelo banco |
 | Teto do *stale-if-error* | 60 s | Cobre falha curta da origem sem servir dado antigo demais |
 | Pausa depois de falha da origem | 5 s | A requisição não espera o timeout da origem |
-| Tamanho da página | 50 itens | Fatiadas da entrada única |
+| Tamanho da página | 50 itens; `?page` de 1 a 999999 | Fatiadas da entrada única; o teto só barra um número sem sentido |
 | "Últimas unidades" | até 5 livres | Escassez sem expor o número |
 | Intervalo da sincronização | 60 s | Defasagem de até 65,5 s mais a rodada; uma leitura do catálogo por minuto no ERP |
 | Timeout do ERP | 10 s | Acima do p99,9 da premissa (8 s) |

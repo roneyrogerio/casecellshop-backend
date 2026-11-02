@@ -65,6 +65,12 @@ export interface TypedMetrics<S extends Specs> {
     value: number,
     ...attributes: AttributesArgument<S[N]>
   ): void;
+  // Registra a leitura do gauge observável, chamada a cada coleta; `undefined` não grava ponto naquela coleta.
+  observe<N extends NamesOf<S, 'observable_gauge'>>(
+    name: N,
+    read: () => number | undefined,
+    ...attributes: AttributesArgument<S[N]>
+  ): void;
 }
 
 type Instrument = Counter | UpDownCounter | Histogram;
@@ -88,6 +94,8 @@ function createInstrument(
           ? { advice: { explicitBucketBoundaries: [...spec.buckets] } }
           : {}),
       });
+    case 'observable_gauge':
+      throw new Error('não implementado');
   }
 }
 
@@ -114,6 +122,9 @@ export function createInstruments<S extends Specs>(
     record(name: string, value: number, attributes?: Attributes): void {
       const instrument = pick(name);
       if ('record' in instrument) instrument.record(value, attributes);
+    },
+    observe(): void {
+      throw new Error('não implementado');
     },
   };
   // A assinatura genérica de TypedMetrics só existe no tipo; o corpo é o mesmo para qualquer declaração.
