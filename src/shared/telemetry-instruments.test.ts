@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import type { Meter, ObservableGauge } from '@opentelemetry/api';
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { MetricSpec } from './telemetry-catalog.ts';
-import { metricsOf } from './telemetry-instruments.ts';
+import { createInstruments, metricsOf } from './telemetry-instruments.ts';
 import { createTelemetry, type Telemetry } from './telemetry.ts';
 
 // OBS-07 (AD-029): `observe` registra o callback que o scrape chama para ler um gauge, com os atributos da declaração,
@@ -203,35 +204,219 @@ describe('OBS-07 observe: o callback do gauge é lido no scrape', () => {
     expect(reading(text, QUEUE_PROM, BILLING)).toBe(3);
   });
 
-  it('OBS-07 um callback que lança deixa só a série dele sem valor naquele scrape: o scrape responde e os outros gauges saem', async () => {
+  // O SDK de JavaScript, com a temporalidade cumulativa do exportador Prometheus, segue exportando o último valor de
+  // um gauge cujo callback falhou. O que o /metrics mostra da série depois da falha é detalhe do SDK e não é afirmado:
+  // o que `observe` garante é que o `onError` é avisado e que o callback segue rejeitando.
+  it('OBS-07 um callback que lança chama o onError uma vez por scrape com o erro, e o scrape responde com os outros gauges', async () => {
     const { telemetry, metrics } = newMetrics();
-    metrics.observe(RESERVED, () => {
-      throw new Error('banco indisponível');
-    });
+    const failure = new Error('banco indisponível');
+    const errors: unknown[] = [];
+    metrics.observe(
+      RESERVED,
+      () => {
+        throw failure;
+      },
+      { onError: (error) => errors.push(error) },
+    );
     metrics.observe(QUEUE, (observe) =>
       observe(6, { 'casecellshop.queue.name': 'billing' }),
     );
 
-    const text = await scrape(telemetry);
+    const first = await scrape(telemetry);
+    expect(errors).toEqual([failure]);
+    await scrape(telemetry);
 
-    expect(reading(text, RESERVED_PROM)).toBeUndefined();
-    expect(reading(text, QUEUE_PROM, BILLING)).toBe(6);
+    expect(errors, 'uma chamada por falha').toEqual([failure, failure]);
+    expect(reading(first, QUEUE_PROM, BILLING)).toBe(6);
   });
 
-  it('OBS-07 um callback assíncrono que rejeita deixa a série sem valor naquele scrape, e a leitura seguinte volta a funcionar', async () => {
+  it('OBS-07 um callback assíncrono que rejeita chama o onError, e a leitura seguinte volta a funcionar sem chamá-lo', async () => {
+    const run = await failingThenGood((metrics, read, onError) =>
+      metrics.observe(
+        RESERVED,
+        async (observe) => {
+          await read();
+          observe(3);
+        },
+        { onError },
+      ),
+    );
+
+    expect(run.errorsAfterFailure).toBe(1);
+    expect(reading(run.up, RESERVED_PROM)).toBe(3);
+    expect(run.errorsAfterRecovery, 'a leitura boa não chama o onError').toBe(
+      1,
+    );
+  });
+
+  it('OBS-07 o onError é opcional: sem ele os callbacks, simples e em lote, que falham não derrubam o scrape', async () => {
     const { telemetry, metrics } = newMetrics();
-    let failing = true;
-    metrics.observe(RESERVED, async (observe) => {
-      await Promise.resolve();
-      if (failing) throw new Error('banco indisponível');
-      observe(3);
+    const reads: string[] = [];
+    metrics.observe(RESERVED, () => {
+      reads.push('observe');
+      throw new Error('banco indisponível');
+    });
+    metrics.observeBatch([QUEUE], () => {
+      reads.push('observeBatch');
+      throw new Error('banco indisponível');
     });
 
-    const down = await scrape(telemetry);
-    failing = false;
-    const up = await scrape(telemetry);
+    await scrape(telemetry);
 
-    expect(reading(down, RESERVED_PROM)).toBeUndefined();
-    expect(reading(up, RESERVED_PROM)).toBe(3);
+    expect(reads.sort()).toEqual(['observe', 'observeBatch']);
+  });
+
+  // O SDK captura a rejeição do callback; para vê-la, o teste pega o callback que `observe` registrou no gauge do
+  // próprio `Meter` (os `vi.spyOn` abaixo seguem para a implementação real) e o chama como o SDK chama.
+  it('OBS-07 o callback registrado avisa o onError e depois segue rejeitando com o mesmo erro, para o SDK tratar a falha', async () => {
+    const { telemetry } = newMetrics();
+    const meter = telemetry.meter('test.rejection');
+    const created = vi.spyOn(meter, 'createObservableGauge');
+    const metrics = createInstruments(meter, SPECS);
+    const gauge = gaugeCreated(created, 1);
+    const registered = vi.spyOn(gauge, 'addCallback');
+    const failure = new Error('banco indisponível');
+    const order: string[] = [];
+    metrics.observe(RESERVED, () => Promise.reject(failure), {
+      onError: () => order.push('onError'),
+    });
+    const callback = registered.mock.calls[0]?.[0];
+    if (!callback) throw new Error('o callback não foi registrado no gauge');
+
+    await expectRejectionAfterOnError(
+      () => callback({ observe: () => undefined }),
+      failure,
+      order,
+    );
+  });
+
+  it('OBS-07 o callback registrado que lê com sucesso grava o valor e não chama o onError', async () => {
+    const { telemetry } = newMetrics();
+    const meter = telemetry.meter('test.success');
+    const created = vi.spyOn(meter, 'createObservableGauge');
+    const metrics = createInstruments(meter, SPECS);
+    const gauge = gaugeCreated(created, 1);
+    const registered = vi.spyOn(gauge, 'addCallback');
+    const onError = vi.fn<(error: unknown) => void>();
+    metrics.observe(RESERVED, (observe) => observe(9), { onError });
+    const callback = registered.mock.calls[0]?.[0];
+    if (!callback) throw new Error('o callback não foi registrado no gauge');
+    const written: number[] = [];
+
+    await callback({ observe: (value) => written.push(value) });
+
+    expect(written).toEqual([9]);
+    expect(onError).not.toHaveBeenCalled();
   });
 });
+
+describe('OBS-07 observeBatch: a leitura em lote que falha avisa o onError', () => {
+  it('OBS-07 o callback em lote que rejeita chama o onError, e a leitura seguinte volta a funcionar sem chamá-lo', async () => {
+    const run = await failingThenGood((metrics, read, onError) =>
+      metrics.observeBatch(
+        [RESERVED, QUEUE],
+        async (observe) => {
+          await read();
+          observe[RESERVED](5);
+          observe[QUEUE](2, { 'casecellshop.queue.name': 'dlq' });
+        },
+        { onError },
+      ),
+    );
+
+    expect(run.errorsAfterFailure).toBe(1);
+    expect(reading(run.up, RESERVED_PROM)).toBe(5);
+    expect(reading(run.up, QUEUE_PROM, DLQ)).toBe(2);
+    expect(run.errorsAfterRecovery, 'a leitura boa não chama o onError').toBe(
+      1,
+    );
+  });
+
+  it('OBS-07 o callback em lote registrado avisa o onError e depois segue rejeitando com o mesmo erro', async () => {
+    const { telemetry } = newMetrics();
+    const meter = telemetry.meter('test.batch');
+    const registered = vi.spyOn(meter, 'addBatchObservableCallback');
+    const metrics = createInstruments(meter, SPECS);
+    const failure = new Error('banco indisponível');
+    const order: string[] = [];
+    metrics.observeBatch(
+      [RESERVED, QUEUE],
+      () => {
+        throw failure;
+      },
+      { onError: () => order.push('onError') },
+    );
+    const callback = registered.mock.calls[0]?.[0];
+    if (!callback) throw new Error('o callback não foi registrado no meter');
+
+    await expectRejectionAfterOnError(
+      () => callback({ observe: () => undefined }),
+      failure,
+      order,
+    );
+  });
+});
+
+// Um scrape com a leitura falhando e outro com ela boa, para o `register` ligar o callback do teste (simples ou em
+// lote) ao `read` e ao `onError`. Devolve quantos erros o `onError` recebeu depois de cada scrape.
+async function failingThenGood(
+  register: (
+    metrics: ReturnType<typeof newMetrics>['metrics'],
+    read: () => Promise<void>,
+    onError: (error: unknown) => void,
+  ) => void,
+) {
+  const { telemetry, metrics } = newMetrics();
+  let failing = true;
+  const errors: unknown[] = [];
+  register(
+    metrics,
+    async () => {
+      await Promise.resolve();
+      if (failing) throw new Error('banco indisponível');
+    },
+    (error) => errors.push(error),
+  );
+
+  await scrape(telemetry);
+  const errorsAfterFailure = errors.length;
+  failing = false;
+  const up = await scrape(telemetry);
+  return { errorsAfterFailure, errorsAfterRecovery: errors.length, up };
+}
+
+// O callback que o SDK chama avisa o `onError` e só então rejeita, com o mesmo erro.
+async function expectRejectionAfterOnError(
+  call: () => void | Promise<void>,
+  failure: Error,
+  order: string[],
+): Promise<void> {
+  const rejection = await rejectionOf(() => {
+    order.push('chamada');
+    return call();
+  });
+
+  expect(rejection).toBe(failure);
+  expect(order).toEqual(['chamada', 'onError']);
+}
+
+// O gauge que o `Meter` devolveu na `index`-ésima criação (a ordem das declarações de SPECS).
+function gaugeCreated(
+  created: MockInstance<Meter['createObservableGauge']>,
+  index: number,
+): ObservableGauge {
+  const result = created.mock.results[index];
+  if (result?.type !== 'return')
+    throw new Error('o gauge não foi criado pelo Meter');
+  return result.value;
+}
+
+// A rejeição (ou o `throw` síncrono) de uma chamada, ou `undefined` se ela terminar bem.
+async function rejectionOf(call: () => void | Promise<void>): Promise<unknown> {
+  try {
+    await call();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}

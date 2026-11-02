@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import request from 'supertest';
 import {
   afterAll,
@@ -8,6 +9,8 @@ import {
   expect,
   it,
 } from 'vitest';
+import type { AppLogger } from '../../../src/shared/logging.ts';
+import { captureLogs, type LogLine } from '../../helpers/logs.ts';
 import { registerOutboxAgeGauge } from '../../../src/billing/outbox-age.ts';
 import { registerInventoryGauges } from '../../../src/checkout/inventory-gauges.ts';
 import {
@@ -58,20 +61,25 @@ afterEach(() => {
   removers = [];
 });
 
-function registerInventory(): void {
+// Os testes que não leem o log da API não querem ruído dele.
+const SILENT: AppLogger = captureLogs('casecellshop-api', 'silent').logger;
+
+function registerInventory(logger: AppLogger = SILENT): void {
   removers.push(
     registerInventoryGauges({
       pool: harness.pool,
       telemetry: harness.telemetry,
+      logger,
     }),
   );
 }
 
-function registerOutboxAge(): void {
+function registerOutboxAge(logger: AppLogger = SILENT): void {
   removers.push(
     registerOutboxAgeGauge({
       pool: harness.pool,
       telemetry: harness.telemetry,
+      logger,
     }),
   );
 }
@@ -224,6 +232,7 @@ describe('OBS-06 gauges de estoque lidos do banco no /metrics da API', () => {
       registerInventoryGauges({
         pool: probe.pool,
         telemetry: harness.telemetry,
+        logger: SILENT,
       }),
     );
     await seedProduct(database.pool, {
@@ -248,6 +257,7 @@ describe('OBS-06 gauges de estoque lidos do banco no /metrics da API', () => {
     const remove = registerInventoryGauges({
       pool: probe.pool,
       telemetry: harness.telemetry,
+      logger: SILENT,
     });
     await seedProduct(database.pool, {
       priceCents: 1000,
@@ -363,6 +373,7 @@ describe('OBS-02 gauge da idade da linha mais antiga da outbox no /metrics da AP
     const remove = registerOutboxAgeGauge({
       pool: probe.pool,
       telemetry: harness.telemetry,
+      logger: SILENT,
     });
     expect(await oldestAge()).toBe(0);
     expect(probe.matched, 'uma consulta no primeiro scrape').toBe(1);
@@ -380,5 +391,164 @@ describe('OBS-02 gauge da idade da linha mais antiga da outbox no /metrics da AP
     await scrapeApi();
 
     expect(probe.matched, 'nenhuma consulta depois de remove()').toBe(3);
+  });
+});
+
+// Leitura que falha (design.md, "Leitura que falha"): com a temporalidade cumulativa o SDK segue exportando o último
+// valor do gauge, então o /metrics não denuncia a falha. O sinal é o counter de falhas e o log de erro. O que o
+// /metrics mostra do próprio gauge no scrape que falhou é detalhe do SDK e não é afirmado.
+const INJECTED_FAILURE = 'banco indisponível (injetado)';
+
+interface ReadFailureCase {
+  gauge: 'outbox_oldest_pending_age' | 'inventory';
+  event:
+    | 'casecellshop.billing.gauge.read_failed'
+    | 'casecellshop.checkout.gauge.read_failed';
+  // O texto do comando que a leitura manda ao banco.
+  match: RegExp;
+  register(pool: pg.Pool, logger: AppLogger): () => void;
+  seed(): Promise<void>;
+  // O valor do gauge no /metrics e o total do counter de falhas dele.
+  value(families: Exposition): number | undefined;
+  failures(families: Exposition): number;
+}
+
+interface Observation {
+  value: number | undefined;
+  failures: number;
+  events: LogLine[];
+}
+
+const OUTBOX_CASE: ReadFailureCase = {
+  gauge: 'outbox_oldest_pending_age',
+  event: 'casecellshop.billing.gauge.read_failed',
+  match: /outbox/i,
+  register: (pool, logger) =>
+    registerOutboxAgeGauge({ pool, telemetry: harness.telemetry, logger }),
+  async seed() {
+    const orderId = await seedOrder(database.pool, { acceptedAgoSeconds: 1 });
+    await seedOutboxRow(database.pool, orderId, { createdAgoSeconds: 120 });
+  },
+  value: (families) =>
+    metricValue(families, 'casecellshop.outbox.oldest_pending.age'),
+  failures: (families) =>
+    metricValue(families, 'casecellshop.billing.gauge.read_failures', {
+      'casecellshop.gauge.name': 'outbox_oldest_pending_age',
+    }) ?? 0,
+};
+
+const INVENTORY_CASE: ReadFailureCase = {
+  gauge: 'inventory',
+  event: 'casecellshop.checkout.gauge.read_failed',
+  match: /inventory/i,
+  register: (pool, logger) =>
+    registerInventoryGauges({ pool, telemetry: harness.telemetry, logger }),
+  async seed() {
+    await seedProduct(database.pool, {
+      priceCents: 1000,
+      onHand: 10,
+      reserved: 4,
+    });
+  },
+  value: (families) => metricValue(families, 'casecellshop.inventory.reserved'),
+  failures: (families) =>
+    metricValue(families, 'casecellshop.checkout.gauge.read_failures', {
+      'casecellshop.gauge.name': 'inventory',
+    }) ?? 0,
+};
+
+// Uma leitura boa, uma que falha na fronteira do banco (um único comando) e uma de recuperação, cada uma um scrape do
+// /metrics da API. O counter é cumulativo e compartilhado pelo arquivo: o que vale é a diferença para a leitura inicial.
+async function readGaugeThroughAFailure(c: ReadFailureCase) {
+  const logs = captureLogs('casecellshop-api');
+  const probe = interceptPool(harness.pool, {
+    match: c.match,
+    fail: () => new Error(INJECTED_FAILURE),
+    times: 1,
+  });
+  probe.armed = false;
+  removers.push(c.register(probe.pool, logs.logger));
+  const takeReading = async (): Promise<Observation> => {
+    const families = await scrapeApi();
+    return {
+      value: c.value(families),
+      failures: c.failures(families),
+      events: logs.eventsOf(c.event),
+    };
+  };
+
+  const initial = await takeReading();
+  await c.seed();
+  const good = await takeReading();
+  probe.armed = true;
+  const failed = await takeReading();
+  probe.armed = false;
+  const recovered = await takeReading();
+  return { probe, initial, good, failed, recovered };
+}
+
+type ReadFailureRun = Awaited<ReturnType<typeof readGaugeThroughAFailure>>;
+
+// A falha deixa o sinal: um evento de erro com o gauge e o erro, e 1 a mais no counter, visto na leitura seguinte (a
+// ordem entre o callback e o counter dentro do mesmo scrape é do SDK). A recuperação não loga de novo.
+function expectFailureSignal(run: ReadFailureRun, gauge: string): void {
+  expect(run.probe.fired, 'a falha injetada disparou').toBe(1);
+  expect(run.failed.events).toHaveLength(1);
+  const [event] = run.failed.events;
+  expect(event?.['level']).toBe('error');
+  expect(event?.['gauge']).toBe(gauge);
+  expect(JSON.stringify(event?.['err'])).toContain(INJECTED_FAILURE);
+  expect(run.recovered.failures - run.initial.failures).toBe(1);
+  expect(run.recovered.events, 'a recuperação não loga de novo').toHaveLength(
+    1,
+  );
+}
+
+// A leitura que dá certo não deixa sinal nenhum.
+function expectGoodReadsSilent(run: ReadFailureRun): void {
+  expect(run.probe.fired, 'a falha injetada disparou').toBe(1);
+  expect(run.initial.events).toHaveLength(0);
+  expect(run.good.events).toHaveLength(0);
+  expect(run.good.failures - run.initial.failures).toBe(0);
+}
+
+describe('OBS-02 a leitura da idade da outbox que falha é contada e logada', () => {
+  it('OBS-02 a leitura que falha depois de uma boa soma 1 em billing.gauge.read_failures com o gauge outbox_oldest_pending_age e escreve gauge.read_failed com o gauge e o erro', async () => {
+    const run = await readGaugeThroughAFailure(OUTBOX_CASE);
+
+    expect(run.good.value).toBeGreaterThanOrEqual(120);
+    expectFailureSignal(run, 'outbox_oldest_pending_age');
+  });
+
+  it('OBS-02 a leitura que dá certo não soma em billing.gauge.read_failures nem escreve gauge.read_failed', async () => {
+    expectGoodReadsSilent(await readGaugeThroughAFailure(OUTBOX_CASE));
+  });
+
+  it('OBS-02 depois da falha a leitura seguinte volta a mostrar a idade da outbox', async () => {
+    const run = await readGaugeThroughAFailure(OUTBOX_CASE);
+
+    expect(run.probe.fired, 'a falha injetada disparou').toBe(1);
+    expect(run.recovered.value).toBeGreaterThanOrEqual(120);
+    expect(run.recovered.value).toBeLessThan(150);
+  });
+});
+
+describe('OBS-06 a leitura dos gauges do estoque que falha é contada e logada', () => {
+  it('OBS-06 a leitura que falha depois de uma boa soma 1 em checkout.gauge.read_failures com o gauge inventory, uma só vez para os dois gauges, e escreve gauge.read_failed com o gauge e o erro', async () => {
+    const run = await readGaugeThroughAFailure(INVENTORY_CASE);
+
+    expect(run.good.value).toBe(4);
+    expectFailureSignal(run, 'inventory');
+  });
+
+  it('OBS-06 a leitura que dá certo não soma em checkout.gauge.read_failures nem escreve gauge.read_failed', async () => {
+    expectGoodReadsSilent(await readGaugeThroughAFailure(INVENTORY_CASE));
+  });
+
+  it('OBS-06 depois da falha a leitura seguinte volta a mostrar as unidades reservadas', async () => {
+    const run = await readGaugeThroughAFailure(INVENTORY_CASE);
+
+    expect(run.probe.fired, 'a falha injetada disparou').toBe(1);
+    expect(run.recovered.value).toBe(4);
   });
 });

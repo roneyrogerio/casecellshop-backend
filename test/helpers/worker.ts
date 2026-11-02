@@ -953,8 +953,9 @@ export function retrySeconds(options: {
 export interface PoolRule {
   // Casa com o texto SQL do comando que o Kysely manda ao `pg`.
   match: RegExp;
-  // Roda antes de o comando seguir: o teste avança o relógio manual no ponto exato, sem sleep.
-  before?: (sql: string) => void | Promise<void>;
+  // Roda antes de o comando seguir: o teste avança o relógio manual no ponto exato, sem sleep. Recebe também os
+  // parâmetros do comando, para o teste capturar o texto e os valores e repeti-los (um `EXPLAIN`, por exemplo).
+  before?: (sql: string, values: readonly unknown[]) => void | Promise<void>;
   // Faz o comando lançar este erro, sem chegar ao banco. Só falha; nunca devolve dado.
   fail?: () => Error;
   // Quantos comandos que casam sofrem o efeito; os outros passam (padrão: todos).
@@ -1022,7 +1023,8 @@ export function interceptPool(pool: pg.Pool, rule: PoolRule): PoolProbe {
               state.matched += 1;
               if (state.fired < (rule.times ?? Infinity)) {
                 state.fired += 1;
-                await rule.before?.(text);
+                const values: unknown = args[1];
+                await rule.before?.(text, Array.isArray(values) ? values : []);
                 if (rule.fail) throw rule.fail();
               }
             }

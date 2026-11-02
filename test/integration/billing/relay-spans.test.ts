@@ -130,6 +130,10 @@ describe('OBS-05 o envio do relay ao SQS é um span de mensageria', () => {
     expect(span.attributes['messaging.destination.name']).toBe('billing');
     expect(span.attributes['messaging.batch.message_count']).toBe(3);
     expect(span.status.code).not.toBe(SpanStatusCode.ERROR);
+    expect(
+      span.attributes['error.type'],
+      'o envio que dá certo não leva error.type',
+    ).toBeUndefined();
     expect(await drain(world.emq, world.queues.queueUrl)).toHaveLength(3);
   });
 
@@ -195,13 +199,14 @@ describe('OBS-05 o envio do relay ao SQS é um span de mensageria', () => {
     expect(span.links).toHaveLength(0);
   });
 
-  it('OBS-05 falha do envio ao SQS marca o span com status de erro, e a linha continua sem published_at', async () => {
+  it('OBS-05 falha do envio ao SQS marca o span com status de erro e com error.type igual ao nome da exceção, e a linha continua sem published_at', async () => {
     const world = await createWorld(suite);
     const [orderId] = await acceptMany(1);
-    // Só o erro de transporte do SQS, injetado na fronteira; a fila de verdade responde depois dele.
+    // Só o erro de transporte do SQS, injetado na fronteira; a fila de verdade responde depois dele. O TypeError
+    // (e não um Error) separa o nome da exceção de um valor fixo no código.
     const send = vi
       .spyOn(world.queues.queue, 'send')
-      .mockRejectedValueOnce(new Error('SQS indisponível (injetado)'));
+      .mockRejectedValueOnce(new TypeError('SQS indisponível (injetado)'));
 
     await expect(relayOver(world).publishOnce()).rejects.toThrow(
       'SQS indisponível (injetado)',
@@ -210,6 +215,8 @@ describe('OBS-05 o envio do relay ao SQS é um span de mensageria', () => {
     expect(send, 'a falha injetada disparou').toHaveBeenCalledTimes(1);
     const span = await onlySendSpan();
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    // Convenção de mensageria: `error.type` é "Conditionally Required" se, e somente se, a operação falhou.
+    expect(span.attributes['error.type']).toBe('TypeError');
     expect(span.kind).toBe(SpanKind.CLIENT);
     const row = await suite.pool.query<{ published_at: Date | null }>(
       'select published_at from outbox where order_id = $1',

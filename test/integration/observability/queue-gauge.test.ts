@@ -1,10 +1,11 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   createTelemetry,
   type Telemetry,
 } from '../../../src/shared/telemetry.ts';
 import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
+import { captureLogs, type CapturedLogs } from '../../helpers/logs.ts';
 import {
   metricValue,
   scrapeMetrics,
@@ -221,5 +222,138 @@ describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
       'o reconciliador parou: dlq não é consultada',
     ).not.toHaveBeenCalled();
     expect(billingSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Leitura que falha (design.md, "Leitura que falha"): o SDK segue exportando o último valor do gauge, então o
+// /metrics não denuncia a falha. O sinal é o counter de falhas e o log de erro; o valor do gauge no scrape que falhou
+// é detalhe do SDK e não é afirmado. A falha entra na fronteira: o `approximateCount` da fila rejeita uma vez.
+function queueReadFailures(families: Exposition): number {
+  return (
+    metricValue(families, 'casecellshop.billing.gauge.read_failures', {
+      'casecellshop.gauge.name': 'queue_messages',
+    }) ?? 0
+  );
+}
+
+const READ_FAILED = 'casecellshop.billing.gauge.read_failed';
+
+interface FailureRig {
+  telemetry: Telemetry;
+  logs: CapturedLogs;
+  // Delega à fila de verdade; o teste faz só a próxima chamada rejeitar.
+  count: MockInstance<() => Promise<number>>;
+  stop(): Promise<void>;
+}
+
+// O worker iniciado sobre a fila de origem com uma mensagem, e o logger que captura as linhas.
+async function startBillingRig(): Promise<FailureRig> {
+  const { telemetry, world } = await createRig();
+  await submit(world);
+  const logs = captureLogs('casecellshop-worker');
+  const worker = buildWorker(world, {
+    config: LOOP_CONFIG,
+    logger: logs.logger,
+  });
+  const gate = await startHeld(worker, world.queue);
+  const count = vi.spyOn(world.queue, 'approximateCount');
+  return {
+    telemetry,
+    logs,
+    count,
+    async stop() {
+      gate.releaseAll();
+      await stopAdvancing(worker, world);
+    },
+  };
+}
+
+// O reconciliador iniciado sobre a DLQ com duas mensagens.
+async function startDlqRig(): Promise<FailureRig> {
+  const { telemetry, world } = await createRig();
+  await fillDlq(world, 2);
+  const logs = captureLogs('casecellshop-worker');
+  const { reconciler, dlq } = buildReconciler(world, {
+    telemetry,
+    logger: logs.logger,
+  });
+  // Depois do portão a rodada falha ao receber e não toca nas mensagens: o teste só lê a contagem da fila.
+  dlq.inject('receive', 1);
+  const gate = await startHeld(reconciler, dlq);
+  const count = vi.spyOn(dlq, 'approximateCount');
+  return {
+    telemetry,
+    logs,
+    count,
+    async stop() {
+      gate.releaseAll();
+      await driveClock(reconciler.stop(), world);
+    },
+  };
+}
+
+// Uma leitura boa, uma que rejeita (injetada na fronteira) e uma de recuperação: a boa não deixa sinal, a que falha
+// deixa o evento de erro e o counter, este visto no scrape seguinte porque a ordem entre o callback e o counter dentro
+// do mesmo scrape é do SDK.
+async function expectReadFailureSignal(
+  rig: FailureRig,
+  queue: 'billing' | 'dlq',
+  messages: number,
+): Promise<void> {
+  const { telemetry, logs, count } = rig;
+  const good = await scrapeMetrics(telemetry);
+  expect(queueMessages(good, queue)).toBe(messages);
+  expect(queueReadFailures(good), 'a leitura boa não soma').toBe(0);
+  expect(logs.eventsOf(READ_FAILED), 'a leitura boa não loga').toEqual([]);
+
+  count.mockRejectedValueOnce(new Error('SQS indisponível (injetado)'));
+  await scrapeMetrics(telemetry);
+
+  expect(
+    count.mock.settledResults.filter((result) => result.type === 'rejected'),
+    'a falha injetada disparou',
+  ).toHaveLength(1);
+  const events = logs.eventsOf(READ_FAILED);
+  expect(events).toHaveLength(1);
+  expect(events[0]?.['level']).toBe('error');
+  expect(events[0]?.['gauge']).toBe('queue_messages');
+  expect(JSON.stringify(events[0]?.['err'])).toContain('SQS indisponível');
+  const recovered = await scrapeMetrics(telemetry);
+  expect(queueReadFailures(recovered)).toBe(1);
+  expect(queueMessages(recovered, queue)).toBe(messages);
+  expect(
+    logs.eventsOf(READ_FAILED),
+    'a leitura que se recupera não loga de novo',
+  ).toHaveLength(1);
+}
+
+describe('OBS-02 a leitura da fila que falha é contada e logada', () => {
+  it('OBS-02 o GetQueueAttributes do worker que falha depois de uma leitura boa soma 1 em billing.gauge.read_failures com queue_messages e escreve gauge.read_failed', async () => {
+    const rig = await startBillingRig();
+
+    await expectReadFailureSignal(rig, 'billing', 1);
+
+    await rig.stop();
+  });
+
+  it('OBS-02 o GetQueueAttributes da DLQ que falha no reconciliador também soma em queue_messages e escreve gauge.read_failed', async () => {
+    const rig = await startDlqRig();
+
+    await expectReadFailureSignal(rig, 'dlq', 2);
+
+    await rig.stop();
+  });
+
+  it('OBS-02 a leitura da fila que dá certo, scrape após scrape, não soma em billing.gauge.read_failures nem escreve gauge.read_failed', async () => {
+    const rig = await startBillingRig();
+
+    await scrapeMetrics(rig.telemetry);
+    await scrapeMetrics(rig.telemetry);
+    const families = await scrapeMetrics(rig.telemetry);
+
+    expect(rig.count, 'três leituras').toHaveBeenCalledTimes(3);
+    expect(queueReadFailures(families)).toBe(0);
+    expect(rig.logs.eventsOf(READ_FAILED)).toEqual([]);
+    await rig.stop();
   });
 });

@@ -23,7 +23,12 @@ import {
   createTelemetry,
   type Telemetry,
 } from '../../../src/shared/telemetry.ts';
-import { settle, WAIT_GUARD_MS, waitAdvancing } from '../../helpers/async.ts';
+import {
+  settle,
+  track,
+  WAIT_GUARD_MS,
+  waitAdvancing,
+} from '../../helpers/async.ts';
 import {
   createManualClock,
   watchSleeps,
@@ -39,6 +44,7 @@ import {
   countBreached,
   resetStore,
   seedOrder,
+  seedOrders,
   type OrderSeed,
 } from '../../helpers/store-seed.ts';
 import { interceptPool, within } from '../../helpers/worker.ts';
@@ -485,6 +491,33 @@ describe('OBS-04 o laço da verificação roda pelo relógio injetável', () => 
     expect(await breachedIds(database.pool)).not.toContain(third);
   });
 
+  // Sem isso, cada SIGTERM deixaria a API parada até o fim do intervalo de 10 s antes de fechar o pool.
+  it('OBS-04 o stop() acorda o laço que dorme entre as rodadas: resolve sem o relógio andar', async () => {
+    const { clock } = watchSleeps(createManualClock());
+    const { monitor } = buildMonitor({ clock });
+    await monitor.start();
+    await vi.waitFor(
+      () => {
+        expect(clock.pendingWaits(), 'o laço dormindo no relógio').toHaveLength(
+          1,
+        );
+      },
+      { timeout: WAIT_GUARD_MS, interval: 25 },
+    );
+    const before = clock.now();
+
+    const stopping = track(monitor.stop());
+
+    await vi.waitFor(
+      () => {
+        expect(stopping.settled, 'o stop() resolveu').toBe(true);
+      },
+      { timeout: WAIT_GUARD_MS, interval: 25 },
+    );
+    await stopping.result;
+    expect(clock.now(), 'o relógio não andou').toBe(before);
+  });
+
   it('OBS-04 uma falha da rodada no pool gera casecellshop.order.stuck_check.failed, não marca nada e a rodada seguinte funciona', async () => {
     const { clock } = watchSleeps(createManualClock());
     const logs = captureLogs('casecellshop-api');
@@ -524,4 +557,107 @@ describe('OBS-04 o laço da verificação roda pelo relógio injetável', () => 
 
     await stopAdvancing(monitor, clock);
   });
+});
+
+// Um nó do plano de `EXPLAIN (FORMAT JSON)`, só com os campos que o teste lê.
+interface PlanNode {
+  'Node Type': string;
+  'Relation Name'?: string;
+  'Index Name'?: string;
+  'Rows Removed by Filter'?: number;
+  'Actual Loops'?: number;
+  Plans?: PlanNode[];
+}
+
+function planNodes(node: PlanNode): PlanNode[] {
+  return [node, ...(node.Plans ?? []).flatMap(planNodes)];
+}
+
+// Linhas que os nós sobre `orders` leram e descartaram pelo filtro. O PostgreSQL informa a média por volta do nó.
+function removedByFilter(nodes: PlanNode[]): number {
+  return nodes
+    .filter((node) => node['Relation Name'] === 'orders')
+    .reduce(
+      (sum, node) =>
+        sum +
+        (node['Rows Removed by Filter'] ?? 0) * (node['Actual Loops'] ?? 1),
+      0,
+    );
+}
+
+const ON_TIME_ORDERS = 5000;
+const DELAYED_ORDERS = 4;
+
+describe('OBS-04 a verificação não relê os pedidos entregues no prazo', () => {
+  // Manual do PostgreSQL, "Partial Indexes": o índice parcial só entra no plano se a consulta implica o predicado
+  // dele, e isso se decide no planejamento. O pedido faturado em até 60 s nunca recebe a marca; se ele ficar no
+  // índice, cada rodada de 10 s, em cada réplica, o percorre e o descarta pelo filtro.
+  it('OBS-04 o plano do UPDATE do monitor usa o índice parcial de orders e não descarta por filtro os pedidos entregues no prazo', async () => {
+    await seedOrders(database.pool, ON_TIME_ORDERS, {
+      acceptedAgoSeconds: 600,
+      outcomeAfterSeconds: 30,
+    });
+    for (let index = 0; index < DELAYED_ORDERS / 2; index += 1) {
+      await seedOrder(database.pool, { acceptedAgoSeconds: 120 + index });
+      await seedOrder(database.pool, {
+        acceptedAgoSeconds: 300 + index,
+        outcomeAfterSeconds: 90,
+      });
+    }
+    await database.pool.query('analyze orders');
+    // O UPDATE de produção, com o texto e os parâmetros que ele manda ao banco.
+    let captured: { text: string; values: readonly unknown[] } | undefined;
+    const probe = interceptPool(database.pool, {
+      match: /update\s+"?orders"?[\s\S]*sli_breached_at/i,
+      times: 1,
+      before: (text, values) => {
+        captured = { text, values };
+      },
+    });
+    const { monitor } = buildMonitor({ pool: probe.pool });
+    expect(await monitor.checkOnce(), 'os atrasados foram marcados').toBe(
+      DELAYED_ORDERS,
+    );
+    expect(probe.fired, 'o UPDATE do monitor foi capturado').toBe(1);
+    // O plano é de uma tabela como a de antes da marca: os atrasados voltam a ficar sem ela.
+    await database.pool.query('update orders set sli_breached_at = null');
+    await database.pool.query('analyze orders');
+    const partial = await database.pool.query<{ name: string }>(
+      `select c.relname as name
+         from pg_index i join pg_class c on c.oid = i.indexrelid
+        where i.indrelid = 'orders'::regclass and i.indpred is not null`,
+    );
+    const partialIndexes = partial.rows.map((row) => row.name);
+
+    // O ANALYZE do EXPLAIN executa o UPDATE: dentro de uma transação que termina em ROLLBACK, para a tabela ficar
+    // como estava. Sem varredura sequencial, o plano mostra o caminho de índice que o planejador acha.
+    const client = await database.pool.connect();
+    let plan: PlanNode;
+    try {
+      await client.query('begin');
+      await client.query('set local enable_seqscan = off');
+      const explained = await client.query<{
+        'QUERY PLAN': { Plan: PlanNode }[];
+      }>(`explain (analyze, format json) ${captured?.text ?? ''}`, [
+        ...(captured?.values ?? []),
+      ]);
+      const root = explained.rows[0]?.['QUERY PLAN'][0]?.Plan;
+      if (!root) throw new Error('o EXPLAIN não devolveu um plano');
+      plan = root;
+    } finally {
+      await client.query('rollback');
+      client.release();
+    }
+
+    const nodes = planNodes(plan);
+    const usedIndexes = nodes.flatMap((node) => node['Index Name'] ?? []);
+    expect(
+      usedIndexes.filter((name) => partialIndexes.includes(name)),
+      `um índice parcial de orders no plano (índices usados: ${usedIndexes.join(', ')})`,
+    ).toContain('orders_sli_pending_idx');
+    expect(
+      removedByFilter(nodes),
+      'pedidos descartados pelo filtro nos nós sobre orders',
+    ).toBeLessThan(ON_TIME_ORDERS);
+  }, 120_000);
 });

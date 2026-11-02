@@ -43,6 +43,35 @@ export async function seedOrder(
   return row.id;
 }
 
+// Muitos pedidos iguais numa instrução só (`generate_series`), para os testes que dependem do volume, como o plano
+// de uma consulta. O aceite de cada um recua mais 1 s que o anterior, para os instantes não coincidirem.
+export async function seedOrders(
+  pool: pg.Pool,
+  count: number,
+  seed: OrderSeed,
+): Promise<void> {
+  const hasOutcome = seed.outcomeAfterSeconds !== undefined;
+  const status = seed.status ?? (hasOutcome ? 'invoiced' : 'pending');
+  await pool.query(
+    `insert into orders (status, failure_reason, accepted_at, outcome_at, sli_breached_at)
+     select
+       $1::text,
+       case when $1::text = 'failed' then 'erp_rejected' else null end,
+       now() - make_interval(secs => $2::float8 + n),
+       case when $3::float8 is null then null
+            else now() - make_interval(secs => $2::float8 + n) + make_interval(secs => $3::float8) end,
+       case when $4::boolean then now() else null end
+     from generate_series(1, $5::int) as n`,
+    [
+      status,
+      seed.acceptedAgoSeconds,
+      seed.outcomeAfterSeconds ?? null,
+      seed.alreadyBreached ?? false,
+      count,
+    ],
+  );
+}
+
 export interface OutboxSeed {
   // Há quantos segundos a linha da outbox foi criada.
   createdAgoSeconds: number;

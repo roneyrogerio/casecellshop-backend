@@ -1,7 +1,7 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { pino } from 'pino';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { registerOutboxAgeGauge } from '../../../src/billing/outbox-age.ts';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { createStuckOrderMonitor } from '../../../src/billing/stuck-orders.ts';
@@ -168,6 +168,22 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'api',
   },
+  'casecellshop.billing.gauge.read_failures': {
+    exported: 'casecellshop_billing_gauge_read_failures_total',
+    type: 'counter',
+    unit: '{read}',
+    labels: ['casecellshop_gauge_name'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.checkout.gauge.read_failures': {
+    exported: 'casecellshop_checkout_gauge_read_failures_total',
+    type: 'counter',
+    unit: '{read}',
+    labels: ['casecellshop_gauge_name'],
+    optionalLabels: [],
+    process: 'api',
+  },
 } as const satisfies Record<MetricName, ExportedMetric>;
 
 const ENTRIES = Object.entries(EXPECTED) as [MetricName, ExportedMetric][];
@@ -250,10 +266,33 @@ async function exerciseApi(running: WorkerSuite): Promise<() => void> {
     clock: createManualClock(),
   });
   expect(await monitor.checkOnce(), 'o pedido atrasado foi marcado').toBe(1);
-  const removers = [
-    registerOutboxAgeGauge({ pool, telemetry: checkout.telemetry }),
-    registerInventoryGauges({ pool, telemetry: checkout.telemetry }),
-  ];
+  const logger = fromPino(pino({ level: 'silent' }));
+  const gauges = {
+    'idade da outbox': () =>
+      registerOutboxAgeGauge({ pool, telemetry: checkout.telemetry, logger }),
+    estoque: () =>
+      registerInventoryGauges({ pool, telemetry: checkout.telemetry, logger }),
+  };
+
+  // Uma leitura que falha depois de uma boa, uma por gauge, para o counter de falhas de cada pasta ter o ponto. A
+  // falha é uma conexão do pool que rejeita uma vez; cada gauge falha sozinho, para a falha cair nele.
+  const connect = vi.spyOn(pool, 'connect');
+  for (const [label, register] of Object.entries(gauges)) {
+    const remove = register();
+    expect((await request(checkout.app).get('/metrics')).status).toBe(200);
+    connect.mockRejectedValueOnce(
+      new Error(`falha injetada no gauge: ${label}`),
+    );
+    expect((await request(checkout.app).get('/metrics')).status).toBe(200);
+    remove();
+  }
+  expect(
+    connect.mock.settledResults.filter((result) => result.type === 'rejected'),
+    'as duas falhas injetadas dispararam',
+  ).toHaveLength(2);
+  connect.mockRestore();
+
+  const removers = Object.values(gauges).map((register) => register());
   return () => {
     for (const remove of removers) remove();
   };
