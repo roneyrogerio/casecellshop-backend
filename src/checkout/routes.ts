@@ -2,7 +2,6 @@ import express, {
   type ErrorRequestHandler,
   type RequestHandler,
 } from 'express';
-import type { Logger } from 'pino';
 import {
   CheckoutRequest,
   checkoutRoute,
@@ -11,7 +10,7 @@ import {
 } from '../contract/index.ts';
 import { ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import type { CheckoutRepository } from './repository.ts';
 import { CHECKOUT_LOG_EVENTS, checkoutMetrics } from './telemetry.ts';
@@ -142,7 +141,7 @@ const rejectDuplicateSku: RequestHandler = (req, _res, next) => {
 function createAccept(
   checkout: CheckoutRepository,
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
 ): RequestHandler {
   return async (req, res) => {
     const result = await checkout.create({
@@ -181,7 +180,7 @@ function createAccept(
 // O erro segue para o middleware único, que monta o problem+json.
 function createOnError(
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
 ): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
   return (error: unknown, _req, res, next) => {
@@ -217,7 +216,7 @@ function createOnError(
 export function createCheckoutRoutes(
   checkout: CheckoutRepository,
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
 ): CheckoutRoutes {
   const jsonBody = express.json({ limit: MAX_BODY_BYTES });
   const accept = createAccept(checkout, telemetry, logger);

@@ -19,10 +19,9 @@ import {
   METRIC_HTTP_SERVER_REQUEST_DURATION,
 } from '@opentelemetry/semantic-conventions';
 import type { Request, RequestHandler, Response } from 'express';
-import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
 import { HTTP_LOG_EVENTS, HTTP_METHODS, httpMetrics } from './telemetry.ts';
-import { eventLogger, logContext } from '../shared/logging.ts';
+import { eventLogger, logContext, type AppLogger } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
 
 // Aceita o X-Request-Id válido; qualquer outro vira um UUID novo.
@@ -42,7 +41,7 @@ function methodAttribute(method: string): (typeof HTTP_METHODS)[number] {
 
 interface ConcludedRequest {
   telemetry: Telemetry;
-  logger: Logger;
+  logger: AppLogger;
   req: Request;
   res: Response;
   span: Span;
@@ -172,7 +171,7 @@ function concludeRequest({
 // fim da resposta, fecha o span, mede a duração e registra o log da requisição.
 export function requestContext(
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
 ): RequestHandler {
   return (req, res, next) => {
     const correlationId = correlationIdFrom(req.headers['x-request-id']);

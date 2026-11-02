@@ -1,6 +1,5 @@
 import { sql, type Kysely } from 'kysely';
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import type { BillingMessage } from '../contract/billing-message.ts';
 import { createDb, type StoreDb } from '../db/database.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
@@ -10,7 +9,7 @@ import {
   type ReceivedMessage,
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
@@ -41,7 +40,7 @@ export interface ReconcilerDependencies {
   dlq: Queue;
   erp: ErpClient;
   semaphore: Semaphore;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   clock: Clock;
   config?: Partial<ReconcilerConfig>;
@@ -66,7 +65,7 @@ interface Context {
   dlq: Queue;
   erp: ErpClient;
   semaphore: Semaphore;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   clock: Clock;
   settings: ReconcilerConfig;
@@ -91,7 +90,7 @@ async function withSemaphore<T>(
 async function markDead(
   { db, telemetry }: Context,
   orderId: string,
-  log: Logger,
+  log: AppLogger,
 ): Promise<void> {
   const marked = await db
     .updateTable('outbox')
@@ -116,7 +115,7 @@ async function invoiceIfFound(
   ctx: Context,
   received: ReceivedMessage,
   message: BillingMessage,
-  log: Logger,
+  log: AppLogger,
 ): Promise<Settled> {
   const { db, dlq, erp, telemetry, settings } = ctx;
   // Sem a permissão (outra chamada há menos que o atraso mínimo), a mensagem fica para o runbook.
@@ -154,7 +153,7 @@ async function settleMessage(
   ctx: Context,
   received: ReceivedMessage,
   message: BillingMessage,
-  log: Logger,
+  log: AppLogger,
 ): Promise<Settled> {
   const { db, dlq, telemetry, semaphore } = ctx;
   await markDead(ctx, message.orderId, log);

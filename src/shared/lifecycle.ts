@@ -1,5 +1,4 @@
-import type { Logger } from 'pino';
-import { eventLogger } from './logging.ts';
+import { eventLogger, type AppLogger } from './logging.ts';
 import { PROCESS_LOG_EVENTS } from './telemetry.ts';
 
 // design.md, "Parâmetros": 25 s no processo; o compose dá 30 s antes do SIGKILL.
@@ -9,7 +8,7 @@ export const SHUTDOWN_TIMEOUT_MS = 25_000;
 // trabalho e esperar o que está em voo; se passar do prazo, sai com erro em
 // vez de esperar o SIGKILL do Docker.
 export function installGracefulShutdown(options: {
-  logger: Logger;
+  logger: AppLogger;
   stop: () => Promise<void>;
 }): void {
   const log = eventLogger(options.logger, PROCESS_LOG_EVENTS);

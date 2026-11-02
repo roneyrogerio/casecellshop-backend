@@ -1,10 +1,9 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
-import type { Logger } from 'pino';
 import type { z } from 'zod';
 import { PROBLEM_MEDIA_TYPE, type Problem } from '../contract/index.ts';
 import { TransactionAbortedError } from '../db/database.ts';
 import { DB_LOG_EVENTS } from '../db/telemetry.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { HTTP_LOG_EVENTS } from './telemetry.ts';
 
 type ProblemBody = z.input<typeof Problem>;
@@ -55,7 +54,7 @@ export const notFoundHandler: RequestHandler = (_req, _res, next) => {
   );
 };
 
-export function createErrorHandler(logger: Logger): ErrorRequestHandler {
+export function createErrorHandler(logger: AppLogger): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
   return (error: unknown, _req, res, _next) => {
     const correlationId = res.locals['correlationId'] as string;

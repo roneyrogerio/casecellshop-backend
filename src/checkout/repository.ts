@@ -2,12 +2,11 @@ import { createHash } from 'node:crypto';
 import { context, SpanKind, type TextMapSetter } from '@opentelemetry/api';
 import type { Kysely, Transaction } from 'kysely';
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import type { CheckoutAccepted, CheckoutRequest } from '../contract/index.ts';
 import { createDb, runInTransaction, type StoreDb } from '../db/database.ts';
 import { isUnavailable } from '../db/unavailable.ts';
 import { databaseUnavailableProblem, ProblemError } from '../http/problem.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
 import { CHECKOUT_LOG_EVENTS } from './telemetry.ts';
 
@@ -286,7 +285,7 @@ function runInSpan(
 function databaseProblem(
   error: unknown,
   progress: Progress,
-  logger: Logger,
+  logger: AppLogger,
 ): ProblemError | undefined {
   if (!isUnavailable(error)) return undefined;
   const code = (error as { code?: unknown } | null)?.code;
@@ -308,7 +307,7 @@ function databaseProblem(
 async function createCheckout(
   db: Kysely<StoreDb>,
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
   input: CheckoutInput,
 ): Promise<CheckoutResult> {
   const items = [...input.request.items].sort(compareSku);
@@ -330,7 +329,7 @@ async function createCheckout(
 export function createCheckoutRepository(
   pool: Pool,
   telemetry: Telemetry,
-  logger: Logger,
+  logger: AppLogger,
 ): CheckoutRepository {
   const db = createDb(pool);
   return { create: (input) => createCheckout(db, telemetry, logger, input) };

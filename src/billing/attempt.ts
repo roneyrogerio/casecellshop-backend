@@ -1,9 +1,8 @@
 import type { Span } from '@opentelemetry/api';
-import type { Logger } from 'pino';
 import { TransactionAbortedError } from '../db/database.ts';
 import { DB_LOG_EVENTS } from '../db/telemetry.ts';
 import type { HandleResult, Queue } from '../queue/sqs.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { concludeOrder, type OrderConclusion } from './conclude.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
@@ -20,7 +19,7 @@ import {
 
 export interface AttemptContext extends CallContext {
   queue: Queue;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
 }
 
@@ -32,7 +31,7 @@ type RetryOutcome = Extract<Outcome, { kind: 'retry' | 'deferred' }>;
 async function respond(
   { telemetry }: AttemptContext,
   action: () => Promise<HandleResult>,
-  log: Logger,
+  log: AppLogger,
 ): Promise<HandleResult | 'error'> {
   try {
     const result = await action();
@@ -62,7 +61,7 @@ async function respond(
 async function close(
   ctx: AttemptContext,
   message: Attempt,
-  log: Logger,
+  log: AppLogger,
 ): Promise<void> {
   // Só conta quando o SQS apagou: com o handle antigo (stale), outro recebimento é quem encerra.
   const result = await respond(
@@ -86,7 +85,7 @@ async function concludeInDb(
   { db, clock }: AttemptContext,
   message: Attempt,
   conclusion: OrderConclusion,
-  log: Logger,
+  log: AppLogger,
 ) {
   // O teto impede que um erro rápido e persistente vire um laço contra o banco.
   for (let tries = 1; tries <= MAX_CONCLUSION_TRIES; tries += 1) {
@@ -117,7 +116,7 @@ async function finishRetry(
   ctx: AttemptContext,
   message: Attempt,
   outcome: RetryOutcome,
-  log: Logger,
+  log: AppLogger,
 ): Promise<void> {
   const result = await respond(
     ctx,
@@ -147,7 +146,7 @@ async function finishConclusion(
   ctx: AttemptContext,
   message: Attempt,
   outcome: OrderConclusion,
-  log: Logger,
+  log: AppLogger,
 ): Promise<void> {
   const result = await concludeInDb(ctx, message, outcome, log);
   if (!result) return;
@@ -186,14 +185,18 @@ function finish(
   ctx: AttemptContext,
   message: Attempt,
   outcome: Outcome,
-  log: Logger,
+  log: AppLogger,
 ): Promise<void> {
   if (outcome.kind === 'retry' || outcome.kind === 'deferred')
     return finishRetry(ctx, message, outcome, log);
   return finishConclusion(ctx, message, outcome, log);
 }
 
-function logAttemptFailed(log: Logger, error: unknown, message: string): void {
+function logAttemptFailed(
+  log: AppLogger,
+  error: unknown,
+  message: string,
+): void {
   eventLogger(log, BILLING_LOG_EVENTS).error(
     'casecellshop.outbox.attempt.failed',
     { err: error },

@@ -1,11 +1,10 @@
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import { sql, type Kysely, type Transaction } from 'kysely';
 import { BillingMessage } from '../contract/billing-message.ts';
 import { createDb, runInTransaction, type StoreDb } from '../db/database.ts';
 import type { OutgoingMessage, Queue } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
@@ -26,7 +25,7 @@ export const DEFAULT_RELAY_CONFIG: RelayConfig = {
 export interface RelayDependencies {
   pool: Pool;
   queue: Queue;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   clock: Clock;
   config?: Partial<RelayConfig>;
@@ -41,7 +40,7 @@ export interface Relay {
 interface Context {
   db: Kysely<StoreDb>;
   queue: Queue;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   settings: RelayConfig;
 }
@@ -54,7 +53,7 @@ interface OutboxRow {
 
 // Valida o corpo antes de enviar: a mensagem que sai tem de passar no contrato do worker.
 // Linha inválida fica fora do lote: se derrubasse a rodada, travaria as demais, já que é das mais antigas.
-function toOutgoing(logger: Logger, rows: OutboxRow[]): OutgoingMessage[] {
+function toOutgoing(logger: AppLogger, rows: OutboxRow[]): OutgoingMessage[] {
   return rows.flatMap((row) => {
     const parsed = BillingMessage.safeParse({
       orderId: row.order_id,
@@ -122,7 +121,7 @@ const round = (ctx: Context) =>
   runInTransaction(ctx.db, (trx) => publishBatch(ctx, trx));
 
 function announce(
-  logger: Logger,
+  logger: AppLogger,
   name:
     'casecellshop.outbox.relay.started' | 'casecellshop.outbox.relay.stopped',
 ): void {

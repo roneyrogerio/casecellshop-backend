@@ -1,9 +1,8 @@
 import type { Kysely } from 'kysely';
-import type { Logger } from 'pino';
 import type { StoreDb } from '../db/database.ts';
 import type { ErpClient, ErpOrderItem } from '../erp/erp-client.ts';
 import type { Clock } from '../shared/clock.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { renewCallPermit, takeCallPermit } from './call-permit.ts';
 import type { OrderConclusion } from './conclude.ts';
 import { BILLING_LOG_EVENTS } from './telemetry.ts';
@@ -72,7 +71,7 @@ function retry(ctx: CallContext, message: Attempt, cause: RetryCause): Outcome {
 function configError(
   ctx: CallContext,
   message: Attempt,
-  log: Logger,
+  log: AppLogger,
   status: number,
 ): Outcome {
   eventLogger(log, BILLING_LOG_EVENTS).warn(
@@ -83,7 +82,7 @@ function configError(
   return retry(ctx, message, 'config_error');
 }
 
-function giveUp(log: Logger): undefined {
+function giveUp(log: AppLogger): undefined {
   eventLogger(log, BILLING_LOG_EVENTS).warn(
     'casecellshop.outbox.lease.too_short',
     {},
@@ -131,7 +130,7 @@ async function loadItems(
 async function lookupExisting(
   ctx: CallContext,
   message: Attempt,
-  log: Logger,
+  log: AppLogger,
 ): Promise<Outcome | 'not_found'> {
   const found = await ctx.erp.findOrderByReference(message.orderId);
   if (found.kind === 'found') return { kind: 'invoiced' };
@@ -144,7 +143,7 @@ async function lookupExisting(
 async function createInErp(
   ctx: CallContext,
   message: Attempt,
-  log: Logger,
+  log: AppLogger,
   items: ErpOrderItem[],
 ): Promise<Outcome> {
   const created = await ctx.erp.createOrder({
@@ -167,7 +166,7 @@ async function createInErp(
 export async function callErp(
   ctx: CallContext,
   message: Attempt,
-  log: Logger,
+  log: AppLogger,
 ): Promise<Outcome | undefined> {
   const { db, clock, settings } = ctx;
   // Os itens vêm antes da permissão: nenhuma consulta ao banco pode ficar entre a última

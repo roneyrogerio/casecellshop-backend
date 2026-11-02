@@ -1,10 +1,9 @@
 import type { RequestHandler } from 'express';
-import type { Logger } from 'pino';
 import { orderStatusRoute, type OrderStatus } from '../contract/index.ts';
 import { isUnavailable } from '../db/unavailable.ts';
 import { databaseUnavailableProblem, ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import type { OrdersRepository } from './repository.ts';
 import { ORDERS_LOG_EVENTS } from './telemetry.ts';
 
@@ -15,7 +14,7 @@ export interface OrdersRoutes {
 
 export function createOrdersRoutes(
   orders: OrdersRepository,
-  logger: Logger,
+  logger: AppLogger,
 ): OrdersRoutes {
   const getOrderStatus: RequestHandler = async (req, res) => {
     const orderId = req.params['orderId'] as string;

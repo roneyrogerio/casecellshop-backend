@@ -1,5 +1,4 @@
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import { createDb } from '../db/database.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
 import {
@@ -9,6 +8,7 @@ import {
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger } from '../shared/logging.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import { createSemaphore, type Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
@@ -44,7 +44,7 @@ export interface WorkerDependencies {
   semaphore?: Semaphore;
   // Porta do ERP (camada anticorrupção).
   erp: ErpClient;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   clock: Clock;
   // Sorteio do jitter; o teste o fixa.
@@ -72,7 +72,7 @@ interface WorkerContext extends AttemptContext {
 // Corpo fora do schema: a fila é uma entrada como outra qualquer. Não responde ao SQS, para a
 // mensagem voltar e chegar à DLQ pelo limite de recebimentos.
 function rejectInvalid(
-  logger: Logger,
+  logger: AppLogger,
   received: ReceivedMessage,
   orderId: string | undefined,
 ): void {
@@ -173,7 +173,7 @@ async function pollLoop(
 }
 
 function announce(
-  logger: Logger,
+  logger: AppLogger,
   name: 'casecellshop.worker.started' | 'casecellshop.worker.stopped',
 ): void {
   const message =

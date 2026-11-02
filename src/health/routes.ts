@@ -1,9 +1,8 @@
 import type { RequestHandler } from 'express';
-import type { Logger } from 'pino';
 import { healthRoute, type HealthStatus } from '../contract/index.ts';
 import { databaseUnavailableProblem } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
-import { eventLogger } from '../shared/logging.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import type { HealthRepository } from './repository.ts';
 import { HEALTH_LOG_EVENTS } from './telemetry.ts';
 
@@ -14,7 +13,7 @@ export interface HealthRoutes {
 
 export function createHealthRoutes(
   health: HealthRepository,
-  logger: Logger,
+  logger: AppLogger,
 ): HealthRoutes {
   const getHealth: RequestHandler = async (_req, res) => {
     try {
