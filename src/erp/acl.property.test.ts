@@ -5,6 +5,7 @@ import {
   expectAsyncProperty,
   expectFalsifiedAsync,
 } from '../../test/helpers/properties.ts';
+import { DEFAULT_SEED } from '../../test/helpers/property-setup.ts';
 import { createErpClient, type ErpClientOptions } from './acl.ts';
 import type { ErpClient, ErpOrderRequest } from './erp-client.ts';
 import {
@@ -56,29 +57,63 @@ const statusArb = fc.oneof(
   fc.integer(),
 );
 
-// Números nas bordas do dinheiro e do estoque: inteiros seguros, fora da faixa, fracionários e não numéricos.
+// Números nas bordas do dinheiro e do estoque: inteiros seguros, fora da faixa, fracionários e não numéricos. Os
+// pesos dão mais vez às formas que separam o cliente certo dos três clientes quebrados dos controles negativos
+// (inteiro acima do seguro, decimal >= 0, negativo) e ao inteiro seguro, que é o outro campo do mesmo item: o
+// controle só reprova se um campo é a borda e o outro passa na regra frouxa. Com pesos iguais, 7 das 20 primeiras
+// sementes não achavam o inteiro não seguro a 100 casos. Nenhuma forma saiu: as que não são borda ficam com peso 1.
 const numberLikeArb = fc.oneof(
-  fc.integer({ min: 0, max: 1_000_000 }),
-  fc.integer({ min: -1_000_000, max: -1 }),
-  fc.double({ noNaN: false }),
-  fc.constantFrom(
-    0,
-    -0,
-    1.5,
-    Number.MAX_SAFE_INTEGER,
-    Number.MAX_SAFE_INTEGER + 1,
-    Number.MIN_SAFE_INTEGER,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ),
-  fc.string(),
-  fc.jsonValue(),
+  { weight: 4, arbitrary: fc.integer({ min: 0, max: 1_000_000 }) },
+  { weight: 3, arbitrary: fc.integer({ min: -1_000_000, max: -1 }) },
+  {
+    weight: 3,
+    arbitrary: fc.oneof(
+      fc.constantFrom(
+        Number.MAX_SAFE_INTEGER + 1,
+        2 ** 53,
+        2 ** 60,
+        1e21,
+        Number.MAX_VALUE,
+      ),
+      fc.double({ min: 2 ** 53, noNaN: true, noDefaultInfinity: true }),
+    ),
+  },
+  {
+    weight: 3,
+    arbitrary: fc.oneof(
+      fc.constantFrom(0.5, 1.5, 0.1, 4990.5),
+      fc.double({ min: 0, max: 1_000_000, noNaN: true }),
+    ),
+  },
+  { weight: 1, arbitrary: fc.double({ noNaN: false }) },
+  {
+    weight: 1,
+    arbitrary: fc.constantFrom(
+      0,
+      -0,
+      1.5,
+      Number.MAX_SAFE_INTEGER,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.MIN_SAFE_INTEGER,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ),
+  },
+  { weight: 1, arbitrary: fc.string() },
+  { weight: 1, arbitrary: fc.jsonValue() },
+);
+
+// O item só chega à regra de preço e estoque se sku e name forem texto; o peso mantém o jsonValue (que quase nunca é
+// texto) como forma possível, mas faz o item passar dessa porta na maior parte dos casos.
+const textOrJsonArb = fc.oneof(
+  { weight: 4, arbitrary: fc.string() },
+  { weight: 1, arbitrary: fc.jsonValue() },
 );
 
 const nearItemArb = fc.record(
   {
-    sku: fc.oneof(fc.string(), fc.jsonValue()),
-    name: fc.oneof(fc.string(), fc.jsonValue()),
+    sku: textOrJsonArb,
+    name: textOrJsonArb,
     priceCents: numberLikeArb,
     onHand: numberLikeArb,
   },
@@ -364,7 +399,10 @@ describe('FND-15 createErpClient: catálogo', () => {
     await expectAsyncProperty(countsAreSafeIntegers(createErpClient));
   });
 
-  it.each([
+  // O controle não pode depender da sorte da semente: cada cliente quebrado é reprovado a 100 casos com a semente
+  // padrão do PR e com outras três (as que, com pesos iguais no gerador, não achavam o contraexemplo), e a semente e
+  // o número de casos são fixados aqui, não lidos do ambiente do agendado.
+  const brokenCounts = [
     {
       defect: 'aceita inteiro não seguro',
       accepts: (v: unknown) =>
@@ -379,10 +417,18 @@ describe('FND-15 createErpClient: catálogo', () => {
       defect: 'aceita número negativo',
       accepts: (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v),
     },
-  ])(
-    'FND-15 controle negativo: a propriedade de preço e estoque reprova o cliente que $defect',
-    async ({ accepts }) => {
-      await expectFalsifiedAsync(countsAreSafeIntegers(lenientCounts(accepts)));
+  ];
+  const controlCases = brokenCounts.flatMap((broken) =>
+    [DEFAULT_SEED, 1, 2, 6].map((seed) => ({ ...broken, seed })),
+  );
+
+  it.each(controlCases)(
+    'FND-15 controle negativo: a propriedade de preço e estoque reprova o cliente que $defect, com a semente $seed a 100 casos',
+    async ({ accepts, seed }) => {
+      await expectFalsifiedAsync(
+        countsAreSafeIntegers(lenientCounts(accepts)),
+        { seed, numRuns: 100 },
+      );
     },
   );
 

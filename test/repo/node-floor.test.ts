@@ -632,6 +632,13 @@ describe('FND-12 a perna do piso do CI exclui só os testes que sobem o docker c
       '--coverage.thresholds.lines=0',
       '--coverage.enabled=false',
       '--coverage.reporter=lcov',
+      // A5 da Revisão 2 do #35: as chaves que estreitam a medida (o escopo de src/ do AI-37) pela linha de comando. A
+      // lista fechada do FND-12 as recusa por serem tokens fora dela; o AI-37 aponta para esta lista.
+      '--coverage.exclude=src/erp/**',
+      '--coverage.include=src/http/**/*.ts',
+      '--coverage.ignoreClassMethods=x',
+      '--coverage.excludeAfterRemap',
+      '--coverage.allowExternal',
     ];
     const escaped: string[] = [];
     const variants: Record<string, (t: string) => string> = {};
