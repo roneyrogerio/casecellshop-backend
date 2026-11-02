@@ -45,6 +45,15 @@ export function createLogger(options: {
   );
 }
 
+// O logger que o resto de `src/` recebe. Stub da fatia de correção: o implementer o troca por um tipo opaco,
+// que só cria filhos e só escreve pelo `eventLogger`.
+export type AppLogger = Logger;
+
+// Envolve um logger do pino (os testes montam o deles, com destino próprio).
+export function fromPino(logger: Logger): AppLogger {
+  return logger;
+}
+
 type EventSpecs = Readonly<Record<string, LogEventSpec>>;
 
 // Os campos de correlação, que todo evento aceita além dos próprios: o log da requisição os passa à mão,
