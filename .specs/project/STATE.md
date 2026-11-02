@@ -63,7 +63,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-003 · Outbox transacional como fila, no próprio PostgreSQL
 
-**Status:** aceita (29/10/2026); "a tabela da outbox é a fila" e o motivo para não rodar SQS local são substituídos pela AD-021
+**Status:** aceita (29/10/2026); "a tabela da outbox é a fila" e o motivo para não rodar SQS local são substituídos pela AD-021; a conferência dos pedidos falhos e a confirmação da rejeição, descartadas aqui, entram pela AD-031
 
 **Contexto.** Publicar antes de gravar o pedido gera mensagem fantasma; publicar depois gera pedido fantasma se o processo cair entre os dois passos. Um worker atrasado não pode desfazer o que outro concluiu, e o ERP lento não pode receber mais chamadas do que aguenta.
 
@@ -199,7 +199,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-009 · Sincronização periódica de preço e estoque, sem devolver unidade vendida
 
-**Status:** aceita (29/10/2026). A gravação de todo SKU em toda rodada é alterada pela AD-030.
+**Status:** aceita (29/10/2026). A gravação de todo SKU em toda rodada é alterada pela AD-030; a exceção de leitura do MySQL do ERP ganha a contagem de faturas pela AD-031.
 
 **Contexto.** Uma carga única na subida deixaria preço e estoque congelados. A loja baixa o `on_hand` localmente no faturamento, então uma leitura do ERP feita **antes** de um faturamento e gravada **depois** da baixa local devolveria a unidade vendida. Pular a linha nesse caso evitaria isso, mas um SKU que vende sem parar nunca seria atualizado.
 
@@ -890,6 +890,42 @@ O princípio adotado é a verificação determinística e independente de quem i
 - [commercetools, *Plan your integration landscape*](https://docs.commercetools.com/learning-integrate-with-composable-commerce/integration-patterns/integrate-with-external-product-and-inventory-data.md), consultado em 02/11/2026: depois da carga inicial, só o que mudou, com fluxos separados para preço e estoque.
 - [Dutchie, *Incremental Sync*](https://api.pos.dutchie.com/pages/incremental-sync.html), consultado em 02/11/2026: a carga completa de base e depois "alterados desde"; os registros apagados não aparecem na carga incremental.
 
+### AD-031 · Envio em dúvida: verificação tardia, cancelamento e recusa só depois da janela de assentamento
+
+**Status:** proposta (02/11/2026). Retoma duas alternativas descartadas na AD-003 ("confirmar a rejeição antes de marcar o pedido como falho, ou conferir de novo os pedidos falhos") e amplia a exceção de leitura do MySQL do ERP do R6 (AD-009, "Alternativas consideradas").
+
+**Contexto.** Sem a H1b e acima da H4, um pedido pode terminar com duas faturas no ERP, ou `failed` com uma fatura que aparece depois (R6). O ERP não muda, então a loja não elimina esses casos. Até aqui ela também não os via: o pedido seguia `invoiced` ou `failed`, e o cliente reclamaria antes de a operação saber. Dois caminhos da própria loja pioravam o caso: o `cancel` do runbook cancelava sem olhar o tempo da última chamada nem consultar o ERP, e uma recusa definitiva do ERP logo depois de um envio sem resposta fechava o pedido como `failed` na hora, com a criação anterior talvez ainda em processamento. O desafio pede rastreabilidade e detectar o problema antes da reclamação do cliente, e diz que a loja tem acesso de leitura ao MySQL do ERP.
+
+Um envio está em dúvida quando a criação pode ter tido efeito sem a loja saber (timeout, `5xx` ambíguo, worker morto no meio). Só um envio em dúvida produz os dois casos: a duplicata precisa de duas criações, e o pedido falho com fatura precisa de uma criação em dúvida seguida de recusa ou cancelamento.
+
+**Decisão.**
+
+- **Marca de envio antes da chamada.** A outbox ganha `create_calls`, somado no mesmo `UPDATE` que toma a permissão de chamada do worker (quando a criação vem direto) ou a renova (antes da criação que segue a consulta). A soma vem antes da chamada, então a contagem nunca fica abaixo do número real de criações.
+- **Janela de assentamento** de 15 min desde a última chamada ao ERP, bem maior que a H4 (40 s): depois dela, a criação em dúvida já concluiu ou foi abandonada. É o mesmo parâmetro nos três itens abaixo ([`design.md`, "Parâmetros"](../features/casecellshop/design.md#parâmetros)).
+- **Verificação tardia** no worker, no estilo da reconciliação: a cada 5 min, os pedidos com desfecho e envio em dúvida (`create_calls >= 2`, ou `cancelled` com `create_calls >= 1`) cuja janela venceu. Pedido `failed`: consulta pela referência (H1a), com a permissão de chamada (AD-024); se o ERP o tem, é uma "fatura de pedido falho". Pedido `invoiced`: conta as faturas da referência no banco do ERP; duas ou mais, "fatura duplicada". O pedido não muda de estado. O achado vai para uma marca durável na outbox (`late_checked_at`, `late_finding`), gravada por compare-and-set, para alertar uma vez só, também entre réplicas; para o log `casecellshop.order.late_invoice.detected`, com `orderId` e a causa; e para o counter `casecellshop.order.late_invoices`, com a causa de lista fechada e sem `orderId`, que dispara um alerta `page` com runbook no README.
+- **Leitura do MySQL do ERP só para contar faturas.** A consulta pela referência (H1a) devolve um pedido, e a API não diz quantas faturas existem. A contagem é uma consulta só, parametrizada e de leitura, atrás da porta `ErpClient` (`countInvoicesByReference`), por um adaptador próprio (`ErpInvoiceReader`); nenhuma outra parte da loja lê o banco do ERP.
+- **Cancelamento seguro.** O `cancel` do runbook toma a permissão de chamada com a janela de assentamento no lugar do atraso mínimo: recusa se a última chamada é mais nova que a janela, e impede outra tentativa de chamar o ERP enquanto consulta. Depois consulta o ERP pela referência e só cancela com o `not_found` explícito, numa transação que confere o `call_token` na linha travada. Cada recusa tem mensagem própria ao operador.
+- **Recusa depois de um envio sem resposta: adiar e confirmar.** Com um envio anterior, a recusa definitiva fica gravada na outbox (`refusal_reason`, `refused_at`) e a mensagem volta pela janela de assentamento. Depois dela, a consulta pela referência decide: o ERP tem o pedido, ele é faturado; não tem, termina `failed` com o motivo gravado. Com uma recusa gravada, o worker nunca cria de novo. O limite é o tempo (a janela) e, no pior caso, o limite de recebimentos do SQS, que leva à DLQ, onde a reconciliação e o cancelamento seguro tratam o pedido. A recusa no primeiro envio continua concluindo na hora (`ORD-08`).
+- Detalhes: [`design.md`, "Worker: verificação tardia"](../features/casecellshop/design.md#worker-verificação-tardia-ad-031), "Worker: envio" e "Worker: reconciliação e runbook".
+
+**Alternativas consideradas:**
+
+- **Aceitar só o caso do pedido falho**, pela API. Não depende de tabela interna do ERP, mas a fatura duplicada, o caso mais provável sem a H1b, continua invisível.
+- **Conciliar por um relatório de faturas do ERP** (arquivo diário), como se faz na liquidação de pagamentos. Não depende de tabela interna, mas exige um relatório que nenhuma hipótese garante e detecta com um dia de atraso.
+- **Aumentar o atraso mínimo até a janela de assentamento.** Reduz a chance da duplicata sem eliminá-la e põe todo pedido com envio em dúvida 15 min fora do SLO de 60 s. Fica como ajuste do runbook quando a verificação acha casos.
+- **Recusa: concluir na hora e deixar para a verificação tardia.** Mais simples, mas o cliente vê `failed` e depois é faturado, e cada caso vira um `page` com correção manual. Adiar acerta sozinho o caso comum (a criação anterior conclui entre 45 s e 15 min), ao custo de a reserva ficar até 15 min a mais num caminho raro.
+- **Corrigir o pedido automaticamente** ao achar a fatura (faturar o pedido falho, estornar a duplicata). Estornar ou cancelar fatura é operação do ERP, sem API conhecida, e mudar o pedido depois de o cliente ver o desfecho precisa de decisão humana.
+- **Verificar todo pedido concluído.** Sem a marca de envio, cada pedido custaria uma consulta ao ERP; com ela, só os pedidos com envio em dúvida, que são raros, entram.
+
+**Trade-off.** A contagem depende de uma tabela interna do ERP, que pode mudar numa atualização dele: uma leitura que falha aparece como `transient` no histograma do ERP e o pedido volta na rodada seguinte, sem falso negativo silencioso, mas uma mudança de semântica da tabela exige ajustar o adaptador. A detecção leva até ~20 min depois da última chamada, e uma fatura que aparece depois da verificação (a H4 violada em mais que a janela) não é vista. O cancelamento manual espera a janela, e o pedido recusado depois de outro envio fica até 15 min a mais com a reserva.
+
+**Rever quando:** o ERP passar a deduplicar pela referência (H1b), que torna a verificação desnecessária para a duplicata; a API do ERP expuser a contagem ou a lista de faturas por referência, que substitui a leitura do MySQL; ou a verificação achar casos, sinal de que a H4 não vale e de que o atraso mínimo precisa ser revisto.
+
+**Referências:**
+
+- [Stripe, *Advanced error handling*](https://docs.stripe.com/error-low-level), consultado em 02/11/2026: um `500` ou um erro de rede deixa o resultado indeterminado, com possíveis efeitos colaterais; a orientação é não tratar como falha, não trocar de chave antes de resolver o resultado original e reconciliar consultando o objeto.
+- [Prometheus, *Avoid missing metrics*](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026: exportar 0 de antemão para a série que se sabe que vai existir, para o primeiro evento mover o `increase`.
+
 ## Escolhas de ferramenta
 
 | Tema | Escolha | Descartado | Por quê |
@@ -951,7 +987,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 | R3 | Quem clonar o repositório pode não ter Docker | `npm run test:unit` sem Docker; o CI mostra a suíte completa |
 | R4 | O teste de concorrência pode passar sem provar nada | Controle negativo com janela forçada, que precisa vender além do estoque (CHK-02); várias conexões; repetição em laço |
 | R5 | Testes intermitentes no CI | Relógio injetável, sem `sleep`, horários semeados no banco, pool fixo |
-| R6 | A H1b (deduplicação) ou a H4 (tempo de processamento) podem não valer para um ERP real | Marcador de envio gravado antes da chamada; consulta pela referência depois do primeiro envio, sempre após o atraso mínimo; provada com o fake sem a H1b e com o modo "fatura depois do timeout". **Resíduo:** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP, ou falho com uma fatura que aparece depois, e a loja não detecta esses casos; um teste acima da H4 os demonstra (ORD-06), e o README os declara. Se nem a H1a valer, a consulta por referência lê o MySQL do ERP, isolada atrás da porta `ErpClient`: é a única exceção à regra de falar com o ERP só pela API |
+| R6 | A H1b (deduplicação) ou a H4 (tempo de processamento) podem não valer para um ERP real | Marcador de envio gravado antes da chamada; consulta pela referência depois do primeiro envio, sempre após o atraso mínimo; provada com o fake sem a H1b e com o modo "fatura depois do timeout". **Resíduo:** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP, ou falho com uma fatura que aparece depois; a loja não evita esses casos, mas os detecta pela verificação tardia (AD-031) em até ~20 min depois da última chamada ao ERP do pedido (janela de assentamento de 15 min mais o intervalo de 5 min), com o alerta `CasecellshopFaturaTardia` e o runbook "Fatura tardia ou duplicada" do README; o `ORD-06` demonstra a duplicata e a detecção. O cancelamento manual e a recusa depois de um envio sem resposta esperam a janela e consultam o ERP antes de concluir. Fica sem detecção a fatura que aparece depois da verificação. A leitura do MySQL do ERP, atrás da porta `ErpClient`, é a única exceção à regra de falar com o ERP só pela API: conta as faturas de uma referência (AD-031) e é o plano B da consulta, se nem a H1a valer |
 | R7 | A IA que escreve o código também o revisa | O `reviewer` revisa em contexto limpo, num modelo mais forte; o `test-writer` escreve os testes antes, sem ler a implementação, e a guarda impede o `implementer` de alterá-los e de alterar o CI; o PR sai da identidade configurada no clone, que no modo `bot` é uma conta separada de quem aprova (AD-014), e só entra na `main` com a aprovação do dono, imposta pelo ruleset (AD-013). Resta: o dono pede e aprova, e o relatório do `reviewer` chega ao PR pela sessão principal, então é informação, nunca aprovação |
 | R8 | Ferramental recente pode não se integrar (Node 26, OpenTelemetry 3, TypeScript 7, Vitest 5, zod 4 com o gerador de OpenAPI 3.1, Testcontainers no macOS, exporters do OpenTelemetry na linha experimental 0.x) | Versões conferidas pelos peer dependencies e pelo status no npm. Spike no início do M1, pelo `implementer`, com comandos descartáveis: *type stripping* no Node 26 e na 24.12, `tsc`, lint com tipos, Vitest, Testcontainers, node-pg-migrate com `.sql`, um schema zod gerando OpenAPI 3.1 que passa no lint, um span filho e uma métrica. Planos B: `zod-openapi` no lugar do gerador (AD-010), OpenTelemetry 2.12 (AD-011) e o PostgreSQL do compose no lugar do Testcontainers. **Resultado (29/10/2026):** os dez pontos passaram no Node 26.13.0 e na 24.12.0, sem plano B |
 | R9 | A H2 pode não valer: o ERP fatura sem estoque e fica negativo | A sincronização grava zero, registra o caso em log, e a loja para de vender o SKU |
@@ -1023,8 +1059,6 @@ O princípio adotado é a verificação determinística e independente de quem i
 Além da lista "Adicionais" do roadmap:
 
 - redrive automático da DLQ;
-- nova conferência dos pedidos falhos, para a fatura tardia do R6;
-- confirmação da rejeição antes de marcar o pedido como falho;
 - várias réplicas do worker, com a sincronização coordenada e o limite e os pools divididos entre elas;
 - cabeçalhos de cache HTTP, quando houver uma CDN;
 - faixa "consultar" na vitrine depois de um teto sem sincronização;
