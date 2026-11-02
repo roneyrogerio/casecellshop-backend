@@ -35,8 +35,8 @@ import {
   metricValue,
   scrapeMetrics,
 } from '../../helpers/metrics.ts';
-import type { Queue } from '../../../src/queue/sqs.ts';
-import { drain, type Injection } from '../../helpers/sqs.ts';
+import type { Queue, ReceivedMessage } from '../../../src/queue/sqs.ts';
+import { countsOf, drain, type Injection } from '../../helpers/sqs.ts';
 import {
   ageLastCall,
   buildWorker,
@@ -428,7 +428,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     expect(await outcomeCount(rig, 'dead')).toBe(1);
   });
 
-  it('ORD-14 recebe da DLQ até maxMessages em lotes de no máximo 10, com a visibilidade configurada, e deixa o resto para a rodada seguinte', async () => {
+  it('ORD-14 recebe da DLQ até maxMessages em lotes de no máximo 10, com a visibilidade configurada, e a rodada seguinte pode receber de novo as mesmas', async () => {
     const rig = await createRig({ config: { maxMessages: 12 } });
     const { world } = rig;
     await seedDead(
@@ -442,7 +442,7 @@ describe('ORD-14 ERP fora por mais que a janela de retry', () => {
     expect(rig.dlq.received).toHaveLength(12);
     for (const options of rig.dlq.receives) {
       expect(options.max).toBeLessThanOrEqual(10);
-      // 5 min: a mensagem não é vista duas vezes na rodada, e a seguinte lê outras.
+      // 5 min: a mensagem não é vista duas vezes na rodada (ela volta no fim, e a seguinte pode recebê-la de novo).
       expect(options.visibilitySeconds).toBe(300);
     }
     // As 12 que a rodada recebeu e deixou na DLQ voltam no fim dela (ORD-14), junto das 3 que sobraram.
@@ -726,6 +726,110 @@ function findOrderReferences(world: QueueWorld): string[] {
     );
 }
 
+// Outro consumidor recebe a primeira mensagem da DLQ: o handle que a reconciliação guarda dela passa a ser antigo
+// (`stale`), igual ao que o ORD-22 provoca na porta.
+async function stealFromDlq(
+  world: QueueWorld,
+  messages: ReceivedMessage[],
+): Promise<void> {
+  await world.queues.dlq.changeVisibility(messages[0]?.receiptHandle ?? '', 0);
+  const taken = await world.queues.dlq.receive({
+    max: 10,
+    waitSeconds: 0,
+    visibilitySeconds: 300,
+  });
+  expect(taken, 'o outro consumidor recebeu a mensagem').toHaveLength(1);
+}
+
+// 12 mensagens na DLQ (um lote de 10 e mais 2) e a segunda leitura da DLQ falha: a rodada termina por um erro com
+// 10 mensagens recebidas. Devolve a injeção, para o teste conferir que ela disparou.
+async function seedAndFailSecondRead(rig: Rig): Promise<Injection> {
+  await seedDead(
+    rig,
+    Array.from({ length: 12 }, () => ({ quantity: 1 })),
+  );
+  let reads = 0;
+  const injection = { fired: 0 };
+  rig.dlq.beforeReceive(() => {
+    reads += 1;
+    if (reads === 2) {
+      const armed = rig.dlq.inject('receive');
+      Object.defineProperty(injection, 'fired', { get: () => armed.fired });
+    }
+    return Promise.resolve();
+  }, 2);
+  return injection;
+}
+
+describe('ORD-14 a devolução da visibilidade para no primeiro erro que não seja stale', () => {
+  it('ORD-14 o primeiro changeVisibility da devolução lança: a devolução para ali, nenhuma outra chamada sai, as mensagens seguem em voo e a rodada não rejeita', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+    await seedDead(rig, [{}, {}, {}]);
+    const injection = rig.dlq.inject('changeVisibility', 1);
+
+    const result = await rig.reconciler.reconcileOnce();
+
+    expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
+    expect(result).toEqual({ seen: 3, invoiced: 0, closed: 0 });
+    expect(
+      rig.dlq.visibilityChanges.map((call) => call.result),
+      'chamadas de changeVisibility na rodada',
+    ).toEqual(['rejected']);
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 0,
+      notVisible: 3,
+    });
+  });
+
+  it('ORD-14 a rodada que termina por um erro e tem a devolução falha mantém o erro original e para a devolução na primeira chamada', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+    const receiveInjection = await seedAndFailSecondRead(rig);
+    const releaseInjection = rig.dlq.inject('changeVisibility', 1);
+
+    // A spec não diz se a rodada rejeita ou só loga a falha da leitura; o teste aceita os dois, e exige que o
+    // erro, se houver, seja o da leitura, e não o da devolução.
+    const error: unknown = await rig.reconciler
+      .reconcileOnce()
+      .then(() => undefined)
+      .catch((caught: unknown) => caught);
+
+    expect(receiveInjection.fired, 'a leitura falhou').toBe(1);
+    expect(releaseInjection.fired, 'a devolução falhou').toBe(1);
+    // Sem erro, não há o que conferir: a mensagem de referência já é a da leitura.
+    expect(error instanceof Error ? error.message : '(receive)').toContain(
+      '(receive)',
+    );
+    expect(rig.dlq.visibilityChanges).toHaveLength(1);
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 2,
+      notVisible: 10,
+    });
+  });
+
+  it('ORD-14 controle: um stale na primeira devolução não interrompe, e as outras mensagens ficam visíveis', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+    await seedDead(rig, [{}, {}, {}]);
+    // Handle antigo de verdade, sem injeção: o outro consumidor recebe a primeira mensagem antes de a rodada tratá-la.
+    rig.dlq.afterReceive((messages) => stealFromDlq(world, messages));
+
+    const result = await rig.reconciler.reconcileOnce();
+
+    expect(result.seen).toBe(3);
+    expect(
+      rig.dlq.visibilityChanges.map((call) => call.result),
+      'chamadas de changeVisibility na rodada',
+    ).toEqual(['stale', 'ok', 'ok']);
+    // A mensagem roubada segue com o outro consumidor; as duas devolvidas ficam visíveis.
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 2,
+      notVisible: 1,
+    });
+  });
+});
+
 describe('ORD-14 a reconciliação devolve a visibilidade das mensagens que deixou na DLQ', () => {
   it('ORD-14 no fim da rodada, a mensagem que o ERP não tem volta visível, sem nenhuma em voo; as apagadas (faturada, fechada) não voltam', async () => {
     const rig = await createRig();
@@ -847,22 +951,12 @@ describe('ORD-14 a reconciliação devolve a visibilidade das mensagens que deix
   it('ORD-14 a rodada que termina por um erro (a segunda leitura da DLQ falha) devolve as mensagens que já tinha recebido', async () => {
     const rig = await createRig();
     const { world } = rig;
-    await seedDead(
-      rig,
-      Array.from({ length: 12 }, () => ({ quantity: 1 })),
-    );
-    let reads = 0;
-    let injection: Injection | undefined;
-    rig.dlq.beforeReceive(() => {
-      reads += 1;
-      if (reads === 2) injection = rig.dlq.inject('receive');
-      return Promise.resolve();
-    }, 2);
+    const secondRead = await seedAndFailSecondRead(rig);
 
     // A spec não diz se a rodada rejeita ou só loga a falha da leitura; o teste aceita os dois.
     await rig.reconciler.reconcileOnce().catch(() => undefined);
 
-    expect(injection?.fired, 'a falha do SQS foi injetada').toBe(1);
+    expect(secondRead.fired, 'a falha do SQS foi injetada').toBe(1);
     expect(rig.dlq.received, 'só o primeiro lote foi recebido').toHaveLength(
       10,
     );
