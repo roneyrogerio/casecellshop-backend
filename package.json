@@ -19,6 +19,7 @@
     "lint": "oxlint --ignore-path .gitignore",
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
+    "telemetry-doc": "node scripts/generate-telemetry-doc.ts",
     "lint:openapi": "redocly lint openapi.yaml",
     "lint:commits": "commitlint --from origin/main --to HEAD",
     "test:changed": "vitest run --changed",
