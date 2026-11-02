@@ -5,8 +5,10 @@ import { BillingMessage } from '../contract/billing-message.ts';
 import { createDb, runInTransaction, type StoreDb } from '../db/database.ts';
 import type { OutgoingMessage, Queue } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
+import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Message Relay (Polling Publisher): publica no SQS as linhas da outbox ainda não
 // publicadas (AD-021; design.md, "Message Relay").
@@ -59,8 +61,9 @@ function toOutgoing(logger: Logger, rows: OutboxRow[]): OutgoingMessage[] {
       correlationId: row.correlation_id,
     });
     if (!parsed.success) {
-      logger.error(
-        { event: 'outbox.invalid_row', orderId: row.order_id },
+      eventLogger(logger, BILLING_LOG_EVENTS).error(
+        'casecellshop.outbox.row.rejected',
+        { orderId: row.order_id },
         'linha da outbox inválida, fora do lote',
       );
       return [];
@@ -108,12 +111,27 @@ async function publishBatch(
     .where('order_id', 'in', accepted)
     .returning('order_id')
     .execute();
-  telemetry.outboxPublished.add(marked.length);
+  billingMetrics(telemetry).add(
+    'casecellshop.outbox.published.messages',
+    marked.length,
+  );
   return { read: rows.length, published: marked.length };
 }
 
 const round = (ctx: Context) =>
   runInTransaction(ctx.db, (trx) => publishBatch(ctx, trx));
+
+function announce(
+  logger: Logger,
+  name:
+    'casecellshop.outbox.relay.started' | 'casecellshop.outbox.relay.stopped',
+): void {
+  const message =
+    name === 'casecellshop.outbox.relay.started'
+      ? 'relay iniciado'
+      : 'relay encerrado';
+  eventLogger(logger, BILLING_LOG_EVENTS).info(name, {}, message);
+}
 
 export function createRelay({
   pool,
@@ -139,8 +157,9 @@ export function createRelay({
         try {
           full = (await round(ctx)).published >= settings.batchSize;
         } catch (error) {
-          logger.error(
-            { event: 'outbox.relay_error', err: error },
+          eventLogger(logger, BILLING_LOG_EVENTS).error(
+            'casecellshop.outbox.relay.failed',
+            { err: error },
             'falha na rodada do relay',
           );
         }
@@ -148,8 +167,8 @@ export function createRelay({
         if (!full && isRunning()) await clock.sleep(settings.idleIntervalMs);
       }
     },
-    onStarted: () => logger.info({ event: 'relay_started' }, 'relay iniciado'),
-    onStopped: () => logger.info({ event: 'relay_stopped' }, 'relay encerrado'),
+    onStarted: () => announce(logger, 'casecellshop.outbox.relay.started'),
+    onStopped: () => announce(logger, 'casecellshop.outbox.relay.stopped'),
   });
 
   return {

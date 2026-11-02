@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; #21 (B2, checagens de código) entrou; #22 (B3, workflows do CI e cadeia de suprimentos) e #25 (teste do compose independente da ordem) entraram; #26 (B4a, guardas do repositório e das dependências) e #28 (preparo da sessão na nuvem) entraram; #27 (B4b, workflows, lint do Kysely e guardas) e #30 (processo, os `baixa` do #27) entraram; o PR C (#29, testes) está pronto para a aprovação; o #32 (processo: o piso de cobertura por dado e os `baixa` do PR C) está em revisão; a seguir, os PRs D e E, depois o M4. O M3 terminou nos PRs #13 e #15
+**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; #21 (B2, checagens de código) entrou; #22 (B3, workflows do CI e cadeia de suprimentos) e #25 (teste do compose independente da ordem) entraram; #26 (B4a, guardas do repositório e das dependências) e #28 (preparo da sessão na nuvem) entraram; #27 (B4b, workflows, lint do Kysely e guardas) e #30 (processo, os `baixa` do #27) entraram; o PR C (#29, testes) e o #32 (processo: o piso de cobertura por dado e os `baixa` do PR C) entraram; o PR D (catálogo de telemetria) está em andamento; a seguir, o PR E e o M4. O M3 terminou nos PRs #13 e #15
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -151,8 +151,8 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um diz onde entra. As pendências de um PR para o seguinte ficam na descrição dele: as do PR 2 do M3 estão no #13, em "Para o próximo plano".
 
 - **Testes unitários do `src/` anterior ao M3** (pedido do mantenedor, PR próprio). Lacunas por prioridade:
-  - **alta:** o `503` do `/health` (status, `Retry-After`, problem+json, log `health_failed`, span ERROR), por integração com o contêiner parado; o `traceparent` de entrada continuar o trace (`request-context.ts`); os campos obrigatórios do log fora de requisição;
-  - **média:** `validate.ts` (caminho, mensagem, um erro por chave, origens, `messageFor`); `request-context.ts` (labels, log `http_request`, span ERROR no `5xx`, `close` sem `finish`); `lifecycle.ts` (um sinal só, `exit` 0 e 1, prazo de 25 s); `pool.ts` (`statement_timeout`, `lock_timeout` e o ouvinte `db_pool_error`); a mesma identidade de serviço no log e no trace;
+  - **alta:** o `503` do `/health` (status, `Retry-After`, problem+json, log `casecellshop.health.db.unavailable`, span ERROR), por integração com o contêiner parado; o `traceparent` de entrada continuar o trace (`request-context.ts`); os campos obrigatórios do log fora de requisição;
+  - **média:** `validate.ts` (caminho, mensagem, um erro por chave, origens, `messageFor`); `request-context.ts` (labels, log `casecellshop.http.request.completed`, span ERROR no `5xx`, `close` sem `finish`); `lifecycle.ts` (um sinal só, `exit` 0 e 1, prazo de 25 s); `pool.ts` (`statement_timeout`, `lock_timeout` e o ouvinte `db_pool_error`); a mesma identidade de serviço no log e no trace;
   - **baixa:** o exportador escolhido por `OTEL_TRACES_EXPORTER`; o `404` e o `x-powered-by`; `envPort` e `requireEnv`.
   - **Decisões do mantenedor antes do PR:** o ID dos testes sem critério no `spec.md`; dois `SPEC_DEVIATION` (fora de requisição o log não traz `correlationId`, `trace_id` nem `span_id`; o `lifecycle.ts` usa `setTimeout` direto, contra a regra do relógio injetável); o provedor de cobertura, que seria dependência nova; e o `OTEL_TRACES_EXPORTER`, que ignora em silêncio um valor desconhecido.
 - **Limite de paralelismo da integração (FND-13):** com os contêineres da rodada (FND-14, PR C), a medição do `maxWorkers` com a máquina carregada variou demais (de 52 s a 139 s na integração, sem relação com o número de arquivos em paralelo); o limite segue em 4 até repetir 4 e 8 numa máquina ociosa.
@@ -169,7 +169,7 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
 - **Pular o job `test` em PR que só muda `.specs/**` ou o `README.md`** (depois do B3): calculado no próprio YAML, com uma lista estreita de caminhos que nenhum teste lê, e nunca por `paths-ignore`, que deixaria o `ci-ok` pendente.
-- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
+- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `casecellshop_erp_out_of_stock_rejections_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor:**
   - feitas em 01/11/2026:
     - o ruleset exige só o `ci-ok`, a branch atualizada, o resultado do CodeQL (High or higher, Errors) e a aprovação do último push;

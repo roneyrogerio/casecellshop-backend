@@ -70,7 +70,7 @@ function abortedByDriverError(): TransactionAbortedError {
   return new TransactionAbortedError({ cause: driverError });
 }
 
-describe('FND-10 a transação abortada vira 500 com o evento db.transaction_aborted', () => {
+describe('FND-10 a transação abortada vira 500 com o evento casecellshop.db.transaction.aborted', () => {
   it('FND-10 TransactionAbortedError responde 500 em problem+json com type /problems/internal-error', async () => {
     const { app } = createApp(abortedByDriverError());
 
@@ -116,24 +116,24 @@ describe('FND-10 a transação abortada vira 500 com o evento db.transaction_abo
     expect(response.headers['retry-after']).toBeUndefined();
   });
 
-  it('FND-10 a transação abortada grava um log error com event db.transaction_aborted', async () => {
+  it('FND-10 a transação abortada grava um log error com event casecellshop.db.transaction.aborted', async () => {
     const { app, lines } = createApp(abortedByDriverError());
 
     await request(app).get('/falha');
 
     const aborted = lines.filter(
-      (line) => line.event === 'db.transaction_aborted',
+      (line) => line.event === 'casecellshop.db.transaction.aborted',
     );
     expect(aborted).toHaveLength(1);
     expect(aborted[0]?.level).toBe('error');
     expect(aborted[0]?.correlationId).toBe(CORRELATION_ID);
     // Um erro só gera um log: o evento genérico não se soma ao específico.
-    expect(lines.filter((line) => line.event === 'unhandled_error')).toEqual(
-      [],
-    );
+    expect(
+      lines.filter((line) => line.event === 'casecellshop.http.request.failed'),
+    ).toEqual([]);
   });
 
-  it('FND-10 outro erro qualquer continua com o evento unhandled_error', async () => {
+  it('FND-10 outro erro qualquer continua com o evento casecellshop.http.request.failed', async () => {
     const { app, lines } = createApp(new Error('falha qualquer'));
 
     const response = await request(app).get('/falha');
@@ -142,7 +142,7 @@ describe('FND-10 a transação abortada vira 500 com o evento db.transaction_abo
     expect(response.body).toMatchObject({ type: '/problems/internal-error' });
     expect(response.headers['retry-after']).toBeUndefined();
     const events = lines.map((line) => line.event);
-    expect(events).toEqual(['unhandled_error']);
+    expect(events).toEqual(['casecellshop.http.request.failed']);
     expect(lines[0]?.level).toBe('error');
   });
 });

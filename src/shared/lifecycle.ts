@@ -1,4 +1,6 @@
 import type { Logger } from 'pino';
+import { eventLogger } from './logging.ts';
+import { PROCESS_LOG_EVENTS } from './telemetry.ts';
 
 // design.md, "Parâmetros": 25 s no processo; o compose dá 30 s antes do SIGKILL.
 export const SHUTDOWN_TIMEOUT_MS = 25_000;
@@ -10,18 +12,21 @@ export function installGracefulShutdown(options: {
   logger: Logger;
   stop: () => Promise<void>;
 }): void {
+  const log = eventLogger(options.logger, PROCESS_LOG_EVENTS);
   let shuttingDown = false;
   const handle = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    options.logger.info(
-      { event: 'shutdown_started', signal },
+    log.info(
+      'casecellshop.process.shutdown.started',
+      { signal },
       'encerramento iniciado',
     );
 
     const deadline = setTimeout(() => {
-      options.logger.error(
-        { event: 'shutdown_timeout' },
+      log.error(
+        'casecellshop.process.shutdown.timed_out',
+        {},
         'encerramento passou do prazo',
       );
       process.exit(1);
@@ -31,15 +36,17 @@ export function installGracefulShutdown(options: {
     options
       .stop()
       .then(() => {
-        options.logger.info(
-          { event: 'shutdown_completed' },
+        log.info(
+          'casecellshop.process.shutdown.completed',
+          {},
           'encerramento concluído',
         );
         process.exit(0);
       })
       .catch((error: unknown) => {
-        options.logger.error(
-          { event: 'shutdown_failed', err: error },
+        log.error(
+          'casecellshop.process.shutdown.failed',
+          { err: error },
           'falha no encerramento',
         );
         process.exit(1);

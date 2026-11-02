@@ -10,12 +10,14 @@ import {
   type ReceivedMessage,
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
+import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
 // reconciliação e runbook").
@@ -99,11 +101,14 @@ async function markDead(
     .returning('order_id')
     .executeTakeFirst();
   if (!marked) return;
-  log.error(
-    { event: 'outbox.dead' },
+  eventLogger(log, BILLING_LOG_EVENTS).error(
+    'casecellshop.outbox.dead',
+    {},
     'a mensagem chegou à DLQ: o pedido segue pendente com a reserva',
   );
-  telemetry.outboxAttemptOutcome.add(1, { outcome: 'dead' });
+  billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
+    'casecellshop.outbox.attempt.outcome': 'dead',
+  });
 }
 
 // Confirma no ERP que o pedido existe e então o fatura; 'kept' deixa a mensagem para o runbook.
@@ -125,10 +130,20 @@ async function invoiceIfFound(
 
   const result = await concludeOrder(db, message.orderId, { kind: 'invoiced' });
   if (result.orderChanged) {
-    telemetry.outboxAttemptOutcome.add(1, { outcome: 'invoiced' });
-    log.info({ event: 'order.invoiced' }, 'pedido faturado pela reconciliação');
+    const metrics = billingMetrics(telemetry);
+    metrics.add('casecellshop.outbox.attempts', 1, {
+      'casecellshop.outbox.attempt.outcome': 'invoiced',
+    });
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.order.invoiced',
+      {},
+      'pedido faturado pela reconciliação',
+    );
     if (result.acceptToOutcomeSeconds !== undefined)
-      telemetry.orderAcceptToInvoice.record(result.acceptToOutcomeSeconds);
+      metrics.record(
+        'casecellshop.order.accept_to_invoice.duration',
+        result.acceptToOutcomeSeconds,
+      );
   }
   await dlq.delete(received.receiptHandle);
   return 'invoiced';
@@ -152,9 +167,12 @@ async function settleMessage(
   if (!order) return 'kept';
   if (order.status !== 'pending') {
     if ((await dlq.delete(received.receiptHandle)) !== 'ok') return 'kept';
-    telemetry.outboxAttemptOutcome.add(1, { outcome: 'closed' });
-    log.info(
-      { event: 'outbox.closed' },
+    billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
+      'casecellshop.outbox.attempt.outcome': 'closed',
+    });
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.outbox.closed',
+      {},
       'pedido já tinha desfecho: mensagem apagada da DLQ',
     );
     return 'closed';
@@ -186,8 +204,9 @@ function inSettleSpan(
       return await settleMessage(ctx, received, message, log);
     } catch (error) {
       // Uma mensagem com problema não impede as outras da rodada; logada aqui, leva correlationId e trace.
-      log.warn(
-        { event: 'outbox.reconcile_error', err: error },
+      eventLogger(log, BILLING_LOG_EVENTS).warn(
+        'casecellshop.outbox.reconciliation.failed',
+        { err: error },
         'falha ao reconciliar a mensagem',
       );
       return 'kept';
@@ -222,13 +241,15 @@ async function reconcileOnce(ctx: Context): Promise<ReconcileResult> {
 async function round(ctx: Context): Promise<void> {
   try {
     const result = await reconcileOnce(ctx);
-    ctx.logger.info(
-      { event: 'outbox.reconciled', ...result },
+    eventLogger(ctx.logger, BILLING_LOG_EVENTS).info(
+      'casecellshop.outbox.reconciliation.completed',
+      result,
       'rodada de reconciliação concluída',
     );
   } catch (error) {
-    ctx.logger.warn(
-      { event: 'outbox.reconcile_error', err: error },
+    eventLogger(ctx.logger, BILLING_LOG_EVENTS).warn(
+      'casecellshop.outbox.reconciliation.failed',
+      { err: error },
       'falha na rodada de reconciliação',
     );
   }

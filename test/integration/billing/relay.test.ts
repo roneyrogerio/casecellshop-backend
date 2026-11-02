@@ -55,7 +55,7 @@ import {
   type TestDatabase,
 } from '../../helpers/database.ts';
 import { captureLogs } from '../../helpers/logs.ts';
-import { scrapeMetrics, valueOf } from '../../helpers/metrics.ts';
+import { familyOf, metricValue, scrapeMetrics } from '../../helpers/metrics.ts';
 import {
   drain,
   duplicatedOrderIds,
@@ -570,10 +570,13 @@ describe('ORD-22 relay publica as linhas da outbox', () => {
 async function publishedCount(
   telemetry: Telemetry,
 ): Promise<number | undefined> {
-  return valueOf(await scrapeMetrics(telemetry), 'outbox_published_total');
+  return metricValue(
+    await scrapeMetrics(telemetry),
+    'casecellshop.outbox.published.messages',
+  );
 }
 
-describe('ORD-22 outbox_published_total', () => {
+describe('ORD-22 casecellshop.outbox.published.messages', () => {
   it('ORD-22 conta no /metrics as linhas que o relay publicou, sem label', async () => {
     const queues = await freshQueues();
     await acceptMany(3);
@@ -586,8 +589,17 @@ describe('ORD-22 outbox_published_total', () => {
     expect(await relay.publishOnce()).toBe(0);
 
     const families = await scrapeMetrics(telemetry);
-    expect(families.get('outbox_published_total')?.type).toBe('counter');
-    expect(valueOf(families, 'outbox_published_total')).toBe(3);
+    expect(
+      familyOf(families, 'casecellshop.outbox.published.messages')?.type,
+    ).toBe('counter');
+    expect(
+      metricValue(families, 'casecellshop.outbox.published.messages'),
+    ).toBe(3);
+    // O contador não tem atributo: só o escopo do exportador acompanha a série.
+    expect(
+      familyOf(families, 'casecellshop.outbox.published.messages')?.samples[0]
+        ?.labels,
+    ).toEqual({});
     await telemetry.shutdown();
   });
 });
@@ -655,7 +667,7 @@ describe('ORD-22 laço do relay (start e stop)', () => {
     );
   });
 
-  it('ORD-22 um erro do SQS é logado como outbox.relay_error e não para o laço: a rodada seguinte publica', async () => {
+  it('ORD-22 um erro do SQS é logado como casecellshop.outbox.relay.failed e não para o laço: a rodada seguinte publica', async () => {
     const queues = await freshQueues();
     const { orderId } = await acceptCheckout();
     const failing = failingSend(queues.queue, 1);
@@ -670,7 +682,7 @@ describe('ORD-22 laço do relay (start e stop)', () => {
       });
       await untilSlept(sleeps);
 
-      const errors = logs.eventsOf('outbox.relay_error');
+      const errors = logs.eventsOf('casecellshop.outbox.relay.failed');
       expect(errors).toHaveLength(1);
       expect(errors[0]?.['level']).toBe('error');
       expect((await readState(orderId)).publishedAt).toBeNull();
@@ -784,7 +796,7 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
     }
   });
 
-  it('ORD-22 sob start() o send sem resposta vira outbox.relay_error na rodada, e o stop não trava', async () => {
+  it('ORD-22 sob start() o send sem resposta vira casecellshop.outbox.relay.failed na rodada, e o stop não trava', async () => {
     const { orderId } = await acceptCheckout();
     const hole = blackHoleQueue();
     const logs = captureLogs();
@@ -794,7 +806,10 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
     void relay.start();
     try {
       await vi.waitFor(
-        () => expect(logs.eventsOf('outbox.relay_error')).toHaveLength(1),
+        () =>
+          expect(
+            logs.eventsOf('casecellshop.outbox.relay.failed'),
+          ).toHaveLength(1),
         { timeout: WAIT_GUARD_MS, interval: 50 },
       );
 
@@ -802,7 +817,9 @@ describe('ORD-22 relay com o SQS que aceita a conexão e não responde', () => {
         blackHole.requestCount(),
         'o send não chegou ao servidor que não responde',
       ).toBeGreaterThan(requestsBefore);
-      expect(logs.eventsOf('outbox.relay_error')[0]?.['level']).toBe('error');
+      expect(
+        logs.eventsOf('casecellshop.outbox.relay.failed')[0]?.['level'],
+      ).toBe('error');
       expect((await readState(orderId)).publishedAt).toBeNull();
       await untilSlept(sleeps);
       expect(sleeps[0]).toBe(500);
@@ -833,7 +850,7 @@ async function insertOutboxRow(
 }
 
 describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', () => {
-  it('ORD-22 a linha inválida (a mais antiga) é logada como outbox.invalid_row com o orderId e não impede as outras de saírem', async () => {
+  it('ORD-22 a linha inválida (a mais antiga) é logada como casecellshop.outbox.row.rejected com o orderId e não impede as outras de saírem', async () => {
     const queues = await freshQueues();
     const invalidId = await insertOutboxRow('req com espaço', 100);
     const validIds = [
@@ -852,11 +869,11 @@ describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', ()
     expect(orderIdsIn(await drain(emq, queues.queueUrl))).toEqual(
       [...validIds].sort(),
     );
-    const invalid = logs.eventsOf('outbox.invalid_row');
+    const invalid = logs.eventsOf('casecellshop.outbox.row.rejected');
     expect(invalid).toHaveLength(1);
     expect(invalid[0]?.['level']).toBe('error');
     expect(invalid[0]?.['orderId']).toBe(invalidId);
-    expect(logs.eventsOf('outbox.relay_error')).toEqual([]);
+    expect(logs.eventsOf('casecellshop.outbox.relay.failed')).toEqual([]);
   });
 
   it('ORD-22 uma rodada que leu um lote cheio de linhas inválidas e não publicou nada espera 500 ms pelo relógio, sem girar', async () => {
@@ -881,11 +898,13 @@ describe('ORD-22 relay com linha da outbox que não passa no BillingMessage', ()
 
       expect(sleeps[0]).toBe(500);
       expect(
-        logs.eventsOf('outbox.relay_error'),
+        logs.eventsOf('casecellshop.outbox.relay.failed'),
         'a linha inválida derrubou a rodada em vez de ficar fora do lote',
       ).toEqual([]);
       const logged = new Set(
-        logs.eventsOf('outbox.invalid_row').map((line) => line['orderId']),
+        logs
+          .eventsOf('casecellshop.outbox.row.rejected')
+          .map((line) => line['orderId']),
       );
       expect(logged).toEqual(new Set(invalidIds));
       expect(await publishedOrderIds(invalidIds)).toEqual([]);

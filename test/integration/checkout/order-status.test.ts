@@ -252,7 +252,7 @@ describe('CHK-11 defeito do código no status do pedido responde 500; a falha do
     ['TypeError na retirada da conexão (promessa rejeitada)', 'reject'],
     ['TypeError lançado na retirada da conexão', 'throw'],
   ] as const)(
-    'CHK-11 %s: 500 em problem+json sem Retry-After e sem detalhe interno, com o log error unhandled_error',
+    'CHK-11 %s: 500 em problem+json sem Retry-After e sem detalhe interno, com o log error casecellshop.http.request.failed',
     async (_label, mode) => {
       const correlationId = `chk11-500-${randomUUID()}`;
       const detail = 'Cannot read properties of undefined (reading rows)';
@@ -280,7 +280,7 @@ describe('CHK-11 defeito do código no status do pedido responde 500; a falha do
         () => {
           const unhandled = logLines.filter(
             (line) =>
-              line['event'] === 'unhandled_error' &&
+              line['event'] === 'casecellshop.http.request.failed' &&
               line['correlationId'] === correlationId,
           );
           expect(unhandled).toHaveLength(1);
@@ -292,7 +292,7 @@ describe('CHK-11 defeito do código no status do pedido responde 500; a falha do
       expect(
         logLines.filter(
           (line) =>
-            line['event'] === 'order_status_failed' &&
+            line['event'] === 'casecellshop.orders.db.unavailable' &&
             line['correlationId'] === correlationId,
         ),
       ).toEqual([]);
@@ -344,7 +344,7 @@ describe('CHK-11 defeito do código no status do pedido responde 500; a falha do
 });
 
 describe('OBS-01 orderId no log do status', () => {
-  it('OBS-01 o log http_request da consulta a um pedido existente traz o orderId', async () => {
+  it('OBS-01 o log casecellshop.http.request.completed da consulta a um pedido existente traz o orderId', async () => {
     const orderId = await insertOrder('pending');
     const correlationId = `obs01-${randomUUID()}`;
 
@@ -358,7 +358,7 @@ describe('OBS-01 orderId no log do status', () => {
       () => {
         const entry = logLines.find(
           (line) =>
-            line['event'] === 'http_request' &&
+            line['event'] === 'casecellshop.http.request.completed' &&
             line['correlationId'] === correlationId,
         );
         expect(entry).toBeDefined();
@@ -388,7 +388,8 @@ describe('OBS-01 orderId no log do status', () => {
         const byCorrelation = (id: string) =>
           logLines.find(
             (line) =>
-              line['event'] === 'http_request' && line['correlationId'] === id,
+              line['event'] === 'casecellshop.http.request.completed' &&
+              line['correlationId'] === id,
           );
         expect(byCorrelation(firstCorrelation)?.['orderId']).toBe(first);
         expect(byCorrelation(secondCorrelation)?.['orderId']).toBe(second);

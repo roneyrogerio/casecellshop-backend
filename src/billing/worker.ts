@@ -8,6 +8,7 @@ import {
   type ReceivedMessage,
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import { createSemaphore, type Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
@@ -15,6 +16,7 @@ import { type AttemptContext, runAttempt } from './attempt.ts';
 import { MIN_CALL_DELAY_MS } from './call-permit.ts';
 import type { Attempt, CallSettings } from './erp-call.ts';
 import { parseBillingMessage } from './message.ts';
+import { BILLING_LOG_EVENTS } from './telemetry.ts';
 
 // Parâmetros da tabela do design.md; os testes sobrepõem só o que precisam.
 export interface WorkerConfig extends CallSettings {
@@ -74,9 +76,9 @@ function rejectInvalid(
   received: ReceivedMessage,
   orderId: string | undefined,
 ): void {
-  logger.error(
+  eventLogger(logger, BILLING_LOG_EVENTS).error(
+    'casecellshop.outbox.message.rejected',
     {
-      event: 'outbox.invalid_message',
       attempt: received.receiveCount,
       ...(orderId === undefined ? {} : { orderId }),
     },
@@ -160,13 +162,25 @@ async function pollLoop(
       inFlight.add(round.done);
       void round.done.finally(() => inFlight.delete(round.done));
     } catch (error) {
-      ctx.logger.error(
-        { event: 'worker.poll_error', err: error },
+      eventLogger(ctx.logger, BILLING_LOG_EVENTS).error(
+        'casecellshop.worker.poll.failed',
+        { err: error },
         'falha na rodada do worker',
       );
       if (isRunning()) await ctx.clock.sleep(POLL_ERROR_BACKOFF_MS);
     }
   }
+}
+
+function announce(
+  logger: Logger,
+  name: 'casecellshop.worker.started' | 'casecellshop.worker.stopped',
+): void {
+  const message =
+    name === 'casecellshop.worker.started'
+      ? 'worker iniciado'
+      : 'worker encerrado';
+  eventLogger(logger, BILLING_LOG_EVENTS).info(name, {}, message);
 }
 
 export function createWorker({
@@ -198,10 +212,8 @@ export function createWorker({
   const runner = createLoopRunner({
     run: (isRunning) => pollLoop(ctx, inFlight, isRunning),
     drain: () => Promise.all(inFlight),
-    onStarted: () =>
-      logger.info({ event: 'worker_started' }, 'worker iniciado'),
-    onStopped: () =>
-      logger.info({ event: 'worker_stopped' }, 'worker encerrado'),
+    onStarted: () => announce(logger, 'casecellshop.worker.started'),
+    onStopped: () => announce(logger, 'casecellshop.worker.stopped'),
   });
 
   return {

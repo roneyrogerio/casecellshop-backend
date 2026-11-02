@@ -3,6 +3,9 @@ import type { Logger } from 'pino';
 import type { z } from 'zod';
 import { PROBLEM_MEDIA_TYPE, type Problem } from '../contract/index.ts';
 import { TransactionAbortedError } from '../db/database.ts';
+import { DB_LOG_EVENTS } from '../db/telemetry.ts';
+import { eventLogger } from '../shared/logging.ts';
+import { HTTP_LOG_EVENTS } from './telemetry.ts';
 
 type ProblemBody = z.input<typeof Problem>;
 
@@ -63,14 +66,16 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
 
     if (error instanceof TransactionAbortedError) {
       // Defeito do código (erro capturado dentro da transação), não falha do cliente.
-      logger.error(
-        { event: 'db.transaction_aborted', err: error, correlationId },
+      eventLogger(logger, DB_LOG_EVENTS).error(
+        'casecellshop.db.transaction.aborted',
+        { err: error, correlationId },
         'transação abortada antes do COMMIT',
       );
     } else if (!(error instanceof ProblemError)) {
       // O detalhe vai só para o log; a resposta nunca leva stack trace nem SQL.
-      logger.error(
-        { event: 'unhandled_error', err: error, correlationId },
+      eventLogger(logger, HTTP_LOG_EVENTS).error(
+        'casecellshop.http.request.failed',
+        { err: error, correlationId },
         'erro inesperado na requisição',
       );
     }

@@ -7,7 +7,9 @@ import type { CheckoutAccepted, CheckoutRequest } from '../contract/index.ts';
 import { createDb, runInTransaction, type StoreDb } from '../db/database.ts';
 import { isUnavailable } from '../db/unavailable.ts';
 import { databaseUnavailableProblem, ProblemError } from '../http/problem.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
+import { CHECKOUT_LOG_EVENTS } from './telemetry.ts';
 
 export interface CheckoutResult extends CheckoutAccepted {
   // 'replay' quando a chave já tinha um pedido; o status é o atual dele.
@@ -295,8 +297,9 @@ function databaseProblem(
       'Esta Idempotency-Key ainda está em andamento',
     );
   }
-  logger.warn(
-    { event: 'checkout.db_unavailable', err: error, step: progress.step },
+  eventLogger(logger, CHECKOUT_LOG_EVENTS).warn(
+    'casecellshop.checkout.db.unavailable',
+    { err: error, step: progress.step },
     'o banco não atendeu o checkout',
   );
   return databaseUnavailableProblem();

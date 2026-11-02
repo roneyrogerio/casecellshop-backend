@@ -1,6 +1,10 @@
 import { createServer } from 'node:http';
 import request from 'supertest';
+import { METRICS } from '../../scripts/telemetry-catalog.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
+
+// Os nomes do catálogo (OBS-07), como o registro os junta.
+export type MetricName = keyof typeof METRICS;
 
 export type MetricType =
   'counter' | 'gauge' | 'histogram' | 'summary' | 'untyped';
@@ -76,11 +80,88 @@ export function parseExposition(text: string): Exposition {
   return families;
 }
 
-// O /metrics como o Prometheus o lê: uma requisição HTTP ao handler da telemetria.
-export async function scrapeMetrics(telemetry: Telemetry): Promise<Exposition> {
+// O texto do /metrics como o Prometheus o recebe: uma requisição HTTP ao handler da telemetria.
+export async function scrapeMetricsText(telemetry: Telemetry): Promise<string> {
   const server = createServer((req, res) => telemetry.metricsHandler(req, res));
   const res = await request(server).get('/metrics');
-  return parseExposition(res.text);
+  return res.text;
+}
+
+export async function scrapeMetrics(telemetry: Telemetry): Promise<Exposition> {
+  return parseExposition(await scrapeMetricsText(telemetry));
+}
+
+// As linhas `# UNIT <nome> <unidade>` do texto: o exportador só escreve a unidade aqui, nunca no nome.
+export function parseUnits(text: string): Map<string, string> {
+  const units = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const match = /^# UNIT (\S+) (.+)$/.exec(line);
+    if (match?.[1] && match[2]) units.set(match[1], match[2]);
+  }
+  return units;
+}
+
+// O nome da série derivado do catálogo (OBS-07): o exportador troca o ponto por `_` e acrescenta `_total` ao
+// contador. Os testes dos valores usam esta tradução para ler o nome do catálogo; o teste que fixa os nomes
+// exportados (test/integration/observability/metrics-names.test.ts) os escreve por extenso, sem passar por aqui.
+export function promName(name: MetricName): string {
+  const base = name.replaceAll('.', '_');
+  return METRICS[name].instrument === 'counter' ? `${base}_total` : base;
+}
+
+export function promLabel(attribute: string): string {
+  return attribute.replaceAll('.', '_');
+}
+
+type AttributeOf<N extends MetricName> = Extract<
+  keyof (typeof METRICS)[N]['attributes'],
+  string
+>;
+
+// Os atributos de uma métrica, pelos nomes do catálogo; o `le` das fronteiras do histograma também vale.
+export type Attributes<N extends MetricName> = Partial<
+  Record<AttributeOf<N>, string>
+> & { le?: string };
+
+function promLabels(attributes: Record<string, string | undefined>) {
+  const labels: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value !== undefined) labels[promLabel(key)] = value;
+  }
+  return labels;
+}
+
+// A família da métrica no /metrics, pelo nome do catálogo.
+export function familyOf(
+  families: Exposition,
+  name: MetricName,
+): MetricFamily | undefined {
+  return families.get(promName(name));
+}
+
+// Valor da série com exatamente estes atributos (nomes do catálogo). O `suffix` escolhe a série do histograma:
+// `_count`, `_sum` ou `_bucket` (com o `le` nos atributos).
+export function metricValue<N extends MetricName>(
+  families: Exposition,
+  name: N,
+  attributes: Attributes<N> = {},
+  suffix: '' | '_count' | '_sum' | '_bucket' = '',
+): number | undefined {
+  return valueOf(
+    families,
+    promName(name),
+    promLabels(attributes),
+    `${promName(name)}${suffix}`,
+  );
+}
+
+// O `_count` do histograma: quantas medições com estes atributos.
+export function histogramCount<N extends MetricName>(
+  families: Exposition,
+  name: N,
+  attributes: Attributes<N> = {},
+): number | undefined {
+  return metricValue(families, name, attributes, '_count');
 }
 
 // Valor da série com exatamente estes labels (os de `le` incluídos, se pedidos).
