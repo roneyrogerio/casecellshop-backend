@@ -100,4 +100,10 @@ export const CATALOG_LOG_EVENTS = {
       'Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado.',
     fields: ['cause', 'page', 'err'],
   },
+  'casecellshop.catalog.sync.state.load_failed': {
+    levels: ['warn'],
+    description:
+      'A leitura da última rodada completa falhou na subida: o gauge da idade fica sem valor até a primeira rodada completa e as rodadas seguem.',
+    fields: ['err'],
+  },
 } as const satisfies Record<string, LogEventSpec>;

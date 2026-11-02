@@ -217,7 +217,7 @@ async function seedCompletedMark(ctx: Context): Promise<void> {
   } catch (err) {
     // Banco fora na subida não pode derrubar o start: o gauge fica sem valor até a primeira rodada completa.
     eventLogger(ctx.logger, CATALOG_LOG_EVENTS).warn(
-      'casecellshop.catalog.sync.round.failed',
+      'casecellshop.catalog.sync.state.load_failed',
       { err },
       'falha do banco ao ler a última rodada completa',
     );

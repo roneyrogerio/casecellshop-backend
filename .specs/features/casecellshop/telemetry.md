@@ -124,6 +124,7 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.catalog.origin.load_failed` | `warn` | `err` | A carga do cache a partir do banco falhou; a vitrine serve a entrada antiga até o teto ou responde 503. |
 | `casecellshop.catalog.sync.round.completed` | `info` | `skuCount`, `missingCount`, `duration_ms` | Fim de uma rodada completa da sincronização, com os SKUs lidos, os ausentes zerados e a duração. |
 | `casecellshop.catalog.sync.round.failed` | `warn` | `cause`, `page`, `err` | Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado. |
+| `casecellshop.catalog.sync.state.load_failed` | `warn` | `err` | A leitura da última rodada completa falhou na subida: o gauge da idade fica sem valor até a primeira rodada completa e as rodadas seguem. |
 | `casecellshop.checkout.accepted` | `info` | `orderId` | Checkout aceito, com o pedido criado. |
 | `casecellshop.checkout.db.unavailable` | `warn` | `err`, `step` | O banco não respondeu no checkout; a resposta é 503. |
 | `casecellshop.checkout.price_changed` | `warn` | `reason`, `items` | Checkout recusado porque o preço informado mudou. |
