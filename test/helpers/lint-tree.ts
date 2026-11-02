@@ -52,6 +52,47 @@ export function typecheckSample(
 
 export const oxlintBin = join(repoRoot, 'node_modules', '.bin', 'oxlint');
 
+// Prazo do `beforeAll` das paridades com o oxlint: um processo por caso, feitos uma vez.
+export const PARITY_TIMEOUT_MS = 120_000;
+
+export interface Report {
+  file: string;
+  line: number;
+}
+
+export interface OxlintRun {
+  status: number | null;
+  stderr: string;
+  reports: Report[];
+}
+
+// Roda o oxlint com uma configuração própria (escrita na árvore sob `name`) sobre a árvore toda, e lê os relatórios
+// no formato `unix` (arquivo, linha).
+export function runOxlint(
+  tree: string,
+  config: unknown,
+  name: string,
+): OxlintRun {
+  writeFileIn(tree, name, JSON.stringify(config));
+  const result = runCommand(
+    oxlintBin,
+    ['-c', name, '--format=unix', '--disable-nested-config', '.'],
+    { cwd: tree },
+  );
+  const reports = [...result.stdout.matchAll(/^(\S+?):(\d+):\d+: /gm)].map(
+    (match): Report => ({
+      file: (match[1] ?? '').replace(/^\.\//, ''),
+      line: Number(match[2]),
+    }),
+  );
+  return { status: result.status, stderr: result.stderr, reports };
+}
+
+// Sem as categorias, só a regra da vez fica ligada: o que sai da saída é o que a regra e o glob casaram.
+export function singleRuleConfig(overrides: unknown[], rules: unknown = {}) {
+  return { categories: { correctness: 'off' }, rules, overrides };
+}
+
 // Roda o oxlint com a configuração do projeto sobre um único arquivo `lib/x.ts` numa árvore nova (fora de `src/`, para
 // as regras de `src/` não interferirem). Devolve o código de saída e a saída junta.
 export function lintSampleFile(

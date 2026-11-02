@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { overrideFilesMatch } from '../helpers/glob.ts';
 import {
-  overrideFilesMatch,
   restrictedImportMatches,
   type RestrictionEntry,
   type RestrictionOptions,
-} from '../helpers/glob.ts';
+} from '../helpers/restricted-imports.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
 
 // Imports que os testes não fazem, travados pelo `no-restricted-imports` do oxlint e conferidos aqui com o
