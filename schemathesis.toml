@@ -1,8 +1,0 @@
-# Configuração do fuzzing (FND-16), montada em /app, o diretório de trabalho da imagem, onde o Schemathesis a procura.
-
-# O perfil fuzz não sobe o worker, então o catálogo nunca sincroniza e o GET /products responde 503 por desenho
-# (CAT-05). O not_a_server_error reprova qualquer 5xx, mesmo documentado; aqui só esse 503, só nessa operação,
-# deixa de reprovar, como na seção "Operations that return a documented 5xx" da documentação do Schemathesis.
-[[operations]]
-include-name = "GET /products"
-checks.not_a_server_error.expected-statuses = ["2xx", "3xx", "4xx", "503"]
