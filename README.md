@@ -786,7 +786,7 @@ A verificação tardia do worker (AD-031) revisita, 15 min depois da última cha
 
 A contagem de faturas da verificação tardia lê o banco do ERP (MySQL, acesso de leitura), fora da API (AD-031). Enquanto essa leitura falha, a fatura duplicada não é detectada; os pedidos ficam sem a marca e voltam a cada rodada, então nada se perde quando a leitura volta.
 
-1. Veja o erro no log `casecellshop.order.late_check.failed` e no histograma do ERP com a operação `count_invoices` e o desfecho `transient`.
+1. Veja o desfecho `transient` no histograma do ERP com a operação `count_invoices` e, no Jaeger, os spans `erp.count_invoices` com erro (`error.type` = `transient`): a camada anticorrupção classifica a falha da leitura e não a repassa ao log.
 2. Credencial vencida ou permissão retirada: renove o usuário de leitura do banco do ERP na configuração do worker e reinicie o worker (`docker compose restart worker`).
 3. Tabela de faturas mudada numa atualização do ERP: a contagem depende dela (AD-031); ajuste o adaptador da leitura antes de confiar de novo na detecção da fatura duplicada.
 4. Quando a leitura volta, a rodada seguinte da verificação tardia confere os pedidos que ficaram para trás.
