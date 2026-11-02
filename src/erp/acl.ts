@@ -177,7 +177,7 @@ async function observe<T extends { kind: ErpOutcome }>(
     metrics.add('casecellshop.erp.client.active_operations', -1);
     // Uma exceção inesperada não tem desfecho da lista fechada: só a duração fica sem registro.
     if (result) {
-      if (result.kind === 'config_error')
+      if (result.kind === 'config_error' && operation !== 'count_invoices')
         metrics.add('casecellshop.erp.config_errors', 1, {
           'casecellshop.erp.operation': operation,
         });

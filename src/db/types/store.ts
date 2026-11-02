@@ -50,6 +50,7 @@ export interface Outbox {
   dead_at: Timestamp | null;
   first_sent_at: Timestamp | null;
   last_call_at: Timestamp | null;
+  last_create_at: Timestamp | null;
   late_checked_at: Timestamp | null;
   late_finding: string | null;
   order_id: string;

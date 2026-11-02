@@ -112,7 +112,7 @@ Fronteiras: 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30
 
 | Atributo | Exigência | Valores | Descrição |
 | --- | --- | --- | --- |
-| `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog`, `count_invoices` | Operação da porta ErpClient. |
+| `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog` | Operação da porta ErpClient. |
 
 ### `casecellshop.erp.out_of_stock.rejections`
 
