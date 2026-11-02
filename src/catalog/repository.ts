@@ -1,5 +1,7 @@
 // A origem do cache da vitrine: o banco da loja, nunca o ERP (AD-005).
+import { SpanKind } from '@opentelemetry/api';
 import type { Pool } from 'pg';
+import { createDb } from '../db/database.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 
 export interface CatalogRow {
@@ -17,8 +19,45 @@ export interface CatalogRepository {
 }
 
 export function createCatalogRepository(
-  _pool: Pool,
-  _telemetry: Telemetry,
+  pool: Pool,
+  telemetry: Telemetry,
 ): CatalogRepository {
-  return { listAll: () => Promise.reject(new Error('não implementado')) };
+  const db = createDb(pool);
+  return {
+    listAll() {
+      return telemetry.withSpan(
+        'catalog.repository.list',
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { 'db.system.name': 'postgresql' },
+        },
+        async () => {
+          const state = await db
+            .selectFrom('sync_state')
+            .select('last_completed_at')
+            .executeTakeFirst();
+          if (!state?.last_completed_at) return null;
+          const rows = await db
+            .selectFrom('products')
+            .innerJoin('inventory', 'inventory.sku', 'products.sku')
+            .select([
+              'products.sku',
+              'products.name',
+              'products.price_cents',
+              'inventory.on_hand',
+              'inventory.reserved',
+            ])
+            .orderBy('products.sku')
+            .execute();
+          return rows.map((row) => ({
+            sku: row.sku,
+            name: row.name,
+            priceCents: row.price_cents,
+            onHand: row.on_hand,
+            reserved: row.reserved,
+          }));
+        },
+      );
+    },
+  };
 }

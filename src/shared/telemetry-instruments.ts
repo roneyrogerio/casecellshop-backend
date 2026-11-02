@@ -6,6 +6,7 @@ import type {
   Counter,
   Histogram,
   Meter,
+  ObservableGauge,
   UpDownCounter,
 } from '@opentelemetry/api';
 import type { MetricSpec } from './telemetry-catalog.ts';
@@ -73,7 +74,7 @@ export interface TypedMetrics<S extends Specs> {
   ): void;
 }
 
-type Instrument = Counter | UpDownCounter | Histogram;
+type Instrument = Counter | UpDownCounter | Histogram | ObservableGauge;
 
 function createInstrument(
   meter: Meter,
@@ -95,7 +96,8 @@ function createInstrument(
           : {}),
       });
     case 'observable_gauge':
-      throw new Error('não implementado');
+      // O valor é lido por função na coleta (a idade de uma rodada não é um evento a somar): gauge assíncrono.
+      return meter.createObservableGauge(name, options);
   }
 }
 
@@ -123,8 +125,18 @@ export function createInstruments<S extends Specs>(
       const instrument = pick(name);
       if ('record' in instrument) instrument.record(value, attributes);
     },
-    observe(): void {
-      throw new Error('não implementado');
+    observe(
+      name: string,
+      read: () => number | undefined,
+      attributes?: Attributes,
+    ): void {
+      const instrument = pick(name);
+      if (!('addCallback' in instrument)) return;
+      instrument.addCallback((result) => {
+        // Sem valor naquela coleta, nenhum ponto é gravado (em vez de um 0 enganoso).
+        const value = read();
+        if (value !== undefined) result.observe(value, attributes);
+      });
     },
   };
   // A assinatura genérica de TypedMetrics só existe no tipo; o corpo é o mesmo para qualquer declaração.
