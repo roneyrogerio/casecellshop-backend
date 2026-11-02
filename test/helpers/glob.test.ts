@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { globToRegExp } from './glob.ts';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  globToRegExp,
+  overrideFilesMatch,
+  restrictedGroupResult,
+} from './glob.ts';
+import { cleanupTempDirs, makeTempDir, writeFileIn } from './git-sandbox.ts';
+import { oxlintBin } from './lint-tree.ts';
+import { runCommand } from './run-node.ts';
 
 // FND-13 e FND-14: a conferência do lint lida como dado (`files` dos overrides do .oxlintrc.json) decide pelo
 // `globToRegExp`; se ele traduz errado, a conferência libera ou reprova o arquivo errado sem avisar.
@@ -83,6 +90,9 @@ const COMMA_OUTSIDE_BRACES: GlobCase[] = [
   },
 ];
 
+// A classe negada traduzida para `[^…]` vale para estes casos, em que a classe fica dentro de um trecho do caminho.
+// Fora deles o oxlint não segue a regex: no fast-glob 1.1.1 que ele traz, `[!x]` e `[^x]` casam também a `/` (a
+// paridade com o oxlint real está em "FND-13 paridade dos files dos overrides com o oxlint").
 const NEGATED_CLASS: GlobCase[] = [
   {
     glob: 'a[!x]',
@@ -150,6 +160,212 @@ describe('FND-13 globToRegExp', () => {
     'FND-13 chaves aninhadas viram alternativas só dentro das chaves: $glob',
     (testCase) => {
       expectCase(testCase);
+    },
+  );
+});
+
+// ---------------------------------------------------------------- paridade com o oxlint instalado
+
+// O que o oxlint reporta é a medida: cada teste roda o binário do projeto sobre uma árvore temporária (fora do
+// repositório) e compara o que ele casou com o que o helper diz. Um processo por glob, feitos uma vez no `beforeAll`.
+const PARITY_TIMEOUT_MS = 120_000;
+
+interface Report {
+  file: string;
+  line: number;
+}
+
+interface OxlintRun {
+  status: number | null;
+  stderr: string;
+  reports: Report[];
+}
+
+function runOxlint(tree: string, config: unknown, name: string): OxlintRun {
+  writeFileIn(tree, name, JSON.stringify(config));
+  const result = runCommand(
+    oxlintBin,
+    ['-c', name, '--format=unix', '--disable-nested-config', '.'],
+    { cwd: tree },
+  );
+  const reports = [...result.stdout.matchAll(/^(\S+?):(\d+):\d+: /gm)].map(
+    (match): Report => ({
+      file: (match[1] ?? '').replace(/^\.\//, ''),
+      line: Number(match[2]),
+    }),
+  );
+  return { status: result.status, stderr: result.stderr, reports };
+}
+
+// Sem as categorias, só a regra da vez fica ligada: o que sai da saída é o que a regra e o glob casaram.
+function singleRuleConfig(overrides: unknown[], rules: unknown = {}) {
+  return { categories: { correctness: 'off' }, rules, overrides };
+}
+
+// Um arquivo por amostra com `debugger;`: o oxlint reporta o arquivo se o override com `no-debugger` o casar.
+const FILE_SAMPLES = [
+  'a/b.js',
+  'axb.js',
+  'ayb.js',
+  'sub/x.ts',
+  'x.ts',
+  'a/b/c.ts',
+];
+
+const OVERRIDE_GLOBS = [
+  'a[!x]b.js',
+  'a[^x]b.js',
+  'a[/y]b.js',
+  'a[xy]b.js',
+  'a?b.js',
+  '*.ts',
+  './x.ts',
+  'sub/*.ts',
+  '**/*.ts',
+  'a/**',
+  '{a,sub}/**/*.ts',
+  '!**/*.js',
+];
+
+describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
+  const measured = new Map<string, string[]>();
+  const failures: string[] = [];
+
+  beforeAll(() => {
+    const tree = makeTempDir('glob-parity-');
+    for (const file of FILE_SAMPLES) writeFileIn(tree, file, 'debugger;\n');
+    OVERRIDE_GLOBS.forEach((glob, index) => {
+      const run = runOxlint(
+        tree,
+        singleRuleConfig([
+          { files: [glob], rules: { 'no-debugger': 'error' } },
+        ]),
+        `override-${String(index)}.json`,
+      );
+      if (run.stderr !== '' || (run.status !== 0 && run.status !== 1))
+        failures.push(`${glob}: status ${String(run.status)} ${run.stderr}`);
+      measured.set(glob, run.reports.map((report) => report.file).sort());
+    });
+  }, PARITY_TIMEOUT_MS);
+
+  afterAll(cleanupTempDirs);
+
+  it('FND-13 controle: o oxlint rodou a regra e reportou arquivos em algum glob', () => {
+    expect(failures).toEqual([]);
+    const reportedSomething = [...measured.values()].some(
+      (files) => files.length > 0,
+    );
+    expect(reportedSomething).toBe(true);
+    // O oxlint também deixa de reportar o que o glob não casa: o `?` não casa a `/`, então a/b.js fica de fora.
+    expect(measured.get('a?b.js')).toEqual(['axb.js', 'ayb.js']);
+  });
+
+  it.each(OVERRIDE_GLOBS)(
+    'FND-13 o overrideFilesMatch casa as mesmas amostras que o oxlint: %s',
+    (glob) => {
+      const expected = FILE_SAMPLES.filter((file) =>
+        overrideFilesMatch([glob], file),
+      ).sort();
+      expect(expected).toEqual(measured.get(glob));
+    },
+  );
+});
+
+const MODULES = [
+  'Foo/bar',
+  'foo/baz',
+  'node:child_process',
+  './local/x.js',
+] as const;
+
+interface GroupCase {
+  group: string[];
+  caseSensitive?: boolean;
+}
+
+const GROUP_CASES: GroupCase[] = [
+  { group: ['foo/*'] },
+  { group: ['FOO/*'] },
+  { group: ['FOO/*'], caseSensitive: true },
+  { group: ['foo/*', '!foo/baz'] },
+  { group: ['!foo/baz', 'foo/*'] },
+  { group: ['bar'] },
+  { group: ['node:child_process'] },
+];
+
+function groupLabel({ group, caseSensitive }: GroupCase): string {
+  return `${JSON.stringify(group)}${caseSensitive === true ? ' com caseSensitive' : ''}`;
+}
+
+describe('FND-13 paridade do group do no-restricted-imports com o oxlint', () => {
+  const measured = new Map<GroupCase, string[]>();
+  const failures: string[] = [];
+
+  beforeAll(() => {
+    const tree = makeTempDir('group-parity-');
+    // Uma importação por linha: a linha do relatório diz qual módulo foi reportado.
+    writeFileIn(
+      tree,
+      'lib/imports.ts',
+      `${MODULES.map((module) => `import '${module}';`).join('\n')}\n`,
+    );
+    GROUP_CASES.forEach((groupCase, index) => {
+      const pattern: Record<string, unknown> = {
+        group: groupCase.group,
+        message: 'x',
+      };
+      if (groupCase.caseSensitive !== undefined)
+        pattern.caseSensitive = groupCase.caseSensitive;
+      const run = runOxlint(
+        tree,
+        singleRuleConfig([], {
+          'no-restricted-imports': ['error', { patterns: [pattern] }],
+        }),
+        `group-${String(index)}.json`,
+      );
+      if (run.stderr !== '' || (run.status !== 0 && run.status !== 1))
+        failures.push(
+          `${groupLabel(groupCase)}: status ${String(run.status)} ${run.stderr}`,
+        );
+      measured.set(
+        groupCase,
+        run.reports
+          .filter((report) => report.file === 'lib/imports.ts')
+          .map((report) => MODULES[report.line - 1] ?? `linha ${report.line}`)
+          .sort(),
+      );
+    });
+  }, PARITY_TIMEOUT_MS);
+
+  afterAll(cleanupTempDirs);
+
+  it('FND-13 controle: o oxlint rodou a regra e reportou importações em algum group', () => {
+    expect(failures).toEqual([]);
+    const reportedSomething = [...measured.values()].some(
+      (modules) => modules.length > 0,
+    );
+    expect(reportedSomething).toBe(true);
+    // Um group que não casa nada deixa o arquivo limpo: o controle distingue casar de não casar.
+    expect(measured.get(GROUP_CASES[2] as GroupCase)).toEqual([]);
+  });
+
+  it.each(
+    GROUP_CASES.map((groupCase): [string, GroupCase] => [
+      groupLabel(groupCase),
+      groupCase,
+    ]),
+  )(
+    'FND-13 o restrictedGroupResult reprova os mesmos módulos que o oxlint: %s',
+    (_label, groupCase) => {
+      const expected = MODULES.filter(
+        (module) =>
+          restrictedGroupResult(
+            groupCase.group,
+            module,
+            groupCase.caseSensitive,
+          ) === 'found',
+      ).sort();
+      expect(expected).toEqual(measured.get(groupCase));
     },
   );
 });
