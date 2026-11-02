@@ -58,7 +58,7 @@ export const CATALOG_METRICS = {
     instrument: 'counter',
     unit: '{read}',
     description:
-      'Leituras de gauge da vitrine e da sincronização que falharam no scrape; o gauge segue com o último valor lido.',
+      'Leituras do gauge da idade da sincronização que falharam no /metrics da API; nesse caso o gauge mantém o último valor.',
     attributes: {
       'casecellshop.gauge.name': {
         description: 'Gauge cuja leitura falhou.',

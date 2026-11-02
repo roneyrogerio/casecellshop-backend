@@ -10,7 +10,7 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | --- | --- | --- | --- | --- |
 | `casecellshop.billing.gauge.read_failures` | `casecellshop_billing_gauge_read_failures_total` | contador | `{read}` | Leituras de gauge do faturamento que falharam no scrape; o gauge segue com o último valor lido. |
 | `casecellshop.catalog.cache.lookups` | `casecellshop_catalog_cache_lookups_total` | contador | `{lookup}` | Leituras do cache da vitrine por resultado; o hit ratio sai daqui. |
-| `casecellshop.catalog.gauge.read_failures` | `casecellshop_catalog_gauge_read_failures_total` | contador | `{read}` | Leituras de gauge da vitrine e da sincronização que falharam no scrape; o gauge segue com o último valor lido. |
+| `casecellshop.catalog.gauge.read_failures` | `casecellshop_catalog_gauge_read_failures_total` | contador | `{read}` | Leituras do gauge da idade da sincronização que falharam no /metrics da API; nesse caso o gauge mantém o último valor. |
 | `casecellshop.catalog.origin.active_loads` | `casecellshop_catalog_origin_active_loads` | UpDownCounter | `{load}` | Cargas do cache em andamento; o single-flight a mantém em no máximo 1 por instância. |
 | `casecellshop.catalog.origin.loads` | `casecellshop_catalog_origin_loads_total` | contador | `{load}` | Cargas do cache a partir do banco, por desfecho: o custo do cache em consultas à origem. |
 | `casecellshop.catalog.served_entry.age` | `casecellshop_catalog_served_entry_age` | histograma | `s` | Idade da entrada do cache servida, desde a carga que a gerou. |
