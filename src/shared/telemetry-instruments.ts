@@ -189,15 +189,45 @@ function observeGauges(
   return () => meter.removeBatchObservableCallback(observable, gauges);
 }
 
+// Produto cartesiano dos valores das listas fechadas. Devolve `undefined` quando a série não tem como nascer em 0:
+// atributo de lista aberta (status, rota) ou condicional, cujas combinações não se conhecem de antemão.
+function zeroCombinations(spec: MetricSpec): Attributes[] | undefined {
+  let combinations: Attributes[] = [{}];
+  for (const [key, attribute] of Object.entries(spec.attributes)) {
+    if (
+      attribute.requirement !== 'required' ||
+      attribute.values.kind !== 'enum'
+    )
+      return undefined;
+    combinations = combinations.flatMap((base) =>
+      attribute.values.kind === 'enum'
+        ? attribute.values.values.map((value) => ({ ...base, [key]: value }))
+        : [],
+    );
+  }
+  return combinations;
+}
+
+// OBS-08: o `increase()` do Prometheus não conta o primeiro evento de uma série que nasce com ele, e a documentação
+// pede exportar 0 de antemão. Só counter e up_down_counter; histograma e gauge não nascem vazios.
+function seedZeroSeries(instrument: Instrument, spec: MetricSpec): void {
+  if (spec.instrument !== 'counter' && spec.instrument !== 'up_down_counter')
+    return;
+  if (!('add' in instrument)) return;
+  for (const attributes of zeroCombinations(spec) ?? [])
+    instrument.add(0, attributes);
+}
+
 export function createInstruments<S extends Specs>(
   meter: Meter,
   specs: S,
 ): TypedMetrics<S> {
   const instruments = new Map<string, Instrument>(
-    Object.entries(specs).map(([name, spec]) => [
-      name,
-      createInstrument(meter, name, spec),
-    ]),
+    Object.entries(specs).map(([name, spec]) => {
+      const instrument = createInstrument(meter, name, spec);
+      seedZeroSeries(instrument, spec);
+      return [name, instrument];
+    }),
   );
   const pick = (name: string): Instrument => {
     const instrument = instruments.get(name);
