@@ -4,7 +4,7 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado: serve o catálogo do banco da loja, reserva o estoque de forma atômica no checkout e envia os pedidos ao ERP de forma assíncrona, por uma outbox e uma fila SQS. Node.js 26, TypeScript, PostgreSQL e OpenTelemetry. O ERP é simulado no processo do worker, atrás da porta `ErpClient`.
 
-**Estado:** checkout, faturamento assíncrono, retry, DLQ, reconciliação e a operação (SLOs, dashboard, alertas e runbooks) prontos. A vitrine com cache e a sincronização (M4) e as métricas de cache, fila e estoque que parte dos alertas usa (M5) estão pendentes; cada item abaixo diz se está pronto ou em qual marco entra. O andamento está no [`ROADMAP.md`](.specs/project/ROADMAP.md).
+**Estado:** vitrine com cache e sincronização, checkout, faturamento assíncrono, retry, DLQ, reconciliação e a operação (SLOs, dashboard, alertas e runbooks) prontos (marcos M1 a M5). A entrega final (M6) está no [`ROADMAP.md`](.specs/project/ROADMAP.md).
 
 ## Índice
 
@@ -49,17 +49,14 @@ Sobem o PostgreSQL, as migrações (que terminam antes da API e do worker), o El
 
 As portas mudam com `API_PORT` e `JAEGER_UI_PORT`.
 
-**Catálogo até o M4:** o catálogo da loja é preenchido pela sincronização com o ERP, que entra no M4. Até lá, copie o catálogo do ERP simulado uma vez, com o compose no ar:
-
-```sh
-docker compose exec postgres psql -U casecellshop -d casecellshop -c "
-  insert into products (sku, name, price_cents) select sku, name, price_cents from erp_sim.products on conflict do nothing;
-  insert into inventory (sku, on_hand) select sku, on_hand from erp_sim.products on conflict do nothing;"
-```
+O worker sincroniza o catálogo do ERP simulado na subida e a cada minuto; antes da primeira rodada completa, `GET /products` responde `503` (`CAT-05`).
 
 Um pedido de ponta a ponta:
 
 ```sh
+curl http://localhost:3000/products
+# {"items":[{"sku":"CAPA-MOTO-G84",…}],"hasNext":false}
+
 curl -i -X POST http://localhost:3000/checkout \
   -H 'content-type: application/json' -H 'idempotency-key: pedido-1' \
   -d '{"items":[{"sku":"CAPA-MOTO-G84","quantity":1,"expectedUnitPrice":4990}]}'
@@ -69,7 +66,7 @@ curl http://localhost:3000/orders/<orderId>/status
 # {"orderId":"…","status":"invoiced"} depois de o worker faturar
 ```
 
-O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições de exemplo. Ao importar o `openapi.yaml` no Insomnia ou no Postman, defina a URL base `http://localhost:3000`: o contrato declara o servidor como `/`, o que muda no M4.
+O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições de exemplo. O contrato declara o servidor `http://localhost:3000`, então o `openapi.yaml` importado no Insomnia ou no Postman já aponta para a API do compose.
 
 ## Testar
 
@@ -96,18 +93,18 @@ O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/fea
 
 | O desafio pede | Onde | Teste | Estado |
 | --- | --- | --- | --- |
-| `GET /products` com cache e TTL | `src/catalog/`, cache em memória (AD-005) | `CAT-01` a `CAT-13` | M4 |
+| `GET /products` com cache e TTL | [`src/catalog/`](src/catalog/), cache em memória (AD-005) | `CAT-01` a `CAT-15` | pronto |
 | `POST /checkout` responde `202` com `orderId` e status | [`src/checkout/`](src/checkout/) | `CHK-09` | pronto |
 | `GET /orders/{orderId}/status` | [`src/orders/`](src/orders/) | `CHK-11`, `ORD-19` | pronto |
 | Contrato com schemas de sucesso e erro | [`openapi.yaml`](openapi.yaml), gerado de [`src/contract/`](src/contract/); erros em `application/problem+json` (RFC 9457) | `FND-03`, `FND-07` | pronto |
 | Logs estruturados com `correlationId` e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts), eventos no [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) | `OBS-01`, `OBS-07` | pronto |
-| Métricas de cache, checkout e fila | `/metrics` da API e do worker, nomes no catálogo de telemetria | `OBS-02`, `OBS-07` | pronto; cache e fila no M4 e no M5 |
-| Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18`, `CAT-12` | pronto, menos o cache (M4) |
+| Métricas de cache, checkout e fila | `/metrics` da API e do worker, nomes no catálogo de telemetria | `OBS-02`, `OBS-04`, `OBS-06`, `OBS-07` | pronto |
+| Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18`, `CAT-12`, `OBS-05` | pronto |
 | Exemplo de dashboard, alerta ou runbook | [Operação](#operação): SLOs, dashboard, alertas em regras do Prometheus e um runbook por alerta | `OBS-03`; runbook da DLQ: `ORD-15` | pronto |
 | Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | `CHK-01`, `CHK-02` (controle negativo) | pronto |
 | Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | `CHK-03` a `CHK-05` | pronto |
 | Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | `ORD-01` a `ORD-22` | pronto |
-| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | tabela critério × teste do CI | cache no M4 |
+| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | tabela critério × teste do CI | pronto |
 | Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | `DOC-OPS-01`, `DOC-IDX-01` | pronto |
 
 ## As cinco perguntas
@@ -117,8 +114,8 @@ As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada u
 | Pergunta | Seção do `ARCHITECTURE.md` | Critérios | Implementação |
 | --- | --- | --- | --- |
 | 1. Diagnóstico, trade-offs e arquitetura alvo | "Diagnóstico e arquitetura alvo" | `DOC-DIA-01` a `06` | pronto |
-| 2. Cache, invalidação e vitrine | "Cache e performance da vitrine" | `DOC-CAC-01` a `04` | M4 |
-| 3. Observabilidade | "Observabilidade"; SLOs, alertas, dashboard e runbooks na [Operação](#operação) deste README | `DOC-OBS-01` a `04` | M5 |
+| 2. Cache, invalidação e vitrine | "Cache e performance da vitrine" | `DOC-CAC-01` a `04` | pronto |
+| 3. Observabilidade | "Observabilidade"; SLOs, alertas, dashboard e runbooks na [Operação](#operação) deste README | `DOC-OBS-01` a `04` | pronto |
 | 4. Concorrência, estoque e idempotência | "Concorrência e idempotência" | `DOC-CON-01` a `04` | pronto |
 | 5. Mensageria, resiliência, contrato e IA | "Mensageria e resiliência" | `DOC-MSG-01` a `04` | pronto |
 
@@ -153,8 +150,6 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 - **H3:** o ERP fatura pelo preço enviado.
 - **H4:** o ERP conclui ou abandona uma criação em até 40 s.
 
-Um ID com o marco entre parênteses é de um critério que ainda não está pronto; a linha descreve o desenho que ele vai provar.
-
 | Garantia | Depende de | Teste |
 | --- | --- | --- |
 | Nenhuma venda além do estoque, com 50 checkouts simultâneos | o banco da loja | `CHK-01`, `CHK-02` (controle negativo) |
@@ -167,8 +162,8 @@ Um ID com o marco entre parênteses é de um critério que ainda não está pron
 | Estoque baixado uma vez só, mesmo com conclusões simultâneas | o banco da loja | `ORD-17` |
 | Reserva liberada quando o ERP recusa o pedido | H2 | `ORD-08` |
 | Todo pedido aceito termina faturado, falho ou na DLQ, de onde sai pela reconciliação ou pelo runbook | H1a | `ORD-13`, `ORD-14`, `ORD-15` |
-| Vitrine sem preço ou disponibilidade defasados além do limite da meta 2 | a sincronização com o ERP | `CAT-06`, `CAT-07` (M4) |
-| Um pedido sem desfecho em 60 s é contado uma vez, com várias réplicas da API | o banco da loja | `OBS-04` (M5) |
+| Vitrine sem preço ou disponibilidade defasados além do limite da meta 2 | a sincronização com o ERP | `CAT-06`, `CAT-07` |
+| Um pedido sem desfecho em 60 s é contado uma vez, com várias réplicas da API | o banco da loja | `OBS-04` |
 
 | Falha | Detecção | Mitigação | Teste |
 | --- | --- | --- | --- |
@@ -184,9 +179,9 @@ Um ID com o marco entre parênteses é de um critério que ainda não está pron
 | Banco indisponível no checkout | `lock_timeout` ou falha de conexão; burn rate do checkout | `503` com `Retry-After`, sem reserva parcial | `CHK-08` |
 | Banco falha ao gravar o desfecho | erro na transação de conclusão | até 5 repetições; depois a mensagem volta à fila, sem ir para a DLQ | `ORD-16` |
 | SKU disputado por muitos checkouts | `409` por falta de estoque no desfecho do checkout | `UPDATE` condicional na linha do estoque, sem venda além dele | `CHK-01`, `CHK-07` |
-| Origem do cache em erro | consultas à origem com `error`; alerta [Vitrine servida velha](#vitrine-servida-velha) | serve a última entrada até o teto de 60 s, sem esperar a origem durante a pausa; sem entrada, `503` | `CAT-04` (M4) |
-| Sincronização parada | idade da sincronização; alerta [Sincronização parada](#sincronização-parada) | a loja segue com o último estoque e preço conhecidos; o checkout decide pelo banco | `CAT-09`, `CAT-11` (M4) |
-| Venda em outro canal | SKUs com `reserved > on_hand` e rejeições por falta de estoque; alerta [Furo de estoque](#furo-de-estoque) | a sincronização desconta as vendas da loja depois da leitura; o ERP recusa sem estoque (H2) e a reserva é liberada | `CAT-07` (M4), `OBS-06` (M5), `ORD-08` |
+| Origem do cache em erro | consultas à origem com `error`; alerta [Vitrine servida velha](#vitrine-servida-velha) | serve a última entrada até o teto de 60 s, sem esperar a origem durante a pausa; sem entrada, `503` | `CAT-04` |
+| Sincronização parada | idade da sincronização; alerta [Sincronização parada](#sincronização-parada) | a loja segue com o último estoque e preço conhecidos; o checkout decide pelo banco | `CAT-09`, `CAT-11`, `CAT-15` |
+| Venda em outro canal | SKUs com `reserved > on_hand` e rejeições por falta de estoque; alerta [Furo de estoque](#furo-de-estoque) | a sincronização desconta as vendas da loja depois da leitura; o ERP recusa sem estoque (H2) e a reserva é liberada | `CAT-07`, `OBS-06`, `ORD-08` |
 | Preço alterado entre a vitrine e o checkout | `409` com o preço atual; log `casecellshop.checkout.price_changed` | nada é reservado; o cliente confirma o preço novo | `CHK-06` |
 
 ## Operação
@@ -329,6 +324,13 @@ sum(increase(casecellshop_erp_out_of_stock_rejections_total[1h]))
 # Sincronização: idade da última rodada completa (s)
 max(casecellshop_catalog_sync_age)
 
+# Leituras de gauge que falharam, por pasta e gauge, na última hora
+sum by (casecellshop_gauge_name) (increase(casecellshop_billing_gauge_read_failures_total[1h]))
+
+sum by (casecellshop_gauge_name) (increase(casecellshop_checkout_gauge_read_failures_total[1h]))
+
+sum by (casecellshop_gauge_name) (increase(casecellshop_catalog_gauge_read_failures_total[1h]))
+
 # Sincronização: correções, na última hora
 sum(increase(casecellshop_catalog_sync_corrections_total[1h]))
 
@@ -342,20 +344,20 @@ As regras estão no formato de arquivo de regras do Prometheus ([regras de alert
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
 
-Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os eventos registrados antes da primeira coleta de cada série depois da subida do processo (por exemplo, a primeira rejeição por falta de estoque ou os primeiros `config_error`) podem não disparar o alerta; o próximo evento depois dessa coleta, dentro da janela, dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio.
+Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os eventos registrados antes da primeira coleta de cada série depois da subida do processo (por exemplo, a primeira rejeição por falta de estoque ou os primeiros `config_error`) podem não disparar o alerta; o próximo evento depois dessa coleta, dentro da janela, dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como o design pede (`CAT-15`).
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
 | `CasecellshopErrosBurnRateRapido` e `…Lento` | a vitrine ou o checkout gastam o orçamento de `5xx` | `page` e `ticket` | [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout) |
 | `CasecellshopVitrineLentaBurnRate…` e `CasecellshopCheckoutLentoBurnRate…` | a vitrine passa de 200 ms, ou o checkout de 500 ms, acima do orçamento | `page` e `ticket` | [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout) |
 | `CasecellshopFaturamentoBurnRate…` | pedidos sem desfecho em 60 s acima do orçamento | `page` e `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
-| `CasecellshopPendenciaAntiga` | a pendência mais antiga da outbox passa de 2 min, por 5 min | `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
+| `CasecellshopPendenciaAntiga` | a pendência mais antiga da outbox passa de 2 min, ou a leitura dela falha, por 5 min | `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
 | `CasecellshopMetricasDaFilaAusentes` | o gauge da fila some, por 10 min | `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
-| `CasecellshopDLQ` | há mensagem na DLQ, por 10 min | `ticket` | [DLQ](#dlq) |
-| `CasecellshopFuroDeEstoque` | um SKU com `reserved > on_hand`, ou uma rejeição do ERP por falta de estoque | `page` | [Furo de estoque](#furo-de-estoque) |
+| `CasecellshopDLQ` | há mensagem na DLQ, ou a leitura da fila falha, por 10 min | `ticket` | [DLQ](#dlq) |
+| `CasecellshopFuroDeEstoque` | um SKU com `reserved > on_hand`, uma rejeição do ERP por falta de estoque, ou a leitura do estoque falha | `page` | [Furo de estoque](#furo-de-estoque) |
 | `CasecellshopErpErroDeConfiguracao` | uma chamada ao ERP com `config_error` | `page` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
 | `CasecellshopErpFalhando` | mais da metade das chamadas `transient` ou `ambiguous`, por 10 min | `ticket` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
-| `CasecellshopSincronizacaoParada` | a última rodada completa tem mais de 3 min, ou a série some, por 5 min | `page` | [Sincronização parada](#sincronização-parada) |
+| `CasecellshopSincronizacaoParada` | a última rodada completa tem mais de 3 min, a série some, ou a leitura dela falha, por 5 min | `page` | [Sincronização parada](#sincronização-parada) |
 | `CasecellshopVitrineServidaVelha` | a idade p99 da entrada servida passa de 30 s, por 5 min | `ticket` | [Vitrine servida velha](#vitrine-servida-velha) |
 
 ```yaml
@@ -509,6 +511,8 @@ groups:
       - alert: CasecellshopPendenciaAntiga
         expr: |
           max(casecellshop_outbox_oldest_pending_age) > 120
+          or
+          sum(increase(casecellshop_billing_gauge_read_failures_total{casecellshop_gauge_name="outbox_oldest_pending_age"}[5m])) > 0
         for: 5m
         labels:
           severity: ticket
@@ -527,17 +531,21 @@ groups:
       - alert: CasecellshopDLQ
         expr: |
           max(casecellshop_queue_messages{casecellshop_queue_name="dlq"}) > 0
+          or
+          sum(increase(casecellshop_billing_gauge_read_failures_total{casecellshop_gauge_name="queue_messages"}[10m])) > 0
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: "{{ $value }} mensagem(ns) na DLQ"
+          summary: Há mensagem na DLQ, ou a leitura da fila falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#dlq
       - alert: CasecellshopFuroDeEstoque
         expr: |
           max(casecellshop_inventory_oversold_skus) > 0
           or
           sum(increase(casecellshop_erp_out_of_stock_rejections_total[15m])) > 0
+          or
+          sum(increase(casecellshop_checkout_gauge_read_failures_total{casecellshop_gauge_name="inventory"}[15m])) > 0
         for: 0m
         labels:
           severity: page
@@ -570,6 +578,8 @@ groups:
           max(casecellshop_catalog_sync_age) > 180
           or
           absent(casecellshop_catalog_sync_age)
+          or
+          sum(increase(casecellshop_catalog_gauge_read_failures_total{casecellshop_gauge_name="catalog_sync_age"}[5m])) > 0
         for: 5m
         labels:
           severity: page
@@ -601,6 +611,8 @@ Os comandos rodam com o compose no ar. Para ler o banco: `docker compose exec po
 
 #### Pendência antiga e burn rate do faturamento
 
+Se o alerta veio do counter de falhas de leitura, o gauge da pendência está congelado no último valor: o log `casecellshop.billing.gauge.read_failed` traz o erro, e a leitura é do banco, na API (`curl -i http://localhost:3000/health`). Corrigido o banco, siga os passos abaixo.
+
 1. Veja no dashboard se o worker publica e tenta: `casecellshop_outbox_published_messages_total` parado com a pendência subindo é o relay; tentativas paradas é o worker. Confira `docker compose ps worker` e os logs `casecellshop.outbox.relay.failed` e `casecellshop.worker.poll.failed`.
 2. Tentativas com `retry` ou `deferred` crescendo: o ERP está lento ou fora. Siga [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração).
 3. Tentativas com `lease_short`: a visibilidade da mensagem não cabe numa chamada ao ERP; confira a configuração da fila.
@@ -609,6 +621,8 @@ Os comandos rodam com o compose no ar. Para ler o banco: `docker compose exec po
 #### DLQ
 
 Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`).
+
+Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelado no último valor: o log `casecellshop.billing.gauge.read_failed` traz o erro do `GetQueueAttributes`, e o SQS está fora do alcance do worker (`docker compose ps elasticmq`). Até a leitura voltar, a DLQ não é vista pelo gauge, e a reconciliação ainda registra cada chegada em `casecellshop.outbox.dead`.
 
 1. Ache os pedidos: o log `casecellshop.outbox.dead` traz o `orderId` de cada chegada à DLQ. Uma mensagem com o corpo fora do schema não gera esse log: ela aparece em `casecellshop.outbox.message.rejected`, com o `orderId` quando o corpo o tem (`ORD-12`).
 2. Espere uma rodada da reconciliação (5 min): ela fatura e tira da DLQ os pedidos que o ERP já tem (`ORD-14`). O resumo sai em `casecellshop.outbox.reconciliation.completed`.
@@ -640,12 +654,16 @@ Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`)
 
 O ERP tem menos unidades que a loja prometeu, quase sempre por venda em outro canal.
 
+Se o alerta veio do counter de falhas de leitura, o gauge do estoque está congelado no último valor: o log `casecellshop.checkout.gauge.read_failed` traz o erro, e a leitura é do banco, na API (`curl -i http://localhost:3000/health`). Enquanto ela falha, a consulta do passo 1 é a fonte.
+
 1. Ache os SKUs: `select sku, on_hand, reserved from inventory where reserved > on_hand order by sku;`.
 2. Os pedidos pendentes desses SKUs que o ERP recusar por falta de estoque terminam `failed` com o motivo `erp_out_of_stock` e liberam a reserva (`ORD-08`). Avise o atendimento: o cliente recebeu `202` e o pedido não será faturado.
 3. Não altere `inventory` à mão: o `on_hand` vem do ERP pela sincronização, e o `reserved` é a soma das reservas dos pedidos pendentes.
 4. Confirme com o time do ERP a venda no outro canal ou o ajuste de estoque; se a origem for recorrente, reduza o intervalo da sincronização.
 
 #### Sincronização parada
+
+A idade da sincronização sai da API, lida do banco a cada coleta, e segue crescendo com o worker parado (`CAT-15`). Se o alerta veio do counter de falhas de leitura, o gauge está congelado no último valor: o log `casecellshop.catalog.gauge.read_failed` traz o erro, e a leitura é do banco (`curl -i http://localhost:3000/health`).
 
 1. Confira o worker (`docker compose ps worker`) e as chamadas `list_catalog` no painel do ERP: um desfecho diferente de `ok` aponta o ERP; nenhuma chamada aponta a sincronização.
 2. ERP fora: a loja segue com o último preço e estoque conhecidos; o checkout continua, e o preço cobrado é o do banco da loja (`CHK-06`). Siga [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração).
@@ -687,7 +705,7 @@ O que as garantias não cobrem e como aparece na operação. A lista completa, c
 | --- | --- | --- |
 | Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | não é detectável pela loja; demonstrado no `ORD-06` | conferir as faturas no ERP real antes de confiar na H4 |
 | O ERP fatura sem estoque e fica negativo, contra a H2 (R9) | a sincronização grava zero e registra o caso em log | a loja para de vender o SKU até o estoque voltar |
-| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`, M5) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
+| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
 | Cache por instância: com N réplicas da API, uma expiração gera até N consultas à origem | cargas da origem no dashboard | aceito enquanto a origem é o banco da loja (AD-005) |
 | O ElasticMQ não é o SQS (R12) | o worker trata o *receipt handle* recusado e o sucesso aparente do mesmo jeito | na AWS, muda só o endereço; o `ListMessageMoveTasks` não é chamado |
 | O exportador Prometheus passa a acrescentar o sufixo de unidade (R13) | o teste dos nomes do `/metrics` (`OBS-07`) reprova no PR da atualização; o das consultas desta página (`OBS-03`) segue o `prometheusName` do gerador do catálogo, que precisa mudar junto | ajustar os alertas e o dashboard junto, numa decisão |
@@ -698,7 +716,6 @@ O que as garantias não cobrem e como aparece na operação. A lista completa, c
 - **Premissas de carga:** o pico de pedidos, a latência e o limite de chamadas do ERP e o tamanho do catálogo, de onde saem os parâmetros do design, estão no [`PROJECT.md`](.specs/project/PROJECT.md), seção "Hipóteses", e serão revistos com medição.
 - **ERP simulado:** roda no processo do worker, atrás da porta `ErpClient`; trocar pelo real muda o adaptador, e não a regra.
 - **Sem autenticação nem pagamento:** fora do escopo do desafio.
-- **Catálogo:** a sincronização com o ERP e a vitrine com cache entram no M4; até lá, o catálogo é copiado à mão (ver [Rodar](#rodar)).
 - **Uma instância de cada serviço no compose:** o desenho admite várias (fila, outbox e locks no banco), mas o compose sobe uma de cada.
 - **Alertas e dashboard são exemplos:** as regras estão neste README, sem um Prometheus nem um Alertmanager no compose; o `/metrics` é o mesmo que um Prometheus ou o Agent do Datadog coletaria.
 - **Nuvem como hipótese:** tudo roda localmente; o equivalente gerenciado de cada peça está no `ARCHITECTURE.md`, seção "A nuvem como hipótese de evolução".
