@@ -317,8 +317,8 @@ describe('OBS-07 observeBatch: a leitura em lote que falha avisa o onError', () 
         [RESERVED, QUEUE],
         async (observe) => {
           await read();
-          observe[RESERVED](5);
-          observe[QUEUE](2, { 'casecellshop.queue.name': 'dlq' });
+          observe(RESERVED, 5);
+          observe(QUEUE, 2, { 'casecellshop.queue.name': 'dlq' });
         },
         { onError },
       ),

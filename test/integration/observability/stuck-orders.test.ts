@@ -442,10 +442,11 @@ async function naiveCheck(
 }
 
 describe('OBS-04 o laço da verificação roda pelo relógio injetável', () => {
-  it('OBS-04 a configuração padrão verifica a cada 10 s os pedidos de 60 s ou mais, em lotes de até 500', () => {
+  // O limiar de 60 s é constante na consulta (o índice parcial só é usado com o limiar constante), e por isso não é
+  // um campo da configuração.
+  it('OBS-04 a configuração padrão verifica a cada 10 s, em lotes de até 500, e o limiar de 60 s não é configurável', () => {
     expect(DEFAULT_STUCK_ORDER_MONITOR_CONFIG).toEqual({
       intervalMs: INTERVAL_MS,
-      thresholdSeconds: 60,
       batchSize: 500,
     });
   });
