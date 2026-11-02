@@ -39,6 +39,7 @@ const sim = createSimulatedErp({ pool: erpPool, clock: systemClock });
 sim.script.setDefault(SIM_MODES[simMode]);
 const erp = createErpClient({
   transport: sim.transport,
+  invoiceReader: sim.invoiceReader,
   clock: systemClock,
   timeoutMs: DEFAULT_WORKER_CONFIG.erpTimeoutMs,
   telemetry,

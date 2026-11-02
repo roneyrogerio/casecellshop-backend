@@ -12,6 +12,10 @@ export const outbox = expressionBuilder<StoreDb, 'outbox'>();
 // ida da requisição). O worker e a reconciliação tomam a mesma permissão, então partilham o valor.
 export const MIN_CALL_DELAY_MS = 45_000;
 
+// Janela de assentamento (AD-031): bem maior que a H4, a criação em dúvida já concluiu ou foi abandonada.
+// Vale para a verificação tardia, o cancelamento e a recusa que vem depois de outro envio.
+export const SETTLE_WINDOW_MS = 900_000;
+
 export type CallPermit =
   | { granted: true; token: string; sentBefore: boolean }
   // Outra tentativa chamou o ERP há menos que o atraso mínimo.

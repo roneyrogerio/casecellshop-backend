@@ -25,6 +25,7 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.inventory.oversold_skus` | `casecellshop_inventory_oversold_skus` | gauge | `{sku}` | SKUs com `reserved > on_hand`: reservas que o estoque já não cobre (furo de estoque). |
 | `casecellshop.inventory.reserved` | `casecellshop_inventory_reserved` | gauge | `{unit}` | Unidades reservadas por pedidos pendentes, somadas em todos os SKUs. |
 | `casecellshop.order.accept_to_invoice.duration` | `casecellshop_order_accept_to_invoice_duration` | histograma | `s` | Tempo do aceite do pedido até o faturamento no ERP. |
+| `casecellshop.order.late_invoices` | `casecellshop_order_late_invoices_total` | contador | `{order}` | Achados da verificação tardia (AD-031): fatura de pedido falho ou fatura duplicada no ERP, um por pedido. |
 | `casecellshop.order.stuck` | `casecellshop_order_stuck_total` | contador | `{order}` | Pedidos sem desfecho em 60 s do aceite, contados uma vez pela marca no banco, mesmo com várias réplicas da API. |
 | `casecellshop.outbox.attempts` | `casecellshop_outbox_attempts_total` | contador | `{attempt}` | Tentativas da outbox por desfecho; o `dead` é contado pela reconciliação. |
 | `casecellshop.outbox.oldest_pending.age` | `casecellshop_outbox_oldest_pending_age` | gauge | `s` | Idade da linha mais antiga da outbox com o pedido pendente e fora da DLQ; 0 sem nenhuma. |
@@ -103,7 +104,7 @@ Fronteiras: 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30
 
 | Atributo | Exigência | Valores | Descrição |
 | --- | --- | --- | --- |
-| `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog` | Operação da porta ErpClient. |
+| `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog`, `count_invoices` | Operação da porta ErpClient. |
 | `casecellshop.erp.outcome` | obrigatório | `ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous`, `config_error` | Desfecho da chamada, pela lista fechada da porta. |
 
 ### `casecellshop.erp.out_of_stock.rejections`
@@ -123,6 +124,12 @@ Sem atributos.
 Fronteiras: 1, 5, 15, 30, 60, 120, 300, 600, 1800
 
 Sem atributos.
+
+### `casecellshop.order.late_invoices`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.order.late_invoice.cause` | obrigatório | `failed_order`, `duplicate` | O que a verificação tardia achou no ERP. |
 
 ### `casecellshop.order.stuck`
 
@@ -188,6 +195,9 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.migration.completed` | `info` | — | As migrações dos dois schemas terminaram. |
 | `casecellshop.order.failed` | `warn` | `reason` | O pedido terminou sem faturamento; `reason` diz por quê. |
 | `casecellshop.order.invoiced` | `info` | — | O ERP faturou o pedido. |
+| `casecellshop.order.late_check.completed` | `info` | `checked`, `found` | Uma rodada da verificação tardia terminou. |
+| `casecellshop.order.late_check.failed` | `warn` | `err` | A verificação tardia de um pedido, ou a rodada inteira, falhou; o pedido volta na rodada seguinte. |
+| `casecellshop.order.late_invoice.detected` | `error` | `cause` | A verificação tardia achou no ERP uma fatura de pedido falho ou uma fatura duplicada; `cause` diz qual. |
 | `casecellshop.order.stuck_check.failed` | `error` | `err` | A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo. |
 | `casecellshop.orders.db.unavailable` | `warn` | `err` | O banco não respondeu na leitura do status do pedido. |
 | `casecellshop.outbox.attempt.failed` | `error` | `err` | A tentativa falhou com um erro inesperado. |

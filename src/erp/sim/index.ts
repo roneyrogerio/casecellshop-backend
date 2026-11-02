@@ -4,6 +4,7 @@ import type { Clock } from '../../shared/clock.ts';
 import { createErpDb, type ErpSimDb } from '../../db/database.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpRequest,
   type ErpResponse,
   type ErpTransport,
@@ -18,7 +19,8 @@ export interface SimulatedErpOptions {
   withoutH1b?: boolean;
 }
 
-export type ErpSimOperation = ErpRequest['op'];
+// `countInvoices` é a leitura do banco do ERP, fora do transporte (AD-031).
+export type ErpSimOperation = ErpRequest['op'] | 'countInvoices';
 
 // Cada comportamento vale para uma chamada só (design.md, "Roteiro do ERP simulado").
 export type ErpSimBehavior =
@@ -34,7 +36,7 @@ export type ErpSimBehavior =
 
 export interface ErpSimMatch {
   op?: ErpSimOperation;
-  // Só na criação e na consulta, que têm referência.
+  // Só na criação, na consulta e na contagem, que têm referência.
   reference?: string;
 }
 
@@ -48,6 +50,8 @@ export interface ErpSimScript {
 
 export interface SimulatedErp {
   transport: ErpTransport;
+  // Faz o papel do acesso de leitura ao MySQL do ERP: conta as linhas de erp_sim.invoices.
+  invoiceReader: ErpInvoiceReader;
   script: ErpSimScript;
 }
 
@@ -244,6 +248,9 @@ export function createSimulatedErp({
 
   return {
     transport: { send: (request, signal) => send(sim, request, signal) },
+    invoiceReader: {
+      countInvoices: () => Promise.reject(new Error('não implementado')),
+    },
     script,
   };
 }
