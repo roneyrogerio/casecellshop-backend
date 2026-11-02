@@ -102,7 +102,8 @@ const UNIT_WORDS = new Set<string>([
 ]);
 
 // Os nomes que a própria linha de log já usa: um campo de evento com um deles colidiria com o campo do logger.
-const RESERVED_LOG_FIELDS = new Set<string>([
+// Fica numa tupla para o `logging.ts` derivar dela o tipo que recusa esses nomes nos bindings de um filho.
+export const RESERVED_LOG_FIELD_NAMES = [
   'event',
   'level',
   'msg',
@@ -110,7 +111,9 @@ const RESERVED_LOG_FIELDS = new Set<string>([
   'service',
   'env',
   'version',
-]);
+] as const;
+
+const RESERVED_LOG_FIELDS = new Set<string>(RESERVED_LOG_FIELD_NAMES);
 
 function redundantWord(name: string): string | undefined {
   const words = name.split(/[._]/);

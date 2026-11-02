@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { trace } from '@opentelemetry/api';
 import { pino, type DestinationStream, type Logger } from 'pino';
 import { resolveServiceIdentity } from './service-identity.ts';
-import type { LogEventSpec, LogLevel } from './telemetry-catalog.ts';
+import type {
+  LogEventSpec,
+  LogLevel,
+  RESERVED_LOG_FIELD_NAMES,
+} from './telemetry-catalog.ts';
 
 export interface LogContext {
   correlationId: string;
@@ -53,23 +57,35 @@ function traceMixin(): object {
 // objeto não tem método de escrita.
 const appLoggerBrand: unique symbol = Symbol('AppLogger');
 
-// Os bindings de um filho recusam `event`: o nome do evento só entra pelo `eventLogger`.
+// Os nomes que a linha já tem, derivados da mesma tupla que o catálogo usa para recusar campos de evento: um
+// binding com um deles colidiria com o campo do logger ou com o nome do evento. O correlationId, o trace_id e o
+// span_id ficam de fora de propósito, pois o filho pode fixá-los.
+type ReservedLogField = (typeof RESERVED_LOG_FIELD_NAMES)[number];
+
+// Os bindings de um filho recusam os nomes reservados; o nome do evento só entra pelo `eventLogger`.
 export type ChildBindings = Readonly<Record<string, unknown>> & {
-  readonly event?: never;
+  readonly [K in ReservedLogField]?: never;
 };
 
 // O logger que o resto de `src/` recebe: só cria filhos; escrever é com o `eventLogger`.
 export interface AppLogger {
-  // O pino fica sob o símbolo privado, fora do alcance de quem recebe o AppLogger.
-  readonly [appLoggerBrand]: Logger;
+  // O pino e os campos do filho ficam sob o símbolo privado, fora do alcance de quem recebe o AppLogger.
+  readonly [appLoggerBrand]: { readonly pino: Logger; readonly fields: object };
   child(bindings: ChildBindings): AppLogger;
 }
 
 // Envolve um logger do pino (os testes montam o deles, com destino próprio).
 export function fromPino(logger: Logger): AppLogger {
+  return withFields(logger, {});
+}
+
+// Os campos do filho ficam aqui, e não no `child` do pino: o pino serializa os bindings à parte e escreve
+// depois o objeto do mixin e o da chamada sem deduplicar, o que repetia chaves (como o correlationId) na linha.
+// Juntos num objeto só a cada escrita, cada chave sai uma vez; filho de filho acumula e o mais novo vale.
+function withFields(pino: Logger, fields: object): AppLogger {
   return {
-    [appLoggerBrand]: logger,
-    child: (bindings) => fromPino(logger.child(bindings)),
+    [appLoggerBrand]: { pino, fields },
+    child: (bindings) => withFields(pino, { ...fields, ...bindings }),
   };
 }
 
@@ -125,13 +141,22 @@ export function eventLogger<S extends EventSpecs>(
 ): EventLogger<S> {
   // A declaração só serve ao compilador (nome, nível e campos); em execução o nome vai direto ao campo `event`.
   void specs;
-  // Escrever pelo pino deste `logger` (e não por um global) preserva os campos de um logger filho.
+  // O pino é sempre o raiz; os campos de um logger filho vêm do que o `AppLogger` guarda e entram no objeto
+  // de cada escrita.
   const write =
     (level: LogLevel) =>
     (event: string, fields: object, message: string): void => {
       // O `event` vai depois dos campos para valer sobre qualquer campo de mesmo nome: o nome do evento é o
       // que o catálogo e os painéis procuram, e um campo não pode sobrescrevê-lo.
-      logger[appLoggerBrand][level]({ ...fields, event }, message);
+      // Precedência numa chave repetida: evento, filho, contexto (o mixin do pino fica por baixo, pois o
+      // merge padrão dele deixa valer o objeto da chamada).
+      const { pino, fields: bound } = logger[appLoggerBrand];
+      // Um campo `undefined` do evento sairia no merge por cima do valor do filho e o apagaria; descartá-lo antes
+      // deixa valer o do filho.
+      const defined = Object.fromEntries(
+        Object.entries(fields).filter(([, value]) => value !== undefined),
+      );
+      pino[level]({ ...bound, ...defined, event }, message);
     };
   return { info: write('info'), warn: write('warn'), error: write('error') };
 }

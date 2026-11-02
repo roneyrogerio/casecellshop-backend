@@ -182,10 +182,8 @@ function inSettleSpan(
     attributes: { orderId: message.orderId },
   };
   return runConsumerSpan(ctx.telemetry, options, async () => {
-    const log = ctx.logger.child({
-      orderId: message.orderId,
-      correlationId: message.correlationId,
-    });
+    // O correlationId já vai no logContext do runConsumerSpan; repeti-lo aqui duplicaria a chave.
+    const log = ctx.logger.child({ orderId: message.orderId });
     try {
       return await settleMessage(ctx, received, message, log);
     } catch (error) {

@@ -45,7 +45,8 @@ export interface ErpConfigError {
 
 export type CreateOrderResult =
   | { kind: 'ok'; order: ErpOrder }
-  | { kind: 'permanent'; reason: 'rejected' | 'out_of_stock' }
+  // `sku`: o SKU que o corpo do 422 apontou, só para o log; o ERP é entrada externa, e quem o usa confere.
+  | { kind: 'permanent'; reason: 'rejected' | 'out_of_stock'; sku?: string }
   | ErpTransient
   // Pode ter chegado sem resposta conclusiva: a próxima tentativa consulta antes de criar.
   | { kind: 'ambiguous'; cause: string }

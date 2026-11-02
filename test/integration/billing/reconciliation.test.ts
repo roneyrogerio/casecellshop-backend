@@ -28,6 +28,7 @@ import {
   type ReconcilerOptions,
   type ReconcilerRig,
 } from '../../helpers/dlq.ts';
+import { topLevelKeys } from '../../helpers/duplicate-keys.ts';
 import { countInvoices } from '../../helpers/erp.ts';
 import { captureLogs, type CapturedLogs } from '../../helpers/logs.ts';
 import {
@@ -1051,6 +1052,70 @@ describe('OBS-01 casecellshop.outbox.dead, uma vez por chegada da mensagem à DL
 
     expect(rig.logs.eventsOf(DEAD, id)).toHaveLength(2);
     expect((await readOutbox(suite.pool, id)).deadAt).not.toBeNull();
+  });
+});
+
+// O correlationId sai uma vez só no texto cru da linha (o JSON.parse fica com a última e esconderia a repetição que o
+// filho da reconciliação faz ao repetir o do contexto da mensagem).
+function expectCorrelationOnce(
+  rig: Rig,
+  event: string,
+  order: AcceptedOrder,
+): void {
+  const raw = rig.logs.rawOf(event, order.orderId);
+  expect(raw, `linhas cruas de ${event}`).toHaveLength(1);
+  expect(
+    topLevelKeys(raw[0] ?? '').filter((key) => key === 'correlationId'),
+  ).toHaveLength(1);
+  expect(rig.logs.eventsOf(event, order.orderId)[0]?.['correlationId']).toBe(
+    order.requestId,
+  );
+}
+
+describe('OBS-01 cada chave sai uma vez só nas linhas da reconciliação', () => {
+  it('OBS-01 a mensagem da DLQ que vira casecellshop.outbox.dead sai sem chave repetida, com o correlationId da mensagem uma vez só', async () => {
+    const rig = await createRig({ shared: true });
+    const [order] = await seedDead(rig, [{}]);
+    if (!order) throw new Error('pedido não semeado');
+
+    await rig.reconciler.reconcileOnce();
+
+    expect(rig.logs.eventsOf(DEAD, order.orderId)).toHaveLength(1);
+    expectCorrelationOnce(rig, DEAD, order);
+    expect(rig.logs.repeatedKeys()).toEqual([]);
+  });
+
+  it('OBS-01 a mensagem de um pedido que já tinha desfecho, encerrada com casecellshop.outbox.closed, sai sem chave repetida, com o correlationId da mensagem uma vez só', async () => {
+    const { rig, order } = await seedInvoicedOutOfFlow();
+
+    await rig.reconciler.reconcileOnce();
+
+    expect(rig.logs.eventsOf(CLOSED, order.orderId)).toHaveLength(1);
+    expectCorrelationOnce(rig, CLOSED, order);
+    expect(rig.logs.repeatedKeys()).toEqual([]);
+  });
+
+  it('OBS-01 o pedido que o ERP já faturou, fechado pela reconciliação com casecellshop.order.invoiced, e a falha de uma mensagem saem sem chave repetida', async () => {
+    const rig = await createRig();
+    const [order] = await seedDead(rig, [{ erpHas: true }]);
+    if (!order) throw new Error('pedido não semeado');
+
+    await rig.reconciler.reconcileOnce();
+
+    expect(rig.logs.eventsOf(INVOICED, order.orderId)).toHaveLength(1);
+    expectCorrelationOnce(rig, INVOICED, order);
+    expect(rig.logs.repeatedKeys()).toEqual([]);
+
+    const failing = await seedInvoicedOutOfFlow();
+    const injection = failing.rig.dlq.inject('delete');
+    await failing.rig.reconciler.reconcileOnce();
+
+    expect(injection.fired, 'a falha do SQS foi injetada').toBe(1);
+    expect(
+      failing.rig.logs.eventsOf(FAILED, failing.order.orderId),
+    ).toHaveLength(1);
+    expectCorrelationOnce(failing.rig, FAILED, failing.order);
+    expect(failing.rig.logs.repeatedKeys()).toEqual([]);
   });
 });
 

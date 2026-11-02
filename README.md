@@ -728,8 +728,8 @@ O ERP tem menos unidades que a loja prometeu, quase sempre por venda em outro ca
 
 Se o alerta veio do counter de falhas de leitura, o gauge do estoque está congelado no último valor: o log `casecellshop.checkout.gauge.read_failed` traz o erro, e a leitura é do banco, na API (`curl -i http://localhost:3000/health`). Enquanto ela falha, a consulta do passo 1 é a fonte.
 
-1. Ache os SKUs: `select sku, on_hand, reserved from inventory where reserved > on_hand order by sku;`.
-2. Os pedidos pendentes desses SKUs que o ERP recusar por falta de estoque terminam `failed` com o motivo `erp_out_of_stock` e liberam a reserva (`ORD-08`). Avise o atendimento: o cliente recebeu `202` e o pedido não será faturado.
+1. Ache os SKUs: `select sku, on_hand, reserved from inventory where reserved > on_hand order by sku;`. Nos logs do worker, o `casecellshop.catalog.sync.sku.corrected` com `on_hand` em `fields` diz em que rodada a sincronização baixou o estoque de cada SKU, e o `casecellshop.catalog.sync.sku.zeroed`, qual SKU sumiu do ERP.
+2. Os pedidos pendentes desses SKUs que o ERP recusar por falta de estoque terminam `failed` com o motivo `erp_out_of_stock` e liberam a reserva (`ORD-08`). O log `casecellshop.order.failed` de cada um traz o `orderId`, os `skus` do pedido e o `sku` que o ERP apontou. Avise o atendimento: o cliente recebeu `202` e o pedido não será faturado.
 3. Não altere `inventory` à mão: o `on_hand` vem do ERP pela sincronização, e o `reserved` é a soma das reservas dos pedidos pendentes.
 4. Confirme com o time do ERP a venda no outro canal ou o ajuste de estoque; se a origem for recorrente, reduza o intervalo da sincronização.
 

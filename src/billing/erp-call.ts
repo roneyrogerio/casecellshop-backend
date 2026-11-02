@@ -151,12 +151,19 @@ async function createInErp(
     items,
   });
   if (created.kind === 'ok') return { kind: 'invoiced' };
-  if (created.kind === 'permanent')
+  if (created.kind === 'permanent') {
+    const skus = items.map((item) => item.sku);
     return {
       kind: 'failed',
       reason:
         created.reason === 'rejected' ? 'erp_rejected' : 'erp_out_of_stock',
+      skus,
+      // O ERP é externo: o SKU que ele aponta só vale se for um dos do pedido.
+      ...(created.sku !== undefined && skus.includes(created.sku)
+        ? { sku: created.sku }
+        : {}),
     };
+  }
   if (created.kind === 'config_error')
     return configError(ctx, message, log, created.status);
   return retry(ctx, message, created.kind);
