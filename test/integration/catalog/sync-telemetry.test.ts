@@ -1,6 +1,8 @@
-import { SpanKind } from '@opentelemetry/api';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { describe, expect, it } from 'vitest';
+import { createErpClient } from '../../../src/erp/acl.ts';
 import { counterValue, seedCatalog, skuRange } from '../../helpers/catalog.ts';
+import { ERP_TIMEOUT_MS } from '../../helpers/erp.ts';
 import {
   familyOf,
   metricValue,
@@ -202,18 +204,16 @@ describe('OBS-07 o gauge da idade da última rodada completa', () => {
 describe('OBS-07 o span da rodada da sincronização', () => {
   it('OBS-07 cada rodada gera um span catalog.sync.round, pai das chamadas ao ErpClient da rodada', async () => {
     await putErpCatalog(db.erpPool, 'SP', 120);
-    // O ErpClient embrulhado abre um span por chamada, no lugar dos spans que o ErpClient abrirá: o que o teste
-    // confere é que a sincronização chama o ErpClient dentro do span da rodada.
+    // O ErpClient real, sobre o transporte do ERP simulado e com a telemetria da sincronização: os spans
+    // `erp.list_catalog` são os que ele mesmo abre, filhos do span ativo, que na rodada é o `catalog.sync.round`.
     const rig = db.rig({
-      erp: ({ world, telemetry }) => ({
-        ...world.erp,
-        listCatalog: (page) =>
-          telemetry.withSpan(
-            'erp.list_catalog',
-            { kind: SpanKind.CLIENT },
-            () => world.erp.listCatalog(page),
-          ),
-      }),
+      erp: ({ world, telemetry }) =>
+        createErpClient({
+          transport: world.transport,
+          clock: world.clock,
+          timeoutMs: ERP_TIMEOUT_MS,
+          telemetry,
+        }),
     });
 
     await rig.sync.runRound();
@@ -229,9 +229,47 @@ describe('OBS-07 o span da rodada da sincronização', () => {
         (call) => call.parentSpanContext?.spanId === round.spanContext().spanId,
       );
       expect(children.length, 'chamadas filhas da rodada').toBe(3);
-      for (const child of children)
+      for (const child of children) {
         expect(child.spanContext().traceId).toBe(round.spanContext().traceId);
+        expect(child.kind).toBe(SpanKind.CLIENT);
+        expect(child.attributes['casecellshop.erp.operation']).toBe(
+          'list_catalog',
+        );
+        expect(child.attributes['casecellshop.erp.outcome']).toBe('ok');
+      }
     }
+    // Todo span do ErpClient da rodada tem o `catalog.sync.round` por pai: nenhuma chamada fica solta, em outra trace.
+    const roundIds = new Set(rounds.map((round) => round.spanContext().spanId));
+    for (const call of calls)
+      expect(roundIds.has(call.parentSpanContext?.spanId ?? '')).toBe(true);
+  });
+
+  it('OBS-07 a rodada com o ERP fora gera o span erp.list_catalog da chamada que falhou, filho da rodada e com status de erro', async () => {
+    await putErpProducts(db.erpPool, [{ sku: 'SP-901' }]);
+    const rig = db.rig({
+      erp: ({ world, telemetry }) =>
+        createErpClient({
+          transport: world.transport,
+          clock: world.clock,
+          timeoutMs: ERP_TIMEOUT_MS,
+          telemetry,
+        }),
+    });
+    failErpPageAfter(rig.world);
+
+    expect((await rig.sync.runRound()).complete).toBe(false);
+
+    const spans = await rig.spans();
+    const [round] = spans.filter((span) => span.name === 'catalog.sync.round');
+    const calls = spans.filter((span) => span.name === 'erp.list_catalog');
+    expect(round).toBeDefined();
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.parentSpanContext?.spanId).toBe(
+      round?.spanContext().spanId,
+    );
+    expect(calls[0]?.spanContext().traceId).toBe(round?.spanContext().traceId);
+    expect(calls[0]?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(calls[0]?.attributes['casecellshop.erp.outcome']).toBe('transient');
   });
 
   it('OBS-07 a rodada incompleta, com o ERP fora, também gera o span catalog.sync.round', async () => {

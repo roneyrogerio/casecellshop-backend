@@ -5,12 +5,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { registerOutboxAgeGauge } from '../../../src/billing/outbox-age.ts';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { createStuckOrderMonitor } from '../../../src/billing/stuck-orders.ts';
+import { DEFAULT_CATALOG_SYNC_CONFIG } from '../../../src/catalog/config.ts';
+import { createCatalogSync } from '../../../src/catalog/sync.ts';
 import { registerInventoryGauges } from '../../../src/checkout/inventory-gauges.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
 import { fromPino } from '../../../src/shared/logging.ts';
+import { createSemaphore } from '../../../src/shared/semaphore.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
+import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
+import { seedErpProduct } from '../../helpers/erp.ts';
 import {
   parseExposition,
   parseUnits,
@@ -63,6 +68,63 @@ const EXPECTED = {
     ],
     optionalLabels: ['error_type'],
     process: 'api',
+  },
+  'casecellshop.catalog.cache.lookups': {
+    exported: 'casecellshop_catalog_cache_lookups_total',
+    type: 'counter',
+    unit: '{lookup}',
+    labels: ['casecellshop_catalog_cache_result'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.origin.loads': {
+    exported: 'casecellshop_catalog_origin_loads_total',
+    type: 'counter',
+    unit: '{load}',
+    labels: ['casecellshop_catalog_origin_outcome'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.origin.active_loads': {
+    exported: 'casecellshop_catalog_origin_active_loads',
+    type: 'gauge',
+    unit: '{load}',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.served_entry.age': {
+    exported: 'casecellshop_catalog_served_entry_age',
+    type: 'histogram',
+    unit: 's',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  // As três da sincronização são do worker: o `exercise` roda uma rodada com uma correção e um SKU ausente.
+  'casecellshop.catalog.sync.age': {
+    exported: 'casecellshop_catalog_sync_age',
+    type: 'gauge',
+    unit: 's',
+    labels: [],
+    optionalLabels: [],
+    process: 'worker',
+  },
+  'casecellshop.catalog.sync.corrections': {
+    exported: 'casecellshop_catalog_sync_corrections_total',
+    type: 'counter',
+    unit: '{correction}',
+    labels: ['casecellshop_catalog_sync_field'],
+    optionalLabels: [],
+    process: 'worker',
+  },
+  'casecellshop.catalog.sync.missing_skus': {
+    exported: 'casecellshop_catalog_sync_missing_skus_total',
+    type: 'counter',
+    unit: '{sku}',
+    labels: [],
+    optionalLabels: [],
+    process: 'worker',
   },
   'casecellshop.checkout.requests': {
     exported: 'casecellshop_checkout_requests_total',
@@ -204,6 +266,14 @@ const workerTelemetry = createTelemetry({
 // a API (checkout e duração HTTP) e o worker (relay, tentativa, ERP, aceite ao faturamento, rejeição por
 // estoque e conclusão sem efeito). O ERP e o worker usam a telemetria própria do worker.
 async function exercise(running: WorkerSuite): Promise<QueueWorld> {
+  // Vitrine, na API: a primeira leitura carrega o cache (miss, carga ok, idade servida) e a segunda é hit.
+  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-1' }]);
+  await markSynced(running.pool);
+  for (let read = 0; read < 2; read += 1) {
+    const res = await request(running.checkout.app).get('/products');
+    expect(res.status, 'a vitrine respondeu').toBe(200);
+  }
+
   const world = await createWorld(running, { telemetry: workerTelemetry });
   const poll = () => buildWorker(world).pollOnce();
 
@@ -230,6 +300,31 @@ async function exercise(running: WorkerSuite): Promise<QueueWorld> {
     () => stealMessage(world, stolen.orderId),
   );
   expect(await poll()).toBe(1);
+
+  // Sincronização, no processo do worker: uma correção de preço (o ERP cobra mais que a loja guardou) e um SKU da
+  // loja ausente do ERP, para as três métricas casecellshop.catalog.sync.* terem ponto.
+  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-GONE', onHand: 3 }]);
+  await seedErpProduct(running.database.erpPool, {
+    sku: 'METRICS-NAMES-1',
+    name: 'Capinha METRICS-NAMES-1',
+    priceCents: 5990,
+    onHand: 10,
+  });
+  const sync = createCatalogSync({
+    pool: running.pool,
+    erp: world.erp,
+    semaphore: createSemaphore(30),
+    clock: world.clock,
+    logger: fromPino(pino({ level: 'silent' })),
+    telemetry: workerTelemetry,
+    config: DEFAULT_CATALOG_SYNC_CONFIG,
+  });
+  const round = await sync.runRound();
+  expect(round.complete, 'a sincronização leu o catálogo todo').toBe(true);
+  expect(
+    round.missingCount,
+    'a sincronização zerou o SKU ausente',
+  ).toBeGreaterThanOrEqual(1);
   return world;
 }
 
