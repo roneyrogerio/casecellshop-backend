@@ -129,7 +129,9 @@ export function eventLogger<S extends EventSpecs>(
   const write =
     (level: LogLevel) =>
     (event: string, fields: object, message: string): void => {
-      logger[appLoggerBrand][level]({ event, ...fields }, message);
+      // O `event` vai depois dos campos para valer sobre qualquer campo de mesmo nome: o nome do evento é o
+      // que o catálogo e os painéis procuram, e um campo não pode sobrescrevê-lo.
+      logger[appLoggerBrand][level]({ ...fields, event }, message);
     };
   return { info: write('info'), warn: write('warn'), error: write('error') };
 }

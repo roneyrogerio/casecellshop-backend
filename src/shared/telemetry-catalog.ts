@@ -99,6 +99,17 @@ const UNIT_WORDS = new Set<string>([
   'bits',
 ]);
 
+// Os nomes que a própria linha de log já usa: um campo de evento com um deles colidiria com o campo do logger.
+const RESERVED_LOG_FIELDS = new Set<string>([
+  'event',
+  'level',
+  'msg',
+  'time',
+  'service',
+  'env',
+  'version',
+]);
+
 function redundantWord(name: string): string | undefined {
   const words = name.split(/[._]/);
   return (
@@ -219,6 +230,12 @@ export function catalogViolations(
     ...(new Set(spec.levels).size === spec.levels.length
       ? []
       : [`o evento ${name} repete um nível em levels`]),
+    ...spec.fields
+      .filter((field) => RESERVED_LOG_FIELDS.has(field))
+      .map(
+        (field) =>
+          `o evento ${name} declara o campo ${field}, nome reservado da linha de log`,
+      ),
   ]);
   return [
     ...Object.entries(metrics).flatMap(([name, spec]) =>
