@@ -7,6 +7,7 @@ import {
   type Exposition,
 } from '../../helpers/metrics.ts';
 import {
+  expectOneDatabaseFailureLogged,
   failErpPageAfter,
   olderReadFinishesAfterNewer,
   putErpCatalog,
@@ -133,11 +134,7 @@ describe('OBS-02 as correções por campo e os SKUs ausentes da sincronização 
     await rig.sync.runRound().catch(() => undefined);
 
     expect(probe.fired, 'a falha injetada disparou').toBeGreaterThan(0);
-    const failures = rig.logs.eventsOf(ROUND_FAILED);
-    expect(failures.length).toBe(1);
-    expect(failures[0]?.['level']).toBe('warn');
-    expect(failures[0]?.['err']).toBeDefined();
-    expect(failures[0]?.['cause']).toBeUndefined();
+    expectOneDatabaseFailureLogged(rig.logs);
     expect(rig.logs.eventsOf(ROUND_COMPLETED)).toEqual([]);
     expect(await readLastCompleted(db.pool)).toBeNull();
   });

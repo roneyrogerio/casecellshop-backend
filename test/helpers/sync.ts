@@ -234,6 +234,15 @@ export function roundsFinished(logs: CapturedLogs): number {
   );
 }
 
+// Uma falha do banco foi registrada, uma vez: evento de falha em warn com o `err` e sem a `cause` do ERP.
+export function expectOneDatabaseFailureLogged(logs: CapturedLogs): void {
+  const failures = logs.eventsOf(ROUND_FAILED);
+  expect(failures.length).toBe(1);
+  expect(failures[0]?.['level']).toBe('warn');
+  expect(failures[0]?.['err']).toBeDefined();
+  expect(failures[0]?.['cause']).toBeUndefined();
+}
+
 export interface SyncDatabase {
   readonly database: TestDatabase;
   // O pool do worker, como em produção (10 conexões).
