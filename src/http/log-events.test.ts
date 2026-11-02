@@ -1,5 +1,6 @@
 import { afterAll, describe, it } from 'vitest';
 import {
+  FIELD_ERROR_CODES,
   expectLogCompiles,
   expectLogTypeError,
   type SampleCase,
@@ -90,7 +91,7 @@ log.info(
       sample(
         "log.info('casecellshop.http.request.completed', { status: 200, url: '/x' }, 'm');",
       ),
-      { code: 'TS2353', text: 'url' },
+      { code: FIELD_ERROR_CODES, text: 'url' },
     );
   }, 60_000);
 });

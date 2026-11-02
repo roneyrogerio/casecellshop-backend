@@ -1,5 +1,4 @@
 import express from 'express';
-import { pino } from 'pino';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { PROBLEM_MEDIA_TYPE } from '../contract/index.ts';
@@ -9,7 +8,7 @@ import {
   findRoute,
   type ObservedResponse,
 } from '../../test/helpers/contract.ts';
-import { fromPino, type AppLogger } from '../shared/logging.ts';
+import { createLogger, type AppLogger } from '../shared/logging.ts';
 import { createErrorHandler } from './problem.ts';
 
 const CORRELATION_ID = 'fnd10-correlation-id';
@@ -22,19 +21,18 @@ interface LogLine {
   [key: string]: unknown;
 }
 
-// Logger do pino escrevendo numa lista em memória, com o nível como texto (como o da aplicação).
+// O logger da aplicação (createLogger) escrevendo numa lista em memória: só o logging.ts importa o pino.
 function createMemoryLogger(): { logger: AppLogger; lines: LogLine[] } {
   const lines: LogLine[] = [];
-  const logger = fromPino(
-    pino(
-      { level: 'info', formatters: { level: (label) => ({ level: label }) } },
-      {
-        write(chunk: string) {
-          lines.push(JSON.parse(chunk) as LogLine);
-        },
+  const logger = createLogger({
+    serviceName: 'casecellshop-api',
+    level: 'info',
+    destination: {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as LogLine);
       },
-    ),
-  );
+    },
+  });
   return { logger, lines };
 }
 

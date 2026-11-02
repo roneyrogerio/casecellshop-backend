@@ -5,19 +5,22 @@ import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
 import { lintFilesByLine, type LintReport } from '../helpers/lint-tree.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
 
-// OBS-07 (AD-029, A17): o lint só deixa importar o `pino` em `src/shared/logging.ts`. O resto de `src/` recebe um
-// `AppLogger` opaco, e é essa regra que impede um arquivo de trazer o logger cru e escrever um log por fora do
-// `eventLogger`. O que vale é o que o oxlint decide, com o .oxlintrc.json do projeto numa árvore temporária (a
-// restrição é uma regra por arquivo: a que vale para `src/checkout/` ou para `src/app.ts` é a do último override que
-// casa, e a do `pino` tem de estar junta com a de cada pasta). Os testes de `src/` (`*.test.ts`) montam o logger do
-// pino para o código de produção e continuam livres. O `await import('pino')` é de outra regra, a local
-// `test-imports/no-restricted-dynamic-import`, que vale em `src/` pela mesma lista de exceções.
+// OBS-07 (AD-029, A17): em `src/`, o lint só deixa importar o `pino` em `src/shared/logging.ts` e em
+// `src/shared/logging.test.ts` (que testa o `fromPino`). O resto de `src/` recebe um `AppLogger` opaco, e é essa
+// regra que impede um arquivo de trazer o logger cru e escrever um log por fora do `eventLogger`. O que vale é o que
+// o oxlint decide, com o .oxlintrc.json do projeto numa árvore temporária (a restrição é uma regra por arquivo: a que
+// vale para `src/checkout/` ou para `src/app.ts` é a do último override que casa, e a do `pino` tem de estar junta
+// com a de cada pasta). Os outros testes de `src/` (`*.test.ts`) também ficam proibidos e montam o logger pelo
+// `createLogger`, com `destination` para capturar as linhas. Fora de `src/` (`lib/`, `test/helpers/`) o pino é livre.
+// O `await import('pino')` é de outra regra, a local `test-imports/no-restricted-dynamic-import`, que vale em `src/`
+// pela mesma lista de exceções.
 
 const RESTRICTED = /no-restricted-imports/;
 const DYNAMIC = /no-restricted-dynamic-import/;
 // Regra do núcleo sempre ligada: prova que o oxlint leu a amostra (o arquivo não ficou de fora por ignore ou caminho).
 const CANARY = /no-debugger/;
 const LOGGER_FILE = 'src/shared/logging.ts';
+const LOGGER_TEST_FILE = 'src/shared/logging.test.ts';
 
 // Cada pasta de `src/` com um import de outra pasta que o AD-025 já proíbe nela: o `pino` entra sem derrubar a regra
 // que já existia no mesmo override. `undefined` é a pasta sem restrição de pasta hoje.
@@ -99,14 +102,16 @@ function sample(file: string, expected: 'blocked' | 'pass', kept?: string) {
 }
 
 const SAMPLES: Sample[] = [
-  // O arquivo do logger é a única exceção, e só para o pino: a regra de pastas de `src/shared/` continua nele.
+  // O arquivo do logger e o teste dele são as únicas exceções, e só para o pino: a regra de pastas de `src/shared/`
+  // continua neles.
   sample(LOGGER_FILE, 'pass', FOLDERS['shared']),
+  sample(LOGGER_TEST_FILE, 'pass', FOLDERS['shared']),
   sample('src/app.ts', 'blocked', './main/api.ts'),
   sample('src/amostra.ts', 'blocked'),
   ...Object.entries(FOLDERS).flatMap(([folder, kept]) => [
     sample(`src/${folder}/amostra.ts`, 'blocked', kept),
-    // Os testes de src/ montam o logger do pino para o código de produção: livres.
-    sample(`src/${folder}/amostra.test.ts`, 'pass'),
+    // Os outros testes de src/ também ficam proibidos: montam o logger pelo `createLogger`.
+    sample(`src/${folder}/amostra.test.ts`, 'blocked', kept),
   ]),
   // Fora de `src/` o pino é livre (os helpers de teste e os scripts o importam).
   sample('lib/amostra.ts', 'pass'),
@@ -160,7 +165,7 @@ const blocked = SAMPLES.filter((entry) =>
   entry.lines.some((line) => line.expected === 'blocked'),
 );
 
-describe('OBS-07 o lint só deixa importar o pino em src/shared/logging.ts (A17)', () => {
+describe('OBS-07 em src/ o lint só deixa importar o pino em src/shared/logging.ts e no teste dele (A17)', () => {
   it.each(blocked)(
     'OBS-07 em $file o import do pino (por nome, padrão, namespace, de tipo e dinâmico) reprova, e a regra de pastas de sempre continua',
     (entry) => {
@@ -168,19 +173,17 @@ describe('OBS-07 o lint só deixa importar o pino em src/shared/logging.ts (A17)
     },
   );
 
-  it('OBS-07 src/shared/logging.ts importa o pino sem reprovar, e a regra de pastas de src/shared/ continua nele', () => {
-    const logger = SAMPLES.find((entry) => entry.file === LOGGER_FILE);
+  it.each([LOGGER_FILE, LOGGER_TEST_FILE])(
+    'OBS-07 %s importa o pino sem reprovar, e a regra de pastas de src/shared/ continua nele',
+    (file) => {
+      const logger = SAMPLES.find((entry) => entry.file === file);
 
-    expect(defects(logger as Sample)).toEqual([]);
-  });
+      expect(defects(logger as Sample)).toEqual([]);
+    },
+  );
 
-  it.each(
-    SAMPLES.filter(
-      (entry) =>
-        entry.file.endsWith('.test.ts') || !entry.file.startsWith('src/'),
-    ),
-  )(
-    'OBS-07 em $file (teste de src/ ou arquivo fora de src/) o pino é livre',
+  it.each(SAMPLES.filter((entry) => !entry.file.startsWith('src/')))(
+    'OBS-07 em $file (fora de src/) o pino é livre',
     (entry) => {
       expect(defects(entry)).toEqual([]);
     },
