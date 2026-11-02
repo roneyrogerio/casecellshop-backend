@@ -6,6 +6,7 @@ import { createRelay } from '../../../src/billing/relay.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
 import { fromPino } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
+import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import {
   parseExposition,
@@ -57,6 +58,63 @@ const EXPECTED = {
     ],
     optionalLabels: ['error_type'],
     process: 'api',
+  },
+  'casecellshop.catalog.cache.lookups': {
+    exported: 'casecellshop_catalog_cache_lookups_total',
+    type: 'counter',
+    unit: '{lookup}',
+    labels: ['casecellshop_catalog_cache_result'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.origin.loads': {
+    exported: 'casecellshop_catalog_origin_loads_total',
+    type: 'counter',
+    unit: '{load}',
+    labels: ['casecellshop_catalog_origin_outcome'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.origin.active_loads': {
+    exported: 'casecellshop_catalog_origin_active_loads',
+    type: 'gauge',
+    unit: '{load}',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.catalog.served_entry.age': {
+    exported: 'casecellshop_catalog_served_entry_age',
+    type: 'histogram',
+    unit: 's',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  // As três da sincronização são do worker: o teste da fatia da sincronização as exercita em `exercise`.
+  'casecellshop.catalog.sync.age': {
+    exported: 'casecellshop_catalog_sync_age',
+    type: 'gauge',
+    unit: 's',
+    labels: [],
+    optionalLabels: [],
+    process: 'worker',
+  },
+  'casecellshop.catalog.sync.corrections': {
+    exported: 'casecellshop_catalog_sync_corrections_total',
+    type: 'counter',
+    unit: '{correction}',
+    labels: ['casecellshop_catalog_sync_field'],
+    optionalLabels: [],
+    process: 'worker',
+  },
+  'casecellshop.catalog.sync.missing_skus': {
+    exported: 'casecellshop_catalog_sync_missing_skus_total',
+    type: 'counter',
+    unit: '{sku}',
+    labels: [],
+    optionalLabels: [],
+    process: 'worker',
   },
   'casecellshop.checkout.requests': {
     exported: 'casecellshop_checkout_requests_total',
@@ -142,6 +200,14 @@ const workerTelemetry = createTelemetry({
 // a API (checkout e duração HTTP) e o worker (relay, tentativa, ERP, aceite ao faturamento, rejeição por
 // estoque e conclusão sem efeito). O ERP e o worker usam a telemetria própria do worker.
 async function exercise(running: WorkerSuite): Promise<void> {
+  // Vitrine, na API: a primeira leitura carrega o cache (miss, carga ok, idade servida) e a segunda é hit.
+  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-1' }]);
+  await markSynced(running.pool);
+  for (let read = 0; read < 2; read += 1) {
+    const res = await request(running.checkout.app).get('/products');
+    expect(res.status, 'a vitrine respondeu').toBe(200);
+  }
+
   const world = await createWorld(running, { telemetry: workerTelemetry });
   const poll = () => buildWorker(world).pollOnce();
 
