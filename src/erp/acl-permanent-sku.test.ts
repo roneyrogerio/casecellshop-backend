@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
+import { countingInvoices } from '../../test/helpers/invoice-reader.ts';
 import { createErpClient } from './acl.ts';
 import type { CreateOrderResult, ErpOrderRequest } from './erp-client.ts';
 
@@ -15,6 +16,7 @@ const orderRequest: ErpOrderRequest = {
 function create(body: unknown): Promise<CreateOrderResult> {
   const client = createErpClient({
     transport: { send: () => Promise.resolve({ status: 422, body }) },
+    invoiceReader: countingInvoices(),
     clock: createManualClock(),
     timeoutMs: 10_000,
   });
