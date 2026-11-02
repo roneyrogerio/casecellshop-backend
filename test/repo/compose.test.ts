@@ -819,3 +819,76 @@ describe('FND-16 o serviço schemathesis do compose.yaml', () => {
     expect(profiledOthers(compose)).toEqual([]);
   });
 });
+
+// --- AI-45: o Jaeger vem do Docker Hub, que o Dependabot lê sem credencial --------------------------------------------
+
+// Forma sem prefixo de registro, como as outras imagens do Docker Hub do arquivo. Versão e digest ficam
+// livres: o Dependabot os sobe, e a versão mora só no compose.yaml.
+const JAEGER_IMAGE =
+  /^jaegertracing\/jaeger:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
+
+// O cr.jaegertracing.io serve a mesma imagem, mas o Dependabot o trata como registro privado sem
+// credencial (private_source_authentication_failure) e a falha derruba a atualização do grupo inteiro.
+// Só por tag, nada impede que a tag passe a apontar outra imagem; só por digest, o Dependabot não acha a versão.
+function jaegerViolations(compose: ComposeFile): string[] {
+  const service = compose.services?.['jaeger'];
+  if (service === undefined) return ['falta o serviço jaeger'];
+  if (JAEGER_IMAGE.test(service.image ?? '')) return [];
+  return [
+    `image ${String(service.image)} não é jaegertracing/jaeger do Docker Hub fixada por versão X.Y.Z e digest sha256 juntos`,
+  ];
+}
+
+function jaegerWith(image: string): ComposeFile {
+  return { services: { jaeger: { image } } };
+}
+
+const JAEGER_DIGEST = `sha256:${'a'.repeat(64)}`;
+
+describe('AI-45 a conferência do Jaeger do compose enxerga o que procura (controle negativo)', () => {
+  it('AI-45 o Jaeger do Docker Hub com versão e digest passa (controle positivo)', () => {
+    expect(
+      jaegerViolations(
+        jaegerWith(`jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`),
+      ),
+    ).toEqual([]);
+  });
+
+  it('AI-45 sem o serviço jaeger, reprova', () => {
+    expect(jaegerViolations({ services: {} })).toEqual([
+      'falta o serviço jaeger',
+    ]);
+  });
+
+  it.each<[string, string]>([
+    [
+      'pelo cr.jaegertracing.io só por tag',
+      'cr.jaegertracing.io/jaegertracing/jaeger:2.22.0',
+    ],
+    [
+      'pelo cr.jaegertracing.io com versão e digest',
+      `cr.jaegertracing.io/jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`,
+    ],
+    ['só por tag no Docker Hub', 'jaegertracing/jaeger:2.22.0'],
+    ['só por digest, sem tag', `jaegertracing/jaeger@${JAEGER_DIGEST}`],
+    ['com a tag latest', 'jaegertracing/jaeger:latest'],
+    ['com latest e digest', `jaegertracing/jaeger:latest@${JAEGER_DIGEST}`],
+    [
+      'com o digest curto',
+      `jaegertracing/jaeger:2.22.0@sha256:${'a'.repeat(63)}`,
+    ],
+    ['pelo Quay', `quay.io/jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`],
+  ])('AI-45 o Jaeger %s reprova', (_name, image) => {
+    expect(jaegerViolations(jaegerWith(image))).not.toEqual([]);
+  });
+});
+
+describe('AI-45 o Jaeger do compose.yaml', () => {
+  const compose = parse(
+    readFileSync(join(root, 'compose.yaml'), 'utf8'),
+  ) as ComposeFile;
+
+  it('AI-45 vem do Docker Hub (jaegertracing/jaeger), fixado por versão e digest juntos, para o Dependabot ler sem credencial', () => {
+    expect(jaegerViolations(compose)).toEqual([]);
+  });
+});
