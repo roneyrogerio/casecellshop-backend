@@ -1,6 +1,7 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
+import { countingInvoices } from '../../test/helpers/invoice-reader.ts';
 import {
   expectAsyncProperty,
   expectFalsifiedAsync,
@@ -41,6 +42,7 @@ function transportOf(behavior: Behavior): ErpTransport {
 function clientOver(make: Factory, behavior: Behavior): ErpClient {
   return make({
     transport: transportOf(behavior),
+    invoiceReader: countingInvoices(),
     clock: createManualClock(),
     timeoutMs: 10_000,
   });

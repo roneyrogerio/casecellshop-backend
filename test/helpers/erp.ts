@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { afterAll, beforeAll } from 'vitest';
 import { createErpClient } from '../../src/erp/acl.ts';
 import type { ErpClient, ErpOrderRequest } from '../../src/erp/erp-client.ts';
 import {
@@ -7,6 +8,7 @@ import {
 } from '../../src/erp/sim/index.ts';
 import { settle, track } from './async.ts';
 import { createManualClock, type ManualClock } from './clock.ts';
+import { startMigratedDatabase, type TestDatabase } from './database.ts';
 
 // Timeout do ERP do design.md (Parâmetros): 10 s.
 export const ERP_TIMEOUT_MS = 10_000;
@@ -35,10 +37,35 @@ export function createErpHarness(
   );
   const client = createErpClient({
     transport: sim.transport,
+    invoiceReader: sim.invoiceReader,
     clock,
     timeoutMs: ERP_TIMEOUT_MS,
   });
   return { clock, sim, client };
+}
+
+// Banco migrado do arquivo de teste e um cenário novo por teste: o ERP simulado com a camada anticorrupção, um
+// SKU com estoque e uma referência nova (nomes únicos, sem colisão no mesmo banco).
+export function useErpScenarios() {
+  let database: TestDatabase | undefined;
+  beforeAll(async () => {
+    database = await startMigratedDatabase();
+  }, 120_000);
+  afterAll(async () => {
+    await database?.stop();
+  });
+  const current = (): TestDatabase => {
+    if (!database) throw new Error('o banco do arquivo ainda não subiu');
+    return database;
+  };
+  async function newScenario(options: { withoutH1b?: boolean } = {}) {
+    const harness = createErpHarness(current().erpPool, options);
+    const sku = uniqueName('CENARIO-SKU');
+    const reference = uniqueName('pedido-cenario');
+    await seedErpProduct(current().pool, { sku, onHand: 1000 });
+    return { ...harness, sku, reference, order: orderFor(reference, sku) };
+  }
+  return { database: current, newScenario };
 }
 
 let counter = 0;

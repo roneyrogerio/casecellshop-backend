@@ -16,6 +16,15 @@ import {
   MIN_RETRY_DELAY_MS,
   countInvoices,
 } from '../../helpers/erp.ts';
+import {
+  buildLateCheck,
+  LATE_INVOICE_DETECTED,
+  markOthersChecked,
+  PAST_WINDOW_SECONDS,
+  readLateColumns,
+  readLateInvoices,
+} from '../../helpers/late-check.ts';
+import { captureLogs } from '../../helpers/logs.ts';
 import { countsOf } from '../../helpers/sqs.ts';
 import {
   acceptOrder,
@@ -354,6 +363,39 @@ describe('ORD-06 ERP acima do limite da H4', () => {
     expect(await invoices(order.orderId)).toBe(2);
     // O pedido da loja não muda: a duplicata é só do lado do ERP.
     await expectInvoiced(world, order);
+  });
+
+  it('ORD-06 sem a H1b, depois da janela de assentamento a verificação tardia detecta a duplicata como duplicate, uma vez só, sem mudar o pedido', async () => {
+    const { world, order } = await runLateInvoice(true);
+    expect(await invoices(order.orderId)).toBe(2);
+    // A janela de assentamento corre no relógio do banco: a última chamada ao ERP fica velha de 16 min.
+    await ageLastCall(world.pool, order.orderId, PAST_WINDOW_SECONDS);
+    await markOthersChecked(world.pool, [order.orderId]);
+    const logs = captureLogs();
+    const lateCheck = buildLateCheck(world, { logger: logs.logger });
+    const counterBefore = (await readLateInvoices(world.telemetry)).duplicate;
+    const orderBefore = await readOrder(world.pool, order.orderId);
+
+    expect(await lateCheck.checkOnce()).toEqual({ checked: 1, found: 1 });
+
+    expect((await readLateColumns(world.pool, order.orderId)).lateFinding).toBe(
+      'duplicate',
+    );
+    const detected = logs.eventsOf(LATE_INVOICE_DETECTED, order.orderId);
+    expect(detected).toHaveLength(1);
+    expect(detected[0]).toMatchObject({ level: 'error', cause: 'duplicate' });
+    expect((await readLateInvoices(world.telemetry)).duplicate).toBe(
+      (counterBefore ?? 0) + 1,
+    );
+    expect(await readOrder(world.pool, order.orderId)).toEqual(orderBefore);
+    await expectInvoiced(world, order);
+
+    // A rodada seguinte não registra de novo.
+    expect(await lateCheck.checkOnce()).toEqual({ checked: 0, found: 0 });
+    expect(logs.eventsOf(LATE_INVOICE_DETECTED, order.orderId)).toHaveLength(1);
+    expect((await readLateInvoices(world.telemetry)).duplicate).toBe(
+      (counterBefore ?? 0) + 1,
+    );
   });
 });
 

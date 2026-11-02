@@ -333,6 +333,7 @@ export function createErpWorld(
   // Com a telemetria, a camada anticorrupção produz as métricas do ERP (OBS-02, M3); os spans da tentativa são do worker, não dela.
   const erp = createErpClient({
     transport,
+    invoiceReader: sim.invoiceReader,
     clock,
     timeoutMs: ERP_TIMEOUT_MS,
     ...(options.telemetry ? { telemetry: options.telemetry } : {}),
