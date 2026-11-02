@@ -102,8 +102,11 @@ services:
   # All-in-one em memória, sem arquivo de configuração: os traces somem ao derrubar o serviço.
   # O OTLP/HTTP (4318) não tem autenticação e fica só na rede do compose: a API e o worker
   # chegam nele por http://jaeger:4318, então a porta não é publicada no host.
+  # A imagem vem do Docker Hub, com versão e digest juntos (AI-45): o Dependabot lê o Docker Hub sem
+  # credencial e trata o cr.jaegertracing.io como registro privado, e a falha dele derrubaria o grupo
+  # inteiro. É a mesma imagem nos dois registros, e o Dependabot sobe a tag e o digest juntos.
   jaeger:
-    image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
     ports:
       - '${JAEGER_UI_PORT:-16686}:16686'
     restart: unless-stopped
