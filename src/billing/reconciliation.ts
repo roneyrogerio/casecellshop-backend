@@ -295,7 +295,7 @@ export function createReconciler({
       }
     },
     onStopping: () => wake?.(),
-    ...queueGaugeLifecycle(telemetry, dlq, 'dlq'),
+    ...queueGaugeLifecycle(telemetry, dlq, 'dlq', logger),
   });
 
   return {

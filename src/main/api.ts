@@ -27,8 +27,8 @@ const server = app.listen(port, () => {
 // Os sinais lidos do banco (AD-008) saem pela API, não pelo worker; cada réplica os registra, e a marca no banco
 // garante que o counter de pedidos sem desfecho conte cada pedido uma vez.
 const removeGauges = [
-  registerOutboxAgeGauge({ pool, telemetry }),
-  registerInventoryGauges({ pool, telemetry }),
+  registerOutboxAgeGauge({ pool, telemetry, logger }),
+  registerInventoryGauges({ pool, telemetry, logger }),
 ];
 const stuckOrders = createStuckOrderMonitor({
   pool,

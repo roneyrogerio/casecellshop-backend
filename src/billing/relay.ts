@@ -1,7 +1,6 @@
 import {
   ROOT_CONTEXT,
   SpanKind,
-  SpanStatusCode,
   defaultTextMapGetter,
   isSpanContextValid,
   trace,
@@ -112,7 +111,7 @@ function sendTraced(
   { queue, telemetry }: Context,
   outgoing: OutgoingMessage[],
 ): Promise<{ failedIds: string[] }> {
-  return telemetry.tracer.startActiveSpan(
+  return telemetry.withSpan(
     'send billing',
     {
       kind: SpanKind.CLIENT,
@@ -125,17 +124,7 @@ function sendTraced(
         [ATTR_MESSAGING_BATCH_MESSAGE_COUNT]: outgoing.length,
       },
     },
-    async (span) => {
-      try {
-        return await queue.send(outgoing);
-      } catch (error) {
-        span.setStatus({ code: SpanStatusCode.ERROR });
-        if (error instanceof Error) span.recordException(error);
-        throw error;
-      } finally {
-        span.end();
-      }
-    },
+    () => queue.send(outgoing),
   );
 }
 

@@ -210,7 +210,7 @@ export function createWorker({
   };
   const inFlight = new Set<Promise<void>>();
 
-  const gauge = queueGaugeLifecycle(telemetry, queue, 'billing');
+  const gauge = queueGaugeLifecycle(telemetry, queue, 'billing', logger);
   const runner = createLoopRunner({
     run: (isRunning) => pollLoop(ctx, inFlight, isRunning),
     drain: () => Promise.all(inFlight),

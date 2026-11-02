@@ -10,15 +10,21 @@ import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 // Pedidos sem desfecho em 60 s (OBS-04; design.md, "Observabilidade"): a verificação periódica da API marca a
 // linha com `sli_breached_at` por `UPDATE … RETURNING` e conta só o que marcou, uma vez em qualquer réplica.
 
+// O limiar é o literal do predicado do índice `orders_sli_pending_idx`: o PostgreSQL só usa um índice parcial se a
+// consulta repetir a expressão dele, e uma cláusula parametrizada não serve ("Partial Indexes"). Por isso o texto
+// SQL abaixo fixa `interval '60 seconds'` e o tipo da configuração aceita só 60.
+const THRESHOLD_SECONDS = 60;
+const THRESHOLD = sql`interval '60 seconds'`;
+
 export interface StuckOrderMonitorConfig {
   intervalMs: number;
-  thresholdSeconds: number;
+  thresholdSeconds: typeof THRESHOLD_SECONDS;
   batchSize: number;
 }
 
 export const DEFAULT_STUCK_ORDER_MONITOR_CONFIG: StuckOrderMonitorConfig = {
   intervalMs: 10_000,
-  thresholdSeconds: 60,
+  thresholdSeconds: THRESHOLD_SECONDS,
   batchSize: 500,
 };
 
@@ -47,8 +53,6 @@ async function markBatch(
   telemetry: Telemetry,
   settings: StuckOrderMonitorConfig,
 ): Promise<number> {
-  // O limite entra como parâmetro, nunca interpolado no texto da consulta.
-  const threshold = sql`make_interval(secs => ${settings.thresholdSeconds})`;
   const marked = await db
     .updateTable('orders')
     .set({ sli_breached_at: sql<Date>`now()` })
@@ -63,14 +67,15 @@ async function markBatch(
             cond(
               cond.ref('accepted_at'),
               '<=',
-              sql<Date>`now() - ${threshold}`,
+              sql<Date>`now() - ${THRESHOLD}`,
             ),
+            // Mesma expressão do predicado do índice, para o planejador provar a implicação.
             cond.or([
               cond('outcome_at', 'is', null),
               cond(
-                'outcome_at',
+                sql`${cond.ref('outcome_at')} - ${cond.ref('accepted_at')}`,
                 '>',
-                sql<Date>`${cond.ref('accepted_at')} + ${threshold}`,
+                THRESHOLD,
               ),
             ]),
           ]),
@@ -100,6 +105,7 @@ export function createStuckOrderMonitor({
   };
   const db = createDb(pool);
   const checkOnce = () => markBatch(db, telemetry, settings);
+  let wake: (() => void) | undefined;
 
   const runner = createLoopRunner({
     async run(isRunning) {
@@ -114,9 +120,15 @@ export function createStuckOrderMonitor({
             'falha na verificação dos pedidos sem desfecho',
           );
         }
-        if (isRunning()) await clock.sleep(settings.intervalMs);
+        // O stop() acorda a espera: sem isso, o encerramento da API aguardaria o intervalo inteiro.
+        if (isRunning())
+          await Promise.race([
+            clock.sleep(settings.intervalMs),
+            new Promise<void>((resolve) => (wake = resolve)),
+          ]);
       }
     },
+    onStopping: () => wake?.(),
   });
 
   return {

@@ -132,31 +132,20 @@ function traceCall<T extends { kind: ErpOutcome }>(
   operation: ErpOperation,
   run: () => Promise<T>,
 ): Promise<T> {
-  return telemetry.tracer.startActiveSpan(
+  return telemetry.withSpan(
     `erp.${operation}`,
     {
       kind: SpanKind.CLIENT,
       attributes: { 'casecellshop.erp.operation': operation },
     },
     async (span) => {
-      try {
-        const result = await run();
-        span.setAttribute('casecellshop.erp.outcome', result.kind);
-        if (TECHNICAL_FAILURES.includes(result.kind)) {
-          span.setStatus({ code: SpanStatusCode.ERROR });
-          span.setAttribute(ATTR_ERROR_TYPE, result.kind);
-        }
-        return result;
-      } catch (error) {
+      const result = await run();
+      span.setAttribute('casecellshop.erp.outcome', result.kind);
+      if (TECHNICAL_FAILURES.includes(result.kind)) {
         span.setStatus({ code: SpanStatusCode.ERROR });
-        if (error instanceof Error) {
-          span.setAttribute(ATTR_ERROR_TYPE, error.name);
-          span.recordException(error);
-        }
-        throw error;
-      } finally {
-        span.end();
+        span.setAttribute(ATTR_ERROR_TYPE, result.kind);
       }
+      return result;
     },
   );
 }

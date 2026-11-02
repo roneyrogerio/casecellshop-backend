@@ -63,6 +63,11 @@ export type GaugeObservation<M extends MetricSpec> = (
   ...attributes: AttributesArgument<M>
 ) => void;
 
+export interface ObserveOptions {
+  // Chamado uma vez por leitura que falha (lançamento síncrono ou rejeição), antes de a exceção seguir para o SDK.
+  onError?: (error: unknown) => void;
+}
+
 export interface TypedMetrics<S extends Specs> {
   add<N extends NamesOf<S, 'counter' | 'up_down_counter'>>(
     name: N,
@@ -75,10 +80,12 @@ export interface TypedMetrics<S extends Specs> {
     ...attributes: AttributesArgument<S[N]>
   ): void;
   // Registra o callback que o scrape chama para ler o gauge; devolve a função que o remove. Uma falha do callback
-  // só deixa a série sem valor naquele scrape.
+  // mantém o último valor exportado (o exportador é cumulativo); por isso `onError` avisa cada falha, para o
+  // chamador contá-la e registrá-la.
   observe<N extends NamesOf<S, 'gauge'>>(
     name: N,
     callback: (observe: GaugeObservation<S[N]>) => void | Promise<void>,
+    options?: ObserveOptions,
   ): () => void;
   // Vários gauges lidos por uma consulta só: o callback recebe uma gravação por nome pedido, e o SDK só aceita
   // observar nele os gauges associados (Meter.addBatchObservableCallback).
@@ -87,6 +94,7 @@ export interface TypedMetrics<S extends Specs> {
     callback: (observe: {
       [K in N]: GaugeObservation<S[K]>;
     }) => void | Promise<void>,
+    options?: ObserveOptions,
   ): () => void;
 }
 
@@ -120,16 +128,34 @@ function createInstrument(
 type GaugeWriter = (value: number, attributes?: Attributes) => void;
 type ObserveCallback = (observe: GaugeWriter) => void | Promise<void>;
 // O objeto do lote tem uma chave por nome pedido, tipada em `TypedMetrics`; por dentro `never` aceita o callback
-// de qualquer declaração, e o objeto montado abaixo é um `Record<string, GaugeWriter>`.
+// de qualquer declaração. PENDENTE (A5): sem cast ainda não fecha o tipo; ver o relatório.
 type ObserveBatchCallback = (observe: never) => void | Promise<void>;
+
+// Avisa a falha da leitura antes de devolvê-la ao SDK. O exportador cumulativo segue exportando o último valor
+// quando o callback lança: sem este aviso a falha do banco ou da fila não deixa sinal nenhum.
+async function reportingFailure(
+  read: () => void | Promise<void>,
+  options: ObserveOptions | undefined,
+): Promise<void> {
+  try {
+    await read();
+  } catch (error) {
+    options?.onError?.(error);
+    throw error;
+  }
+}
 
 // ObservableGauge.addCallback / removeCallback: o SDK espera o callback assíncrono antes de escrever o scrape.
 function observeGauge(
   gauge: ObservableGauge,
   callback: ObserveCallback,
+  options: ObserveOptions | undefined,
 ): () => void {
   const observable: ObservableCallback = (result) =>
-    callback((value, attributes) => result.observe(value, attributes));
+    reportingFailure(
+      () => callback((value, attributes) => result.observe(value, attributes)),
+      options,
+    );
   gauge.addCallback(observable);
   return () => gauge.removeCallback(observable);
 }
@@ -137,9 +163,9 @@ function observeGauge(
 // Meter.addBatchObservableCallback: um callback para vários gauges; só os associados podem ser observados nele.
 function observeGauges(
   meter: Meter,
-  names: readonly string[],
-  gauges: ObservableGauge[],
+  { names, gauges }: { names: readonly string[]; gauges: ObservableGauge[] },
   callback: ObserveBatchCallback,
+  options: ObserveOptions | undefined,
 ): () => void {
   const observable: BatchObservableCallback = (result) => {
     const writers: Record<string, GaugeWriter> = Object.fromEntries(
@@ -149,7 +175,7 @@ function observeGauges(
           result.observe(gauges[index]!, value, attributes),
       ]),
     );
-    return callback(writers as never);
+    return reportingFailure(() => callback(writers as never), options);
   };
   meter.addBatchObservableCallback(observable, gauges);
   return () => meter.removeBatchObservableCallback(observable, gauges);
@@ -185,10 +211,22 @@ export function createInstruments<S extends Specs>(
       const instrument = pick(name);
       if ('record' in instrument) instrument.record(value, attributes);
     },
-    observe: (name: string, callback: ObserveCallback) =>
-      observeGauge(pickGauge(name), callback),
-    observeBatch: (names: readonly string[], callback: ObserveBatchCallback) =>
-      observeGauges(meter, names, names.map(pickGauge), callback),
+    observe: (
+      name: string,
+      callback: ObserveCallback,
+      options?: ObserveOptions,
+    ) => observeGauge(pickGauge(name), callback, options),
+    observeBatch: (
+      names: readonly string[],
+      callback: ObserveBatchCallback,
+      options?: ObserveOptions,
+    ) =>
+      observeGauges(
+        meter,
+        { names, gauges: names.map(pickGauge) },
+        callback,
+        options,
+      ),
   };
   // A assinatura genérica de TypedMetrics só existe no tipo; o corpo é o mesmo para qualquer declaração.
   return typed;
