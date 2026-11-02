@@ -264,7 +264,7 @@ Com relógio controlado:
   - **Agregado:** `scripts/telemetry-catalog.ts` junta as declarações para a documentação e para os testes; um teste de repositório confere que toda pasta com `telemetry.ts` entra, que nenhum nome se repete e que o agregado não tem violação das regras.
   - **Prometheus:** um teste fixa os nomes que o `/metrics` exporta, já traduzidos pelo exportador.
   - **Documentação:** `.specs/features/casecellshop/telemetry.md` é gerado do catálogo, e um teste de repositório o gera de novo e compara.
-  - **Controle negativo:** um nome com `_total` ou com a unidade, um nome sem o prefixo fora da convenção, um evento fora do catálogo, um valor de atributo fora da lista e a documentação defasada reprovam.
+  - **Controle negativo:** um nome com `_total` ou com a unidade, um nome sem o prefixo fora da convenção, um evento fora do catálogo, um campo de evento com nome reservado da linha de log (`event`, `level`, `msg`, `time`, `service`, `env`, `version`), um valor de atributo fora da lista, um import do pino por um caminho dentro do pacote (`pino/…`) e a documentação defasada reprovam.
 
 ## Design conceitual
 
