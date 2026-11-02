@@ -50,16 +50,20 @@ jobs:
 
       # Sem --no-renames, um rename de src/ para o README.md mostraria só o nome
       # novo. O -z mantém inteiro um nome com quebra de linha. Um erro do git
-      # reprova o passo, e o ci-ok com ele.
+      # reprova o passo, e o ci-ok com ele. Só um PR contra a main pula: contra outra
+      # branch que já tem o código, o PR sairia só de documentação e, com a base
+      # trocada para a main depois (pull_request edited, que não roda o CI), levaria
+      # o ci-ok verde sem testes.
       - id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           docs_only=false
           # O commit e os pais numa linha; o merge do PR tem dois pais.
           head_line=$(git rev-list --parents -n 1 HEAD)
           read -ra commits <<< "$head_line"
-          if [ "$EVENT_NAME" = pull_request ] && [ "${#commits[@]}" -eq 3 ]; then
+          if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" = main ] && [ "${#commits[@]}" -eq 3 ]; then
             mapfile -t allowed <<< "$DOCS_ONLY_PATHS"
             list=$(mktemp)
             git diff --name-only --no-renames -z HEAD^1 HEAD > "$list"
