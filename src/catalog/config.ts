@@ -7,8 +7,6 @@ export interface CatalogConfig {
   originFailurePauseMs: number;
   // Até quantas unidades livres o produto aparece como "últimas unidades".
   lowStockMax: number;
-  // Segundos do Retry-After do 503, o mesmo do /health.
-  retryAfterSeconds: number;
 }
 
 export const DEFAULT_CATALOG_CONFIG: CatalogConfig = {
@@ -17,7 +15,6 @@ export const DEFAULT_CATALOG_CONFIG: CatalogConfig = {
   staleCeilingMs: 60_000,
   originFailurePauseMs: 5_000,
   lowStockMax: 5,
-  retryAfterSeconds: 5,
 };
 
 export interface CatalogSyncConfig {

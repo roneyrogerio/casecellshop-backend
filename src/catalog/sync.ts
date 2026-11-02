@@ -117,13 +117,26 @@ async function writeItems(
 ): Promise<void> {
   const sorted = items.toSorted((a, b) => (a.sku < b.sku ? -1 : 1));
   for (const item of sorted) {
-    const product = await upsertProduct(ctx.db, snapshot.t0, item);
-    const inventory = await upsertInventory(
-      ctx.db,
-      snapshot.t0,
-      item,
-      snapshot.inventory.get(item.sku)?.soldTotal ?? 0,
-    );
+    // Só o que mudou: com o ERP igual ao guardado em t0, o valor da fórmula é o que a loja já tem depois das
+    // próprias baixas, então o comando não mudaria nada e só custaria uma escrita.
+    const storedProduct = snapshot.products.get(item.sku);
+    const storedStock = snapshot.inventory.get(item.sku);
+    const productChanged =
+      storedProduct === undefined ||
+      storedProduct.priceCents !== item.priceCents ||
+      storedProduct.name !== item.name;
+    const inventoryChanged =
+      storedStock === undefined || storedStock.onHand !== item.onHand;
+    const product =
+      productChanged && (await upsertProduct(ctx.db, snapshot.t0, item));
+    const inventory =
+      inventoryChanged &&
+      (await upsertInventory(
+        ctx.db,
+        snapshot.t0,
+        item,
+        storedStock?.soldTotal ?? 0,
+      ));
     countCorrections(ctx, snapshot, item, { product, inventory });
   }
 }
@@ -198,7 +211,18 @@ async function roundBody(ctx: Context): Promise<SyncRoundResult> {
 // Antes da primeira rodada: com o ERP fora desde a subida, a idade parte da última rodada gravada.
 async function seedCompletedMark(ctx: Context): Promise<void> {
   if (ctx.completedMark.value !== undefined) return;
-  const ageMs = await readStoredAgeMs(ctx.db);
+  let ageMs: number | undefined;
+  try {
+    ageMs = await readStoredAgeMs(ctx.db);
+  } catch (err) {
+    // Banco fora na subida não pode derrubar o start: o gauge fica sem valor até a primeira rodada completa.
+    eventLogger(ctx.logger, CATALOG_LOG_EVENTS).warn(
+      'casecellshop.catalog.sync.round.failed',
+      { err },
+      'falha do banco ao ler a última rodada completa',
+    );
+    return;
+  }
   if (ageMs !== undefined && ctx.completedMark.value === undefined)
     ctx.completedMark.value = ctx.clock.now() - ageMs;
 }

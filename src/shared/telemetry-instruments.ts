@@ -66,7 +66,7 @@ export interface TypedMetrics<S extends Specs> {
     value: number,
     ...attributes: AttributesArgument<S[N]>
   ): void;
-  // Registra a leitura do gauge observável, chamada a cada coleta; `undefined` não grava ponto naquela coleta.
+  // Registra a leitura do gauge observável, chamada a cada coleta; `undefined` só deixa a série sem ponto antes do primeiro valor; depois dele, o exportador cumulativo repete o último ponto.
   observe<N extends NamesOf<S, 'observable_gauge'>>(
     name: N,
     read: () => number | undefined,

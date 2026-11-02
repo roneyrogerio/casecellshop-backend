@@ -1,9 +1,11 @@
 import type { RequestHandler } from 'express';
 import { productsRoute } from '../contract/index.ts';
 import { CacheUnavailableError } from '../cache/cache.ts';
-import { ProblemError } from '../http/problem.ts';
+import {
+  ProblemError,
+  UNAVAILABLE_RETRY_AFTER_SECONDS,
+} from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
-import type { CatalogConfig } from './config.ts';
 import { CatalogNotSyncedError, type Storefront } from './storefront.ts';
 
 export interface CatalogRoutes {
@@ -11,10 +13,7 @@ export interface CatalogRoutes {
   handlers: RequestHandler[];
 }
 
-export function createCatalogRoutes(
-  storefront: Storefront,
-  config: CatalogConfig,
-): CatalogRoutes {
+export function createCatalogRoutes(storefront: Storefront): CatalogRoutes {
   // Primeiro, para valer também no 400, no 503 e no 500: sem o no-store, um cache no caminho aplicaria frescor
   // heurístico (CAT-10).
   const noStore: RequestHandler = (_req, res, next) => {
@@ -38,7 +37,7 @@ export function createCatalogRoutes(
           status: 503,
           cause: 'service-unavailable',
           title: 'Catálogo indisponível',
-          headers: { 'Retry-After': String(config.retryAfterSeconds) },
+          headers: { 'Retry-After': UNAVAILABLE_RETRY_AFTER_SECONDS },
         });
       }
       throw error;

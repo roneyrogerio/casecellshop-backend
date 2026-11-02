@@ -69,7 +69,7 @@ export function createApp({
     telemetry,
     logger,
   });
-  const products = createCatalogRoutes(storefront, catalogConfig);
+  const products = createCatalogRoutes(storefront);
   app.get(toExpressPath(productsRoute.path), ...products.handlers);
 
   const orders = createOrdersRoutes(
