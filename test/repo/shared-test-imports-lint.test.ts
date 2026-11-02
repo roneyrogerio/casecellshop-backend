@@ -16,6 +16,8 @@ const OTHER_FOLDER = '../db/database.ts';
 // O Node e o tsc leem a barra invertida como separador, então `./..\db\` sai da pasta. As barras duplicadas aqui chegam
 // ao arquivo da amostra como `\\`, que o parser lê como uma barra invertida de verdade no specifier.
 const BACKSLASH = './..\\\\db\\\\database.ts';
+// Caminho absoluto sai da pasta sem nenhum `..`.
+const ABSOLUTE = '/abs/src/db/database.ts';
 
 interface Sample {
   file: string;
@@ -55,6 +57,12 @@ const SAMPLES: Sample[] = [
       expected: 'blocked',
       label: 'o teste esconde o .. atrás de barra invertida',
     },
+    {
+      file,
+      path: ABSOLUTE,
+      expected: 'blocked',
+      label: 'o teste importa por caminho absoluto',
+    },
   ]),
   ...PRODUCTION_FILES.flatMap((file): Sample[] => [
     {
@@ -68,6 +76,18 @@ const SAMPLES: Sample[] = [
       path: OTHER_FOLDER,
       expected: 'blocked',
       label: 'o código de produção importa outra pasta de src/ por ..',
+    },
+    {
+      file,
+      path: BACKSLASH,
+      expected: 'blocked',
+      label: 'o código de produção esconde o .. atrás de barra invertida',
+    },
+    {
+      file,
+      path: ABSOLUTE,
+      expected: 'blocked',
+      label: 'o código de produção importa por caminho absoluto',
     },
   ]),
   // Controle: o import de um arquivo da própria pasta segue livre.
