@@ -288,8 +288,48 @@
           {
             "patterns": [
               {
-                "regex": "^\\.\\./",
-                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
+                "regex": "^/",
+                "message": "Um import de src/shared/ não usa caminho absoluto, que sai da pasta sem \"..\" (AD-025)."
+              },
+              {
+                "regex": "(^|/)\\.\\.(/|$)",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025); um teste da pasta usa o atalho #test-helpers/."
+              },
+              {
+                "regex": "^#",
+                "message": "O código de produção de src/shared/ não importa atalhos #; o #test-helpers/ é só dos testes (AD-025)."
+              },
+              {
+                "regex": "^pino(/|$)",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/shared/**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
+                "regex": "^/",
+                "message": "Um import de src/shared/ não usa caminho absoluto, que sai da pasta sem \"..\" (AD-025)."
+              },
+              {
+                "regex": "(^|/)\\.\\.(/|$)",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025); um teste da pasta usa o atalho #test-helpers/."
               },
               {
                 "regex": "^pino(/|$)",
@@ -483,15 +523,52 @@
       }
     },
     {
-      "files": ["src/shared/logging.ts", "src/shared/logging.test.ts"],
+      "files": ["src/shared/logging.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "regex": "^\\.\\./",
-                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
+                "regex": "^/",
+                "message": "Um import de src/shared/ não usa caminho absoluto, que sai da pasta sem \"..\" (AD-025)."
+              },
+              {
+                "regex": "(^|/)\\.\\.(/|$)",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025); um teste da pasta usa o atalho #test-helpers/."
+              },
+              {
+                "regex": "^#",
+                "message": "O código de produção de src/shared/ não importa atalhos #; o #test-helpers/ é só dos testes (AD-025)."
+              }
+            ]
+          }
+        ],
+        "test-imports/no-restricted-dynamic-import": "off"
+      }
+    },
+    {
+      "files": ["src/shared/logging.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
+                "regex": "^/",
+                "message": "Um import de src/shared/ não usa caminho absoluto, que sai da pasta sem \"..\" (AD-025)."
+              },
+              {
+                "regex": "(^|/)\\.\\.(/|$)",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025); um teste da pasta usa o atalho #test-helpers/."
               }
             ]
           }

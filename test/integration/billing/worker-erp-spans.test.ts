@@ -1,6 +1,7 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { captureLogs } from '../../helpers/logs.ts';
 import {
   buildWorker,
   createWorld,
@@ -92,6 +93,73 @@ describe('OBS-05 o orderId leva a um trace da requisição ao ERP', () => {
         span.spanContext().traceId === erp.spanContext().traceId,
     );
     expect(checkout, 'span da requisição no trace do ERP').toBeDefined();
+  });
+
+  // O orderId é a chave para os dois lados: o log da tentativa com aquele pedido e o span da chamada ao ERP caem
+  // no mesmo trace, que é o da requisição do checkout.
+  it('OBS-05 o log da tentativa com o orderId traz o trace_id do span erp.create_order daquela tentativa e do checkout', async () => {
+    const logs = captureLogs();
+    const world = await traceWorld();
+    const order = await submitOrder(suiteOf(), world);
+
+    expect(await buildWorker(world, { logger: logs.logger }).pollOnce()).toBe(
+      1,
+    );
+
+    const spans = await finishedSpans();
+    const attempt = only(attemptsOf(spans, order.orderId), 'tentativa');
+    const erp = only(
+      childrenOf(spans, attempt, 'erp.create_order'),
+      'span da criação',
+    );
+    const checkout = spans.find(
+      (span) =>
+        span.name === 'POST /checkout' &&
+        span.spanContext().traceId === erp.spanContext().traceId,
+    );
+    expect(checkout, 'span da requisição no trace do ERP').toBeDefined();
+
+    const lines = logs.ofOrder(order.orderId);
+    expect(lines.length, 'logs da tentativa do pedido').toBeGreaterThan(0);
+    expect(
+      lines.map((line) => line['event']),
+      'o desfecho da tentativa está entre os logs do pedido',
+    ).toContain('casecellshop.order.invoiced');
+    for (const line of lines) {
+      const label = `linha ${JSON.stringify(line)}`;
+      expect(line['trace_id'], label).toBe(erp.spanContext().traceId);
+      expect(line['trace_id'], label).toBe(checkout?.spanContext().traceId);
+      // O span da linha é o da tentativa, pai do span da chamada ao ERP.
+      expect(line['span_id'], label).toBe(attempt.spanContext().spanId);
+      expect(line['span_id'], label).toBe(erp.parentSpanContext?.spanId);
+    }
+  });
+
+  it('OBS-05 pedidos diferentes têm traces diferentes: o trace_id do log de um pedido não aparece no span do ERP do outro', async () => {
+    const logs = captureLogs();
+    const world = await traceWorld();
+    const first = await submitOrder(suiteOf(), world);
+    const second = await submitOrder(suiteOf(), world);
+
+    expect(await buildWorker(world, { logger: logs.logger }).pollOnce()).toBe(
+      2,
+    );
+
+    const spans = await finishedSpans();
+    const traceOf = (orderId: string): string => {
+      const attempt = only(attemptsOf(spans, orderId), 'tentativa');
+      return only(
+        childrenOf(spans, attempt, 'erp.create_order'),
+        'span da criação',
+      ).spanContext().traceId;
+    };
+    expect(traceOf(first.orderId)).not.toBe(traceOf(second.orderId));
+    for (const order of [first, second]) {
+      const lines = logs.ofOrder(order.orderId);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines)
+        expect(line['trace_id']).toBe(traceOf(order.orderId));
+    }
   });
 
   it.each([

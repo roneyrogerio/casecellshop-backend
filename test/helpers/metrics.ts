@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import request from 'supertest';
+import { expect } from 'vitest';
 import { METRICS } from '../../scripts/telemetry-catalog.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
 
@@ -84,6 +85,7 @@ export function parseExposition(text: string): Exposition {
 export async function scrapeMetricsText(telemetry: Telemetry): Promise<string> {
   const server = createServer((req, res) => telemetry.metricsHandler(req, res));
   const res = await request(server).get('/metrics');
+  expect(res.status).toBe(200);
   return res.text;
 }
 

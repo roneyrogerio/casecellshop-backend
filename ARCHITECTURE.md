@@ -2,8 +2,6 @@
 
 O diagnóstico dos três problemas da CaseCellShop, a arquitetura alvo e o porquê de cada bloco. As decisões completas, com as alternativas descartadas, estão no [`STATE.md`](.specs/project/STATE.md); os parâmetros, no [`design.md`](.specs/features/casecellshop/design.md).
 
-**Estado deste documento:** rascunho. As cinco perguntas estão respondidas; o cache e parte da observabilidade estão descritos antes de ser implementados, com a marca do marco que os entrega. A versão final sai no M6, conferida contra o código.
-
 ## As cinco perguntas
 
 `DOC-IDX-01`. Cada pergunta da Parte 1.A do desafio, a seção que a responde e os critérios que a conferem. O texto de entrega, com as cinco respostas, está no [`RESPOSTAS.md`](RESPOSTAS.md).
@@ -18,8 +16,7 @@ O diagnóstico dos três problemas da CaseCellShop, a arquitetura alvo e o porqu
 
 Cada afirmação traz uma marca:
 
-- **[implementado: arquivo, critério]** já existe no código e tem teste;
-- **[M2]** a **[M6]**: planejado neste projeto, no marco indicado do [`ROADMAP.md`](.specs/project/ROADMAP.md);
+- **[implementado: arquivo, critério]** existe no código e tem teste com o ID do critério no nome;
 - **[alvo]**: proposta da arquitetura alvo, fora do escopo do desafio.
 
 ## Diagnóstico e arquitetura alvo
@@ -54,10 +51,10 @@ Os três problemas têm a mesma origem: a loja trata um ERP legado, que não pod
 
 O que B entrega:
 
-- produtos, preço e estoque no PostgreSQL da loja **[M2, M4]**;
-- uma rodada de sincronização na subida e uma a cada 60 s, no worker **[M4]** (AD-009);
-- o catálogo inteiro numa entrada de cache em processo, com tempo de vida (TTL) de 5 s ± 10%, *single-flight* contra stampede e *stale-if-error* com teto de 60 s **[M4]** (AD-005);
-- com o ERP fora, a vitrine segue com o último estoque conhecido, e a idade da sincronização dispara alerta **[M4, M5]**.
+- produtos, preço e estoque no PostgreSQL da loja **[implementado: `migrations/store/`, `src/catalog/sync-store.ts`, `CAT-07`]**;
+- uma rodada de sincronização na subida e uma a cada 60 s, no worker, que lê o catálogo inteiro e grava só o que mudou **[implementado: `src/catalog/sync.ts`, `CAT-09`, `CAT-14`]** (AD-009, AD-030);
+- o catálogo inteiro numa entrada de cache em processo, com tempo de vida (TTL) de 5 s ± 10%, *single-flight* contra stampede e *stale-if-error* com teto de 60 s **[implementado: `src/cache/cache.ts`, `CAT-01` a `CAT-04`]** (AD-005);
+- com o ERP fora, a vitrine segue com o último estoque conhecido, e a idade da sincronização dispara alerta **[implementado: `src/catalog/sync-age.ts`, `CAT-15`; o alerta, `OBS-03`]**.
 
 ### Problema 2: overselling
 
@@ -123,18 +120,18 @@ O que B entrega:
 
 **Dias 0 a 30: tirar o ERP do caminho do cliente.** É o que este projeto implementa.
 
-- **Banco próprio da loja:** PostgreSQL com catálogo, preço, estoque, pedidos, chaves de idempotência e outbox **[M1 a M4]**.
+- **Banco próprio da loja:** PostgreSQL com catálogo, preço, estoque, pedidos, chaves de idempotência e outbox **[implementado: `migrations/store/`, `test/integration/checkout/store-schema.test.ts`, `CHK-01`]**.
 - **Checkout:** reserva atômica, idempotência e `202` **[implementado: `src/checkout/repository.ts`, `CHK-01` a `CHK-12`]**.
 - **Fila:** SQS, alimentado pela outbox do banco por um *Message Relay*; localmente, o ElasticMQ no compose **[implementado]**.
-- **Workers:** um worker para o envio ao ERP e para a sincronização **[implementado: o envio; a sincronização, M4]**.
-- **Sincronização:** preço e estoque a cada 60 s, sem devolver unidade já vendida **[M4]**.
-- **Cache:** em processo, na vitrine **[M4]**.
-- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` **[implementado: `src/contract/`, `src/http/problem.ts`, `FND-03`, `FND-07`]**; os traces da requisição ao banco, vistos no Jaeger local **[implementado: `src/shared/telemetry.ts`, `FND-05`]**; os demais logs, métricas e traces **[M2 a M5]**.
+- **Workers:** um worker para o envio ao ERP e para a sincronização **[implementado: `src/billing/worker.ts`, `ORD-01`; `src/catalog/sync.ts`, `CAT-09`]**.
+- **Sincronização:** preço e estoque a cada 60 s, sem devolver unidade já vendida **[implementado: `src/catalog/sync-store.ts`, `CAT-07`]**.
+- **Cache:** em processo, na vitrine **[implementado: `src/cache/cache.ts`, `CAT-01` a `CAT-05`]**.
+- **Observabilidade básica:** logs estruturados com `correlationId` e `orderId`, métricas em `/metrics` e traces da requisição ao ERP. O contrato com o erro em `problem+json` e o `X-Request-Id` **[implementado: `src/contract/`, `src/http/problem.ts`, `FND-03`, `FND-07`]**; os traces da requisição ao banco, vistos no Jaeger local **[implementado: `src/shared/telemetry.ts`, `FND-05`]**; os demais logs, métricas e traces **[implementado: `OBS-01`, `OBS-02`, `OBS-05`, `OBS-07`]**.
 
 **Dias 30 a 60: operar com segurança.**
 
 - **Reconciliação com o ERP:** a DLQ conferida periodicamente pela referência, e o runbook de reprocessamento e cancelamento **[implementado]**.
-- **Observabilidade completa:** objetivos de nível de serviço (SLOs: vitrine e checkout com 99,9% sem `5xx`, e 99% dos pedidos com desfecho em até 60 s), alertas, dashboard e runbook no Datadog ou equivalente **[M5]**.
+- **Observabilidade completa:** objetivos de nível de serviço (SLOs: vitrine e checkout com 99,9% sem `5xx`, e 99% dos pedidos com desfecho em até 60 s), alertas, dashboard e runbook no Datadog ou equivalente, escritos em PromQL **[implementado: README, seção "Operação", `OBS-03`]**.
 - **Mais de uma instância da API**, com um cache L2 compartilhado (Redis) atrás do cache em processo, para as instâncias servirem o mesmo dado **[alvo]**.
 - **Autenticação na borda** (OAuth2/OIDC) e limite de taxa por cliente; a chave de idempotência passa a valer por cliente **[alvo]**.
 
@@ -192,7 +189,7 @@ flowchart LR
 
 ## Cache e performance da vitrine
 
-**Decisão:** a vitrine lê de um cache em processo que guarda o catálogo inteiro numa entrada só, carregada do banco da loja, com TTL de 5 s ± 10%, *single-flight* e *stale-if-error*. É um cache de latência: o checkout nunca decide por ele, e sem ele o serviço continua correto, só mais lento. O ERP sai do caminho da vitrine; quem fala com ele é a sincronização do worker, uma rodada por minuto **[M4]** (AD-005, AD-009).
+**Decisão:** a vitrine lê de um cache em processo que guarda o catálogo inteiro numa entrada só, carregada do banco da loja, com TTL de 5 s ± 10%, *single-flight* e *stale-if-error*. É um cache de latência: o checkout nunca decide por ele, e sem ele o serviço continua correto, só mais lento. O ERP sai do caminho da vitrine; quem fala com ele é a sincronização do worker, uma rodada por minuto **[implementado: `src/cache/`, `src/catalog/`, `CAT-01` a `CAT-15`]** (AD-005, AD-009).
 
 A vitrine era lenta porque cada acesso virava uma chamada ao ERP (Problema 1). A resposta tem duas defasagens, e elas somam: a do banco da loja, que é uma cópia atualizada pela sincronização (até 60 s mais a duração de uma rodada), e a do cache em processo (até 5,5 s). Daí sai o limite da meta 2: com o ERP respondendo, uma mudança de preço ou de estoque chega à vitrine em até 65,5 s mais a duração de uma rodada (`CAT-06`).
 
@@ -202,10 +199,10 @@ A vitrine era lenta porque cada acesso virava uma chamada ao ERP (Problema 1). A
 
 | Camada | Onde fica | Papel | Defasagem que soma | Aqui |
 | --- | --- | --- | --- | --- |
-| Rede de distribuição de conteúdo (CDN) e cache HTTP | Borda, fora do serviço | Servir imagens e arquivos estáticos perto do cliente | Nenhuma no catálogo, que sai com `no-store` | Fora do escopo; `Cache-Control: no-store` em toda resposta da vitrine **[M4, `CAT-10`]**; a CDN para estáticos **[alvo]** |
-| Em processo (L1) | Memória de cada instância da API | Absorver as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego | Até 5,5 s; até 60 s com a origem em erro | **[M4, `CAT-01` a `CAT-05`]** |
+| Rede de distribuição de conteúdo (CDN) e cache HTTP | Borda, fora do serviço | Servir imagens e arquivos estáticos perto do cliente | Nenhuma no catálogo, que sai com `no-store` | Fora do escopo; `Cache-Control: no-store` em toda resposta da vitrine **[implementado: `src/catalog/routes.ts`, `CAT-10`]**; a CDN para estáticos **[alvo]** |
+| Em processo (L1) | Memória de cada instância da API | Absorver as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego | Até 5,5 s; até 60 s com a origem em erro | **[implementado: `src/cache/cache.ts`, `CAT-01` a `CAT-05`]** |
 | L2 compartilhado (Redis) | Entre as instâncias da API | Dar o mesmo instantâneo a todas as instâncias e uma consulta à origem por TTL no total, e não uma por instância | Até o TTL dele | **[alvo]** |
-| Banco da loja | PostgreSQL | A cópia de catálogo, preço e estoque que a loja controla: origem do cache e fonte de verdade do checkout | Até 60 s mais a duração de uma rodada | **[M4, `CAT-06`, `CAT-07`]** |
+| Banco da loja | PostgreSQL | A cópia de catálogo, preço e estoque que a loja controla: origem do cache e fonte de verdade do checkout | Até 60 s mais a duração de uma rodada | **[implementado: `src/catalog/sync-store.ts`, `CAT-06`, `CAT-07`]** |
 | ERP | Datacenter | Sistema de registro; lido só pela sincronização, nunca por uma requisição | — | ERP simulado **[implementado: `src/erp/sim/`]** |
 
 **Por que o catálogo não passa por CDN.** Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas: a idade da entrada servida é medida na API, e a da borda não. O `no-store` é explícito, e não a ausência de cabeçalho, porque sem `Cache-Control` um cache intermediário pode aplicar frescor heurístico (RFC 9111, §4.2.2). Quando houver uma CDN, a resposta passa a levar `max-age` igual ao TTL restante da entrada, para a borda não somar mais defasagem que o próprio cache (AD-005).
@@ -220,7 +217,7 @@ A vitrine era lenta porque cada acesso virava uma chamada ao ERP (Problema 1). A
 
 `DOC-CAC-02`.
 
-**TTL de 5 s ± 10%.** A maior parte da defasagem vem da sincronização (60 s), não do cache. Um TTL de 1 s faria 5 vezes mais consultas à origem para tirar 4 s de um limite de 65,5 s; um TTL de 30 s pouparia cargas que o banco já absorve sem esforço e levaria o limite de 65,5 s para cerca de 93 s. O jitter de ± 10% espalha as expirações de várias instâncias que subiram juntas, para não carregarem a origem no mesmo instante **[M4, `CAT-02`]**.
+**TTL de 5 s ± 10%.** A maior parte da defasagem vem da sincronização (60 s), não do cache. Um TTL de 1 s faria 5 vezes mais consultas à origem para tirar 4 s de um limite de 65,5 s; um TTL de 30 s pouparia cargas que o banco já absorve sem esforço e levaria o limite de 65,5 s para cerca de 93 s. O jitter de ± 10% espalha as expirações de várias instâncias que subiram juntas, para não carregarem a origem no mesmo instante **[implementado: `src/cache/cache.ts`, `CAT-02`]**.
 
 **Invalidação só por expiração.** A sincronização não avisa a API a cada correção. Um aviso entre processos (um `NOTIFY` do PostgreSQL, ou um pub/sub) tiraria até 5,5 s de um limite de 65,5 s, mas acrescentaria um caminho de falha entre o worker e a API; quando esse aviso se perde em silêncio, quem limita a defasagem é o TTL, de qualquer jeito. O TTL de segundos já é o limite, e o aviso seria só uma otimização dele (AD-005, AD-009).
 
@@ -231,7 +228,7 @@ A vitrine era lenta porque cada acesso virava uma chamada ao ERP (Problema 1). A
 
 O pior efeito de uma entrada defasada é a vitrine mostrar algo que o checkout recusa, e esse caso é medido (`DOC-CAC-04`).
 
-**Disponibilidade em faixas.** A vitrine mostra "disponível", "últimas unidades" (até 5 livres) ou "esgotado", e não o número. A faixa muda menos que o número exato, então a defasagem do TTL aparece menos, e o estoque exato não é exposto **[M4, `CAT-13`]**.
+**Disponibilidade em faixas.** A vitrine mostra a faixa, e não o número: `available` ("disponível"), `low_stock` ("últimas unidades", até 5 livres) ou `out_of_stock` ("esgotado"). A faixa muda menos que o número exato, então a defasagem do TTL aparece menos, e o estoque exato não é exposto **[implementado: `src/catalog/availability.ts`, `CAT-13`]**.
 
 **Cache-aside × refresh-ahead.** O cache é *cache-aside*: a requisição que encontra a entrada vencida carrega a origem, e as que chegam durante a carga esperam a mesma promessa.
 
@@ -248,19 +245,19 @@ O pior efeito de uma entrada defasada é a vitrine mostrar algo que o checkout r
 
 1. entrada dentro do TTL: servida da memória;
 2. entrada vencida: uma carga da origem, com as outras requisições esperando a mesma promessa;
-3. origem em erro: a entrada vencida é servida até 60 s de idade (*stale-if-error*), e, por 5 s depois da falha, servida direto, sem tentar a origem, para nenhuma requisição esperar o timeout de uma origem que acabou de falhar **[M4, `CAT-04`]**;
-4. sem entrada, ou com ela além do teto: `503` com `Retry-After` **[M4, `CAT-04`]**;
-5. antes da primeira sincronização completa: `503`, para a vitrine não mostrar um catálogo vazio como se fosse o real **[M4, `CAT-05`]**.
+3. origem em erro: a entrada vencida é servida até 60 s de idade (*stale-if-error*), e, por 5 s depois da falha, servida direto, sem tentar a origem, para nenhuma requisição esperar o timeout de uma origem que acabou de falhar **[implementado: `src/cache/cache.ts`, `CAT-04`]**;
+4. sem entrada, ou com ela além do teto: `503` com `Retry-After` **[implementado: `src/catalog/routes.ts`, `CAT-04`]**;
+5. antes da primeira sincronização completa: `503`, para a vitrine não mostrar um catálogo vazio como se fosse o real **[implementado: `src/catalog/storefront.ts`, `CAT-05`]**.
 
 O ERP fora não aparece nessa lista: ele não está no caminho da vitrine. Com o ERP fora, a sincronização para, o banco segue com o último preço e o último estoque conhecidos, e a idade da sincronização dispara alerta (AD-009).
 
 **Prevenção de stampede:**
 
-- ***single-flight*:** N leituras simultâneas com a entrada vencida geram uma consulta à origem **[M4, `CAT-01`]**;
+- ***single-flight*:** N leituras simultâneas com a entrada vencida geram uma consulta à origem **[implementado: `src/cache/cache.ts`, `CAT-01`]**;
 - **uma promessa rejeitada é descartada,** para um erro da origem não ficar guardado como se fosse o catálogo;
 - **uma chave só:** o catálogo inteiro numa entrada, sem várias chaves expirando em momentos diferentes;
 - **jitter no TTL e pausa depois da falha,** que espalham as cargas entre instâncias e evitam uma fila de requisições esperando uma origem em erro;
-- **do lado do ERP,** a sincronização faz uma rodada de cada vez, sem sobrepor a seguinte **[M4, `CAT-09`]**, e divide o semáforo de 30 chamadas com o faturamento.
+- **do lado do ERP,** a sincronização faz uma rodada de cada vez, sem sobrepor a seguinte **[implementado: `src/catalog/sync.ts`, `CAT-09`]**, e divide o semáforo de 30 chamadas com o faturamento **[implementado: `src/main/worker.ts`, `ORD-20`]**.
 
 Com N instâncias, o limite é de N cargas por expiração; o L2 com lock o reduz a uma **[alvo]**.
 
@@ -270,11 +267,11 @@ Com N instâncias, o limite é de N cargas por expiração; o L2 com lock o redu
 
 | Ganho | Métrica | Como se lê | Esperado |
 | --- | --- | --- | --- |
-| Latência da vitrine | `http.server.request.duration` na rota `/products` (histogram) | p99 e fração abaixo de 200 ms, pela fronteira de 0,2 s do histograma | 99% em até 200 ms (SLO) **[implementado: `src/http/telemetry.ts`; a rota, M4]** |
-| Taxa de acerto | `casecellshop.catalog.cache.lookups` (counter: `hit`, `miss`, `stale`) | `hit` sobre o total | Perto de 1 − 1/(R × TTL) por instância, com R requisições por segundo: com R = 100, uma falta a cada ~500 leituras **[M4]** |
-| Carga na origem | `casecellshop.catalog.origin.loads` (counter: `ok`, `error`) | Cargas por requisição, a medida de custo da AD-005 | No máximo ~0,2 carga por segundo por instância, qualquer que seja o tráfego **[M4]** |
-| *Single-flight* funcionando | `casecellshop.catalog.origin.active_loads` (gauge) | Cargas em andamento | No máximo 1 por instância **[M4]** |
-| Chamadas ao ERP evitadas | `casecellshop.erp.client.operation.duration` com a operação `list_catalog` (o `_count` do histogram conta as chamadas) | Requisições da vitrine menos chamadas de catálogo ao ERP | Antes, uma chamada ao ERP por acesso; agora, as páginas de uma rodada por minuto, constante com o tráfego **[implementado: `src/erp/telemetry.ts`; a sincronização, M4]** |
+| Latência da vitrine | `http.server.request.duration` na rota `/products` (histogram) | p99 e fração abaixo de 200 ms, pela fronteira de 0,2 s do histograma | 99% em até 200 ms (SLO) **[implementado: `src/http/telemetry.ts`, `OBS-07`]** |
+| Taxa de acerto | `casecellshop.catalog.cache.lookups` (counter: `hit`, `miss`, `stale`) | `hit` sobre o total | Perto de 1 − 1/(R × TTL) por instância, com R requisições por segundo: com R = 100, uma falta a cada ~500 leituras **[implementado: `src/catalog/storefront.ts`, `OBS-02`]** |
+| Carga na origem | `casecellshop.catalog.origin.loads` (counter: `ok`, `error`) | Cargas por requisição, a medida de custo da AD-005 | No máximo ~0,2 carga por segundo por instância, qualquer que seja o tráfego **[implementado: `src/catalog/storefront.ts`, `OBS-02`]** |
+| *Single-flight* funcionando | `casecellshop.catalog.origin.active_loads` (UpDownCounter) | Cargas em andamento | No máximo 1 por instância **[implementado: `src/catalog/storefront.ts`, `OBS-02`]** |
+| Chamadas ao ERP evitadas | `casecellshop.erp.client.operation.duration` com a operação `list_catalog` (o `_count` do histogram conta as chamadas) | Requisições da vitrine menos chamadas de catálogo ao ERP | Antes, uma chamada ao ERP por acesso; agora, as páginas de uma rodada por minuto, constante com o tráfego **[implementado: `src/erp/telemetry.ts`, `src/catalog/sync.ts`, `OBS-07`]** |
 
 As chamadas evitadas, em PromQL, com séries de dois processos (a API e o worker) que o Prometheus coleta juntos:
 
@@ -293,13 +290,13 @@ sum(rate(http_server_request_duration_count{http_route="/products"}[5m]))
 
 | Pergunta | Métrica | Normal | Sinal de problema |
 | --- | --- | --- | --- |
-| Quão velha é a entrada que o cliente vê? | `casecellshop.catalog.served_entry.age` (histogram) | Até 5,5 s | Entre 5,5 e 60 s só em *stale-if-error*; acima de 60 s nunca, porque aí a resposta é `503` (`CAT-04`) **[M4]** |
-| Quão velho é o dado no banco? | `casecellshop.catalog.sync.age` (gauge, desde a última rodada completa) | Até 60 s mais a duração de uma rodada | A sincronização parou: ERP fora ou worker caído **[M4]** |
-| Quanto sai em *stale-if-error*? | `stale` em `casecellshop.catalog.cache.lookups` e `error` em `casecellshop.catalog.origin.loads` | Zero | A origem do cache está falhando **[M4]** |
+| Quão velha é a entrada que o cliente vê? | `casecellshop.catalog.served_entry.age` (histogram) | Até 5,5 s | Entre 5,5 e 60 s só em *stale-if-error*; acima de 60 s nunca, porque aí a resposta é `503` (`CAT-04`) **[implementado: `src/catalog/storefront.ts`, `OBS-02`]** |
+| Quão velho é o dado no banco? | `casecellshop.catalog.sync.age` (gauge, desde a última rodada completa) | Até 60 s mais a duração de uma rodada | A sincronização parou: ERP fora ou worker caído **[implementado: `src/catalog/sync-age.ts`, `CAT-15`]** |
+| Quanto sai em *stale-if-error*? | `stale` em `casecellshop.catalog.cache.lookups` e `error` em `casecellshop.catalog.origin.loads` | Zero | A origem do cache está falhando **[implementado: `src/catalog/storefront.ts`, `CAT-04`, `OBS-02`]** |
 | A vitrine mostrou um preço que já não vale? | `price_changed` em `casecellshop.checkout.requests` (counter) | Raro | Preço muda mais rápido que a sincronização; o cliente recebe `409` com o preço atual e não é cobrado por outro valor (`CHK-06`, H3) **[implementado: `src/checkout/telemetry.ts`]** |
 | A vitrine mostrou disponível o que acabou? | `out_of_stock` em `casecellshop.checkout.requests` | Raro, quase só em "últimas unidades" | Estoque defasado além do TTL **[implementado]** |
-| A promessa passou do estoque? | `casecellshop.inventory.oversold_skus` (gauge, SKUs com `reserved > on_hand`) e `casecellshop.erp.out_of_stock.rejections` (counter) | Zero | Venda em outro canal baixou o estoque do ERP depois da reserva (`OBS-06`) **[M5; o counter, implementado: `src/erp/telemetry.ts`]** |
-| Quanto cada rodada corrige? | `casecellshop.catalog.sync.corrections` (counter, por campo) e `casecellshop.catalog.sync.missing_skus` (counter) | Poucas correções por rodada | Muitas correções: a defasagem custa mais e o intervalo deve ser revisto (AD-009); SKUs ausentes de repente: paginação do ERP ou remoção em massa (`CAT-11`) **[M4]** |
+| A promessa passou do estoque? | `casecellshop.inventory.oversold_skus` (gauge, SKUs com `reserved > on_hand`) e `casecellshop.erp.out_of_stock.rejections` (counter) | Zero | Venda em outro canal baixou o estoque do ERP depois da reserva **[implementado: `src/checkout/inventory-gauges.ts`, `src/erp/acl.ts`, `OBS-06`]** |
+| Quanto cada rodada corrige? | `casecellshop.catalog.sync.corrections` (counter, por campo) e `casecellshop.catalog.sync.missing_skus` (counter) | Poucas correções por rodada | Muitas correções: a defasagem custa mais e o intervalo deve ser revisto (AD-009); SKUs ausentes de repente: paginação do ERP ou remoção em massa (`CAT-11`) **[implementado: `src/catalog/sync.ts`, `OBS-02`]** |
 
 Juntas, as duas idades limitam o que o cliente vê: o dado da vitrine tem no máximo a idade da sincronização mais a idade da entrada servida. A idade da sincronização é lida do banco (`sync_state.last_completed_at`) e sai da API, não do worker, para continuar existindo e disparar o alerta quando o worker está caído.
 
@@ -309,7 +306,7 @@ Os testes provam o mecanismo, e as métricas provam que ele funciona em produç�
 
 **Decisão:** três sinais com a mesma correlação. Logs JSON pelo pino; métricas pela API de métricas do OpenTelemetry, expostas em `/metrics` no formato Prometheus; e traces por spans manuais do OpenTelemetry, com o `traceparent` gravado na outbox para o worker continuar o trace do checkout. Toda métrica e todo evento de log são declarados num catálogo tipado, por pasta, e o `tsc` recusa o que estiver fora dele; o catálogo gerado é o [`telemetry.md`](.specs/features/casecellshop/telemetry.md) **[implementado: `src/shared/telemetry-catalog.ts`, `src/shared/logging.ts`, `OBS-07`]** (AD-008, AD-029).
 
-A observabilidade responde a duas causas do diagnóstico: no Problema 3, sem correlação por pedido não havia como saber o que aconteceu com um pedido; no Problema 2, não havia métrica que mostrasse o furo de estoque antes da reclamação. A meta é detectar degradação e furo de estoque antes do cliente, e seguir qualquer pedido da requisição ao ERP (`OBS-05`) **[M5]**.
+A observabilidade responde a duas causas do diagnóstico: no Problema 3, sem correlação por pedido não havia como saber o que aconteceu com um pedido; no Problema 2, não havia métrica que mostrasse o furo de estoque antes da reclamação. A meta é detectar degradação e furo de estoque antes do cliente, e seguir qualquer pedido da requisição ao ERP **[implementado, `OBS-05`]**.
 
 **Por que assim:**
 
@@ -326,7 +323,7 @@ As métricas saem em `/metrics`, e não por OTLP, porque OTLP exigiria um coleto
 
 `DOC-OBS-01`. Cada log é uma linha JSON, escrita pelo pino. O contexto da requisição (o `correlationId` e o span atual) viaja pelo `AsyncLocalStorage`, então nenhuma função precisa receber o contexto como parâmetro **[implementado: `src/shared/logging.ts`, `src/http/request-context.ts`, `OBS-01`]**.
 
-**Campos obrigatórios.** Os de identificação saem em toda linha; os de correlação, em toda linha escrita dentro de uma requisição ou de uma tentativa do worker:
+**Campos obrigatórios.** Os de identificação saem em toda linha; o `correlationId`, em toda linha escrita dentro de uma requisição ou de uma tentativa do worker; o `trace_id` e o `span_id`, em toda linha escrita dentro de um span:
 
 | Campo | Quando | O que é | De onde vem |
 | --- | --- | --- | --- |
@@ -336,11 +333,11 @@ As métricas saem em `/metrics`, e não por OTLP, porque OTLP exigiria um coleto
 | `event` | Toda linha | Nome do evento do catálogo, como `casecellshop.checkout.accepted` | O `eventLogger`, que vale sobre qualquer campo com o mesmo nome |
 | `msg` | Toda linha | Mensagem em português, para quem lê | O evento |
 | `correlationId` | Requisição ou tentativa | Identificador da requisição | O `X-Request-Id` válido do cliente, ou um UUID novo; volta no cabeçalho e no corpo do erro (`FND-03`), e viaja na mensagem da outbox até o worker |
-| `trace_id`, `span_id` | Requisição ou tentativa | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
+| `trace_id`, `span_id` | Dentro de um span | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
 
-Os logs do próprio processo, fora de uma requisição ou de uma tentativa (a subida, o encerramento, o início do relay), saem sem os campos de correlação. O `design.md` e o `OBS-01` pedem os três em todo log; a divergência está registrada como `SPEC_DEVIATION` pendente de decisão no `ROADMAP.md`, e este texto descreve o código.
+Os logs do próprio processo, fora de uma requisição, de uma tentativa ou de um span (a subida, o encerramento, o início e o fim do relay e do worker, a migração), saem sem os campos de correlação: não há requisição nem span a que ligar, e um valor inventado não levaria a lugar nenhum. A rodada da sincronização roda num span, sem requisição: o log dela traz o `trace_id` e o `span_id`, sem `correlationId` (`OBS-01`).
 
-**Campos quando existem:** `route`, `method`, `status` e `duration_ms` no fim da requisição; `cache` (`hit`, `miss` ou `stale`) na vitrine **[M4]**; `orderId` e `sku`; `attempt` (o número de recebimentos da mensagem no SQS) e `cause` (por que a tentativa voltou à fila) no worker; `reason` (sempre em snake_case, como `out_of_stock` ou `erp_rejected`); e `err`, com o código do erro.
+**Campos quando existem:** `route`, `method`, `status` e `duration_ms` no fim da requisição; `cache` (`hit`, `miss` ou `stale`) no fim de uma resposta `200` da vitrine; `orderId` e `sku`; `attempt` (o número de recebimentos da mensagem no SQS) e `cause` (por que a tentativa voltou à fila) no worker; `reason` (sempre em snake_case, como `out_of_stock` ou `erp_rejected`); e `err`, com o código do erro.
 
 Um exemplo, do checkout aceito:
 
@@ -358,7 +355,7 @@ Um exemplo, do checkout aceito:
 
 **`orderId` e `sku` ficam nos logs, nunca nas métricas.** Um atributo de métrica com um valor por pedido criaria uma série por pedido no Prometheus. Nos logs, eles são o que liga um pedido ou um produto ao resto. O detalhe de um erro fica no log; a resposta ao cliente é o `problem+json`, sem stack trace nem SQL.
 
-**No worker,** cada tentativa roda no contexto do `correlationId` que veio na mensagem e dentro do span dela, e todo log da tentativa leva `orderId` e `attempt`. A chegada à DLQ sai uma vez por mensagem, da reconciliação (`casecellshop.outbox.dead`, com o `orderId`) **[implementado: `src/billing/telemetry.ts`, `OBS-01`]**. Os eventos do catálogo e da sincronização entram no M4 **[M4]**.
+**No worker,** cada tentativa roda no contexto do `correlationId` que veio na mensagem e dentro do span dela, e todo log da tentativa leva `orderId` e `attempt`. A chegada à DLQ sai uma vez por mensagem, da reconciliação (`casecellshop.outbox.dead`, com o `orderId`) **[implementado: `src/billing/telemetry.ts`, `OBS-01`]**. Os eventos da vitrine e da sincronização (`casecellshop.catalog.*`) estão em `src/catalog/telemetry.ts` **[implementado, `OBS-07`]**.
 
 ### Counters, gauges e histograms para cache, checkout, fila e ERP
 
@@ -367,30 +364,33 @@ Um exemplo, do checkout aceito:
 | Área | Métrica | Instrumento | Responde | Estado |
 | --- | --- | --- | --- | --- |
 | Vitrine e checkout | `http.server.request.duration` | histogram, por rota, método e status | Latência e `5xx` de cada rota, base dos SLOs | **[implementado: `src/http/telemetry.ts`]** |
-| Cache | `casecellshop.catalog.cache.lookups` | counter: `hit`, `miss`, `stale` | Taxa de acerto e quanto sai em *stale-if-error* | **[M4]** |
-| Cache | `casecellshop.catalog.origin.loads` | counter: `ok`, `error` | Carga e erro da origem | **[M4]** |
-| Cache | `casecellshop.catalog.origin.active_loads` | gauge | O *single-flight* segura a carga em uma por instância | **[M4]** |
-| Cache | `casecellshop.catalog.served_entry.age` | histogram | Idade do que o cliente vê | **[M4]** |
-| Sincronização | `casecellshop.catalog.sync.age` | gauge | Tempo desde a última rodada completa | **[M4]** |
-| Sincronização | `casecellshop.catalog.sync.corrections` | counter, por campo | Quanto cada rodada corrige | **[M4]** |
-| Sincronização | `casecellshop.catalog.sync.missing_skus` | counter | SKUs ausentes zerados | **[M4]** |
+| Cache | `casecellshop.catalog.cache.lookups` | counter: `hit`, `miss`, `stale` | Taxa de acerto e quanto sai em *stale-if-error* | **[implementado: `src/catalog/telemetry.ts`, `OBS-02`]** |
+| Cache | `casecellshop.catalog.origin.loads` | counter: `ok`, `error` | Carga e erro da origem | **[implementado, `OBS-02`]** |
+| Cache | `casecellshop.catalog.origin.active_loads` | UpDownCounter | O *single-flight* segura a carga em uma por instância | **[implementado, `OBS-02`]** |
+| Cache | `casecellshop.catalog.served_entry.age` | histogram | Idade do que o cliente vê | **[implementado, `OBS-02`]** |
+| Sincronização | `casecellshop.catalog.sync.age` | gauge | Tempo desde a última rodada completa, lido do banco pela API | **[implementado: `src/catalog/sync-age.ts`, `CAT-15`]** |
+| Sincronização | `casecellshop.catalog.sync.corrections` | counter, por campo | Quanto cada rodada corrige | **[implementado: `src/catalog/sync.ts`, `OBS-02`]** |
+| Sincronização | `casecellshop.catalog.sync.missing_skus` | counter | SKUs ausentes zerados | **[implementado, `OBS-02`]** |
 | Checkout | `casecellshop.checkout.requests` | counter: `accepted`, `replay`, `out_of_stock`, `price_changed`, `invalid`, `unavailable` | Desfechos do checkout | **[implementado: `src/checkout/telemetry.ts`, `OBS-02`]** |
-| Estoque | `casecellshop.inventory.reserved` | gauge | Unidades prometidas e ainda não faturadas | **[M5]** |
-| Estoque | `casecellshop.inventory.oversold_skus` | gauge | SKUs com `reserved > on_hand`: o furo de estoque | **[M5, `OBS-06`]** |
+| Estoque | `casecellshop.inventory.reserved` | gauge | Unidades prometidas e ainda não faturadas | **[implementado: `src/checkout/inventory-gauges.ts`, `OBS-06`]** |
+| Estoque | `casecellshop.inventory.oversold_skus` | gauge | SKUs com `reserved > on_hand`: o furo de estoque | **[implementado, `OBS-06`]** |
 | Fila | `casecellshop.outbox.published.messages` | counter | O relay está publicando | **[implementado: `src/billing/telemetry.ts`]** |
 | Fila | `casecellshop.outbox.attempts` | counter: `invoiced`, `failed`, `retry`, `deferred`, `closed`, `lease_short`, `dead` | Desfecho de cada tentativa | **[implementado]** |
 | Fila | `casecellshop.outbox.orphan_conclusions` | counter | Conclusões sem efeito, com o *receipt handle* vencido | **[implementado]** |
-| Fila | `casecellshop.queue.messages` | gauge: `billing`, `dlq` | Mensagens na fila e na DLQ | **[M5]** |
-| Fila | `casecellshop.outbox.oldest_pending.age` | gauge | Idade do pedido mais antigo sem desfecho; o SQS não a expõe pela API, então sai da outbox | **[M5]** |
+| Fila | `casecellshop.queue.messages` | gauge, com `casecellshop.queue.name`: `billing`, `dlq` | Mensagens na fila e na DLQ, pelo `GetQueueAttributes` do SQS, no worker | **[implementado: `src/billing/queue-gauge.ts`, `OBS-02`]** |
+| Fila | `casecellshop.outbox.oldest_pending.age` | gauge | Idade do pedido mais antigo sem desfecho; o SQS não a expõe pela API, então sai da outbox | **[implementado: `src/billing/outbox-age.ts`, `OBS-02`]** |
 | Fila | `casecellshop.order.accept_to_invoice.duration` | histogram, com fronteira em 60 s | Tempo do aceite ao faturamento | **[implementado]** |
-| Fila | `casecellshop.order.stuck` | counter | Pedidos sem desfecho em 60 s, cada um contado uma vez | **[M5, `OBS-04`]** |
+| Fila | `casecellshop.order.stuck` | counter | Pedidos sem desfecho em 60 s, cada um contado uma vez | **[implementado: `src/billing/stuck-orders.ts`, `OBS-04`]** |
 | ERP | `casecellshop.erp.client.operation.duration` | histogram, por operação e desfecho | Latência do ERP; o `_count` conta as chamadas, inclusive as de erro de configuração | **[implementado: `src/erp/telemetry.ts`]** |
 | ERP | `casecellshop.erp.client.active_operations` | UpDownCounter | Chamadas em andamento; perto de 30, o semáforo está cheio | **[implementado]** |
-| ERP | `casecellshop.erp.out_of_stock.rejections` | counter | Pedidos que o ERP recusou por falta de estoque | **[implementado]** |
+| ERP | `casecellshop.erp.out_of_stock.rejections` | counter | Pedidos que o ERP recusou por falta de estoque | **[implementado, `OBS-06`]** |
+| Gauges | `casecellshop.billing.gauge.read_failures`, `casecellshop.checkout.gauge.read_failures`, `casecellshop.catalog.gauge.read_failures` | counter, com `casecellshop.gauge.name` | Leituras de gauge que falharam; o gauge segue com o último valor, e o alerta dispara também por este counter | **[implementado, `OBS-02`, `CAT-15`]** |
 
 **No Prometheus,** o exportador troca o ponto por sublinhado e acrescenta `_total` aos counters: `casecellshop.outbox.attempts` sai como `casecellshop_outbox_attempts_total`, com o atributo `casecellshop_outbox_attempt_outcome`, e um histogram sai com `_bucket`, `_sum` e `_count`. A unidade fica na linha `# UNIT`, sem sufixo no nome; um teste fixa os nomes exportados, para uma mudança do exportador reprovar no PR em vez de quebrar os alertas em silêncio (R13, `OBS-07`).
 
-**O que é lido do banco sai da API.** Os gauges e counters derivados do banco (a idade da sincronização, a idade do pedido mais antigo, os pedidos sem desfecho, o estoque) saem da API, e não do worker, que é o processo monitorado: se o worker cai, as séries continuam e o alerta dispara. Um counter só aparece no `/metrics` depois do primeiro registro, então cada alerta trata a série ausente.
+**O que é lido do banco sai da API.** Os gauges e counters derivados do banco (a idade da sincronização, a idade do pedido mais antigo, os pedidos sem desfecho, o estoque) saem da API, e não do worker, que é o processo monitorado: se o worker cai, as séries continuam e o alerta dispara.
+
+**Série ausente.** Um counter só aparece no `/metrics` depois do primeiro registro, então, nos alertas sobre counters, a série ausente quer dizer que nada aconteceu. Os gauges que precisam existir têm um `absent` próprio: o da fila, que sai do worker, e o da idade da sincronização, que sai da API e por isso também avisa quando a API sai do ar. O que sobra, o primeiro registro de um counter que o `increase` não conta, está declarado na seção "Alertas" do README.
 
 ### Traces de `GET /products` e do `POST /checkout` assíncrono
 
@@ -400,35 +400,35 @@ Um exemplo, do checkout aceito:
 
 ```text
 GET /products                         span SERVER da requisição, na API
-└── cache do catálogo                 hit, miss ou stale
-    └── repositório do catálogo       só numa falta, na requisição que iniciou a carga
-        └── consulta ao PostgreSQL
+└── catalog.cache.get                 hit, miss ou stale
+    └── catalog.repository.list       CLIENT, a consulta ao PostgreSQL; só numa falta, na requisição que iniciou a carga
 ```
 
-Num acerto, o trace tem só a requisição e o cache. Numa falta, o span do repositório mostra quanto a origem custou. Com o *single-flight*, só a requisição que iniciou a carga tem o span do repositório; as outras mostram a espera na duração do span do cache **[M4, `CAT-12`]**. A sincronização tem o próprio trace no worker: a rodada, as chamadas de catálogo ao `ErpClient` e as gravações por SKU, sem ligação com as requisições da vitrine **[M4]**.
+Num acerto, o trace tem só a requisição e o cache. Numa falta, o span do repositório mostra quanto a origem custou. Com o *single-flight*, só a requisição que iniciou a carga tem o span do repositório; as outras mostram a espera na duração do span do cache **[implementado: `src/catalog/storefront.ts`, `src/catalog/repository.ts`, `CAT-12`]**. A sincronização tem o próprio trace no worker: o span `catalog.sync.round` por rodada e, dentro dele, um span `erp.list_catalog` por página lida do ERP, sem ligação com as requisições da vitrine **[implementado: `src/catalog/sync.ts`, `src/erp/acl.ts`, `OBS-07`]**.
 
 **`POST /checkout`,** um trace que atravessa a fila:
 
 ```text
 POST /checkout                             span SERVER, na API; responde 202
 └── checkout.create                        a transação: chave, pedido, reserva e a linha da outbox com o traceparent
-    │   (depois do commit e da resposta, o relay publica no SQS, com o traceparent como atributo da mensagem)
+    │   (depois do commit e da resposta, o relay publica no SQS num span "send billing", com um link para
+    │    este contexto e o traceparent como atributo da mensagem)
     ├── outbox.attempt (orderId, attempt=1)    no worker, segundos depois
-    │   ├── ErpClient: consulta pela referência   a partir do segundo envio
-    │   └── ErpClient: criação do pedido
+    │   ├── erp.find_order                     consulta pela referência, a partir do segundo envio
+    │   └── erp.create_order                   criação do pedido
     ├── outbox.attempt (orderId, attempt=2)    um retry, 45 s ou mais depois, no mesmo trace
     └── outbox.settle                          encerramento sem chamar o ERP
 ```
 
-O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checkout/repository.ts`, `CHK-12`]**, e cada tentativa do worker é um span filho do span da transação do checkout (`checkout.create`), onde o `traceparent` é gravado **[implementado: `src/billing/worker.ts`, `ORD-18`]**. Os spans do `ErpClient`, do relay e da outbox entram no M5 **[M5]**.
+O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checkout/repository.ts`, `CHK-12`]**, e cada tentativa do worker é um span filho do span da transação do checkout (`checkout.create`), onde o `traceparent` é gravado **[implementado: `src/billing/worker.ts`, `ORD-18`]**. Cada chamada ao `ErpClient` abre um span `CLIENT` `erp.<operação>`, filho da tentativa, com a operação e o desfecho; o relay abre um span `send billing` por lote, com um *link* para o contexto do checkout de cada mensagem **[implementado: `src/erp/acl.ts`, `src/billing/relay.ts`, `OBS-05`]**.
 
 **Um trace por pedido, e não um por tentativa.** Com retries, o trace de um pedido pode durar dezenas de minutos. A alternativa, um trace por tentativa ligado ao checkout por *span link*, evita o trace longo, mas a cadeia requisição → worker → ERP deixa de aparecer numa visão só. Para quem investiga um pedido, essa visão é o que importa (AD-008).
 
-**De um pedido ao trace.** Um `orderId` leva aos logs, pelo campo `orderId`; cada log leva o `trace_id`; e o `trace_id` abre o trace inteiro, da requisição ao ERP. O `orderId` e o `trace_id` no log e o span da tentativa já existem **[implementado, `OBS-01`, `ORD-18`]**; os spans do ERP e o teste de ponta a ponta entram no M5 **[M5, `OBS-05`]**. Os atributos `service`, `env` e `version` são os mesmos nos logs e nos traces, então o Datadog liga os dois sem configuração por consulta.
+**De um pedido ao trace.** Um `orderId` leva aos logs, pelo campo `orderId`; cada log leva o `trace_id`; e o `trace_id` abre o trace inteiro, da requisição ao ERP. O log da tentativa leva o `orderId` e o `trace_id`, e o span do ERP está no mesmo trace, filho da tentativa **[implementado: `test/integration/billing/worker-erp-spans.test.ts`, `OBS-01`, `OBS-05`, `ORD-18`]**. Os atributos `service`, `env` e `version` são os mesmos nos logs e nos traces, então o Datadog liga os dois sem configuração por consulta.
 
 ### SLI e SLO, alertas, dashboard e runbook
 
-`DOC-OBS-04`. O resumo fica aqui; as consultas PromQL completas, os limites de cada alerta, o dashboard e o runbook de cada alerta ficam na seção "Operação" do [`README.md`](README.md), e um teste confere cada série que eles usam contra o `/metrics` real **[M5, `OBS-03`]**.
+`DOC-OBS-04`. O resumo fica aqui; as consultas PromQL completas, os limites de cada alerta, o dashboard e o runbook de cada alerta ficam na seção "Operação" do [`README.md`](README.md), e um teste confere cada consulta e cada série contra o catálogo de telemetria **[implementado: `test/repo/readme-promql.test.ts`, `OBS-03`]**; outro confere os nomes do catálogo contra o `/metrics` real (`OBS-07`).
 
 **Indicadores e objetivos de nível de serviço (SLIs e SLOs),** em janelas de 30 dias, com os valores do [`design.md`](.specs/features/casecellshop/design.md) ("Parâmetros"):
 
@@ -459,12 +459,12 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 
 **Dashboard,** na ordem da jornada do cliente: vitrine (requisições, p99, `5xx`, taxa de acerto, idade da entrada servida e da sincronização), checkout (desfechos, p99, taxa de `price_changed`), fila e ERP (publicadas, tentativas por desfecho, DLQ, idade do mais antigo, aceite ao faturamento, chamadas em andamento contra o limite de 30, erros de configuração) e estoque (unidades reservadas, SKUs com furo).
 
-**Runbook,** um por alerta:
+**Runbook,** um por alerta, completo na seção "Runbooks" do README:
 
 - **DLQ:** o pedido segue `pending` com a reserva. Devolver as mensagens à fila (*redrive*), ou cancelar o pedido depois de confirmar no ERP que ele não existe; a reconciliação fatura sozinha o que o ERP já tem **[implementado: `src/main/runbook.ts`, `ORD-14`, `ORD-15`]**;
-- **ERP fora ou com erro de configuração:** os pedidos esperam na fila com a reserva feita, e a vitrine segue com o último estoque conhecido. Conferir o link com o datacenter e a credencial; depois da volta, os retries e a reconciliação esvaziam a fila **[M5]**;
-- **furo de estoque:** o gauge não leva o SKU, então os SKUs saem de uma consulta ao banco (`reserved > on_hand`); a decisão de repor ou cancelar é do negócio **[M5]**;
-- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP. Enquanto isso, a vitrine e o checkout usam o último preço e o último estoque conhecidos: o `409` de preço alterado não pega uma mudança feita no ERP, porque o banco da loja não a recebeu, e o cliente é cobrado pelo preço que viu, que o ERP fatura (H3). O risco que cresce é o furo de estoque por venda em outro canal, que o `casecellshop.inventory.oversold_skus` e o `casecellshop.erp.out_of_stock.rejections` mostram depois; pausar as vendas é decisão do negócio **[M5]**.
+- **ERP fora ou com erro de configuração:** os pedidos esperam na fila com a reserva feita, e a vitrine segue com o último estoque conhecido. Conferir o link com o datacenter e a credencial; depois da volta, os retries e a reconciliação esvaziam a fila **[implementado: README, seção "Runbooks", `OBS-03`]**;
+- **furo de estoque:** o gauge não leva o SKU, então os SKUs saem de uma consulta ao banco (`reserved > on_hand`); a decisão de repor ou cancelar é do negócio **[implementado: README, seção "Runbooks", `OBS-03`]**;
+- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP. Enquanto isso, a vitrine e o checkout usam o último preço e o último estoque conhecidos: o `409` de preço alterado não pega uma mudança feita no ERP, porque o banco da loja não a recebeu, e o cliente é cobrado pelo preço que viu, que o ERP fatura (H3). O risco que cresce é o furo de estoque por venda em outro canal, que o `casecellshop.inventory.oversold_skus` e o `casecellshop.erp.out_of_stock.rejections` mostram depois; pausar as vendas é decisão do negócio **[implementado: README, seção "Runbooks", `OBS-03`]**.
 
 ## Concorrência e idempotência
 
@@ -480,10 +480,10 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 
 - **`UPDATE` condicional atômico (escolhido):** `UPDATE inventory SET reserved = reserved + :q WHERE sku = :sku AND on_hand - reserved >= :q`. A checagem e a gravação são uma instrução só. O PostgreSQL trava a linha, e uma segunda transação concorrente espera e reavalia o `WHERE` com o valor novo. Zero linhas afetadas quer dizer sem estoque, e a transação inteira é desfeita **[implementado: `src/checkout/repository.ts`, `CHK-01`]**.
 - **Lock pessimista (`SELECT … FOR UPDATE` e depois `UPDATE`):** é correto, mas faz duas idas ao banco por SKU e põe a regra na aplicação, entre a leitura e a gravação, onde um erro de código volta a abrir a janela.
-- **Reserva de estoque:** não é alternativa ao lock, e sim o modelo que o checkout usa. A loja guarda a promessa (`reserved`) separada do estoque físico (`on_hand`), e a reserva só baixa no faturamento ou na falha. Assim a sincronização com o ERP nunca apaga uma reserva ainda não faturada **[implementado: a reserva, `CHK-01`; a baixa no faturamento ou na falha, `src/billing/conclude.ts`, `ORD-08`, `ORD-17`; a sincronização, no M4]** (AD-002, L-001). A reserva com prazo, que expira se o cliente não paga, fica fora do escopo: aqui não há pagamento **[alvo]**.
+- **Reserva de estoque:** não é alternativa ao lock, e sim o modelo que o checkout usa. A loja guarda a promessa (`reserved`) separada do estoque físico (`on_hand`), e a reserva só baixa no faturamento ou na falha. Assim a sincronização com o ERP nunca apaga uma reserva ainda não faturada **[implementado: a reserva, `CHK-01`; a baixa no faturamento ou na falha, `src/billing/conclude.ts`, `ORD-08`, `ORD-17`; a sincronização, `src/catalog/sync-store.ts`, `CAT-07`]** (AD-002, L-001). A reserva com prazo, que expira se o cliente não paga, fica fora do escopo: aqui não há pagamento **[alvo]**.
 - **Lock distribuído (Redis ou similar):** resolve a disputa fora do banco, mas o lock precisa de prazo e de *fencing token*, e fica fora da transação do pedido. Um failover com replicação assíncrona pode perder um lock já concedido, e então o banco precisa da condição do mesmo jeito.
 
-Dois pedidos com os mesmos SKUs em ordens diferentes (`{A, B}` e `{B, A}`) podem travar um ao outro. Por isso toda transação reserva os SKUs na mesma ordem, a ordem de SKU **[implementado: `src/checkout/repository.ts`, `CHK-07`]**. O `UPDATE` condicional é a única barreira contra a promessa acima do estoque: o banco aceita `reserved > on_hand`, e o próprio controle negativo do teste mostra isso (`CHK-02`). Os CHECKs `reserved >= 0` e `on_hand >= 0` impedem só valores negativos, como defesa em profundidade **[implementado: `migrations/store/20260102000000_create_store.ts`, `test/integration/checkout/store-schema.test.ts`]**. Uma promessa acima do estoque, que só pode surgir quando a sincronização baixa o `on_hand`, aparece no gauge de SKUs com `reserved > on_hand` **[M5, `OBS-06`]**.
+Dois pedidos com os mesmos SKUs em ordens diferentes (`{A, B}` e `{B, A}`) podem travar um ao outro. Por isso toda transação reserva os SKUs na mesma ordem, a ordem de SKU **[implementado: `src/checkout/repository.ts`, `CHK-07`]**. O `UPDATE` condicional é a única barreira contra a promessa acima do estoque: o banco aceita `reserved > on_hand`, e o próprio controle negativo do teste mostra isso (`CHK-02`). Os CHECKs `reserved >= 0` e `on_hand >= 0` impedem só valores negativos, como defesa em profundidade **[implementado: `migrations/store/20260102000000_create_store.ts`, `test/integration/checkout/store-schema.test.ts`]**. Uma promessa acima do estoque, que só pode surgir quando a sincronização baixa o `on_hand`, aparece no gauge de SKUs com `reserved > on_hand` **[implementado: `src/checkout/inventory-gauges.ts`, `OBS-06`]**.
 
 ### Idempotência para retry, duplo clique e reprocessamento
 
@@ -535,7 +535,7 @@ Por isso a mensagem é uma linha da tabela `outbox`, gravada na mesma transaçã
   - se o ERP também recusa a segunda criação com a mesma referência (H1b), a duplicação fica impossível mesmo além da H4 **[implementado, `ORD-06`]**.
 - **Worker atrasado:** o pedido muda de estado por compare-and-set (`WHERE status = 'pending'`), e o estoque só muda se a transição afetou a linha. Dois workers com a mesma mensagem, depois de um *visibility timeout* vencido, não faturam nem baixam o estoque duas vezes **[implementado, `ORD-16`, `ORD-17`]**.
 
-**Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b **[implementado]**, e o README o declara entre as limitações **[M6]**.
+**Limite declarado (R6):** se a H1b e a H4 falharem juntas, um pedido pode terminar com duas faturas no ERP. O teste `ORD-06` demonstra esse caso com o ERP simulado sem a H1b **[implementado]**, e o README o declara entre os riscos residuais.
 
 ### Retry, DLQ, OpenAPI e testes
 

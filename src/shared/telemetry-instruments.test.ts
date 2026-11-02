@@ -1,8 +1,7 @@
-import { createServer } from 'node:http';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
-import request from 'supertest';
 import type { Meter, ObservableGauge } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { scrapeMetricsText as scrape } from '#test-helpers/metrics.ts';
 import type { MetricSpec } from './telemetry-catalog.ts';
 import { createInstruments, metricsOf } from './telemetry-instruments.ts';
 import { createTelemetry, type Telemetry } from './telemetry.ts';
@@ -48,14 +47,6 @@ function newMetrics() {
   });
   telemetries.push(telemetry);
   return { telemetry, metrics: metricsOf(telemetry, 'test.scope', SPECS) };
-}
-
-// O texto do /metrics como o Prometheus o recebe. Um teste de `shared/` não importa os helpers de `test/` (AD-025).
-async function scrape(telemetry: Telemetry): Promise<string> {
-  const server = createServer((req, res) => telemetry.metricsHandler(req, res));
-  const res = await request(server).get('/metrics');
-  expect(res.status).toBe(200);
-  return res.text;
 }
 
 // Os labels de uma série, sem os do escopo, que o exportador acrescenta a toda série.

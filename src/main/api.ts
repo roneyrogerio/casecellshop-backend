@@ -42,6 +42,7 @@ await stuckOrders.start();
 
 installGracefulShutdown({
   logger,
+  clock: systemClock,
   stop: async () => {
     // Para de aceitar conexões, termina as requisições em voo e só então fecha o banco.
     await new Promise<void>((resolve, reject) => {

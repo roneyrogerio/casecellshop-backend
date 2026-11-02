@@ -111,6 +111,7 @@ metricsServer.listen(metricsPort, () => {
 
 installGracefulShutdown({
   logger,
+  clock: systemClock,
   stop: async () => {
     // Em conjunto: parar em sequência somaria as esperas e estouraria o prazo de encerramento.
     await Promise.all([
