@@ -2,6 +2,8 @@ import { SpanKind } from '@opentelemetry/api';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { pino, type DestinationStream } from 'pino';
 import { describe, expect, it } from 'vitest';
+import { duplicateKeys } from '#test-helpers/duplicate-keys.ts';
+import { memoryDestination } from '#test-helpers/logs.ts';
 import { createLogger, eventLogger, fromPino, logContext } from './logging.ts';
 import type { LogEventSpec } from './telemetry-catalog.ts';
 import { createTelemetry } from './telemetry.ts';
@@ -14,18 +16,6 @@ import { createTelemetry } from './telemetry.ts';
 
 type Line = Record<string, unknown>;
 
-// O destino em memória: guarda cada linha JSON que o logger escreve.
-function memoryDestination() {
-  const lines: Line[] = [];
-  const destination = {
-    write(chunk: string): void {
-      for (const text of chunk.split('\n'))
-        if (text.trim() !== '') lines.push(JSON.parse(text) as Line);
-    },
-  };
-  return { lines, destination };
-}
-
 // Um logger do pino com o nível como texto, como o da aplicação, para o `fromPino` envolver.
 function textLevelPino(level: string, destination: DestinationStream) {
   return pino(
@@ -36,13 +26,13 @@ function textLevelPino(level: string, destination: DestinationStream) {
 
 // O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo `destination`.
 function capture(level = 'info') {
-  const { lines, destination } = memoryDestination();
+  const { lines, raw, destination } = memoryDestination();
   const logger = createLogger({
     serviceName: 'casecellshop-worker',
     level,
     destination,
   });
-  return { logger, lines };
+  return { logger, lines, raw };
 }
 
 // A declaração de teste: um evento por nível e um que sai em dois (como o fim da requisição HTTP).
@@ -359,6 +349,27 @@ describe('OBS-07 AppLogger: só cria filhos, e o eventLogger é o único que esc
   });
 });
 
+// Abre um span ativo (como o withSpan da rodada da sincronização) e devolve os identificadores dele.
+async function inSpan<T>(
+  fn: (ids: { traceId: string; spanId: string }) => T,
+): Promise<T> {
+  const telemetry = createTelemetry({
+    spanExporter: new InMemorySpanExporter(),
+  });
+  try {
+    return await telemetry.withSpan(
+      'obs01.span',
+      { kind: SpanKind.INTERNAL },
+      (span) => {
+        const { traceId, spanId } = span.spanContext();
+        return Promise.resolve(fn({ traceId, spanId }));
+      },
+    );
+  } finally {
+    await telemetry.shutdown();
+  }
+}
+
 // OBS-01 (decisão do mantenedor de 02/11/2026): o correlationId sai dentro de uma requisição ou de uma tentativa do
 // worker (o contexto assíncrono `logContext`); o trace_id e o span_id, dentro de qualquer span, inclusive fora de
 // requisição; um log do processo fora dos três contextos sai sem eles, mas com os campos de identificação.
@@ -374,27 +385,6 @@ describe('OBS-01 campos de correlação por contexto', () => {
     'event',
   ];
   const CORRELATION = ['correlationId', 'trace_id', 'span_id'];
-
-  // Abre um span ativo (como o withSpan da rodada da sincronização) e devolve os identificadores dele.
-  async function inSpan<T>(
-    fn: (ids: { traceId: string; spanId: string }) => T,
-  ): Promise<T> {
-    const telemetry = createTelemetry({
-      spanExporter: new InMemorySpanExporter(),
-    });
-    try {
-      return await telemetry.withSpan(
-        'obs01.span',
-        { kind: SpanKind.INTERNAL },
-        (span) => {
-          const { traceId, spanId } = span.spanContext();
-          return Promise.resolve(fn({ traceId, spanId }));
-        },
-      );
-    } finally {
-      await telemetry.shutdown();
-    }
-  }
 
   it('OBS-01 um log fora de requisição, de tentativa e de span sai sem correlationId, trace_id e span_id, e com os campos de identificação', () => {
     const { logger, lines } = capture();
@@ -484,5 +474,203 @@ describe('OBS-01 campos de correlação por contexto', () => {
     expect(lines).toHaveLength(1);
     for (const key of CORRELATION)
       expect(lines[0], key).not.toHaveProperty(key);
+  });
+});
+
+// As linhas cruas que escrevem alguma chave duas vezes no primeiro nível, com as chaves repetidas.
+function repeatedIn(raw: string[]): { line: string; keys: string[] }[] {
+  return raw
+    .map((line) => ({ line, keys: duplicateKeys(line) }))
+    .filter((found) => found.keys.length > 0);
+}
+
+describe('OBS-01 o detector de chave repetida lê o texto cru da linha', () => {
+  it('OBS-01 controle: a linha com a mesma chave duas vezes no primeiro nível é acusada, e o JSON.parse não mostra a repetição', () => {
+    const line =
+      '{"level":"info","correlationId":"c","a":1,"correlationId":"m","a":2,"msg":"x"}';
+
+    expect(duplicateKeys(line)).toEqual(['correlationId', 'a']);
+    expect(Object.keys(JSON.parse(line) as Line)).toHaveLength(4);
+  });
+
+  it('OBS-01 controle: a mesma chave em objeto aninhado, em lista ou dentro do texto de um valor não é repetição da linha', () => {
+    const line =
+      '{"a":1,"err":{"a":2,"a\\"b":3},"list":[{"a":1},{"a":2}],"msg":"x,\\"a\\":9","b":{"a":1}}';
+
+    expect(duplicateKeys(line)).toEqual([]);
+  });
+
+  it('OBS-01 controle: a chave com aspa escapada repetida é acusada pelo nome já decodificado', () => {
+    expect(duplicateKeys('{"a\\"b":1,"c":2,"a\\"b":3}')).toEqual(['a"b']);
+  });
+
+  it('OBS-01 controle: o pino puro, com mixin e um filho de mesma chave, escreve a repetição que o detector acusa', () => {
+    const { raw, destination } = memoryDestination();
+    const plain = pino({ mixin: () => ({ correlationId: 'm' }) }, destination);
+
+    plain.child({ correlationId: 'c', a: 1 }).info({ a: 2 }, 'x');
+
+    expect(raw).toHaveLength(1);
+    expect(duplicateKeys(raw[0] ?? '').sort()).toEqual(['a', 'correlationId']);
+  });
+});
+
+// Precedência do design: numa chave repetida vale o evento, depois o filho, depois o contexto (requisição e span).
+describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho', () => {
+  it('OBS-01 o filho com o correlationId do contexto da requisição escreve a chave uma vez, com o valor do filho', () => {
+    const { logger, lines, raw } = capture();
+    const child = logger.child({
+      orderId: 'pedido-1',
+      correlationId: 'corr-filho',
+    });
+
+    logContext.run({ correlationId: 'corr-contexto' }, () => {
+      eventLogger(child, EVENTS).info('casecellshop.demo.stopped', {}, 'fim');
+    });
+
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      orderId: 'pedido-1',
+      correlationId: 'corr-filho',
+    });
+  });
+
+  it('OBS-01 o filho com o mesmo correlationId do contexto escreve a chave uma vez, com o valor que os dois levam', () => {
+    const { logger, lines, raw } = capture();
+    const child = logger.child({ orderId: 'pedido-1', correlationId: 'mesmo' });
+
+    logContext.run({ correlationId: 'mesmo' }, () => {
+      eventLogger(child, EVENTS).info('casecellshop.demo.stopped', {}, 'fim');
+    });
+
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({ correlationId: 'mesmo' });
+  });
+
+  it('OBS-01 o filho com trace_id e span_id do span escreve cada chave uma vez, com o valor do filho', async () => {
+    const { logger, lines, raw } = capture();
+    const traceId = 'c'.repeat(32);
+    const spanId = 'd'.repeat(16);
+    const child = logger.child({ trace_id: traceId, span_id: spanId });
+
+    const ids = await inSpan((spanIds) => {
+      eventLogger(child, EVENTS).info('casecellshop.demo.stopped', {}, 'fim');
+      return spanIds;
+    });
+
+    expect(ids.traceId).not.toBe(traceId);
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({ trace_id: traceId, span_id: spanId });
+  });
+
+  it('OBS-01 o evento com correlationId, trace_id e span_id próprios, dentro de requisição e de span, escreve cada chave uma vez, com o valor do evento', async () => {
+    const { logger, lines, raw } = capture();
+    const traceId = 'e'.repeat(32);
+    const spanId = 'f'.repeat(16);
+
+    await inSpan(() =>
+      logContext.run({ correlationId: 'corr-contexto' }, () => {
+        eventLogger(logger, EVENTS).info(
+          'casecellshop.demo.finished',
+          {
+            status: 200,
+            correlationId: 'corr-evento',
+            trace_id: traceId,
+            span_id: spanId,
+          },
+          'fim',
+        );
+      }),
+    );
+
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({
+      correlationId: 'corr-evento',
+      trace_id: traceId,
+      span_id: spanId,
+      status: 200,
+    });
+  });
+
+  it('OBS-01 o filho com um campo que o evento também escreve sai com a chave uma vez, e vale o valor do evento', () => {
+    const { logger, lines, raw } = capture();
+    const child = logger.child({ orderId: 'pedido-1', status: 1, route: '/a' });
+
+    eventLogger(child, EVENTS).info(
+      'casecellshop.demo.finished',
+      { status: 2 },
+      'fim',
+    );
+
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({
+      orderId: 'pedido-1',
+      status: 2,
+      route: '/a',
+    });
+  });
+
+  it('OBS-01 o filho de um filho com a mesma chave sai com ela uma vez, e vale o valor do filho mais novo', () => {
+    const { logger, lines, raw } = capture();
+    const grandchild = logger
+      .child({ orderId: 'pedido-1', attempt: 1 })
+      .child({ attempt: 2, route: '/b' });
+
+    eventLogger(grandchild, EVENTS).info(
+      'casecellshop.demo.finished',
+      { status: 202 },
+      'fim',
+    );
+
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({
+      orderId: 'pedido-1',
+      attempt: 2,
+      route: '/b',
+      status: 202,
+    });
+  });
+
+  it('OBS-01 todas as coincidências juntas (evento, filho, filho do filho, requisição e span) saem com cada chave uma vez e a precedência evento, filho, contexto', async () => {
+    const { logger, lines, raw } = capture();
+    const traceId = 'a'.repeat(32);
+    const grandchild = logger
+      .child({ orderId: 'pedido-1', correlationId: 'corr-filho', status: 1 })
+      .child({
+        correlationId: 'corr-neto',
+        trace_id: traceId,
+        route: '/neto',
+      });
+
+    await inSpan(() =>
+      logContext.run({ correlationId: 'corr-contexto' }, () => {
+        const log = eventLogger(grandchild, EVENTS);
+        log.info('casecellshop.demo.finished', { status: 2 }, 'primeira');
+        log.info(
+          'casecellshop.demo.finished',
+          { status: 3, correlationId: 'corr-evento' },
+          'segunda',
+        );
+      }),
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(repeatedIn(raw)).toEqual([]);
+    expect(lines[0]).toMatchObject({
+      orderId: 'pedido-1',
+      correlationId: 'corr-neto',
+      trace_id: traceId,
+      route: '/neto',
+      status: 2,
+    });
+    expect(lines[1]).toMatchObject({
+      correlationId: 'corr-evento',
+      status: 3,
+    });
+    for (const line of lines)
+      expect(line['span_id'], 'o span_id do contexto fica').toMatch(
+        /^[0-9a-f]{16}$/,
+      );
   });
 });
