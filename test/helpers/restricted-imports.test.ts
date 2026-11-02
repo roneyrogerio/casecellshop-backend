@@ -115,6 +115,127 @@ describe('FND-13 paridade do group do no-restricted-imports com o oxlint', () =>
   );
 });
 
+// ---------------------------------------------------------------- group com padrão inválido
+
+// Um padrão inválido no `group` não é recusado pelo oxlint (diferente dos `files` de um override): a configuração é
+// aceita e o padrão só não casa nada, porque o `fast_glob::glob_match` devolve "não casa". Medido no oxlint 1.90.0:
+// `foo/[ab`, `foo/{ab`, `foo/ab\` e `foo/[z-a]b` não reportam nenhum import, nem o de nome igual ao padrão. O padrão
+// inválido não atrapalha o válido ao lado (`['foo/[ab', 'foo/*']` reporta tudo o que `foo/*` reporta), e um padrão
+// negado inválido não tira nada da lista.
+const INVALID_GROUP_MODULES = [
+  'foo/[ab',
+  'foo/{ab',
+  'foo/ab\\',
+  'foo/[z-a]b',
+  'foo/ab',
+  'foo/zb',
+] as const;
+
+interface InvalidGroupCase {
+  group: string[];
+  // Os módulos que o oxlint reporta, medidos.
+  expected: string[];
+}
+
+const INVALID_GROUP_CASES: InvalidGroupCase[] = [
+  { group: ['foo/[ab'], expected: [] },
+  { group: ['foo/{ab'], expected: [] },
+  { group: ['foo/ab\\'], expected: [] },
+  { group: ['foo/[z-a]b'], expected: [] },
+  { group: ['foo/[ab', 'foo/*'], expected: [...INVALID_GROUP_MODULES] },
+  { group: ['foo/*', 'foo/[ab'], expected: [...INVALID_GROUP_MODULES] },
+  { group: ['foo/*', '!foo/[ab'], expected: [...INVALID_GROUP_MODULES] },
+  // Controle: o padrão negado válido tira o módulo.
+  {
+    group: ['foo/*', '!foo/ab'],
+    expected: INVALID_GROUP_MODULES.filter((module) => module !== 'foo/ab'),
+  },
+];
+
+describe('FND-13 paridade do group inválido do no-restricted-imports com o oxlint', () => {
+  const measured = new Map<InvalidGroupCase, string[]>();
+  const failures: string[] = [];
+
+  beforeAll(() => {
+    const tree = makeTempDir('invalid-group-parity-');
+    // Uma importação por linha; a `\` do módulo é escapada no texto da importação.
+    writeFileIn(
+      tree,
+      'lib/imports.ts',
+      `${INVALID_GROUP_MODULES.map(
+        (module) => `import '${module.replaceAll('\\', '\\\\')}';`,
+      ).join('\n')}\n`,
+    );
+    INVALID_GROUP_CASES.forEach((groupCase, index) => {
+      const run = runOxlint(
+        tree,
+        singleRuleConfig([], {
+          'no-restricted-imports': [
+            'error',
+            { patterns: [{ group: groupCase.group, message: 'x' }] },
+          ],
+        }),
+        `invalid-group-${String(index)}.json`,
+      );
+      // O oxlint aceita a configuração: sem mensagem de glob inválido e com status de lint (0 ou 1).
+      if (
+        run.stderr !== '' ||
+        (run.status !== 0 && run.status !== 1) ||
+        /Invalid glob pattern/.test(run.stdout)
+      )
+        failures.push(
+          `${JSON.stringify(groupCase.group)}: status ${String(run.status)} ${run.stdout}${run.stderr}`,
+        );
+      measured.set(
+        groupCase,
+        run.reports
+          .filter((report) => report.file === 'lib/imports.ts')
+          .map(
+            (report) =>
+              INVALID_GROUP_MODULES[report.line - 1] ?? `linha ${report.line}`,
+          )
+          .sort(),
+      );
+    });
+  }, PARITY_TIMEOUT_MS);
+
+  afterAll(cleanupTempDirs);
+
+  it('FND-13 controle: o oxlint aceita a configuração com group inválido e reporta o que o padrão válido casa', () => {
+    expect(failures).toEqual([]);
+    expect(measured.get(INVALID_GROUP_CASES[4] as InvalidGroupCase)).toEqual(
+      [...INVALID_GROUP_MODULES].sort(),
+    );
+  });
+
+  it.each(
+    INVALID_GROUP_CASES.map((groupCase): [string, InvalidGroupCase] => [
+      JSON.stringify(groupCase.group),
+      groupCase,
+    ]),
+  )(
+    'FND-13 o oxlint trata o padrão inválido do group como "não casa": %s',
+    (_label, groupCase) => {
+      expect(measured.get(groupCase)).toEqual([...groupCase.expected].sort());
+    },
+  );
+
+  it.each(
+    INVALID_GROUP_CASES.map((groupCase): [string, InvalidGroupCase] => [
+      JSON.stringify(groupCase.group),
+      groupCase,
+    ]),
+  )(
+    'FND-13 o restrictedGroupResult trata o padrão inválido como "não casa", sem lançar: %s',
+    (_label, groupCase) => {
+      const found = INVALID_GROUP_MODULES.filter(
+        (module) => restrictedGroupResult(groupCase.group, module) === 'found',
+      ).sort();
+      expect(found).toEqual(measured.get(groupCase));
+    },
+  );
+});
+
 // ---------------------------------------------------------------- opções inteiras do no-restricted-imports
 
 const RESTRICT_MODULES = [...MODULES, 'bar'] as const;

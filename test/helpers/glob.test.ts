@@ -227,6 +227,73 @@ const ESCAPES: GlobCase[] = [
   },
 ];
 
+// Intervalo invertido (`z-a`): vazio, então a classe não casa nada, e a negada casa qualquer caractere (medido na
+// paridade, que também mede a `}` solta e a `}` dentro de uma classe entre chaves). O oxlint aceita o glob.
+const EMPTY_RANGES: GlobCase[] = [
+  {
+    glob: 'q/a[z-a]b.js',
+    matches: [],
+    rejects: ['q/azb.js', 'q/aab.js', 'q/amb.js', 'q/a-b.js'],
+  },
+  {
+    glob: 'q/a[m-a]b.js',
+    matches: [],
+    rejects: ['q/azb.js', 'q/aab.js', 'q/amb.js'],
+  },
+  {
+    glob: 'q/a[!z-a]b.js',
+    matches: ['q/azb.js', 'q/aab.js', 'q/amb.js', 'q/a/b.js'],
+    rejects: ['q/ab.js'],
+  },
+  // O intervalo vazio some, e o resto da classe segue valendo; o intervalo certo (`a-a`, uma letra só) não some.
+  {
+    glob: 'q/a[xz-a]b.js',
+    matches: ['q/axb.js'],
+    rejects: ['q/azb.js', 'q/aab.js'],
+  },
+  {
+    glob: 'q/a[z-ax]b.js',
+    matches: ['q/axb.js'],
+    rejects: ['q/azb.js', 'q/aab.js'],
+  },
+  {
+    glob: 'q/a[!xz-a]b.js',
+    matches: ['q/azb.js', 'q/aab.js'],
+    rejects: ['q/axb.js'],
+  },
+  {
+    glob: 'q/a[a-a]b.js',
+    matches: ['q/aab.js'],
+    rejects: ['q/abb.js', 'q/azb.js'],
+  },
+  // Os extremos escapados contam pelo caractere que a `\` produz: `\n` (LF, 10) vem antes do `a`, então `[a-\n]` é
+  // invertido, e `[\n-a]` não.
+  {
+    glob: 'q/a[a-\\n]b.js',
+    matches: [],
+    rejects: ['q/aab.js', 'q/anb.js'],
+  },
+  {
+    glob: 'q/a[\\n-a]b.js',
+    matches: ['q/aab.js', 'q/a\nb.js'],
+    rejects: ['q/anb.js'],
+  },
+];
+
+// A `}` sem `{` aberta é literal; dentro de uma classe que está dentro de chaves, a `}` não fecha as chaves (medido).
+const LOOSE_BRACES: GlobCase[] = [
+  {
+    glob: 'q/a}b.js',
+    matches: ['q/a}b.js'],
+    rejects: ['q/ab.js', 'q/}b.js'],
+  },
+  {
+    glob: 'q/{a,[}]}b.js',
+    matches: ['q/ab.js', 'q/}b.js'],
+    rejects: ['q/a}b.js', 'q/b.js'],
+  },
+];
+
 // Chaves aninhadas: o helper conta a profundidade, então a vírgula só vira alternativa dentro de alguma chave.
 const NESTED_BRACES: GlobCase[] = [
   {
@@ -324,6 +391,20 @@ describe('FND-13 globToRegExp', () => {
     },
   );
 
+  it.each(EMPTY_RANGES)(
+    'FND-13 o intervalo invertido é vazio, e não um erro de expressão regular: $glob',
+    (testCase) => {
+      expectCase(testCase);
+    },
+  );
+
+  it.each(LOOSE_BRACES)(
+    'FND-13 a } solta é literal, e a } numa classe dentro de chaves não as fecha: $glob',
+    (testCase) => {
+      expectCase(testCase);
+    },
+  );
+
   it.each(NESTED_BRACES)(
     'FND-13 chaves aninhadas viram alternativas só dentro das chaves: $glob',
     (testCase) => {
@@ -364,6 +445,43 @@ const FILE_SAMPLES = [
   'q/abb.js',
   'q/aab.js',
   'q/acb.js',
+  // Letras `z` e `m` (pontas de intervalo invertido), nome sem a letra do meio, `}` no nome (solto e logo depois do
+  // `b`) e a `/` entre o `a` e o `b` (a classe negada a casa).
+  'q/azb.js',
+  'q/amb.js',
+  'q/ab.js',
+  'q/}b.js',
+  'q/a}b.js',
+  'q/a/b.js',
+];
+
+// Intervalo invertido (`z-a`) e `}` solta, medidos no oxlint 1.90.0: o intervalo invertido é vazio (a classe não casa
+// nada, e o oxlint aceita a configuração em vez de recusar); a `}` sem `{` aberta é literal; e a `}` dentro de uma
+// classe que está dentro de chaves não fecha as chaves.
+const RANGE_AND_BRACE_EXPECTED: [string, string[]][] = [
+  ['q/a[z-a]b.js', []],
+  ['q/a[m-a]b.js', []],
+  [
+    'q/a[!z-a]b.js',
+    [
+      'q/a*b.js',
+      'q/a-b.js',
+      'q/a/b.js',
+      'q/a[b.js',
+      'q/a]b.js',
+      'q/aab.js',
+      'q/abb.js',
+      'q/acb.js',
+      'q/amb.js',
+      'q/anb.js',
+      'q/axb.js',
+      'q/ayb.js',
+      'q/azb.js',
+      'q/a}b.js',
+    ],
+  ],
+  ['q/a}b.js', ['q/a}b.js']],
+  ['q/{a,[}]}b.js', ['q/ab.js', 'q/}b.js']],
 ];
 
 // A `\` escapa o caractere seguinte (fast-glob 1.1.1), dentro e fora da classe: o glob e o que o oxlint deve casar.
@@ -386,6 +504,14 @@ const ESCAPE_EXPECTED: [string, string[]][] = [
 // Cada caso é o `files` inteiro de um override: um padrão só, ou vários (o `GlobSet` casa se algum casar).
 const OVERRIDE_FILES: string[][] = [
   ...ESCAPE_EXPECTED.map(([glob]) => [glob]),
+  // Sem repetir: os globs do oráculo fixo também estão nas tabelas do helper.
+  ...[
+    ...new Set([
+      ...RANGE_AND_BRACE_EXPECTED.map(([glob]) => glob),
+      ...EMPTY_RANGES.map(({ glob }) => glob),
+      ...LOOSE_BRACES.map(({ glob }) => glob),
+    ]),
+  ].map((glob) => [glob]),
   ['a[!x]b.js'],
   ['a[^x]b.js'],
   ['a[/y]b.js'],
@@ -523,6 +649,12 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
     // A `\` escapa o caractere seguinte, dentro e fora da classe (medido): cada glob casa só o arquivo indicado, e a
     // `\` não é membro da classe (nenhuma amostra tem `\` no nome: o oxlint não casa um caminho com `\`).
     for (const [glob, expected] of ESCAPE_EXPECTED)
+      expect({ glob, matched: measured.get(filesLabel([glob])) }).toEqual({
+        glob,
+        matched: expected,
+      });
+    // Intervalo invertido e `}` solta (medido): cada glob casa só o que a tabela diz.
+    for (const [glob, expected] of RANGE_AND_BRACE_EXPECTED)
       expect({ glob, matched: measured.get(filesLabel([glob])) }).toEqual({
         glob,
         matched: expected,

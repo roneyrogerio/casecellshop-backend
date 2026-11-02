@@ -24,6 +24,14 @@
 // A `\` escapa o caractere seguinte, dentro e fora da classe (medido: `a[\]]b.js` casa `a]b.js`, `a\[b.js` casa
 // `a[b.js`, `a\*b.js` casa `a*b.js`). Um `\]` não fecha a classe, e a `\` sozinha no fim é recusada. O que o `\x` vale
 // segue o `unescape` do fast-glob 1.1.1 (ver `escapedChar`): `\n`, `\r`, `\t` e `\b` não são letras.
+//
+// O intervalo invertido (`[z-a]`) é vazio: o oxlint aceita o glob e a classe não casa nada, e a negada (`[!z-a]`) casa
+// qualquer caractere (medido: `q/a[z-a]b.js` e `q/a[m-a]b.js` não casam `q/azb.js`, `q/aab.js` nem `q/amb.js`;
+// `q/a[!z-a]b.js` casa todos). A regex do JavaScript recusaria o intervalo com "Range out of order", então ele sai da
+// classe antes de a regex ser montada.
+//
+// A `}` sem `{` aberta é literal (medido: `q/a}b.js` casa `q/a}b.js`), e a `}` numa classe dentro de chaves não as
+// fecha (medido: `q/{a,[}]}b.js` casa `q/ab.js` e `q/}b.js`).
 interface GlobClass {
   negated: boolean;
   // Os membros já em sintaxe de classe de expressão regular: `]`, `^` e os escapados levam `\`.
@@ -31,8 +39,19 @@ interface GlobClass {
   end: number;
 }
 
+// Um membro da classe: o trecho de regex, o código do caractere (para comparar as pontas de um intervalo) e se é o `-`
+// sem escape, que é o que forma o intervalo.
+interface ClassToken {
+  source: string;
+  code: number;
+  dash: boolean;
+}
+
 // O caractere vira literal na expressão regular (fora de letras e dígitos, a `\` na frente só o torna literal).
+// Os de controle (LF, CR, TAB e 0x08, que o `\n`, `\r`, `\t` e `\b` do glob produzem) vão por `\xNN`.
 function escapeLiteral(char: string): string {
+  const code = char.charCodeAt(0);
+  if (code < 0x20) return `\\x${code.toString(16).padStart(2, '0')}`;
   return char.replace(/[^A-Za-z0-9]/g, '\\$&');
 }
 
@@ -40,36 +59,64 @@ function escapeLiteral(char: string): string {
 // duas pontas de um intervalo também): `\b` é o byte 0x08, `\n` é LF, `\r` é CR, `\t` é TAB, `\a` é `a`, e qualquer
 // outro caractere é ele mesmo. Devolve o trecho de expressão regular que casa só esse caractere. Medido no oxlint
 // 1.90.0: `q/a\nb.js` não casa `q/anb.js`, e `q/a\ab.js` casa `q/aab.js`.
+const CONTROL_ESCAPES = new Map([
+  ['b', '\x08'],
+  ['n', '\n'],
+  ['r', '\r'],
+  ['t', '\t'],
+]);
+
+// O caractere que o `\x` do glob produz (o `unescape` descrito acima).
+function unescapedChar(char: string): string {
+  return CONTROL_ESCAPES.get(char) ?? char;
+}
+
 function escapedChar(char: string): string {
-  switch (char) {
-    case 'b':
-      return '\\x08';
-    case 'n':
-      return '\\n';
-    case 'r':
-      return '\\r';
-    case 't':
-      return '\\t';
-    default:
-      return escapeLiteral(char);
+  return escapeLiteral(unescapedChar(char));
+}
+
+function classToken(char: string, escaped: boolean): ClassToken {
+  const real = escaped ? unescapedChar(char) : char;
+  const literal = escaped || char === ']' || char === '^';
+  return {
+    source: literal ? escapeLiteral(real) : char,
+    code: real.charCodeAt(0),
+    dash: !escaped && char === '-',
+  };
+}
+
+// Os membros em sintaxe de classe de expressão regular, sem os intervalos invertidos (vazios, como no oxlint).
+function classMembers(tokens: readonly ClassToken[]): string {
+  let members = '';
+  for (let index = 0; index < tokens.length; index += 1) {
+    const low = tokens[index];
+    const high = tokens[index + 2];
+    if (low !== undefined && high !== undefined && tokens[index + 1]?.dash) {
+      if (low.code <= high.code) members += `${low.source}-${high.source}`;
+      index += 2;
+    } else {
+      members += low?.source ?? '';
+    }
   }
+  return members;
 }
 
 function classAt(glob: string, open: number): GlobClass | undefined {
   const negated =
     glob.charAt(open + 1) === '!' || glob.charAt(open + 1) === '^';
-  let members = '';
+  const tokens: ClassToken[] = [];
   let index = open + 1 + (negated ? 1 : 0);
   // O primeiro caractere da classe, mesmo um `]`, é membro: só um `]` seguinte fecha.
   for (let first = true; index < glob.length; first = false) {
     const char = glob.charAt(index);
-    if (char === ']' && !first) return { negated, members, end: index };
+    if (char === ']' && !first)
+      return { negated, members: classMembers(tokens), end: index };
     if (char === '\\') {
       if (index + 1 >= glob.length) return undefined;
-      members += escapedChar(glob.charAt(index + 1));
+      tokens.push(classToken(glob.charAt(index + 1), true));
       index += 2;
     } else {
-      members += char === ']' || char === '^' ? `\\${char}` : char;
+      tokens.push(classToken(char, false));
       index += 1;
     }
   }
