@@ -29,10 +29,9 @@ export interface AttributeSpec {
   readonly values: AttributeValues;
 }
 
-// O gauge observável é lido na coleta, por uma função registrada (`observe`): serve a valores que só fazem sentido
-// no instante da leitura, como uma idade.
+// O `gauge` é assíncrono: o valor é lido no scrape por um callback, para estado que mora fora do processo (banco, SQS).
 export type InstrumentKind =
-  'counter' | 'histogram' | 'up_down_counter' | 'observable_gauge';
+  'counter' | 'gauge' | 'histogram' | 'up_down_counter';
 
 export interface MetricSpec {
   readonly instrument: InstrumentKind;

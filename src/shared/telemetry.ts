@@ -7,6 +7,7 @@ import {
   type Attributes,
   type Meter,
   type Span,
+  type SpanOptions,
   type Tracer,
 } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
@@ -15,6 +16,7 @@ import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { MeterProvider } from '@opentelemetry/sdk-metrics';
+import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
 import {
   BatchSpanProcessor,
   ConsoleSpanExporter,
@@ -42,7 +44,7 @@ export interface Telemetry {
   // Abre um span ativo, o fecha ao fim da função e registra a falha, se houver.
   withSpan<T>(
     name: string,
-    options: { kind: SpanKind; attributes?: Attributes },
+    options: SpanOptions,
     fn: (span: Span) => Promise<T>,
   ): Promise<T>;
   metricsHandler(request: IncomingMessage, response: ServerResponse): void;
@@ -116,7 +118,11 @@ function createWithSpan(tracer: Tracer): Telemetry['withSpan'] {
         return await fn(span);
       } catch (error) {
         span.setStatus({ code: SpanStatusCode.ERROR });
-        if (error instanceof Error) span.recordException(error);
+        if (error instanceof Error) {
+          // `error.type` é obrigatório nas convenções de mensageria e de cliente quando a operação falha.
+          span.setAttribute(ATTR_ERROR_TYPE, error.name);
+          span.recordException(error);
+        }
         throw error;
       } finally {
         span.end();

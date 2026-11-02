@@ -1,17 +1,16 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { pino } from 'pino';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { registerOutboxAgeGauge } from '../../../src/billing/outbox-age.ts';
 import { createRelay } from '../../../src/billing/relay.ts';
+import { createStuckOrderMonitor } from '../../../src/billing/stuck-orders.ts';
+import { registerInventoryGauges } from '../../../src/checkout/inventory-gauges.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
-import { DEFAULT_CATALOG_SYNC_CONFIG } from '../../../src/catalog/config.ts';
-import { createCatalogSync } from '../../../src/catalog/sync.ts';
 import { fromPino } from '../../../src/shared/logging.ts';
-import { createSemaphore } from '../../../src/shared/semaphore.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
-import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
-import { seedErpProduct } from '../../helpers/erp.ts';
+import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
 import {
   parseExposition,
   parseUnits,
@@ -26,7 +25,9 @@ import {
   createWorld,
   startWorkerSuite,
   stealMessage,
+  stopAdvancing,
   submitOrder,
+  type QueueWorld,
   type WorkerSuite,
 } from '../../helpers/worker.ts';
 
@@ -62,63 +63,6 @@ const EXPECTED = {
     ],
     optionalLabels: ['error_type'],
     process: 'api',
-  },
-  'casecellshop.catalog.cache.lookups': {
-    exported: 'casecellshop_catalog_cache_lookups_total',
-    type: 'counter',
-    unit: '{lookup}',
-    labels: ['casecellshop_catalog_cache_result'],
-    optionalLabels: [],
-    process: 'api',
-  },
-  'casecellshop.catalog.origin.loads': {
-    exported: 'casecellshop_catalog_origin_loads_total',
-    type: 'counter',
-    unit: '{load}',
-    labels: ['casecellshop_catalog_origin_outcome'],
-    optionalLabels: [],
-    process: 'api',
-  },
-  'casecellshop.catalog.origin.active_loads': {
-    exported: 'casecellshop_catalog_origin_active_loads',
-    type: 'gauge',
-    unit: '{load}',
-    labels: [],
-    optionalLabels: [],
-    process: 'api',
-  },
-  'casecellshop.catalog.served_entry.age': {
-    exported: 'casecellshop_catalog_served_entry_age',
-    type: 'histogram',
-    unit: 's',
-    labels: [],
-    optionalLabels: [],
-    process: 'api',
-  },
-  // As três da sincronização são do worker: o teste da fatia da sincronização as exercita em `exercise`.
-  'casecellshop.catalog.sync.age': {
-    exported: 'casecellshop_catalog_sync_age',
-    type: 'gauge',
-    unit: 's',
-    labels: [],
-    optionalLabels: [],
-    process: 'worker',
-  },
-  'casecellshop.catalog.sync.corrections': {
-    exported: 'casecellshop_catalog_sync_corrections_total',
-    type: 'counter',
-    unit: '{correction}',
-    labels: ['casecellshop_catalog_sync_field'],
-    optionalLabels: [],
-    process: 'worker',
-  },
-  'casecellshop.catalog.sync.missing_skus': {
-    exported: 'casecellshop_catalog_sync_missing_skus_total',
-    type: 'counter',
-    unit: '{sku}',
-    labels: [],
-    optionalLabels: [],
-    process: 'worker',
   },
   'casecellshop.checkout.requests': {
     exported: 'casecellshop_checkout_requests_total',
@@ -184,6 +128,62 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'worker',
   },
+  'casecellshop.order.stuck': {
+    exported: 'casecellshop_order_stuck_total',
+    type: 'counter',
+    unit: '{order}',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.queue.messages': {
+    exported: 'casecellshop_queue_messages',
+    type: 'gauge',
+    unit: '{message}',
+    labels: ['casecellshop_queue_name'],
+    optionalLabels: [],
+    process: 'worker',
+  },
+  'casecellshop.outbox.oldest_pending.age': {
+    exported: 'casecellshop_outbox_oldest_pending_age',
+    type: 'gauge',
+    unit: 's',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.inventory.reserved': {
+    exported: 'casecellshop_inventory_reserved',
+    type: 'gauge',
+    unit: '{unit}',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.inventory.oversold_skus': {
+    exported: 'casecellshop_inventory_oversold_skus',
+    type: 'gauge',
+    unit: '{sku}',
+    labels: [],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.billing.gauge.read_failures': {
+    exported: 'casecellshop_billing_gauge_read_failures_total',
+    type: 'counter',
+    unit: '{read}',
+    labels: ['casecellshop_gauge_name'],
+    optionalLabels: [],
+    process: 'api',
+  },
+  'casecellshop.checkout.gauge.read_failures': {
+    exported: 'casecellshop_checkout_gauge_read_failures_total',
+    type: 'counter',
+    unit: '{read}',
+    labels: ['casecellshop_gauge_name'],
+    optionalLabels: [],
+    process: 'api',
+  },
 } as const satisfies Record<MetricName, ExportedMetric>;
 
 const ENTRIES = Object.entries(EXPECTED) as [MetricName, ExportedMetric][];
@@ -203,15 +203,7 @@ const workerTelemetry = createTelemetry({
 // Exercita o que grava um ponto em cada métrica do catálogo, pelos mesmos caminhos de produção:
 // a API (checkout e duração HTTP) e o worker (relay, tentativa, ERP, aceite ao faturamento, rejeição por
 // estoque e conclusão sem efeito). O ERP e o worker usam a telemetria própria do worker.
-async function exercise(running: WorkerSuite): Promise<void> {
-  // Vitrine, na API: a primeira leitura carrega o cache (miss, carga ok, idade servida) e a segunda é hit.
-  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-1' }]);
-  await markSynced(running.pool);
-  for (let read = 0; read < 2; read += 1) {
-    const res = await request(running.checkout.app).get('/products');
-    expect(res.status, 'a vitrine respondeu').toBe(200);
-  }
-
+async function exercise(running: WorkerSuite): Promise<QueueWorld> {
   const world = await createWorld(running, { telemetry: workerTelemetry });
   const poll = () => buildWorker(world).pollOnce();
 
@@ -238,40 +230,85 @@ async function exercise(running: WorkerSuite): Promise<void> {
     () => stealMessage(world, stolen.orderId),
   );
   expect(await poll()).toBe(1);
+  return world;
+}
 
-  // Sincronização, no processo do worker: uma correção de preço (o ERP cobra mais que a loja guardou) e um SKU da
-  // loja ausente do ERP, para as três métricas casecellshop.catalog.sync.* terem ponto.
-  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-GONE', onHand: 3 }]);
-  await seedErpProduct(running.database.erpPool, {
-    sku: 'METRICS-NAMES-1',
-    name: 'Capinha METRICS-NAMES-1',
-    priceCents: 5990,
-    onHand: 10,
-  });
-  const sync = createCatalogSync({
-    pool: running.pool,
-    erp: world.erp,
-    semaphore: createSemaphore(30),
-    clock: world.clock,
+// Os gauges da fila só existem com o laço do worker e o da reconciliação iniciados (design.md, "Quando as métricas
+// de fila e de estoque (M5) sobem"): o /metrics do worker é lido com os dois de pé.
+async function startQueueLoops(
+  world: QueueWorld,
+): Promise<{ stop(): Promise<void> }> {
+  const worker = buildWorker(world, { config: { receiveWaitSeconds: 1 } });
+  const { reconciler } = buildReconciler(world, { telemetry: workerTelemetry });
+  await worker.start();
+  await reconciler.start();
+  return {
+    async stop() {
+      await stopAdvancing(worker, world);
+      await driveClock(reconciler.stop(), world);
+    },
+  };
+}
+
+// O que a API grava por conta própria: a verificação dos pedidos sem desfecho em 60 s (o counter só nasce quando
+// marca um pedido) e os gauges lidos do banco, no scrape. Devolve a função que remove os callbacks.
+async function exerciseApi(running: WorkerSuite): Promise<() => void> {
+  const { pool, checkout } = running;
+  const delayed = await acceptOrder(running);
+  await pool.query(
+    "update orders set accepted_at = now() - interval '5 minutes' where id = $1",
+    [delayed.orderId],
+  );
+  const monitor = createStuckOrderMonitor({
+    pool,
     logger: fromPino(pino({ level: 'silent' })),
-    telemetry: workerTelemetry,
-    config: DEFAULT_CATALOG_SYNC_CONFIG,
+    telemetry: checkout.telemetry,
+    clock: createManualClock(),
   });
-  const round = await sync.runRound();
-  expect(round.complete, 'a sincronização leu o catálogo todo').toBe(true);
+  expect(await monitor.checkOnce(), 'o pedido atrasado foi marcado').toBe(1);
+  const logger = fromPino(pino({ level: 'silent' }));
+  const gauges = {
+    'idade da outbox': () =>
+      registerOutboxAgeGauge({ pool, telemetry: checkout.telemetry, logger }),
+    estoque: () =>
+      registerInventoryGauges({ pool, telemetry: checkout.telemetry, logger }),
+  };
+
+  // Uma leitura que falha depois de uma boa, uma por gauge, para o counter de falhas de cada pasta ter o ponto. A
+  // falha é uma conexão do pool que rejeita uma vez; cada gauge falha sozinho, para a falha cair nele.
+  const connect = vi.spyOn(pool, 'connect');
+  for (const [label, register] of Object.entries(gauges)) {
+    const remove = register();
+    expect((await request(checkout.app).get('/metrics')).status).toBe(200);
+    connect.mockRejectedValueOnce(
+      new Error(`falha injetada no gauge: ${label}`),
+    );
+    expect((await request(checkout.app).get('/metrics')).status).toBe(200);
+    remove();
+  }
   expect(
-    round.missingCount,
-    'a sincronização zerou o SKU ausente',
-  ).toBeGreaterThanOrEqual(1);
+    connect.mock.settledResults.filter((result) => result.type === 'rejected'),
+    'as duas falhas injetadas dispararam',
+  ).toHaveLength(2);
+  connect.mockRestore();
+
+  const removers = Object.values(gauges).map((register) => register());
+  return () => {
+    for (const remove of removers) remove();
+  };
 }
 
 beforeAll(async () => {
   suite = await startWorkerSuite();
-  await exercise(suite);
+  const world = await exercise(suite);
+  const loops = await startQueueLoops(world);
+  const removeApiGauges = await exerciseApi(suite);
   apiText = (await request(suite.checkout.app).get('/metrics')).text;
   workerText = await scrapeMetricsText(workerTelemetry);
   api = parseExposition(apiText);
   worker = parseExposition(workerText);
+  removeApiGauges();
+  await loops.stop();
 }, 240_000);
 
 afterAll(async () => {

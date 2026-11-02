@@ -150,6 +150,7 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
     );
     expect([...instruments].sort()).toEqual([
       'counter',
+      'gauge',
       'histogram',
       'observable_gauge',
       'up_down_counter',

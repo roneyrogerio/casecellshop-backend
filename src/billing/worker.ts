@@ -16,6 +16,7 @@ import { type AttemptContext, runAttempt } from './attempt.ts';
 import { MIN_CALL_DELAY_MS } from './call-permit.ts';
 import type { Attempt, CallSettings } from './erp-call.ts';
 import { parseBillingMessage } from './message.ts';
+import { queueGaugeLifecycle } from './queue-gauge.ts';
 import { BILLING_LOG_EVENTS } from './telemetry.ts';
 
 // Parâmetros da tabela do design.md; os testes sobrepõem só o que precisam.
@@ -209,11 +210,18 @@ export function createWorker({
   };
   const inFlight = new Set<Promise<void>>();
 
+  const gauge = queueGaugeLifecycle(telemetry, queue, 'billing', logger);
   const runner = createLoopRunner({
     run: (isRunning) => pollLoop(ctx, inFlight, isRunning),
     drain: () => Promise.all(inFlight),
-    onStarted: () => announce(logger, 'casecellshop.worker.started'),
-    onStopped: () => announce(logger, 'casecellshop.worker.stopped'),
+    onStarted: () => {
+      gauge.onStarted();
+      announce(logger, 'casecellshop.worker.started');
+    },
+    onStopped: () => {
+      gauge.onStopped();
+      announce(logger, 'casecellshop.worker.stopped');
+    },
   });
 
   return {

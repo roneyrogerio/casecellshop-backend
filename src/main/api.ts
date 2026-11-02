@@ -1,5 +1,9 @@
 import { createApp } from '../app.ts';
+import { createStuckOrderMonitor } from '../billing/stuck-orders.ts';
+import { registerOutboxAgeGauge } from '../billing/outbox-age.ts';
+import { registerInventoryGauges } from '../checkout/inventory-gauges.ts';
 import { createPool } from '../db/pool.ts';
+import { systemClock } from '../shared/clock.ts';
 import { envPort, requireEnv } from '../shared/config.ts';
 import { installGracefulShutdown } from '../shared/lifecycle.ts';
 import { createLogger, eventLogger } from '../shared/logging.ts';
@@ -20,6 +24,20 @@ const server = app.listen(port, () => {
   );
 });
 
+// Os sinais lidos do banco (AD-008) saem pela API, não pelo worker; cada réplica os registra, e a marca no banco
+// garante que o counter de pedidos sem desfecho conte cada pedido uma vez.
+const removeGauges = [
+  registerOutboxAgeGauge({ pool, telemetry, logger }),
+  registerInventoryGauges({ pool, telemetry, logger }),
+];
+const stuckOrders = createStuckOrderMonitor({
+  pool,
+  logger,
+  telemetry,
+  clock: systemClock,
+});
+await stuckOrders.start();
+
 installGracefulShutdown({
   logger,
   stop: async () => {
@@ -31,6 +49,9 @@ installGracefulShutdown({
       });
       server.closeIdleConnections();
     });
+    // O monitor e os gauges usam o pool: param antes de fechá-lo.
+    await stuckOrders.stop();
+    for (const remove of removeGauges) remove();
     await pool.end();
     await telemetry.shutdown();
   },
