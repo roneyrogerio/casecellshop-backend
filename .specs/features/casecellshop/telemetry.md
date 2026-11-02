@@ -21,6 +21,7 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.checkout.requests` | `casecellshop_checkout_requests_total` | contador | `{request}` | Checkouts por desfecho. |
 | `casecellshop.erp.client.active_operations` | `casecellshop_erp_client_active_operations` | UpDownCounter | `{operation}` | Chamadas ao ERP em andamento. |
 | `casecellshop.erp.client.operation.duration` | `casecellshop_erp_client_operation_duration` | histograma | `s` | Duração das chamadas ao ERP, por operação e desfecho; o `_count` conta as chamadas. |
+| `casecellshop.erp.config_errors` | `casecellshop_erp_config_errors_total` | contador | `{call}` | Chamadas ao ERP com desfecho `config_error` (credencial ou rota recusada), por operação. |
 | `casecellshop.erp.out_of_stock.rejections` | `casecellshop_erp_out_of_stock_rejections_total` | contador | `{order}` | Pedidos que o ERP recusou por falta de estoque. |
 | `casecellshop.inventory.oversold_skus` | `casecellshop_inventory_oversold_skus` | gauge | `{sku}` | SKUs com `reserved > on_hand`: reservas que o estoque já não cobre (furo de estoque). |
 | `casecellshop.inventory.reserved` | `casecellshop_inventory_reserved` | gauge | `{unit}` | Unidades reservadas por pedidos pendentes, somadas em todos os SKUs. |
@@ -30,7 +31,7 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.outbox.oldest_pending.age` | `casecellshop_outbox_oldest_pending_age` | gauge | `s` | Idade da linha mais antiga da outbox com o pedido pendente e fora da DLQ; 0 sem nenhuma. |
 | `casecellshop.outbox.orphan_conclusions` | `casecellshop_outbox_orphan_conclusions_total` | contador | `{conclusion}` | Conclusões que não afetaram linha porque o token já não valia. |
 | `casecellshop.outbox.published.messages` | `casecellshop_outbox_published_messages_total` | contador | `{message}` | Linhas da outbox publicadas no SQS pelo relay. |
-| `casecellshop.queue.messages` | `casecellshop_queue_messages` | gauge | `{message}` | Mensagens visíveis na fila, pelo `ApproximateNumberOfMessages` do SQS. |
+| `casecellshop.queue.messages` | `casecellshop_queue_messages` | gauge | `{message}` | Mensagens na fila, visíveis e em voo: `ApproximateNumberOfMessages` mais `ApproximateNumberOfMessagesNotVisible` do SQS. |
 | `http.server.request.duration` | `http_server_request_duration` | histograma | `s` | Duração das requisições HTTP, base dos SLOs de latência. |
 
 ### `casecellshop.billing.gauge.read_failures`
@@ -105,6 +106,12 @@ Fronteiras: 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30
 | --- | --- | --- | --- |
 | `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog` | Operação da porta ErpClient. |
 | `casecellshop.erp.outcome` | obrigatório | `ok`, `found`, `not_found`, `permanent`, `transient`, `ambiguous`, `config_error` | Desfecho da chamada, pela lista fechada da porta. |
+
+### `casecellshop.erp.config_errors`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.erp.operation` | obrigatório | `create_order`, `find_order`, `list_catalog` | Operação da porta ErpClient. |
 
 ### `casecellshop.erp.out_of_stock.rejections`
 

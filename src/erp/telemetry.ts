@@ -45,6 +45,21 @@ export const ERP_METRICS = {
     description: 'Chamadas ao ERP em andamento.',
     attributes: {},
   },
+  // OBS-08: o histograma de duração não nasce em zero (a API do OpenTelemetry não cria um histograma vazio), e o
+  // alerta de configuração precisa contar o primeiro erro depois da subida; este counter nasce em 0 por operação.
+  'casecellshop.erp.config_errors': {
+    instrument: 'counter',
+    unit: '{call}',
+    description:
+      'Chamadas ao ERP com desfecho `config_error` (credencial ou rota recusada), por operação.',
+    attributes: {
+      'casecellshop.erp.operation': {
+        description: 'Operação da porta ErpClient.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ERP_OPERATIONS },
+      },
+    },
+  },
   'casecellshop.erp.out_of_stock.rejections': {
     instrument: 'counter',
     unit: '{order}',
