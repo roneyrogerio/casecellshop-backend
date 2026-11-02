@@ -1,9 +1,10 @@
 import type { RequestHandler } from 'express';
-import type { Logger } from 'pino';
 import { healthRoute, type HealthStatus } from '../contract/index.ts';
 import { databaseUnavailableProblem } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import type { HealthRepository } from './repository.ts';
+import { HEALTH_LOG_EVENTS } from './telemetry.ts';
 
 export interface HealthRoutes {
   // Os middlewares da rota, na ordem.
@@ -12,14 +13,15 @@ export interface HealthRoutes {
 
 export function createHealthRoutes(
   health: HealthRepository,
-  logger: Logger,
+  logger: AppLogger,
 ): HealthRoutes {
   const getHealth: RequestHandler = async (_req, res) => {
     try {
       await health.ping();
     } catch (error) {
-      logger.warn(
-        { event: 'health_failed', err: error },
+      eventLogger(logger, HEALTH_LOG_EVENTS).warn(
+        'casecellshop.health.db.unavailable',
+        { err: error },
         'o banco não respondeu ao healthcheck',
       );
       throw databaseUnavailableProblem();

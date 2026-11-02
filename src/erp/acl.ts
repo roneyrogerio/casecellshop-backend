@@ -1,5 +1,6 @@
 import type { Clock } from '../shared/clock.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
+import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
 import type {
   CreateOrderResult,
   ErpCatalogItem,
@@ -115,31 +116,33 @@ async function call(
 }
 
 // Mede cada operação sem mudar o resultado: duração e contagem por desfecho, a gauge de
-// chamadas em voo e o alerta de configuração. Sem `telemetry`, só repassa.
-async function observe<T extends { kind: string }>(
+// chamadas em voo. O desfecho (inclusive `config_error`) é atributo do histograma, cujo `_count` conta as
+// chamadas. Sem `telemetry`, só repassa.
+async function observe<T extends { kind: ErpOutcome }>(
   { clock, telemetry }: ErpClientOptions,
-  operation: 'create_order' | 'find_order' | 'list_catalog',
+  operation: ErpOperation,
   run: () => Promise<T>,
 ): Promise<T> {
   if (!telemetry) return run();
+  const metrics = erpMetrics(telemetry);
   const startedAt = clock.now();
-  telemetry.erpRequestsInFlight.add(1);
+  metrics.add('casecellshop.erp.client.active_operations', 1);
   let result: T | undefined;
   try {
     result = await run();
     return result;
   } finally {
-    telemetry.erpRequestsInFlight.add(-1);
+    metrics.add('casecellshop.erp.client.active_operations', -1);
     // Uma exceção inesperada não tem desfecho da lista fechada: só a duração fica sem registro.
     if (result) {
-      const labels = { operation, outcome: result.kind };
-      telemetry.erpRequestDuration.record(
+      metrics.record(
+        'casecellshop.erp.client.operation.duration',
         (clock.now() - startedAt) / 1000,
-        labels,
+        {
+          'casecellshop.erp.operation': operation,
+          'casecellshop.erp.outcome': result.kind,
+        },
       );
-      telemetry.erpRequestTotal.add(1, labels);
-      if (result.kind === 'config_error')
-        telemetry.erpConfigError.add(1, { operation });
     }
   }
 }
@@ -248,7 +251,11 @@ export function createErpClient(options: ErpClientOptions): ErpClient {
         ),
       );
       if (result.kind === 'permanent' && result.reason === 'out_of_stock')
-        telemetry?.erpOutOfStockRejection.add(1);
+        if (telemetry)
+          erpMetrics(telemetry).add(
+            'casecellshop.erp.out_of_stock.rejections',
+            1,
+          );
       return result;
     },
     findOrderByReference: (reference) =>

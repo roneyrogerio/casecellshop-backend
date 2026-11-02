@@ -1,6 +1,6 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
-import { pino, type Logger } from 'pino';
+import { pino } from 'pino';
 import {
   afterAll,
   afterEach,
@@ -27,6 +27,7 @@ import {
   type Worker,
   type WorkerConfig,
 } from '../../src/billing/worker.ts';
+import { fromPino, type AppLogger } from '../../src/shared/logging.ts';
 import type { Semaphore } from '../../src/shared/semaphore.ts';
 import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import {
@@ -474,7 +475,7 @@ export interface BuildWorkerOptions {
   config?: Partial<WorkerConfig>;
   random?: () => number;
   // Padrão: silencioso. Os testes de log passam o logger que captura as linhas.
-  logger?: Logger;
+  logger?: AppLogger;
   semaphore?: Semaphore;
   erp?: ErpClient;
 }
@@ -494,7 +495,7 @@ export function buildWorker(
     pool: options.pool ?? world.pool,
     queue: world.queue,
     erp: options.erp ?? world.erp,
-    logger: options.logger ?? pino({ level: 'silent' }),
+    logger: options.logger ?? fromPino(pino({ level: 'silent' })),
     telemetry: options.telemetry ?? world.telemetry,
     clock: world.clock,
     random: options.random ?? (() => 0.5),

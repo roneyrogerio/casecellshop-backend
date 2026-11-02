@@ -91,6 +91,21 @@ async function deadOrders(
   await moveToDlq(world, orders.length, 1);
 }
 
+// Um pedido de 2 unidades cancelado pelo runbook com a mensagem na DLQ, e o logger em memória do cenário.
+async function cancelledDeadOrder() {
+  const world = await createWorld(suite, {
+    withoutH1b: true,
+    maxReceiveCount: 1,
+  });
+  const logs = captureLogs();
+  const order = await submitOrder(suite, world, { quantity: 2 });
+  await deadOrders(world, [order]);
+  expect(await cancelOrder(suite.pool, order.orderId)).toEqual({
+    changed: true,
+  });
+  return { world, logs, order };
+}
+
 function redrive(world: QueueWorld): ReturnType<typeof redriveDlq> {
   return driveClock(
     redriveDlq({
@@ -271,17 +286,8 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     await expectReservationReleased(order);
   });
 
-  it('ORD-15 a mensagem que ficou na DLQ do pedido cancelado é apagada pela reconciliação, com outbox.closed, sem chamar o ERP nem criar fatura', async () => {
-    const world = await createWorld(suite, {
-      withoutH1b: true,
-      maxReceiveCount: 1,
-    });
-    const logs = captureLogs();
-    const order = await submitOrder(suite, world, { quantity: 2 });
-    await deadOrders(world, [order]);
-    expect(await cancelOrder(suite.pool, order.orderId)).toEqual({
-      changed: true,
-    });
+  it('ORD-15 a mensagem que ficou na DLQ do pedido cancelado é apagada pela reconciliação, com casecellshop.outbox.closed, sem chamar o ERP nem criar fatura', async () => {
+    const { world, logs, order } = await cancelledDeadOrder();
     const rig = buildReconciler(world, { logger: logs.logger });
 
     const result = await rig.reconciler.reconcileOnce();
@@ -290,22 +296,15 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     expect(world.transport.sends).toHaveLength(0);
     expect(await invoices(order.orderId)).toBe(0);
     expect(await dlqTotal(world)).toBe(0);
-    expect(logs.eventsOf('outbox.closed', order.orderId)).toHaveLength(1);
+    expect(
+      logs.eventsOf('casecellshop.outbox.closed', order.orderId),
+    ).toHaveLength(1);
     await expectCancelled(order);
     await expectReservationReleased(order);
   });
 
   it('ORD-15 depois de um redrive, o worker apaga a mensagem do pedido cancelado sem chamar o ERP e sem criar fatura', async () => {
-    const world = await createWorld(suite, {
-      withoutH1b: true,
-      maxReceiveCount: 1,
-    });
-    const logs = captureLogs();
-    const order = await submitOrder(suite, world, { quantity: 2 });
-    await deadOrders(world, [order]);
-    expect(await cancelOrder(suite.pool, order.orderId)).toEqual({
-      changed: true,
-    });
+    const { world, logs, order } = await cancelledDeadOrder();
     await redrive(world);
     await vi.waitFor(
       async () => expect(await world.queues.queue.approximateCount()).toBe(1),
@@ -321,7 +320,9 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     expect(
       world.queue.deletesOf(order.orderId).map((call) => call.result),
     ).toEqual(['ok']);
-    expect(logs.eventsOf('outbox.closed', order.orderId)).toHaveLength(1);
+    expect(
+      logs.eventsOf('casecellshop.outbox.closed', order.orderId),
+    ).toHaveLength(1);
     await expectQueuesEmpty(world);
     await expectCancelled(order);
     await expectReservationReleased(order);
@@ -329,7 +330,7 @@ describe('ORD-15 cancelamento pelo runbook', () => {
 });
 
 describe('ORD-15 A12: a linha da outbox que não passa no schema da mensagem', () => {
-  it('ORD-15 o relay segue ignorando a linha inválida (outbox.invalid_row a cada rodada) e, depois do cancelamento do pedido, não a lê mais', async () => {
+  it('ORD-15 o relay segue ignorando a linha inválida (casecellshop.outbox.row.rejected a cada rodada) e, depois do cancelamento do pedido, não a lê mais', async () => {
     const world = await createWorld(suite);
     const logs = captureLogs();
     const relay = createRelay({
@@ -352,7 +353,7 @@ describe('ORD-15 A12: a linha da outbox que não passa no schema da mensagem', (
     expect(await relay.publishOnce()).toBe(0);
     expect(await relay.publishOnce()).toBe(0);
     expect(
-      logs.eventsOf('outbox.invalid_row', orderId),
+      logs.eventsOf('casecellshop.outbox.row.rejected', orderId),
       'uma linha inválida por rodada, enquanto o pedido não é cancelado',
     ).toHaveLength(2);
 
@@ -363,8 +364,10 @@ describe('ORD-15 A12: a linha da outbox que não passa no schema da mensagem', (
       'o cancelamento marca a linha como publicada',
     ).not.toBeNull();
     expect(await relay.publishOnce()).toBe(0);
-    expect(logs.eventsOf('outbox.invalid_row', orderId)).toHaveLength(2);
-    expect(logs.eventsOf('outbox.relay_error')).toEqual([]);
+    expect(
+      logs.eventsOf('casecellshop.outbox.row.rejected', orderId),
+    ).toHaveLength(2);
+    expect(logs.eventsOf('casecellshop.outbox.relay.failed')).toEqual([]);
     // Nada foi publicado no SQS por causa dela.
     expect(await visibleCount(world.emq, world.queues.queueUrl)).toBe(0);
   });

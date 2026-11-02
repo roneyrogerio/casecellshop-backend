@@ -99,6 +99,45 @@ export function singleRuleConfig(overrides: unknown[], rules: unknown = {}) {
   return { categories: { correctness: 'off' }, rules, overrides };
 }
 
+interface Diagnostic {
+  code: string;
+  filename: string;
+  labels?: { span?: { line?: number } }[];
+}
+
+export interface LintReport {
+  tree: string;
+  // Os códigos de regra que o oxlint deu, por arquivo e por linha (a partir de 1).
+  byFile: Map<string, Map<number, string[]>>;
+  stdout: string;
+}
+
+// Roda o oxlint uma vez, com a configuração do projeto, sobre os arquivos dados (caminho relativo e conteúdo) numa
+// árvore nova, e agrupa os códigos de regra por arquivo e por linha. Os caminhos valem para os `files` dos overrides.
+export function lintFilesByLine(
+  prefix: string,
+  files: Readonly<Record<string, string>>,
+): LintReport {
+  const tree = newLintTree(prefix);
+  for (const [file, content] of Object.entries(files))
+    writeFileIn(tree, file, content);
+  const result = runCommand(
+    oxlintBin,
+    ['-c', join(tree, '.oxlintrc.json'), '-f', 'json', ...Object.keys(files)],
+    { cwd: tree },
+  );
+  const parsed = JSON.parse(result.stdout) as { diagnostics: Diagnostic[] };
+  const byFile = new Map<string, Map<number, string[]>>();
+  for (const diagnostic of parsed.diagnostics) {
+    const line = diagnostic.labels?.[0]?.span?.line ?? 0;
+    const lines =
+      byFile.get(diagnostic.filename) ?? new Map<number, string[]>();
+    lines.set(line, [...(lines.get(line) ?? []), diagnostic.code]);
+    byFile.set(diagnostic.filename, lines);
+  }
+  return { tree, byFile, stdout: result.stdout };
+}
+
 // Roda o oxlint com a configuração do projeto sobre um único arquivo `lib/x.ts` numa árvore nova (fora de `src/`, para
 // as regras de `src/` não interferirem). Devolve o código de saída e a saída junta.
 export function lintSampleFile(
