@@ -346,6 +346,12 @@ const EXCEPTIONS: Exception[] = [
       'o getFileInfo do Prettier lê só o .prettierignore, e não o arquivo',
   },
   {
+    file: 'test/repo/readme-promql.test.ts',
+    citations: ['.specs', 'README.md'],
+    reason:
+      'lê o README.md da raiz e o telemetry.md sob .specs, e nenhum dos dois está na lista; a guarda compara pelo nome, e o .specs/README.md da lista tem o mesmo nome do README.md da raiz',
+  },
+  {
     file: 'test/repo/rules-paths.test.ts',
     citations: ['.specs/**'],
     reason: 'o glob que a regra docs.md declara no frontmatter; nada é lido',
@@ -373,6 +379,22 @@ describe('AI-53 a guarda de leitura enxerga o que procura (controle negativo)', 
     'STATE.md',
     'STATE-ARCHIVE.md',
   ];
+
+  it('AI-53 os nomes escritos aqui são os que a guarda real deriva da lista do ci.yml (os controles inventados provam a guarda com nomes que ainda estão nela)', () => {
+    expect(fileNamesOf(docsOnlyPaths())).toEqual(names);
+  });
+
+  it('AI-53 o README.md da raiz e o spec.md ficam fora da lista, e o .specs/README.md continua nela, de modo que o nome README.md segue sendo vigiado', () => {
+    const paths = docsOnlyPaths();
+
+    expect(paths).not.toContain('README.md');
+    expect(paths).not.toContain('.specs/features/casecellshop/spec.md');
+    expect(paths).toContain('.specs/README.md');
+    expect(fileNamesOf(paths)).toContain('README.md');
+    expect(findCitations(`read(join(root, 'README.md'))`, names)).toEqual([
+      'README.md',
+    ]);
+  });
 
   it('AI-53 um teste inventado que lê .specs/project/STATE.md, monta .specs/project/ROADMAP.md com join ou cita README.md é acusado', () => {
     const read = `import { readFileSync } from 'node:fs';
