@@ -1,7 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { globToRegExp } from '../helpers/glob.ts';
+import {
+  overrideFilesMatch,
+  restrictedImportMatches,
+  type RestrictionEntry,
+  type RestrictionOptions,
+} from '../helpers/glob.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
 
 // Imports que os testes não fazem, travados pelo `no-restricted-imports` do oxlint e conferidos aqui com o
@@ -103,17 +108,6 @@ const SPECS: Spec[] = [
   },
 ];
 
-interface RestrictionEntry {
-  name?: string;
-  group?: string[];
-  regex?: string;
-  importNames?: string[];
-  allowImportNames?: string[];
-}
-interface RestrictionOptions {
-  paths?: (string | RestrictionEntry)[];
-  patterns?: (string | RestrictionEntry)[];
-}
 interface Override {
   files?: string[];
   rules?: Record<string, unknown>;
@@ -142,33 +136,12 @@ function effectiveSetting(
 ): unknown {
   let setting = config.rules?.[rule];
   for (const override of config.overrides ?? []) {
-    const matches = (override.files ?? []).some((glob) =>
-      globToRegExp(glob).test(file),
-    );
+    // Os `files` casam como o `GlobSet` do oxlint: `*.ts` sem `/` alcança qualquer pasta.
+    const matches = overrideFilesMatch(override.files ?? [], file);
     if (matches && override.rules && rule in override.rules)
       setting = override.rules[rule];
   }
   return setting;
-}
-
-function entryMatches(
-  entry: string | RestrictionEntry,
-  use: ImportUse,
-): boolean {
-  const { name, group, regex, importNames, allowImportNames } =
-    typeof entry === 'string' ? ({ name: entry } as RestrictionEntry) : entry;
-  const moduleMatches =
-    name === use.module ||
-    (group ?? []).some(
-      (pattern) =>
-        pattern === use.module || globToRegExp(pattern).test(use.module),
-    ) ||
-    (regex !== undefined && new RegExp(regex).test(use.module));
-  if (!moduleMatches) return false;
-  if (importNames !== undefined) return importNames.includes(use.name);
-  if (allowImportNames !== undefined)
-    return !allowImportNames.includes(use.name);
-  return true;
 }
 
 // A regra está ligada como `error` para o arquivo e algum item das opções (`paths` ou `patterns`) reprova o import.
@@ -179,8 +152,7 @@ function isRestricted(
 ): boolean {
   const setting = effectiveSetting(config, file);
   if (severityOf(setting) !== 'error') return false;
-  const { paths = [], patterns = [] } = optionsOf(setting);
-  return [...paths, ...patterns].some((entry) => entryMatches(entry, use));
+  return restrictedImportMatches(optionsOf(setting), use.module, use.name);
 }
 
 interface DefectPhrases<T> {

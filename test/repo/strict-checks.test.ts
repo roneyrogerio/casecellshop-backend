@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
-import { globToRegExp } from '../helpers/glob.ts';
+import { globToRegExp, overrideFilesMatch } from '../helpers/glob.ts';
 import { typecheckSample } from '../helpers/lint-tree.ts';
 import { repoRoot as root } from '../helpers/repo-root.ts';
 import { runCommand } from '../helpers/run-node.ts';
@@ -100,12 +100,16 @@ const TS_SAMPLES = [
 // O glob alcança .ts quando o último trecho dele casa um nome terminado em `.ts` (`*.ts`, `*`, `**`,
 // `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou quando termina em `.ts` ou num grupo `{…ts…}`. Os caminhos de amostra
 // não servem para decidir: uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência.
+// O último trecho é conferido como nome de arquivo, com o `globToRegExp` e não com o `overrideFilesMatch`: o
+// `GlobSet` põe `**/` na frente de um trecho sem `/`, o que não muda o casamento de um nome solto, mas atrapalha o
+// `!` do início (`**/!*.js` é um nome literal), e o `!` do glob inteiro tem de continuar valendo para o trecho.
 function reachesTs(glob: string): boolean {
+  const bangs = /^!*/.exec(glob)?.[0] ?? '';
   const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
   return (
     /(?:\.ts|\*)$/.test(glob) ||
     /\{[^}]*\bts\b[^}]*\}$/.test(glob) ||
-    globToRegExp(lastSegment).test('arquivo.ts')
+    globToRegExp(`${bangs}${lastSegment.replace(/^!+/, '')}`).test('arquivo.ts')
   );
 }
 
@@ -118,7 +122,7 @@ function overrideReachesTs(files: readonly string[]): boolean {
 function onlyReachesGeneratedFiles(files: readonly string[]): boolean {
   return files.filter(reachesTs).every((glob) => {
     const matched = TS_SAMPLES.filter((sample) =>
-      globToRegExp(glob).test(sample),
+      overrideFilesMatch([glob], sample),
     );
     return (
       matched.length > 0 &&
