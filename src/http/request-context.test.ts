@@ -6,7 +6,6 @@ import {
   type ReadableSpan,
 } from '@opentelemetry/sdk-trace';
 import express, { type RequestHandler, type Response } from 'express';
-import type { Logger } from 'pino';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { captureLogs, type LogLine } from '../../test/helpers/logs.ts';
 import {
@@ -14,6 +13,7 @@ import {
   overriding,
   type RecordedAttributes,
 } from '../../test/helpers/telemetry-intercept.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { requestContext } from './request-context.ts';
 
@@ -22,7 +22,7 @@ import { requestContext } from './request-context.ts';
 // memória e a duração HTTP lida no limite do Meter. Nenhum teste espera um prazo fixo: cada um espera o `close` da
 // resposta, que o servidor emite quando a requisição termina.
 
-type Factory = (telemetry: Telemetry, logger: Logger) => RequestHandler;
+type Factory = (telemetry: Telemetry, logger: AppLogger) => RequestHandler;
 
 const exporter = new InMemorySpanExporter();
 const telemetry = createTelemetry({ spanExporter: exporter });

@@ -11,7 +11,7 @@ import {
   PROBLEM_MEDIA_TYPE,
   Problem,
 } from '../../../src/contract/index.ts';
-import { createLogger } from '../../../src/shared/logging.ts';
+import { createLogger, fromPino } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
@@ -58,7 +58,7 @@ beforeAll(async () => {
   database = await startMigratedDatabase();
   app = createApp({
     pool: database.pool,
-    logger: pino({ level: 'info' }, logSink),
+    logger: fromPino(pino({ level: 'info' }, logSink)),
     telemetry: createTelemetry({ spanExporter: new InMemorySpanExporter() }),
   });
 }, 120_000);

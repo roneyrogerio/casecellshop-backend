@@ -1,8 +1,6 @@
-import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { cleanupTempDirs, writeFileIn } from '../helpers/git-sandbox.ts';
-import { newLintTree, oxlintBin } from '../helpers/lint-tree.ts';
-import { runCommand } from '../helpers/run-node.ts';
+import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
+import { lintFilesByLine, type LintReport } from '../helpers/lint-tree.ts';
 
 // FND-13 ("Ligação do lint") e FND-14: o oxlint de verdade, com o .oxlintrc.json do projeto, numa árvore temporária
 // (newLintTree: links para a configuração e para o plugin, nada escrito no repositório). Complementa
@@ -151,54 +149,21 @@ function linesFor(sample: Sample): Line[] {
   return lines;
 }
 
-interface Diagnostic {
-  code: string;
-  filename: string;
-  message: string;
-  labels?: { span?: { line?: number } }[];
-}
-
-interface Report {
-  tree: string;
-  byFile: Map<string, Map<number, string[]>>;
-  stdout: string;
-}
-
-let cached: Report | undefined;
+let cached: LintReport | undefined;
 
 // Roda o oxlint uma vez, sobre todas as amostras, e agrupa os códigos de erro por arquivo e por linha.
-function report(): Report {
-  if (cached) return cached;
-  const tree = newLintTree('fnd13-lint-wiring-');
-  for (const sample of SAMPLES)
-    writeFileIn(
-      tree,
-      sample.file,
-      `${linesFor(sample)
-        .map((line) => line.text)
-        .join('\n')}\n`,
-    );
-  const result = runCommand(
-    oxlintBin,
-    [
-      '-c',
-      join(tree, '.oxlintrc.json'),
-      '-f',
-      'json',
-      ...SAMPLES.map((sample) => sample.file),
-    ],
-    { cwd: tree },
+function report(): LintReport {
+  cached ??= lintFilesByLine(
+    'fnd13-lint-wiring-',
+    Object.fromEntries(
+      SAMPLES.map((sample) => [
+        sample.file,
+        `${linesFor(sample)
+          .map((line) => line.text)
+          .join('\n')}\n`,
+      ]),
+    ),
   );
-  const parsed = JSON.parse(result.stdout) as { diagnostics: Diagnostic[] };
-  const byFile = new Map<string, Map<number, string[]>>();
-  for (const diagnostic of parsed.diagnostics) {
-    const line = diagnostic.labels?.[0]?.span?.line ?? 0;
-    const lines =
-      byFile.get(diagnostic.filename) ?? new Map<number, string[]>();
-    lines.set(line, [...(lines.get(line) ?? []), diagnostic.code]);
-    byFile.set(diagnostic.filename, lines);
-  }
-  cached = { tree, byFile, stdout: result.stdout };
   return cached;
 }
 

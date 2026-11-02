@@ -4,6 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import {
@@ -149,7 +150,7 @@ async function exercise(running: WorkerSuite): Promise<void> {
   const relay = createRelay({
     pool: running.pool,
     queue: world.queues.queue,
-    logger: pino({ level: 'silent' }),
+    logger: fromPino(pino({ level: 'silent' })),
     telemetry: workerTelemetry,
     clock: createManualClock(),
   });

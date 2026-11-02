@@ -10,6 +10,7 @@ import {
   PROBLEM_MEDIA_TYPE,
   Problem,
 } from '../../../src/contract/index.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import {
@@ -27,7 +28,7 @@ beforeAll(async () => {
   database = await startMigratedDatabase();
   app = createApp({
     pool: database.pool,
-    logger: pino({ level: 'silent' }),
+    logger: fromPino(pino({ level: 'silent' })),
     telemetry: createTelemetry({ spanExporter: new InMemorySpanExporter() }),
   });
 }, 120_000);

@@ -2,7 +2,6 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import type { Request, RequestHandler, Response } from 'express';
 import * as fc from 'fast-check';
-import type { Logger } from 'pino';
 import { afterAll, describe, expect, it } from 'vitest';
 import { captureLogs } from '../../test/helpers/logs.ts';
 import {
@@ -24,6 +23,7 @@ import {
   type RecordedAttributes,
 } from '../../test/helpers/telemetry-intercept.ts';
 import { CorrelationId } from '../contract/index.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { requestContext } from './request-context.ts';
 
@@ -33,7 +33,7 @@ import { requestContext } from './request-context.ts';
 // e resposta do Node: um status 1xx não sai por uma conexão HTTP de verdade (o cliente o trata como resposta
 // parcial).
 
-type Factory = (telemetry: Telemetry, logger: Logger) => RequestHandler;
+type Factory = (telemetry: Telemetry, logger: AppLogger) => RequestHandler;
 
 const telemetry = createTelemetry();
 const { logger } = captureLogs('casecellshop-api', 'silent');

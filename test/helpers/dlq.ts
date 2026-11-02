@@ -1,5 +1,5 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
-import { pino, type Logger } from 'pino';
+import { pino } from 'pino';
 import { expect, vi } from 'vitest';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
 import {
@@ -8,6 +8,7 @@ import {
   type ReconcilerConfig,
 } from '../../src/billing/reconciliation.ts';
 import type { ReceivedMessage } from '../../src/queue/sqs.ts';
+import { fromPino, type AppLogger } from '../../src/shared/logging.ts';
 import { createSemaphore, type Semaphore } from '../../src/shared/semaphore.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
 import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
@@ -91,7 +92,7 @@ export function countingSemaphore(size: number): CountingSemaphore {
 }
 
 export interface ReconcilerOptions {
-  logger?: Logger;
+  logger?: AppLogger;
   config?: Partial<ReconcilerConfig>;
   semaphore?: Semaphore;
   erp?: ErpClient;
@@ -122,7 +123,7 @@ export function buildReconciler(
       dlq,
       erp: options.erp ?? world.erp,
       semaphore: options.semaphore ?? createSemaphore(30),
-      logger: options.logger ?? pino({ level: 'silent' }),
+      logger: options.logger ?? fromPino(pino({ level: 'silent' })),
       telemetry: options.telemetry ?? world.telemetry,
       clock,
       ...(options.config ? { config: options.config } : {}),

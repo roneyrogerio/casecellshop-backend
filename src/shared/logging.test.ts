@@ -1,5 +1,6 @@
+import { pino, type DestinationStream } from 'pino';
 import { describe, expect, it } from 'vitest';
-import { createLogger, eventLogger, logContext } from './logging.ts';
+import { createLogger, eventLogger, fromPino, logContext } from './logging.ts';
 import type { LogEventSpec } from './telemetry-catalog.ts';
 
 // OBS-07 (AD-029): o logger tipado, em execução. `info`, `warn` e `error` escrevem uma linha no nível pedido, com o
@@ -9,8 +10,8 @@ import type { LogEventSpec } from './telemetry-catalog.ts';
 
 type Line = Record<string, unknown>;
 
-// O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo `destination`.
-function capture(level = 'info') {
+// O destino em memória: guarda cada linha JSON que o logger escreve.
+function memoryDestination() {
   const lines: Line[] = [];
   const destination = {
     write(chunk: string): void {
@@ -18,6 +19,20 @@ function capture(level = 'info') {
         if (text.trim() !== '') lines.push(JSON.parse(text) as Line);
     },
   };
+  return { lines, destination };
+}
+
+// Um logger do pino com o nível como texto, como o da aplicação, para o `fromPino` envolver.
+function textLevelPino(level: string, destination: DestinationStream) {
+  return pino(
+    { level, formatters: { level: (label) => ({ level: label }) } },
+    destination,
+  );
+}
+
+// O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo `destination`.
+function capture(level = 'info') {
+  const { lines, destination } = memoryDestination();
   const logger = createLogger({
     serviceName: 'casecellshop-worker',
     level,
@@ -234,5 +249,82 @@ describe('OBS-07 eventLogger: a linha que sai', () => {
     expect(lines.map((line) => line['event'])).toEqual([
       'casecellshop.demo.failed',
     ]);
+  });
+});
+
+// A17: o `AppLogger` que o resto de `src/` recebe só cria filhos; a prova de tipo está em
+// test/repo/event-logger-types.test.ts, e aqui o que acontece em execução.
+describe('OBS-07 AppLogger: só cria filhos, e o eventLogger é o único que escreve', () => {
+  it.each(['info', 'warn', 'error', 'fatal', 'debug', 'trace'])(
+    'OBS-07 o AppLogger do createLogger, do fromPino e do child não expõe %s em execução',
+    (method) => {
+      const fromCreate = capture().logger;
+      const fromPinoLogger = fromPino(pino({ level: 'silent' }));
+      const loggers = [
+        fromCreate,
+        fromCreate.child({ orderId: 'pedido-1' }),
+        fromPinoLogger,
+        fromPinoLogger.child({ orderId: 'pedido-1' }),
+      ];
+
+      for (const logger of loggers)
+        expect(
+          (logger as unknown as Record<string, unknown>)[method],
+        ).toBeUndefined();
+    },
+  );
+
+  it('OBS-07 o filho de um filho (child.child) leva os campos dos dois à linha que o eventLogger escreve', () => {
+    const { logger, lines } = capture();
+    const grandchild = logger
+      .child({ orderId: 'pedido-1' })
+      .child({ attempt: 3 });
+
+    eventLogger(grandchild, EVENTS).info(
+      'casecellshop.demo.finished',
+      { status: 202 },
+      'fim',
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      event: 'casecellshop.demo.finished',
+      orderId: 'pedido-1',
+      attempt: 3,
+      status: 202,
+    });
+  });
+
+  it('OBS-07 o fromPino escreve no destino do logger do pino que envolve, e o filho dele leva os campos', () => {
+    const { lines, destination } = memoryDestination();
+    const logger = fromPino(textLevelPino('info', destination));
+
+    eventLogger(logger.child({ orderId: 'pedido-2' }), EVENTS).info(
+      'casecellshop.demo.started',
+      { port: 3000 },
+      'iniciado',
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      level: 'info',
+      event: 'casecellshop.demo.started',
+      orderId: 'pedido-2',
+      port: 3000,
+      msg: 'iniciado',
+    });
+  });
+
+  it('OBS-07 o fromPino respeita o nível do logger do pino: o evento abaixo dele não escreve', () => {
+    const { lines, destination } = memoryDestination();
+    const log = eventLogger(
+      fromPino(textLevelPino('warn', destination)),
+      EVENTS,
+    );
+
+    log.info('casecellshop.demo.stopped', {}, 'parado');
+    log.warn('casecellshop.demo.degraded', { reason: 'x' }, 'degradado');
+
+    expect(lines.map((line) => line['level'])).toEqual(['warn']);
   });
 });

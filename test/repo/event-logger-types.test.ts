@@ -1,5 +1,6 @@
 import { afterAll, describe, it } from 'vitest';
 import {
+  FIELD_ERROR_CODES,
   expectLogCompiles,
   expectLogTypeError,
   type SampleCase,
@@ -90,7 +91,7 @@ describe('OBS-07 eventLogger: o campo que o evento não declara', () => {
       sample(
         "log.info('casecellshop.demo.started', { port: 1, hostname: 'x' }, 'm');",
       ),
-      { code: 'TS2353', text: 'hostname' },
+      { code: FIELD_ERROR_CODES, text: 'hostname' },
     );
   }, 60_000);
 
@@ -99,14 +100,183 @@ describe('OBS-07 eventLogger: o campo que o evento não declara', () => {
       sample(
         "log.info('casecellshop.demo.started', { reason: 'cancelled' }, 'm');",
       ),
-      { code: 'TS2353', text: 'reason' },
+      { code: FIELD_ERROR_CODES, text: 'reason' },
     );
   }, 60_000);
 
   it('OBS-07 o campo event dado à mão reprova no tsc: o nome do evento só entra pelo primeiro argumento', () => {
     expectLogTypeError(
       sample("log.info('casecellshop.demo.started', { event: 'outro' }, 'm');"),
-      { code: 'TS2353', text: 'event' },
+      { code: FIELD_ERROR_CODES, text: 'event' },
+    );
+  }, 60_000);
+});
+
+// A16: o `tsc` só conferia campo a mais num objeto literal escrito na própria chamada. O tipo exato recusa também o
+// objeto montado antes dela, como o `fields` do log da requisição.
+describe('OBS-07 eventLogger: o campo a mais num objeto montado antes da chamada (A16)', () => {
+  it('OBS-07 controle: um objeto montado antes, só com campos declarados e de correlação, compila', () => {
+    expectLogCompiles(
+      sample(`const finished = { status: 200, route: '/x' };
+log.info('casecellshop.demo.finished', finished, 'm');
+const started = { port: 1, correlationId: 'r', trace_id: 't', span_id: 's' };
+log.info('casecellshop.demo.started', started, 'm');
+const empty = {};
+log.info('casecellshop.demo.stopped', empty, 'm');
+const base = { status: 503 };
+const spread = { ...base, route: '/y' };
+log.error('casecellshop.demo.finished', spread, 'm');`),
+    );
+  }, 60_000);
+
+  it('OBS-07 um objeto montado antes com um campo que o evento não declara reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(
+      sample(`const fields = { status: 200, url: '/x' };
+log.info('casecellshop.demo.finished', fields, 'm');`),
+      { code: 'TS2345', text: 'url' },
+    );
+  }, 60_000);
+
+  it('OBS-07 um objeto montado antes com o campo de outro evento reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(
+      sample(`const fields = { port: 1, reason: 'cancelled' };
+log.info('casecellshop.demo.started', fields, 'm');`),
+      { code: 'TS2345', text: 'reason' },
+    );
+  }, 60_000);
+
+  it('OBS-07 um objeto montado antes com o campo event reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(
+      sample(`const fields = { port: 1, event: 'outro' };
+log.info('casecellshop.demo.started', fields, 'm');`),
+      { code: 'TS2345', text: 'event' },
+    );
+  }, 60_000);
+
+  it('OBS-07 um objeto montado antes por espalhamento (spread) com um campo a mais reprova no tsc', () => {
+    expectLogTypeError(
+      sample(`const base = { status: 200 };
+const fields = { ...base, sku: 'ABC' };
+log.error('casecellshop.demo.finished', fields, 'm');`),
+      { code: 'TS2345', text: 'sku' },
+    );
+  }, 60_000);
+});
+
+// O código do erro de atribuição depende de quantas propriedades faltam: TS2322 (tipo incompatível), TS2741 (falta o
+// marcador) e TS2739/TS2740 (faltam várias).
+const NOT_ASSIGNABLE_CODES = ['TS2322', 'TS2739', 'TS2740', 'TS2741'] as const;
+
+// A17: fora de `src/shared/logging.ts`, o código recebe um `AppLogger` que só cria filhos. Escrever um log passa
+// pelo `eventLogger`, que é o único a escrever; o marcador do tipo é um `unique symbol` que só o módulo conhece.
+describe('OBS-07 AppLogger opaco: só cria filhos e só escreve pelo eventLogger (A17)', () => {
+  it('OBS-07 controle: child devolve um AppLogger, que o eventLogger escreve; createLogger e fromPino também devolvem um', () => {
+    expectLogCompiles(
+      sample(`const child: AppLogger = appLogger.child({ orderId: 'pedido-1' });
+const grandchild: AppLogger = child.child({ attempt: 2 });
+const created: AppLogger = createLogger({ serviceName: 'casecellshop-worker' });
+const wrapped: AppLogger = fromPino(pino());
+eventLogger(grandchild, EVENTS).info('casecellshop.demo.started', { port: 1 }, 'm');
+eventLogger(created, EVENTS).warn('casecellshop.demo.degraded', { reason: 'x' }, 'm');
+eventLogger(wrapped.child({ orderId: 'p' }), EVENTS).error('casecellshop.demo.failed', {}, 'm');`),
+    );
+  }, 60_000);
+
+  it('OBS-07 info, warn, error, fatal, debug e trace num AppLogger reprovam no tsc: o tipo não os tem', () => {
+    expectLogTypeError(
+      sample(`appLogger.info({}, 'm');
+appLogger.warn({}, 'm');
+appLogger.error({}, 'm');
+appLogger.fatal({}, 'm');
+appLogger.debug({}, 'm');
+appLogger.trace({}, 'm');`),
+      {
+        code: 'TS2339',
+        text: ['info', 'warn', 'error', 'fatal', 'debug', 'trace'].map(
+          (name) => `Property '${name}' does not exist`,
+        ),
+      },
+    );
+  }, 60_000);
+
+  it('OBS-07 o que o createLogger e o fromPino devolvem também não escreve: info e warn reprovam no tsc', () => {
+    expectLogTypeError(
+      sample(`createLogger({ serviceName: 'casecellshop-worker' }).info({}, 'm');
+fromPino(pino()).warn({}, 'm');
+appLogger.child({ orderId: 'p' }).error({}, 'm');`),
+      {
+        code: 'TS2339',
+        text: ['info', 'warn', 'error'].map(
+          (name) => `Property '${name}' does not exist`,
+        ),
+      },
+    );
+  }, 60_000);
+
+  it('OBS-07 um logger do pino passado como AppLogger reprova no tsc: só o fromPino o envolve', () => {
+    expectLogTypeError(sample('const raw: AppLogger = pino();'), {
+      code: NOT_ASSIGNABLE_CODES,
+      text: 'AppLogger',
+    });
+  }, 60_000);
+
+  it('OBS-07 o eventLogger recusa o logger do pino cru no tsc', () => {
+    expectLogTypeError(
+      sample(
+        "eventLogger(pino(), EVENTS).info('casecellshop.demo.stopped', {}, 'm');",
+      ),
+      { code: 'TS2345', text: 'AppLogger' },
+    );
+  }, 60_000);
+
+  it('OBS-07 um objeto montado fora, só com child, não serve como AppLogger no tsc: o marcador é do módulo', () => {
+    expectLogTypeError(
+      sample('const forged: AppLogger = { child: () => appLogger };'),
+      { code: NOT_ASSIGNABLE_CODES, text: 'AppLogger' },
+    );
+  }, 60_000);
+});
+
+// O nome do evento só entra pelo `eventLogger`: um filho com `event` fixo nos campos duplicaria a chave na linha.
+describe('OBS-07 AppLogger: o child não aceita o campo event (A17)', () => {
+  it('OBS-07 controle: child com orderId e attempt, escrito na chamada ou montado antes, compila e devolve um AppLogger', () => {
+    expectLogCompiles(
+      sample(`const direct: AppLogger = appLogger.child({ orderId: 'pedido-1', attempt: 2 });
+const bindings = { orderId: 'pedido-1', attempt: 2 };
+const prebuilt: AppLogger = appLogger.child(bindings);
+const empty: AppLogger = appLogger.child({});
+eventLogger(direct, EVENTS).info('casecellshop.demo.started', { port: 1 }, 'm');
+eventLogger(prebuilt.child(bindings), EVENTS).info('casecellshop.demo.stopped', {}, 'm');
+eventLogger(empty, EVENTS).info('casecellshop.demo.stopped', {}, 'm');`),
+    );
+  }, 60_000);
+
+  it('OBS-07 appLogger.child({ event }) reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(sample("appLogger.child({ event: 'x' });"), {
+      code: FIELD_ERROR_CODES,
+      text: 'event',
+    });
+  }, 60_000);
+
+  it('OBS-07 child com event e outros campos reprova no tsc', () => {
+    expectLogTypeError(
+      sample("appLogger.child({ orderId: 'pedido-1', event: 'x' });"),
+      { code: FIELD_ERROR_CODES, text: 'event' },
+    );
+  }, 60_000);
+
+  it('OBS-07 child com um objeto montado antes que tem event reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(
+      sample(`const bindings = { orderId: 'pedido-1', event: 'x' };
+appLogger.child(bindings);`),
+      { code: 'TS2345', text: 'event' },
+    );
+  }, 60_000);
+
+  it('OBS-07 o child do filho (appLogger.child({ orderId }).child({ event })) também reprova no tsc', () => {
+    expectLogTypeError(
+      sample("appLogger.child({ orderId: 'p' }).child({ event: 'x' });"),
+      { code: FIELD_ERROR_CODES, text: 'event' },
     );
   }, 60_000);
 });

@@ -9,6 +9,7 @@ import {
   vi,
 } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   ERP_TIMEOUT_MS,
@@ -369,7 +370,7 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
     const relay = createRelay({
       pool: world.pool,
       queue: world.queues.queue,
-      logger: pino({ level: 'silent' }),
+      logger: fromPino(pino({ level: 'silent' })),
       telemetry: world.telemetry,
       clock: world.clock,
     });

@@ -8,6 +8,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MIGRATION_FOLDERS, migrate } from '../../../src/db/migrate.ts';
 import { createMigrationPool, createPool } from '../../../src/db/pool.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { WAIT_GUARD_MS } from '../../helpers/async.ts';
 import { captureUncaught } from '../../helpers/uncaught.ts';
 import { createTestPool } from '../../helpers/pool.ts';
@@ -379,7 +380,7 @@ describe('FND-11 duas chamadas simultâneas esperam pelo advisory lock', () => {
   const rounds = 3;
   const folder = fixtureFolder('concurrency');
   const expectedNames = ['20260101000000_slow', '20260101000001_after'];
-  const logger = pino({ level: 'silent' });
+  const logger = fromPino(pino({ level: 'silent' }));
   // A barreira só é solta depois de as duas chamadas esperarem mais que os 2 s do lock_timeout das
   // requisições (e menos que os 5 s do statement_timeout, para o corte ser o do lock).
   const WAIT_PAST_REQUEST_LIMITS_SECONDS = 3;

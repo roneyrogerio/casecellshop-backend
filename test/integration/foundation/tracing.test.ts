@@ -9,6 +9,7 @@ import { pino } from 'pino';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { findRoute } from '../../helpers/contract.ts';
 import {
@@ -26,7 +27,7 @@ beforeAll(async () => {
   telemetry = createTelemetry({ spanExporter: exporter });
   app = createApp({
     pool: database.pool,
-    logger: pino({ level: 'silent' }),
+    logger: fromPino(pino({ level: 'silent' })),
     telemetry,
   });
 }, 120_000);
@@ -95,7 +96,7 @@ function appWithUnavailableDatabase(): ReturnType<typeof createApp> {
   } as unknown as Pool;
   return createApp({
     pool: brokenPool,
-    logger: pino({ level: 'silent' }),
+    logger: fromPino(pino({ level: 'silent' })),
     telemetry,
   });
 }

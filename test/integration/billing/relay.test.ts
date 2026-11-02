@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type pg from 'pg';
-import { pino, type Logger } from 'pino';
+import { pino } from 'pino';
 import {
   afterAll,
   afterEach,
@@ -28,6 +28,7 @@ import {
   createSqsClient,
   type Queue,
 } from '../../../src/queue/sqs.ts';
+import { fromPino, type AppLogger } from '../../../src/shared/logging.ts';
 import {
   createTelemetry,
   type Telemetry,
@@ -205,7 +206,7 @@ interface RelayOptions {
   pool?: pg.Pool;
   clock?: ManualClock;
   telemetry?: Telemetry;
-  logger?: Logger;
+  logger?: AppLogger;
   config?: Partial<RelayConfig>;
 }
 
@@ -213,7 +214,7 @@ function newRelay(queue: Queue, options: RelayOptions = {}): Relay {
   return createRelay({
     pool: options.pool ?? relayPool,
     queue,
-    logger: options.logger ?? pino({ level: 'silent' }),
+    logger: options.logger ?? fromPino(pino({ level: 'silent' })),
     telemetry: options.telemetry ?? sharedTelemetry,
     clock: options.clock ?? createManualClock(),
     ...(options.config ? { config: options.config } : {}),
