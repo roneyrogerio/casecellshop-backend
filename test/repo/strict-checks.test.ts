@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
-import { globToRegExp, overrideFilesMatch } from '../helpers/glob.ts';
+import { normalizeOverrideGlob, overrideFilesMatch } from '../helpers/glob.ts';
 import { typecheckSample } from '../helpers/lint-tree.ts';
 import { repoRoot as root } from '../helpers/repo-root.ts';
 import { runCommand } from '../helpers/run-node.ts';
@@ -83,32 +83,14 @@ const GENERATED_TYPE_FILES = [
 ];
 const GENERATED_ONLY_RULES = ['typescript/consistent-type-definitions'];
 
-// Caminhos de amostra: servem só para saber a que arquivos um glob que alcança .ts se limita (os gerados).
-const TS_SAMPLES = [
-  'a.ts',
-  'src/app.ts',
-  'src/checkout/reserve.ts',
-  'src/db/migrate.ts',
-  'scripts/check-env.ts',
-  'test/helpers/clock.ts',
-  'test/integration/db/x.test.ts',
-  'migrations/store/20260101000000_x.ts',
-  '.claude/hooks/x.test.ts',
-  ...GENERATED_TYPE_FILES,
-];
+// O único glob (já normalizado) que, além dos caminhos exatos de `GENERATED_TYPE_FILES`, vale como "só os gerados".
+const GENERATED_TYPE_GLOB = 'src/db/types/*.ts';
 
-// Caminhos .ts que não citam pasta nenhuma do projeto: raiz, uma pasta e duas pastas. Servem ao glob positivo, que o
-// `overrideFilesMatch` (o `GlobSet` do oxlint) confere por inteiro, pasta e nome.
-const OUTSIDE_TS_PATHS = [
-  'arquivo.ts',
-  'zz-fora/arquivo.ts',
-  'zz-fora/zz/arquivo.ts',
-];
-
-// As formas de glob que casam todo .ts, de qualquer pasta e de qualquer nome (conferidas com o `overrideFilesMatch`
-// sobre nomes de várias iniciais, pastas fundas e pastas com ponto: ver o teste da lista). Sem `/`, o `GlobSet`
-// põe `**/` na frente, então `*.ts` e `**/*.ts` têm o mesmo efeito. Lista fechada: uma forma que não cobre todo .ts
-// não entra, e o glob negado com ela passa a valer como alcançando .ts.
+// As formas de glob, já normalizadas pelo `GlobSet`, que casam todo .ts, de qualquer pasta e de qualquer nome
+// (conferidas com o `overrideFilesMatch` sobre nomes de várias iniciais, pastas fundas e pastas com ponto: ver o teste
+// da lista). Só há formas com `/`: sem `/`, o `GlobSet` põe `**/` na frente, e `!*.ts` vira `**/!*.ts`, em que o `!`
+// deixa de ser negação. Lista fechada: uma forma que não cobre todo .ts não entra, e o glob negado com ela passa a
+// valer como alcançando .ts.
 const COVERS_ALL_TS = [
   '**/*.ts',
   '**/*.[jt]s',
@@ -117,54 +99,51 @@ const COVERS_ALL_TS = [
   '**/*.{js,ts}',
   '**/*.{ts,js}',
   '**/*',
-  '**',
-  '*.ts',
-  '*.?s',
-  '*.[jt]s',
-  '*',
+  '**/**',
 ];
 
-// O glob alcança .ts por uma de duas regras, conforme o número de `!` no início.
-// Número ímpar de `!` (o glob inteiro é negado, pasta e nome juntos): o glob alcança .ts, a não ser que o corpo
-// positivo (sem os `!`) seja uma forma de `COVERS_ALL_TS`, e então o `!` exclui todo .ts. Não depende de amostra: um
-// `!**/a*.[jt]s` exclui os nomes "a…" e ainda alcança `src/http/server.ts`, que uma amostra de nome fixo não veria
-// (A4 da Revisão 2 do #35). `!src/*.[jt]s` também alcança, porque é "tudo que não é src/<nome>.js|ts".
-// Número par (zero inclusive: o glob positivo; `!!x` volta ao positivo), basta um dos critérios:
-// 1. o `overrideFilesMatch` casa algum caminho .ts de `OUTSIDE_TS_PATHS`;
-// 2. o último trecho casa um nome terminado em `.ts` (`*.ts`, `*`, `**`, `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou o glob
-//    termina em `.ts` ou num grupo `{…ts…}`. Este critério cobre o glob positivo com pasta, que o primeiro não vê:
-//    uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência. O último trecho é conferido
-//    como nome de arquivo, com o `globToRegExp`.
-function reachesTs(glob: string): boolean {
-  const bangs = /^!*/.exec(glob)?.[0] ?? '';
-  if (bangs.length % 2 === 1)
-    return !COVERS_ALL_TS.includes(glob.slice(bangs.length));
-  if (OUTSIDE_TS_PATHS.some((sample) => overrideFilesMatch([glob], sample)))
-    return true;
-  const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
-  return (
-    /(?:\.ts|\*)$/.test(glob) ||
-    /\{[^}]*\bts\b[^}]*\}$/.test(glob) ||
-    globToRegExp(`${bangs}${lastSegment.replace(/^!+/, '')}`).test('arquivo.ts')
-  );
+// Uma extensão literal é um ponto seguido só de letras e dígitos, sem `*`, `?`, `[`, `{` nem `!`.
+const LITERAL_EXTENSION = /\.([A-Za-z0-9]+)$/;
+const LITERAL_EXTENSION_GROUP = /\.\{([A-Za-z0-9]+(?:,[A-Za-z0-9]+)*)\}$/;
+
+// Decide pelo glob já normalizado (`normalizeOverrideGlob`, o mesmo do `GlobSet`), sem amostra de caminho.
+// 1. Número ímpar de `!` no início (o glob inteiro é negado, pasta e nome juntos): alcança .ts, a não ser que o corpo
+//    positivo (sem os `!`) seja uma forma de `COVERS_ALL_TS`, e então o `!` exclui todo .ts. Um `!**/a*.[jt]s` exclui
+//    os nomes "a…" e ainda alcança `src/http/server.ts`; `!src/*.[jt]s` é "tudo que não é src/<nome>.js|ts".
+// 2. Número par (zero inclusive: o glob positivo; `!!x` volta ao positivo): alcança .ts, a não ser que o último trecho
+//    termine numa extensão literal diferente de `ts` (`.js`, `.json`) ou num grupo `.{a,b,…}` só de extensões
+//    literais diferentes de `ts`. Uma classe ou um `?` na extensão (`*.[jt]s`, `*.?s`) não é literal.
+// 3. Qualquer outra forma alcança .ts. O lado é conservador: no pior caso dá falso vermelho, nunca falso verde.
+// Sem `/`, o glob ganha `**/` na frente e o `!` do início vira literal: `!*.ts` é `**/!*.ts`, que casa `src/!x.ts`
+// (um .ts) e só alcança nomes que começam por `!`.
+function reachesTs(pattern: string): boolean {
+  const glob = normalizeOverrideGlob(pattern);
+  const bangs = /^!*/.exec(glob)?.[0].length ?? 0;
+  const body = glob.slice(bangs);
+  if (bangs % 2 === 1) return !COVERS_ALL_TS.includes(body);
+  const lastSegment = body.slice(body.lastIndexOf('/') + 1);
+  const extension = LITERAL_EXTENSION.exec(lastSegment)?.[1];
+  if (extension !== undefined) return extension === 'ts';
+  const group = LITERAL_EXTENSION_GROUP.exec(lastSegment)?.[1];
+  if (group !== undefined) return group.split(',').includes('ts');
+  return true;
 }
 
 function overrideReachesTs(files: readonly string[]): boolean {
   return files.some(reachesTs);
 }
 
-// Todo glob do override que alcança .ts casa ao menos um caminho de amostra e só arquivos gerados; um glob que
-// nenhuma amostra casa (src/http/**/*.ts) não prova que se limita aos gerados.
+// A exceção vale só quando cada glob que alcança .ts é, depois da normalização, `src/db/types/*.ts` ou um caminho
+// exato de `GENERATED_TYPE_FILES`. Lista fechada: nenhum outro glob prova que se limita aos gerados, nem o que casa
+// só `store.ts` entre as amostras (`**/s*.ts`).
 function onlyReachesGeneratedFiles(files: readonly string[]): boolean {
-  return files.filter(reachesTs).every((glob) => {
-    const matched = TS_SAMPLES.filter((sample) =>
-      overrideFilesMatch([glob], sample),
+  return files
+    .filter(reachesTs)
+    .map(normalizeOverrideGlob)
+    .every(
+      (glob) =>
+        glob === GENERATED_TYPE_GLOB || GENERATED_TYPE_FILES.includes(glob),
     );
-    return (
-      matched.length > 0 &&
-      matched.every((sample) => GENERATED_TYPE_FILES.includes(sample))
-    );
-  });
 }
 
 function isOn(setting: unknown): boolean {
@@ -334,8 +313,6 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['os .js, .mjs e .cjs', ['src/http/**/*.{js,mjs,cjs}']],
     ['só os .md', ['docs/**/*.md']],
     ['os .json', ['src/http/*.json']],
-    ['a classe [jm]s, que não casa .ts', ['src/http/**/*.[jm]s']],
-    ['o coringa ?js, que não casa .ts', ['src/http/*.?js']],
     // O `!` com `**/` na frente nega todo .ts, de qualquer pasta: o override só alcança o que não é .ts.
     ['a classe [jt] negada em qualquer pasta', ['!**/*.[jt]s']],
     ['o coringa ?s negado em qualquer pasta', ['!**/*.?s']],
@@ -347,6 +324,94 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
           { files, rules: { 'typescript/return-await': 'off' } },
         ]),
       ).toEqual([]);
+    },
+  );
+
+  // Lado conservador da regra (Revisão 3 do #35): uma extensão com classe ou `?` não é literal, então a regra não a
+  // prova diferente de ts e o glob vale como alcançando .ts, mesmo quando na prática só casaria `.js` ou `.mjs`. O pior
+  // caso é um falso vermelho, nunca um falso verde. Antes da Revisão 3 estes dois globs não alcançavam .ts.
+  it.each([
+    ['a classe [jm]s, que na prática não casa .ts', ['src/http/**/*.[jm]s']],
+    ['o coringa ?js, que na prática não casa .ts', ['src/http/*.?js']],
+  ])(
+    'AI-20 controle: um override para %s vale como alcançando .ts, então desligar return-await reprova',
+    (_label, files) => {
+      expect(
+        styleOverrideViolations([
+          { files, rules: { 'typescript/return-await': 'off' } },
+        ]),
+      ).toHaveLength(1);
+    },
+  );
+
+  // A6 da Revisão 3 do #35: o glob positivo cujo último trecho tem classe ou `?` e não casa o nome de amostra
+  // `arquivo.ts` ainda casa `src/http/server.ts`. A decisão não pode depender de nome de amostra.
+  it.each([['src/http/server.[jt]s'], ['src/http/server.?s'], ['**/s*.[jt]s']])(
+    'AI-20 controle: o glob %s alcança .ts, então desligar qualquer das onze regras reprova (A6)',
+    (glob) => {
+      expect(overrideFilesMatch([glob], 'src/http/server.ts')).toBe(true);
+      for (const rule of STYLE_RULES) {
+        expect(
+          styleOverrideViolations([
+            { files: [glob], rules: { [rule]: 'off' } },
+          ]),
+        ).toHaveLength(1);
+      }
+    },
+  );
+
+  // A7 da Revisão 3 do #35: estes globs casam, entre os gerados, só `src/db/types/store.ts`, mas também casam
+  // `src/http/server.ts`. A exceção do `consistent-type-definitions` é uma lista fechada, sem amostra.
+  it.each([['**/s*.ts'], ['**/{store,server}.ts'], ['!**/[!s]*.ts']])(
+    'AI-20 controle: o glob %s não vale como "só os tipos gerados", então desligar consistent-type-definitions reprova (A7)',
+    (glob) => {
+      expect(overrideFilesMatch([glob], 'src/http/server.ts')).toBe(true);
+      expect(
+        styleOverrideViolations([
+          {
+            files: [glob],
+            rules: { 'typescript/consistent-type-definitions': 'off' },
+          },
+        ]),
+      ).toHaveLength(1);
+    },
+  );
+
+  // A8 da Revisão 3 do #35: sem `/`, o `GlobSet` põe `**/` na frente e o `!` vira literal. O glob `**/!*.ts` casa
+  // `src/!x.ts`, que é um `.ts`, e só alcança nomes que começam por `!`.
+  it.each([['!*.ts'], ['!*.?s'], ['!*.[jt]s'], ['!*'], ['!**']])(
+    'AI-20 controle: o glob %s, sem "/", tem o ! literal e alcança .ts por casar nomes iniciados por !, então desligar return-await reprova (A8)',
+    (glob) => {
+      expect(overrideFilesMatch([glob], 'src/!x.ts')).toBe(true);
+      expect(overrideFilesMatch([glob], 'src/x.ts')).toBe(false);
+      expect(
+        styleOverrideViolations([
+          { files: [glob], rules: { 'typescript/return-await': 'off' } },
+        ]),
+      ).toHaveLength(1);
+    },
+  );
+
+  // Extensão literal (um ponto seguido só de letras e dígitos) diferente de `ts` no fim do glob: não alcança .ts.
+  it.each([['**/*.js'], ['**/*.{js,mjs}'], ['**/*.json']])(
+    'AI-20 controle: o glob %s termina em extensão literal que não é ts, então não alcança .ts',
+    (glob) => {
+      expect(
+        styleOverrideViolations([
+          { files: [glob], rules: { 'typescript/return-await': 'off' } },
+        ]),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([['**/*.{js,ts}'], ['**/*.t?'], ['**/x'], ['**/*.d.ts']])(
+    'AI-20 controle: o glob %s alcança .ts, então desligar return-await reprova',
+    (glob) => {
+      expect(
+        styleOverrideViolations([
+          { files: [glob], rules: { 'typescript/return-await': 'off' } },
+        ]),
+      ).toHaveLength(1);
     },
   );
 
@@ -370,6 +435,9 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     '.git/x.ts',
     'node_modules/p/i.ts',
     'migrations/store/20260101000000_x.ts',
+    'src/!x.ts',
+    'a b/c d.ts',
+    'a.js.ts',
   ];
 
   it.each(COVERS_ALL_TS)(
@@ -377,6 +445,67 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     (form) => {
       expect(
         TS_VARIED_PATHS.filter((path) => !overrideFilesMatch([form], path)),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(COVERS_ALL_TS)(
+    'AI-20 controle: a forma %s já está normalizada (tem "/"), então o GlobSet não muda o glob',
+    (form) => {
+      expect(normalizeOverrideGlob(form)).toBe(form);
+    },
+  );
+
+  // Sem `/`, o `GlobSet` põe `**/` na frente: o `!` deixa de ser o início do glob e vira literal.
+  it.each([
+    ['*.ts', '**/*.ts'],
+    ['!*.ts', '**/!*.ts'],
+    ['!*', '**/!*'],
+    ['./x.ts', 'x.ts'],
+    ['!src/*.ts', '!src/*.ts'],
+  ])(
+    'AI-20 a normalização do glob %s é %s, como a do GlobSet do oxlint',
+    (pattern, normalized) => {
+      expect(normalizeOverrideGlob(pattern)).toBe(normalized);
+    },
+  );
+
+  // Sem `/` não há forma na lista fechada: `*.ts` e o resto alcançam .ts quando positivos, e o `!` na frente é literal.
+  it.each([['*.ts'], ['*.?s'], ['*.[jt]s'], ['*'], ['**']])(
+    'AI-20 controle: o glob %s, sem "/", alcança .ts, com um, dois ou três ! na frente',
+    (form) => {
+      const off = { 'typescript/return-await': 'off' };
+
+      for (const glob of [form, `!${form}`, `!!${form}`, `!!!${form}`]) {
+        expect(
+          styleOverrideViolations([{ files: [glob], rules: off }]),
+        ).toHaveLength(1);
+      }
+    },
+  );
+
+  // O oráculo da decisão negativa: um glob que a regra diz não alcançar .ts não pode casar nenhum caminho .ts, pelo
+  // `overrideFilesMatch`. Uma regra que erra para o lado do falso verde reprova aqui.
+  it.each([
+    ['**/*.js'],
+    ['**/*.mjs'],
+    ['**/*.cjs'],
+    ['**/*.json'],
+    ['**/*.md'],
+    ['**/*.{js,mjs}'],
+    ['src/http/**/*.{js,mjs,cjs}'],
+    ['docs/**/*.md'],
+    ['!**/*.[jt]s'],
+    ['!**/*.?s'],
+    ['!**/*.ts'],
+    ['**/!x.js'],
+    ['!x.js'],
+  ])(
+    'AI-20 controle: o glob %s, que a regra diz não alcançar .ts, não casa nenhum caminho .ts',
+    (glob) => {
+      expect(reachesTs(glob)).toBe(false);
+      expect(
+        TS_VARIED_PATHS.filter((path) => overrideFilesMatch([glob], path)),
       ).toEqual([]);
     },
   );
@@ -434,6 +563,36 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
         { files: ['src/db/types/*.ts', 'src/app.ts'], rules: off },
       ]),
     ).toHaveLength(1);
+  });
+
+  it('AI-20 controle: a exceção do consistent-type-definitions é uma lista fechada: src/db/types/*.ts, normalizado, ou um caminho gerado exato', () => {
+    const off = { 'typescript/consistent-type-definitions': 'off' };
+    const accepted = [
+      ['src/db/types/*.ts'],
+      ['./src/db/types/*.ts'],
+      ['src/db/types/store.ts'],
+      ['src/db/types/store.ts', 'src/db/types/erp-sim.ts'],
+      ['src/db/types/*.ts', 'src/db/types/erp-sim.ts'],
+      // Um glob que não alcança .ts não conta na lista.
+      ['src/db/types/*.ts', '**/*.js'],
+    ];
+    const refused = [
+      ['src/db/types/*.[jt]s'],
+      ['src/db/types/s*.ts'],
+      ['src/db/types/{store,server}.ts'],
+      ['src/db/types/**'],
+      ['src/db/types/*'],
+      ['src/db/types/**/*.ts'],
+      ['**/types/*.ts'],
+      ['src/db/types/store.ts', 'src/http/server.ts'],
+      ['src/db/types/*.ts', 'src/db/types/x.ts'],
+      ['!src/http/*.ts'],
+    ];
+
+    for (const files of accepted)
+      expect(styleOverrideViolations([{ files, rules: off }])).toEqual([]);
+    for (const files of refused)
+      expect(styleOverrideViolations([{ files, rules: off }])).toHaveLength(1);
   });
 
   it('AI-20 controle: os tipos gerados não podem desligar nenhuma outra das onze regras', () => {

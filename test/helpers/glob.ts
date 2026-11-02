@@ -57,14 +57,18 @@ export function globToRegExp(glob: string): RegExp {
 // nome exato: `./*.ts` casa `x.ts`); qualquer outro padrão sem `/` ganha `**/` na frente, então `*.ts` alcança `.ts`
 // em qualquer pasta (diferente do glob cru, que só alcançaria a raiz). O `!` do início não conta como `/`: um `!*.ts`
 // vira `**/!*.ts`, o que o oxlint também faz.
+export function normalizeOverrideGlob(pattern: string): string {
+  const stripped = pattern.startsWith('./') ? pattern.slice(2) : pattern;
+  // `./x` sem `/` fica sem o `**/`: é um glob da raiz (medido: `./*.ts` casa `x.ts`, não `sub/x.ts`).
+  const rooted = stripped.includes('/') || pattern.startsWith('./');
+  return rooted ? stripped : `**/${stripped}`;
+}
+
 export function overrideFilesMatch(
   files: readonly string[],
   path: string,
 ): boolean {
-  return files.some((pattern) => {
-    const stripped = pattern.startsWith('./') ? pattern.slice(2) : pattern;
-    // `./x` sem `/` fica sem o `**/`: é um glob da raiz (medido: `./*.ts` casa `x.ts`, não `sub/x.ts`).
-    const rooted = stripped.includes('/') || pattern.startsWith('./');
-    return globToRegExp(rooted ? stripped : `**/${stripped}`).test(path);
-  });
+  return files.some((pattern) =>
+    globToRegExp(normalizeOverrideGlob(pattern)).test(path),
+  );
 }
