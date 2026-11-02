@@ -288,7 +288,7 @@
           {
             "patterns": [
               {
-                "regex": "^\\.\\./",
+                "regex": "(^|/)\\.\\.(/|$)",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
               },
               {
@@ -308,12 +308,32 @@
           {
             "patterns": [
               {
-                "regex": "^\\.\\./[^.]",
+                "regex": "//",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\./(.*/)?\\.\\.?(/|$)",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\.(/\\.\\.)?/?$",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./([^.]|\\.[^.]|\\.\\.[^/])",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
               },
               {
-                "regex": "^\\.\\./\\.\\./(src/|\\.\\.)",
-                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+                "regex": "^\\.\\./\\.\\./([^t]|t[^e]|te[^s]|tes[^t]|test[^/]|test/[^h]|test/h[^e]|test/he[^l]|test/hel[^p]|test/help[^e]|test/helpe[^r]|test/helper[^s]|test/helpers[^/])",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./(t|te|tes|test|test/|test/h|test/he|test/hel|test/help|test/helpe|test/helper|test/helpers|test/helpers/)$",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./test/helpers/(.*/)?\\.\\.?(/|$)",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
               },
               {
                 "regex": "^pino(/|$)",
@@ -507,15 +527,56 @@
       }
     },
     {
-      "files": ["src/shared/logging.ts", "src/shared/logging.test.ts"],
+      "files": ["src/shared/logging.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "regex": "^\\.\\./",
+                "regex": "(^|/)\\.\\.(/|$)",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              }
+            ]
+          }
+        ],
+        "test-imports/no-restricted-dynamic-import": "off"
+      }
+    },
+    {
+      "files": ["src/shared/logging.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "//",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\./(.*/)?\\.\\.?(/|$)",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\.(/\\.\\.)?/?$",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./([^.]|\\.[^.]|\\.\\.[^/])",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./([^t]|t[^e]|te[^s]|tes[^t]|test[^/]|test/[^h]|test/h[^e]|test/he[^l]|test/hel[^p]|test/help[^e]|test/helpe[^r]|test/helper[^s]|test/helpers[^/])",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./(t|te|tes|test|test/|test/h|test/he|test/hel|test/help|test/helpe|test/helper|test/helpers|test/helpers/)$",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./test/helpers/(.*/)?\\.\\.?(/|$)",
+                "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
               }
             ]
           }
