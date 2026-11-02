@@ -285,7 +285,7 @@ histogram_quantile(0.99, sum by (le, http_route) (rate(http_server_request_durat
 ```
 
 ```promql
-# Fila: mensagens na fila do faturamento e na DLQ
+# Fila: mensagens na fila do faturamento e na DLQ, visíveis e em voo
 max by (casecellshop_queue_name) (casecellshop_queue_messages)
 
 # Fila: idade da pendência mais antiga da outbox (s)
@@ -634,6 +634,8 @@ Se o alerta veio do counter de falhas de leitura, o gauge da pendência está co
 
 Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`).
 
+O gauge da DLQ conta as mensagens visíveis e as em voo (`OBS-09`): a reconciliação recebe cada mensagem e a deixa invisível por 5 min a cada rodada, e mesmo assim ela segue contada, e o alerta continua disparando enquanto a mensagem estiver na DLQ.
+
 Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelado no último valor, e o log `casecellshop.billing.gauge.read_failed` traz o erro do `GetQueueAttributes`. Com o SQS fora do alcance do worker (`docker compose ps elasticmq`), a reconciliação também falha (`casecellshop.outbox.reconciliation.failed`), e as chegadas à DLQ só aparecem em `casecellshop.outbox.dead` na primeira rodada depois da volta. Se só o `GetQueueAttributes` falha (uma permissão faltando, por exemplo), a reconciliação segue registrando cada chegada.
 
 1. Ache os pedidos: o log `casecellshop.outbox.dead` traz o `orderId` de cada chegada à DLQ. Uma mensagem com o corpo fora do schema não gera esse log: ela aparece em `casecellshop.outbox.message.rejected`, com o `orderId` quando o corpo o tem (`ORD-12`).
@@ -645,7 +647,12 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    docker compose exec worker node src/main/runbook.ts redrive
    ```
 
-   É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`).
+   É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`). No compose, o ElasticMQ tira da DLQ, sem entregá-la à fila, a mensagem que a reconciliação segura na hora do `redrive` (risco R12 do [`STATE.md`](.specs/project/STATE.md)). Por isso, guarde antes do `redrive` a lista dos pedidos que chegaram à DLQ e seguem pendentes; depois, um pedido dela que não apareça nos logs do worker (`docker compose logs worker`, pelo `orderId`) ficou fora da fila: trate-o pelos passos 3 e 5.
+
+   ```sql
+   select o.id from orders o join outbox x on x.order_id = o.id where o.status = 'pending' and x.dead_at is not null;
+   ```
+
 5. Cancele só o pedido que o ERP não tem e que não deve mais ser faturado:
 
    ```sh
