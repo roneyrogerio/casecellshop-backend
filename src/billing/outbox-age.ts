@@ -1,9 +1,10 @@
 import { sql } from 'kysely';
 import type { Pool } from 'pg';
 import { createDb } from '../db/database.ts';
-import { eventLogger, type AppLogger } from '../shared/logging.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
-import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
+import { reportGaugeReadFailure } from './gauge-failure.ts';
+import { billingMetrics } from './telemetry.ts';
 
 // Gauge da idade da outbox (AD-008: sinal lido do banco, exposto pela API; design.md, "Observabilidade").
 
@@ -42,18 +43,12 @@ export function registerOutboxAgeGauge({
       observe(row?.age ?? 0);
     },
     {
-      onError(error) {
-        billingMetrics(telemetry).add(
-          'casecellshop.billing.gauge.read_failures',
-          1,
-          { 'casecellshop.gauge.name': 'outbox_oldest_pending_age' },
-        );
-        eventLogger(logger, BILLING_LOG_EVENTS).error(
-          'casecellshop.billing.gauge.read_failed',
-          { gauge: 'outbox_oldest_pending_age', err: error },
-          'falha ao ler a idade da outbox',
-        );
-      },
+      onError: reportGaugeReadFailure(
+        telemetry,
+        logger,
+        'outbox_oldest_pending_age',
+        'falha ao ler a idade da outbox',
+      ),
     },
   );
 }

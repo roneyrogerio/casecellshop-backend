@@ -102,9 +102,9 @@ export function createStuckOrderMonitor({
   };
   const db = createDb(pool);
   const checkOnce = () => markBatch(db, telemetry, settings);
-  let wake: (() => void) | undefined;
 
   const runner = createLoopRunner({
+    clock,
     async run(isRunning) {
       while (isRunning()) {
         try {
@@ -117,15 +117,9 @@ export function createStuckOrderMonitor({
             'falha na verificação dos pedidos sem desfecho',
           );
         }
-        // O stop() acorda a espera: sem isso, o encerramento da API aguardaria o intervalo inteiro.
-        if (isRunning())
-          await Promise.race([
-            clock.sleep(settings.intervalMs),
-            new Promise<void>((resolve) => (wake = resolve)),
-          ]);
+        if (isRunning()) await runner.pause(settings.intervalMs);
       }
     },
-    onStopping: () => wake?.(),
   });
 
   return {

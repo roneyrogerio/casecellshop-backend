@@ -1,7 +1,8 @@
 import type { Queue } from '../queue/sqs.ts';
-import { eventLogger, type AppLogger } from '../shared/logging.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
-import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
+import { reportGaugeReadFailure } from './gauge-failure.ts';
+import { billingMetrics } from './telemetry.ts';
 
 // Gauge `casecellshop.queue.messages` de uma fila (OBS-02): o dono do laço o registra no start() e o remove no
 // stop(), para a fila só ser consultada enquanto há quem a consuma. A leitura é o `ApproximateNumberOfMessages` do
@@ -24,18 +25,12 @@ export function queueGaugeLifecycle(
           });
         },
         {
-          onError(error) {
-            billingMetrics(telemetry).add(
-              'casecellshop.billing.gauge.read_failures',
-              1,
-              { 'casecellshop.gauge.name': 'queue_messages' },
-            );
-            eventLogger(logger, BILLING_LOG_EVENTS).error(
-              'casecellshop.billing.gauge.read_failed',
-              { gauge: 'queue_messages', err: error },
-              'falha ao ler o tamanho da fila',
-            );
-          },
+          onError: reportGaugeReadFailure(
+            telemetry,
+            logger,
+            'queue_messages',
+            'falha ao ler o tamanho da fila',
+          ),
         },
       );
     },

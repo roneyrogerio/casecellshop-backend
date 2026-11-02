@@ -269,7 +269,6 @@ export function createReconciler({
     ...DEFAULT_RECONCILER_CONFIG,
     ...config,
   };
-  let wake: (() => void) | undefined;
   const ctx: Context = {
     db: createDb(pool),
     dlq,
@@ -283,18 +282,14 @@ export function createReconciler({
   };
 
   const runner = createLoopRunner({
+    clock,
     async run(isRunning) {
       while (isRunning()) {
         await round(ctx);
         if (!isRunning()) break;
-        // O stop() acorda a espera: sem isso, o encerramento aguardaria o intervalo inteiro (5 min).
-        await Promise.race([
-          clock.sleep(settings.intervalMs),
-          new Promise<void>((resolve) => (wake = resolve)),
-        ]);
+        await runner.pause(settings.intervalMs);
       }
     },
-    onStopping: () => wake?.(),
     ...queueGaugeLifecycle(telemetry, dlq, 'dlq', logger),
   });
 
