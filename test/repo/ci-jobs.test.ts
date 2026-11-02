@@ -1,6 +1,7 @@
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -800,8 +801,8 @@ const SHA = 'a'.repeat(40);
 // --- AI-53: o job changes e o pulo do test ----------------------------------------------------------------------
 
 // A lista exata do critério. O teste de repositório docs-only-paths.test.ts lê a lista do ci.yml, e não esta.
+// O README.md da raiz não está nela: o OBS-03 lê as consultas PromQL dele, e o PR que o muda roda tudo.
 const DOCS_PATHS = [
-  'README.md',
   '.specs/README.md',
   '.specs/codebase/CONVENTIONS.md',
   '.specs/features/casecellshop/design.md',
@@ -814,8 +815,8 @@ const DOCS_PATHS_TEXT = `${DOCS_PATHS.join('\n')}\n`;
 
 // O passo `decide` de referência: a implementação correta do critério, para provar que a tabela de casos aceita o que
 // pede e para os controles de comportamento mutarem. O ci.yml real tem a sua própria; a tabela roda nas duas.
-// O `grep -F` trata um padrão com quebra de linha como vários padrões (um por linha), então o arquivo `README.md⏎x`
-// casaria com a linha `README.md` da lista. Por isso o nome com quebra de linha é recusado antes do `grep`.
+// O `grep -F` trata um padrão com quebra de linha como vários padrões (um por linha), então o arquivo `STATE.md⏎x`
+// casaria com a linha `STATE.md` da lista. Por isso o nome com quebra de linha é recusado antes do `grep`.
 const GREP_MATCH_LINE = String.raw`    printf '%s\n' "$DOCS_ONLY_PATHS" | grep -qxF -- "$file" || docs_only=false`;
 const MATCH_LINE = String.raw`    case "$file" in *$'\n'*) docs_only=false ;; *) printf '%s\n' "$DOCS_ONLY_PATHS" | grep -qxF -- "$file" || docs_only=false ;; esac`;
 const DECIDE_RUN = String.raw`list=$(mktemp)
@@ -1073,7 +1074,7 @@ function cleanupViolations(workflow: CiWorkflow, id: string): string[] {
 }
 
 // O run real do passo de troca, em diretórios temporários: um com os arquivos da lista e outros que têm de ficar, um
-// vazio (nem a pasta pai existe) e um com um link simbólico no lugar do README.md.
+// vazio (nem a pasta pai existe) e um com um link simbólico no lugar do STATE.md.
 const KEPT_FILES = [
   '.specs/features/casecellshop/spec.md',
   'src/app.ts',
@@ -1097,14 +1098,17 @@ function readOutcome(full: string): string {
   }
 }
 
-// O "teste inventado" do achado A1: lista a raiz, filtra os `.md` e lê cada um que achou. Com o arquivo apagado ele some
-// da listagem e o teste passa sem conferi-lo; com uma pasta no lugar, a leitura reprova com EISDIR.
+// O "teste inventado" do achado A1: lista a pasta .specs/project (onde ficam quatro dos sete arquivos da lista; o
+// README.md da raiz, que a listagem da raiz acharia, saiu da lista), filtra os `.md` e lê cada um que achou. Com o
+// arquivo apagado ele some da listagem e o teste passa sem conferi-lo; com uma pasta no lugar, a leitura reprova com
+// EISDIR.
 function enumeratingTestOutcome(dir: string): string {
+  const listed = join(dir, '.specs', 'project');
   try {
-    for (const name of readdirSync(dir).filter((entry) =>
+    for (const name of readdirSync(listed).filter((entry) =>
       entry.endsWith('.md'),
     ))
-      readFileSync(join(dir, name));
+      readFileSync(join(listed, name));
     return 'sem erro';
   } catch (error) {
     return errorCodeOf(error);
@@ -1166,7 +1170,7 @@ function cleanupBehaviorViolations(
   const listing = enumeratingTestOutcome(populated);
   if (listing !== 'EISDIR')
     violations.push(
-      `com os arquivos: o teste inventado que lista a raiz e lê os .md deu "${listing}", esperado EISDIR`,
+      `com os arquivos: o teste inventado que lista a pasta .specs/project e lê os .md deu "${listing}", esperado EISDIR`,
     );
   const second = run(populated);
   if (second !== 0)
@@ -1186,7 +1190,8 @@ function cleanupBehaviorViolations(
   const linked = makeTempDir('cleanup-link-');
   const target = makeTempDir('cleanup-target-');
   writeFileIn(target, 'dentro.txt', KEPT_CONTENT);
-  symlinkSync(target, join(linked, 'README.md'));
+  mkdirSync(join(linked, '.specs', 'project'), { recursive: true });
+  symlinkSync(target, join(linked, '.specs', 'project', 'STATE.md'));
   const linkedStatus = run(linked);
   if (linkedStatus !== 0)
     violations.push(
@@ -1267,6 +1272,7 @@ const DECIDE_BASE_FILES: Record<string, string> = {
   'src/x.ts': 'linha 1\nlinha 2\nlinha 3\nlinha 4\nlinha 5\n',
   'README.md': 'base\n',
   'docs/README.md': 'base\n',
+  '.specs/README.md': 'base\n',
   '.specs/project/STATE.md': 'base\n',
   '.specs/codebase/CONVENTIONS.md': 'base\n',
   '.specs/features/casecellshop/spec.md': 'base\n',
@@ -1283,44 +1289,64 @@ function touchAll(...paths: string[]): (repo: string) => void {
   };
 }
 
-const RENAME_LABEL = 'rename de src/x.ts para o README.md';
-const PUSH_LABEL = 'push com só o README.md';
+const RENAME_LABEL = 'rename de src/x.ts para o STATE.md';
+const PUSH_LABEL = 'push com só o STATE.md';
 const EMPTY_LABEL = 'merge sem mudança de arquivo';
 const NOT_MERGE_LABEL = 'HEAD que não é merge';
 const SUFFIX_LABEL = 'docs/README.md';
 const PREFIX_LABEL = 'README.md.ts';
 
 const DECIDE_CASES: DecideCase[] = [
-  { label: 'só o README.md', expected: 'true', pr: touchAll('README.md') },
+  // O README.md da raiz saiu da lista (o OBS-03 lê as consultas PromQL dele): o PR que o muda roda tudo.
+  {
+    label: 'só o README.md da raiz',
+    expected: 'false',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: 'o README.md da raiz e o CONVENTIONS.md',
+    expected: 'false',
+    pr: touchAll('README.md', '.specs/codebase/CONVENTIONS.md'),
+  },
+  {
+    label: 'só o .specs/README.md',
+    expected: 'true',
+    pr: touchAll('.specs/README.md'),
+  },
   {
     label: 'só o STATE.md',
     expected: 'true',
     pr: touchAll('.specs/project/STATE.md'),
   },
   {
-    label: 'README.md e CONVENTIONS.md',
+    label: 'STATE.md e CONVENTIONS.md',
     expected: 'true',
-    pr: touchAll('README.md', '.specs/codebase/CONVENTIONS.md'),
+    pr: touchAll('.specs/project/STATE.md', '.specs/codebase/CONVENTIONS.md'),
   },
   {
-    label: 'todos os oito arquivos da lista',
+    label: 'todos os sete arquivos da lista',
     expected: 'true',
     pr: touchAll(...DOCS_PATHS),
   },
   {
-    label: 'README.md e src/app.ts',
+    label: 'os sete arquivos da lista e o README.md da raiz',
     expected: 'false',
-    pr: touchAll('README.md', 'src/app.ts'),
+    pr: touchAll(...DOCS_PATHS, 'README.md'),
   },
   {
-    label: 'README.md e um teste ao lado do código',
+    label: 'STATE.md e src/app.ts',
     expected: 'false',
-    pr: touchAll('README.md', 'src/x.test.ts'),
+    pr: touchAll('.specs/project/STATE.md', 'src/app.ts'),
   },
   {
-    label: 'README.md e um teste de test/repo',
+    label: 'STATE.md e um teste ao lado do código',
     expected: 'false',
-    pr: touchAll('README.md', 'test/repo/x.test.ts'),
+    pr: touchAll('.specs/project/STATE.md', 'src/x.test.ts'),
+  },
+  {
+    label: 'STATE.md e um teste de test/repo',
+    expected: 'false',
+    pr: touchAll('.specs/project/STATE.md', 'test/repo/x.test.ts'),
   },
   {
     label: 'o spec.md',
@@ -1340,12 +1366,12 @@ const DECIDE_CASES: DecideCase[] = [
   {
     label: RENAME_LABEL,
     expected: 'false',
-    // O README.md sai da base, para o git enxergar o src/x.ts virando README.md como um rename.
+    // O STATE.md sai da base, para o git enxergar o src/x.ts virando STATE.md como um rename.
     base: (repo) => {
-      rmSync(join(repo, 'README.md'));
+      rmSync(join(repo, '.specs/project/STATE.md'));
     },
     pr: (repo) => {
-      renameSync(join(repo, 'src/x.ts'), join(repo, 'README.md'));
+      renameSync(join(repo, 'src/x.ts'), join(repo, '.specs/project/STATE.md'));
     },
   },
   {
@@ -1365,7 +1391,7 @@ const DECIDE_CASES: DecideCase[] = [
     label: PUSH_LABEL,
     expected: 'false',
     event: 'push',
-    pr: touchAll('README.md'),
+    pr: touchAll('.specs/project/STATE.md'),
   },
   {
     label: EMPTY_LABEL,
@@ -1376,25 +1402,26 @@ const DECIDE_CASES: DecideCase[] = [
     label: NOT_MERGE_LABEL,
     expected: 'false',
     merge: false,
-    pr: touchAll('README.md'),
+    pr: touchAll('.specs/project/STATE.md'),
   },
 ];
 
 // AI-53, casos de borda: apagar um arquivo da lista conta como mudar só a lista; um nome com espaço ou com quebra de
 // linha é lido inteiro pelo -z e fica fora da lista.
-const REMOVE_README_LABEL = 'a remoção do README.md';
+const REMOVE_SPECS_README_LABEL = 'a remoção do .specs/README.md';
 const REMOVE_STATE_LABEL = 'a remoção do STATE.md';
+const REMOVE_ROOT_README_LABEL = 'a remoção do README.md da raiz';
 const SPACE_NAME_LABEL = 'um arquivo novo chamado "README.md x" (com espaço)';
 const NEWLINE_NAME_LABEL =
-  'um arquivo novo chamado "README.md", quebra de linha e "x"';
-const NEWLINE_NAME = 'README.md\nx';
+  'um arquivo novo chamado "STATE.md", quebra de linha e "x"';
+const NEWLINE_NAME = '.specs/project/STATE.md\nx';
 
 const DECIDE_EDGE_CASES: DecideCase[] = [
   {
-    label: REMOVE_README_LABEL,
+    label: REMOVE_SPECS_README_LABEL,
     expected: 'true',
     pr: (repo) => {
-      rmSync(join(repo, 'README.md'));
+      rmSync(join(repo, '.specs/README.md'));
     },
   },
   {
@@ -1402,6 +1429,14 @@ const DECIDE_EDGE_CASES: DecideCase[] = [
     expected: 'true',
     pr: (repo) => {
       rmSync(join(repo, '.specs/project/STATE.md'));
+    },
+  },
+  {
+    // Fora da lista, apagar o README.md da raiz também roda tudo.
+    label: REMOVE_ROOT_README_LABEL,
+    expected: 'false',
+    pr: (repo) => {
+      rmSync(join(repo, 'README.md'));
     },
   },
   {
@@ -1419,52 +1454,53 @@ const NEWLINE_NAME_CASE: DecideCase = {
 
 // AI-53, a base: o pulo só vale num PR contra a `main`. Um PR contra uma branch que já tem o código sairia só de
 // documentação e, com a base trocada para a `main` depois (o evento `edited` não roda o CI), levaria o ci-ok verde sem
-// testes. Todos mudam só o README.md num merge válido; a comparação com `main` é exata.
+// testes. Todos mudam só o STATE.md (um arquivo da lista) num merge válido; a comparação com `main` é exata.
 const BASE_FEATURE_LABEL =
-  'só o README.md num PR contra chore/telemetry-catalog';
-const BASE_EMPTY_LABEL = 'só o README.md com a base vazia';
-const BASE_CASE_LABEL = 'só o README.md num PR contra Main (maiúscula)';
-const BASE_SPACE_LABEL = 'só o README.md num PR contra "main " (espaço no fim)';
-const BASE_MAIN_LABEL = 'só o README.md num PR contra main';
-const BASE_PUSH_LABEL = 'push com a base main e só o README.md';
+  'só o STATE.md num PR contra chore/telemetry-catalog';
+const BASE_EMPTY_LABEL = 'só o STATE.md com a base vazia';
+const BASE_CASE_LABEL = 'só o STATE.md num PR contra Main (maiúscula)';
+const BASE_SPACE_LABEL = 'só o STATE.md num PR contra "main " (espaço no fim)';
+const BASE_MAIN_LABEL = 'só o STATE.md num PR contra main';
+const BASE_PUSH_LABEL = 'push com a base main e só o STATE.md';
+const STATE_PATH = '.specs/project/STATE.md';
 
 const DECIDE_BASE_CASES: DecideCase[] = [
   {
     label: BASE_FEATURE_LABEL,
     expected: 'false',
     baseRef: 'chore/telemetry-catalog',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
   {
     label: BASE_EMPTY_LABEL,
     expected: 'false',
     baseRef: '',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
   {
     label: BASE_CASE_LABEL,
     expected: 'false',
     baseRef: 'Main',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
   {
     label: BASE_SPACE_LABEL,
     expected: 'false',
     baseRef: 'main ',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
   {
     label: BASE_MAIN_LABEL,
     expected: 'true',
     baseRef: 'main',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
   {
     label: BASE_PUSH_LABEL,
     expected: 'false',
     event: 'push',
     baseRef: 'main',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   },
 ];
 
@@ -1606,7 +1642,7 @@ function decideGitErrorViolations(step: DecideStep | undefined): string[] {
   prepareDecideCase(repo, {
     label: 'git com erro',
     expected: 'false',
-    pr: touchAll('README.md'),
+    pr: touchAll(STATE_PATH),
   });
   const parent = git(repo, 'rev-parse', 'HEAD^1').trim();
   const object = join(
@@ -2578,7 +2614,7 @@ describe('AI-53 as conferências da base do passo decide enxergam o que procuram
 });
 
 describe('AI-53 os casos de borda do passo decide enxergam o que procuram (controle negativo)', () => {
-  it('AI-53 o passo de referência dá true na remoção do README.md e do STATE.md e false no nome com espaço (controle positivo)', () => {
+  it('AI-53 o passo de referência dá true na remoção do .specs/README.md e do STATE.md e false na remoção do README.md da raiz e no nome com espaço (controle positivo)', () => {
     expect(
       decideBehaviorViolations(refStep(DECIDE_RUN), DECIDE_EDGE_CASES),
     ).toEqual([]);
@@ -2592,8 +2628,9 @@ describe('AI-53 os casos de borda do passo decide enxergam o que procuram (contr
       DECIDE_EDGE_CASES,
     );
 
+    // A remoção do README.md da raiz dá false com ou sem o filtro, então só as duas da lista reprovam.
     expect(violations).toHaveLength(2);
-    expect(violations[0]).toContain(REMOVE_README_LABEL);
+    expect(violations[0]).toContain(REMOVE_SPECS_README_LABEL);
     expect(violations[1]).toContain(REMOVE_STATE_LABEL);
   });
 
@@ -2609,12 +2646,14 @@ describe('AI-53 os casos de borda do passo decide enxergam o que procuram (contr
       DECIDE_EDGE_CASES,
     );
 
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain(SPACE_NAME_LABEL);
+    // O prefixo README.md* também casa com a remoção do README.md da raiz, que a lista deixa de fora.
+    expect(violations).toHaveLength(2);
+    expect(violations[0]).toContain(REMOVE_ROOT_README_LABEL);
+    expect(violations[1]).toContain(SPACE_NAME_LABEL);
   });
 
   it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
-    'AI-53 o passo de referência dá false no nome "README.md", quebra de linha, "x" (controle positivo)',
+    'AI-53 o passo de referência dá false no nome "STATE.md", quebra de linha, "x" (controle positivo)',
     () => {
       expect(
         decideBehaviorViolations(refStep(DECIDE_RUN), [NEWLINE_NAME_CASE]),
@@ -2639,7 +2678,7 @@ describe('AI-53 os casos de borda do passo decide enxergam o que procuram (contr
   it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
     'AI-53 o decide que lê o diff por linha, sem -z, também dá false no nome com quebra de linha (o git o escreve entre aspas), então esse caso não distingue o -z',
     () => {
-      // Sem o -z o git cita o nome (`"README.md\nx"`) e a linha não casa com a lista. O que separa o passo certo do
+      // Sem o -z o git cita o nome (`".specs/project/STATE.md\nx"`) e a linha não casa com a lista. O que separa o passo certo do
       // errado nesse caso é a recusa da quebra de linha antes do `grep -F` (o teste acima), e não o -z.
       const perLine = String.raw`list=$(mktemp)
 git diff --name-only --no-renames HEAD^1 HEAD > "$list"
@@ -2831,7 +2870,7 @@ describe('AI-53 as conferências do passo de troca por pastas enxergam o que pro
       'não trata o link (o link fica)',
       '[ -L "$path" ] || ',
       '',
-      'com um link: README.md continua um link',
+      'com um link: .specs/project/STATE.md continua um link',
     ],
     [
       'cria a pasta antes de apagar (mkdir antes do rm)',
@@ -2858,7 +2897,7 @@ describe('AI-53 as conferências do passo de troca por pastas enxergam o que pro
       'com os arquivos: apagou src/app.ts',
     ],
     [
-      'sem ler a lista (troca só o README.md)',
+      'sem ler a lista (troca só o README.md da raiz, que não está nela)',
       '"$DOCS_ONLY_PATHS"',
       '"README.md"',
       'com os arquivos: .specs/README.md não',
@@ -2867,7 +2906,7 @@ describe('AI-53 as conferências do passo de troca por pastas enxergam o que pro
       'trocando só o primeiro caminho da lista',
       '"$DOCS_ONLY_PATHS" |',
       '"$DOCS_ONLY_PATHS" | head -n 1 |',
-      'com os arquivos: .specs/README.md não',
+      'com os arquivos: .specs/codebase/CONVENTIONS.md não',
     ],
   ])(
     'AI-53 o passo de troca %s reprova no comportamento',
@@ -2881,7 +2920,7 @@ describe('AI-53 as conferências do passo de troca por pastas enxergam o que pro
     },
   );
 
-  it('AI-53 um teste inventado que lista a raiz e lê os .md reprova com EISDIR depois da troca, e passa sem erro depois de só apagar (o achado A1)', () => {
+  it('AI-53 um teste inventado que lista a pasta .specs/project e lê os .md reprova com EISDIR depois da troca, e passa sem erro depois de só apagar (o achado A1)', () => {
     expect(enumeratingOutcomeAfter(CLEANUP_RUN)).toBe('EISDIR');
     expect(enumeratingOutcomeAfter(DELETE_ONLY_RUN)).toBe('sem erro');
     expect(
@@ -2889,11 +2928,11 @@ describe('AI-53 as conferências do passo de troca por pastas enxergam o que pro
         '\n',
       ),
     ).toContain(
-      'o teste inventado que lista a raiz e lê os .md deu "sem erro"',
+      'o teste inventado que lista a pasta .specs/project e lê os .md deu "sem erro"',
     );
   });
 
-  it('AI-53 a leitura de cada um dos oito caminhos da lista depois da troca lança EISDIR', () => {
+  it('AI-53 a leitura de cada um dos sete caminhos da lista depois da troca lança EISDIR', () => {
     const dir = makeTempDir('cleanup-eisdir-');
     for (const path of DOCS_PATHS) writeFileIn(dir, path, KEPT_CONTENT);
     const script = join(makeTempDir('cleanup-script-'), 'step.sh');
@@ -2933,8 +2972,8 @@ const STRUCTURE_CASES: StructureCase[] = [
   ],
   [
     'uma lista com um glob a mais',
-    '    README.md\n',
-    '    README.md\n    docs/*.md\n',
+    '    .specs/README.md\n',
+    '    .specs/README.md\n    docs/*.md\n',
     'a lista DOCS_ONLY_PATHS tem glob',
   ],
   [
@@ -2945,8 +2984,14 @@ const STRUCTURE_CASES: StructureCase[] = [
   ],
   [
     'uma lista com o spec.md',
-    '    README.md\n',
-    '    README.md\n    .specs/features/casecellshop/spec.md\n',
+    '    .specs/README.md\n',
+    '    .specs/README.md\n    .specs/features/casecellshop/spec.md\n',
+    'a lista DOCS_ONLY_PATHS não é a do critério',
+  ],
+  [
+    'uma lista com o README.md da raiz (que o OBS-03 lê)',
+    '    .specs/README.md\n',
+    '    README.md\n    .specs/README.md\n',
     'a lista DOCS_ONLY_PATHS não é a do critério',
   ],
   [
@@ -3230,7 +3275,7 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
     expect(changesJobViolations(ci)).toEqual([]);
   });
 
-  it('AI-53 a lista DOCS_ONLY_PATHS do env do topo tem exatamente os oito caminhos, sem glob', () => {
+  it('AI-53 a lista DOCS_ONLY_PATHS do env do topo tem exatamente os sete caminhos, sem glob e sem o README.md da raiz', () => {
     expect(docsPathsOf(ci).sort()).toEqual([...DOCS_PATHS].sort());
     expect(docsPathsOf(ci).filter((path) => /[*?[]/.test(path))).toEqual([]);
   });
@@ -3279,13 +3324,13 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
     expect(decideGitErrorViolations(decideStepWithList(ci))).toEqual([]);
   });
 
-  it('AI-53 o passo de troca real do test faz uma pasta vazia de cada um dos oito caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a raiz reprova com EISDIR', () => {
+  it('AI-53 o passo de troca real do test faz uma pasta vazia de cada um dos sete caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a pasta .specs/project reprova com EISDIR', () => {
     expect(
       cleanupBehaviorViolations(cleanupStepOf(ci, 'test'), docsPathsTextOf(ci)),
     ).toEqual([]);
   });
 
-  it('AI-53 o passo de troca real do api-fuzz faz uma pasta vazia de cada um dos oito caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a raiz reprova com EISDIR', () => {
+  it('AI-53 o passo de troca real do api-fuzz faz uma pasta vazia de cada um dos sete caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a pasta .specs/project reprova com EISDIR', () => {
     expect(
       cleanupBehaviorViolations(
         cleanupStepOf(ci, 'api-fuzz'),
@@ -3298,14 +3343,14 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
     expect(ciOkSkipViolations(ci)).toEqual([]);
   }, 60_000);
 
-  it('AI-53 o passo decide real dá true na remoção do README.md e do STATE.md, e false no nome "README.md x" com espaço', () => {
+  it('AI-53 o passo decide real dá true na remoção do .specs/README.md e do STATE.md, e false na remoção do README.md da raiz e no nome "README.md x" com espaço', () => {
     expect(
       decideBehaviorViolations(decideStepWithList(ci), DECIDE_EDGE_CASES),
     ).toEqual([]);
   }, 60_000);
 
   it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
-    'AI-53 o passo decide real dá false no nome "README.md", quebra de linha, "x": o nome é lido inteiro e fica fora da lista',
+    'AI-53 o passo decide real dá false no nome "STATE.md", quebra de linha, "x": o nome é lido inteiro e fica fora da lista',
     () => {
       expect(
         decideBehaviorViolations(decideStepWithList(ci), [NEWLINE_NAME_CASE]),

@@ -316,6 +316,7 @@ const EXCEPTIONS: Exception[] = [
     file: 'test/repo/ci-jobs.test.ts',
     citations: [
       '*README.md',
+      '.specs',
       '.specs/',
       '.specs/*',
       '.specs/**',
@@ -324,6 +325,7 @@ const EXCEPTIONS: Exception[] = [
       '.specs/features/casecellshop/design.md',
       '.specs/features/casecellshop/spec.md',
       '.specs/features/casecellshop/telemetry.md',
+      '.specs/project',
       '.specs/project/NOVO.md',
       '.specs/project/PROJECT.md',
       '.specs/project/ROADMAP.md',
@@ -344,6 +346,12 @@ const EXCEPTIONS: Exception[] = [
     citations: ['.specs/features/casecellshop/spec.md', 'README.md'],
     reason:
       'o getFileInfo do Prettier lê só o .prettierignore, e não o arquivo',
+  },
+  {
+    file: 'test/repo/readme-promql.test.ts',
+    citations: ['README.md'],
+    reason:
+      'lê o README.md da raiz, que não está na lista; a guarda compara pelo nome, e o .specs/README.md da lista tem o mesmo nome do README.md da raiz. O catálogo vem do METRICS, e nenhum arquivo sob .specs é lido',
   },
   {
     file: 'test/repo/rules-paths.test.ts',
@@ -373,6 +381,22 @@ describe('AI-53 a guarda de leitura enxerga o que procura (controle negativo)', 
     'STATE.md',
     'STATE-ARCHIVE.md',
   ];
+
+  it('AI-53 os nomes escritos aqui são os que a guarda real deriva da lista do ci.yml (os controles inventados provam a guarda com nomes que ainda estão nela)', () => {
+    expect(fileNamesOf(docsOnlyPaths())).toEqual(names);
+  });
+
+  it('AI-53 o README.md da raiz e o spec.md ficam fora da lista, e o .specs/README.md continua nela, de modo que o nome README.md segue sendo vigiado', () => {
+    const paths = docsOnlyPaths();
+
+    expect(paths).not.toContain('README.md');
+    expect(paths).not.toContain('.specs/features/casecellshop/spec.md');
+    expect(paths).toContain('.specs/README.md');
+    expect(fileNamesOf(paths)).toContain('README.md');
+    expect(findCitations(`read(join(root, 'README.md'))`, names)).toEqual([
+      'README.md',
+    ]);
+  });
 
   it('AI-53 um teste inventado que lê .specs/project/STATE.md, monta .specs/project/ROADMAP.md com join ou cita README.md é acusado', () => {
     const read = `import { readFileSync } from 'node:fs';

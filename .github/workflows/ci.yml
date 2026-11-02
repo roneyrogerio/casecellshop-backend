@@ -22,7 +22,6 @@ concurrency:
 # .specs/ (como um que um teste regenera e compara) roda tudo.
 env:
   DOCS_ONLY_PATHS: |
-    README.md
     .specs/README.md
     .specs/codebase/CONVENTIONS.md
     .specs/features/casecellshop/design.md
