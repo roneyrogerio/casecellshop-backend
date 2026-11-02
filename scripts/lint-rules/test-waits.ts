@@ -252,14 +252,17 @@ const isFixedPort = (node: Node | undefined): boolean =>
   typeof node['value'] === 'number' &&
   node['value'] > 0;
 
-// O nome de uma chave de objeto escrita no código (`port` ou `'port'`); a chave
-// calculada (`[k]`) só se conhece ao rodar.
+// O nome de uma chave de objeto escrita no código (`port`, `'port'` ou `0`); a
+// chave calculada (`[k]`) só se conhece ao rodar. A chave numérica vira texto,
+// como no próprio objeto (`{ 0: x }` tem a chave '0').
 function keyName(property: Node): string | undefined {
   if (property['computed'] === true) return undefined;
   const key = child(property, 'key');
-  if (key?.type === 'Literal' && typeof key['value'] === 'string')
-    return key['value'];
-  return nameOf(key);
+  if (key?.type !== 'Literal') return nameOf(key);
+  const value = key['value'];
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : undefined;
 }
 
 // O port de um listen({ port, host }). Um spread, uma chave calculada ou outro
