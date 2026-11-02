@@ -1,9 +1,8 @@
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { readInventory } from '../../helpers/checkout.ts';
 import { expectMatchesContract, findRoute } from '../../helpers/contract.ts';
 import {
-  countInvoices,
   ERP_TIMEOUT_MS,
   invoiceTotals,
   MIN_RETRY_DELAY_MS,
@@ -17,6 +16,7 @@ import {
   expectOneInFlight,
   expectQueuesEmpty,
   interceptPool,
+  invoiceCounter,
   ledgerViolations,
   makeClaimable,
   markSentBefore,
@@ -24,10 +24,10 @@ import {
   releaseMessage,
   snapshotQueues,
   startPoll,
-  startWorkerSuite,
   submitOrder,
   TAKE_PERMIT_STATEMENT,
   untilState,
+  useWorkerSuite,
   waitForDlq,
   type AcceptedOrder,
   type QueueWorld,
@@ -36,24 +36,15 @@ import {
 
 // Desfechos do envio (ORD-08 a ORD-11) e o status do pedido depois do worker (ORD-19), pelo SQS.
 
+const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
 const statusRoute = findRoute('get', '/orders/{orderId}/status');
 
-beforeAll(async () => {
-  suite = await startWorkerSuite();
-}, 180_000);
-
-afterAll(async () => {
-  await suite?.stop();
+beforeEach(() => {
+  suite = suiteOf();
 });
 
-afterEach(() => {
-  suite.releaseWorlds();
-});
-
-function invoices(orderId: string): Promise<number> {
-  return countInvoices(suite.database.pool, orderId);
-}
+const invoices = invoiceCounter(suiteOf);
 
 // O worker só consultou o ERP: a criação não saiu e nenhuma fatura nasceu.
 async function expectLookedUpButNotCreated(

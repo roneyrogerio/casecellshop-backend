@@ -46,7 +46,7 @@ import {
 import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
 import { createManualClock, type ManualClock } from './clock.ts';
 import { startMigratedDatabase, type TestDatabase } from './database.ts';
-import { ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
+import { countInvoices, ERP_TIMEOUT_MS, seedErpProduct } from './erp.ts';
 import {
   countsOf,
   observeQueue,
@@ -418,6 +418,13 @@ export function useWorkerSuite(): () => WorkerSuite {
     if (!started) throw new Error('a suíte do worker ainda não subiu');
     return started;
   };
+}
+
+// Conta as faturas do pedido no erp_sim pela referência; a suíte é lida só na chamada, depois de subir.
+export function invoiceCounter(
+  suiteOf: () => WorkerSuite,
+): (orderId: string) => Promise<number> {
+  return (orderId) => countInvoices(suiteOf().database.pool, orderId);
 }
 
 // ---------------------------------------------------------------- mundo de um teste: ERP, filas e relógio

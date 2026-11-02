@@ -1,21 +1,9 @@
 import { pino } from 'pino';
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { fromPino } from '../../../src/shared/logging.ts';
 import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
-import {
-  ERP_TIMEOUT_MS,
-  MIN_RETRY_DELAY_MS,
-  countInvoices,
-} from '../../helpers/erp.ts';
+import { ERP_TIMEOUT_MS, MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 import {
   buildLateCheck,
   LATE_INVOICE_DETECTED,
@@ -33,14 +21,15 @@ import {
   createWorld,
   expectInvoiced,
   expectQueuesEmpty,
+  invoiceCounter,
   makeClaimable,
   markSentBefore,
   readOrder,
   readOutbox,
   releaseMessage,
   startPoll,
-  startWorkerSuite,
   submitOrder,
+  useWorkerSuite,
   type QueueWorld,
   type WorkerSuite,
 } from '../../helpers/worker.ts';
@@ -50,23 +39,14 @@ import {
 // A mensagem volta à fila com `ChangeMessageVisibility` e `VisibilityTimeout = 0`, e o atraso mínimo é
 // cumprido semeando o `last_call_at` no banco (AD-021): nenhum teste espera o relógio do emulador.
 
+const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
 
-beforeAll(async () => {
-  suite = await startWorkerSuite();
-}, 180_000);
-
-afterAll(async () => {
-  await suite?.stop();
+beforeEach(() => {
+  suite = suiteOf();
 });
 
-afterEach(() => {
-  suite.releaseWorlds();
-});
-
-function invoices(orderId: string): Promise<number> {
-  return countInvoices(suite.database.pool, orderId);
-}
+const invoices = invoiceCounter(suiteOf);
 
 describe('ORD-01 mensagem entregue duas vezes', () => {
   it('ORD-01 sem a H1b, a conclusão perdida e a mensagem devolvida ao SQS reprocessam e deixam uma fatura', async () => {
