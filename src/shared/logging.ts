@@ -49,7 +49,8 @@ function traceMixin(): object {
   };
 }
 
-// O marcador não sai do módulo: sem nomear o símbolo ninguém monta um AppLogger, e o objeto não tem método de escrita.
+// O símbolo não sai do módulo: sem nomeá-lo ninguém monta um AppLogger nem alcança o pino que ele guarda, e o
+// objeto não tem método de escrita.
 const appLoggerBrand: unique symbol = Symbol('AppLogger');
 
 // Os bindings de um filho recusam `event`: o nome do evento só entra pelo `eventLogger`.
@@ -59,21 +60,17 @@ export type ChildBindings = Readonly<Record<string, unknown>> & {
 
 // O logger que o resto de `src/` recebe: só cria filhos; escrever é com o `eventLogger`.
 export interface AppLogger {
-  readonly [appLoggerBrand]: true;
+  // O pino fica sob o símbolo privado, fora do alcance de quem recebe o AppLogger.
+  readonly [appLoggerBrand]: Logger;
   child(bindings: ChildBindings): AppLogger;
 }
 
-// O pino de cada AppLogger fica aqui, fora do alcance de quem recebe o AppLogger.
-const pinoOf = new WeakMap<AppLogger, Logger>();
-
 // Envolve um logger do pino (os testes montam o deles, com destino próprio).
 export function fromPino(logger: Logger): AppLogger {
-  const appLogger: AppLogger = {
-    [appLoggerBrand]: true,
+  return {
+    [appLoggerBrand]: logger,
     child: (bindings) => fromPino(logger.child(bindings)),
   };
-  pinoOf.set(appLogger, logger);
-  return appLogger;
 }
 
 type EventSpecs = Readonly<Record<string, LogEventSpec>>;
@@ -132,7 +129,7 @@ export function eventLogger<S extends EventSpecs>(
   const write =
     (level: LogLevel) =>
     (event: string, fields: object, message: string): void => {
-      pinoOf.get(logger)?.[level]({ event, ...fields }, message);
+      logger[appLoggerBrand][level]({ event, ...fields }, message);
     };
   return { info: write('info'), warn: write('warn'), error: write('error') };
 }
