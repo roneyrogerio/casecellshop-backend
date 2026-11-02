@@ -167,7 +167,7 @@ export function describeCancel(
       };
     case 'permit_lost':
       return {
-        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s.`,
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s, ou depois da janela de assentamento se a outra tentativa enviou uma criação ao ERP.`,
         failed: true,
       };
   }
