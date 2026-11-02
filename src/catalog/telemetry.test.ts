@@ -113,7 +113,7 @@ describe('OBS-07 observe: o gauge lido na coleta', () => {
   });
 });
 
-// A forma que o teste lê, sem depender de como a declaração tipa o índice (o nome novo ainda não existe no tipo).
+// A forma que o teste lê, sem depender de como a declaração tipa o índice.
 interface MetricLike {
   readonly instrument: string;
   readonly unit: string;

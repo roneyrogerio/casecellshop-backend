@@ -137,15 +137,32 @@ async function slowInitialRound(factory?: SyncFactory) {
   };
 }
 
-// Duas rodadas pedidas ao mesmo tempo, com a primeira presa na leitura do ERP.
-async function twoDirectRounds(factory?: SyncFactory) {
+function untilListReads(
+  transport: { sendsOf(op: 'listCatalog'): unknown[] },
+  count: number,
+): Promise<void> {
+  return until(() =>
+    expect(transport.sendsOf('listCatalog').length).toBe(count),
+  );
+}
+
+// Duas rodadas pedidas ao mesmo tempo, com a primeira presa na leitura do ERP. Com `bothReadsExpected`, espera a
+// condição que o controle negativo afirma (as duas leituras no ERP ao mesmo tempo), e não um tempo fixo: sob carga a
+// segunda rodada pode demorar a ler o snapshot do banco antes de chegar ao ERP. Sem ele, a espera curta é a que prova
+// a ausência da segunda leitura, e o caso não depende de ela chegar.
+async function twoDirectRounds(
+  options: { factory?: SyncFactory; bothReadsExpected?: boolean } = {},
+) {
+  const { factory, bothReadsExpected = false } = options;
   await putErpProducts(db.erpPool, [{ sku: 'W-002' }]);
   const rig = db.rig(factory ? { factory } : {});
   const hold = holdErpPage(db, rig.world);
   const first = track(rig.sync.runRound());
   const second = track(rig.sync.runRound());
   await hold.parked();
-  await settle(20);
+  await (bothReadsExpected
+    ? untilListReads(rig.world.transport, 2)
+    : settle(20));
   const readsWhileFirstIsStuck =
     rig.world.transport.sendsOf('listCatalog').length;
   hold.release();
@@ -191,9 +208,10 @@ describe('CAT-09 uma rodada lenta não se sobrepõe à seguinte', () => {
   });
 
   it('CAT-09 controle negativo: sem a exclusão entre rodadas, as duas leituras do ERP andam juntas', async () => {
-    const { rig, readsWhileFirstIsStuck } = await twoDirectRounds(
-      createNaiveCatalogSync(),
-    );
+    const { rig, readsWhileFirstIsStuck } = await twoDirectRounds({
+      factory: createNaiveCatalogSync(),
+      bothReadsExpected: true,
+    });
 
     expect(readsWhileFirstIsStuck).toBe(2);
     expect(rig.world.transport.maxInFlight).toBe(2);

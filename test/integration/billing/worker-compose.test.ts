@@ -247,4 +247,34 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
       familyOf(families, 'casecellshop.order.accept_to_invoice.duration')?.type,
     ).toBe('histogram');
   }, 60_000);
+
+  it('OBS-02 o /metrics do processo da API no compose expõe os gauges lidos do banco: idade da sincronização, idade da outbox e o estoque', async () => {
+    // Os gauges lidos do banco saem pela API, não pelo worker (AD-008): nenhum outro teste sobe o main/api.ts, então
+    // só este vê se ele registra cada um. A leitura sai de dentro do contêiner da API, como a do worker.
+    const script =
+      "fetch('http://127.0.0.1:3000/metrics').then((r) => r.text()).then((t) => process.stdout.write(t))";
+    const result = await environment
+      .getContainer('api-1')
+      .exec(['node', '-e', script]);
+    expect(result.exitCode, result.output).toBe(0);
+
+    const families = parseExposition(result.stdout);
+    const gauges = [
+      'casecellshop.catalog.sync.age',
+      'casecellshop.outbox.oldest_pending.age',
+      'casecellshop.inventory.reserved',
+      'casecellshop.inventory.oversold_skus',
+    ] as const;
+    for (const gauge of gauges) {
+      expect(familyOf(families, gauge)?.type, `${gauge} é um gauge`).toBe(
+        'gauge',
+      );
+      // Sem atributos: uma série só; a primeira rodada completa (esperada no beforeAll) já deu valor à idade da
+      // sincronização, que não grava ponto sem rodada completa.
+      expect(
+        metricValue(families, gauge),
+        `${gauge} tem valor`,
+      ).toBeGreaterThanOrEqual(0);
+    }
+  }, 60_000);
 });

@@ -13,7 +13,7 @@ import {
 } from '../../helpers/sync.ts';
 import { interceptPool } from '../../helpers/worker.ts';
 
-// CAT-15 (AD-009, "Subida com o banco fora"): o worker não lê o banco na subida (a idade da sincronização é da API),
+// CAT-15 (AD-008, design.md § Sincronização, "Idade da sincronização"): o worker não lê o banco na subida (a idade da sincronização é da API),
 // então o banco fora na subida é a falha da primeira rodada. O start não pode rejeitar, porque o restante do processo
 // (relay, reconciliador) já subiu antes dela, e as rodadas seguem.
 
