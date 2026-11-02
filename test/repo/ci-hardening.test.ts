@@ -796,7 +796,8 @@ jobs:
       - id: decide
         env:
           EVENT_NAME: \${{ github.event_name }}
-        run: echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          BASE_REF: \${{ github.base_ref }}
+        run: '[ "$BASE_REF" = "main" ] && echo "docs_only=false" >> "$GITHUB_OUTPUT"'
 `) as Workflow;
 
 const BAD_CHANGES = parse(`
@@ -815,6 +816,24 @@ describe('AI-53 as regras de endurecimento enxergam o job changes (controle nega
     expect(unpinned(GOOD_CHANGES)).toEqual([]);
     expect(checkoutsWithCredentials(GOOD_CHANGES)).toEqual([]);
     expect(interpolatedRuns(stepsOf(GOOD_CHANGES))).toEqual([]);
+    expect(interpolatedRefs(GOOD_CHANGES)).toEqual([]);
+  });
+
+  it('AI-05 o job changes com github.base_ref ou github.head_ref interpolado no run reprova na regra de base_ref e na de interpolação', () => {
+    for (const ref of ['base_ref', 'head_ref']) {
+      const interpolated = parse(`
+jobs:
+  changes:
+    steps:
+      - id: decide
+        env:
+          EVENT_NAME: \${{ github.event_name }}
+        run: '[ "\${{ github.${ref} }}" = "main" ] && echo "docs_only=false" >> "$GITHUB_OUTPUT"'
+`) as Workflow;
+
+      expect(interpolatedRefs(interpolated)).toHaveLength(1);
+      expect(interpolatedRuns(stepsOf(interpolated))).toHaveLength(1);
+    }
   });
 
   it('AI-05 o job changes com o checkout por tag, sem persist-credentials e com a expressão no run reprova nas três regras', () => {
@@ -841,12 +860,15 @@ describe('AI-53 o job changes e os passos de troca por pastas do ci.yml seguem a
     expect(checkouts[0]?.with?.['persist-credentials']).toBe(false);
   });
 
-  it('AI-05 o passo decide recebe o evento por env e não interpola nenhuma expressão no run', () => {
+  it('AI-05 o passo decide recebe o evento e a base por env e não interpola nenhuma expressão no run', () => {
     const decide = stepsOf(changes).find((step) => step.id === 'decide');
 
     expect(decide).toBeDefined();
     expect(decide?.env?.['EVENT_NAME']).toBe('${{ github.event_name }}');
+    expect(decide?.env?.['BASE_REF']).toBe('${{ github.base_ref }}');
+    expect(decide?.run ?? '').toContain('$BASE_REF');
     expect(interpolatedRuns(stepsOf(changes))).toEqual([]);
+    expect(interpolatedRefs(changes)).toEqual([]);
   });
 
   it('AI-05 os passos que trocam os arquivos por pastas, no test e no api-fuzz, leem a lista do ambiente (rm -f --, mkdir -p --) e não interpolam expressão no run', () => {

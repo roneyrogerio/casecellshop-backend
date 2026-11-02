@@ -821,7 +821,7 @@ const MATCH_LINE = String.raw`    case "$file" in *$'\n'*) docs_only=false ;; *)
 const DECIDE_RUN = String.raw`list=$(mktemp)
 git diff --name-only --no-renames -z HEAD^1 HEAD > "$list"
 docs_only=false
-if [ "$EVENT_NAME" = "pull_request" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null && [ -s "$list" ]; then
+if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" = "main" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null && [ -s "$list" ]; then
   docs_only=true
   while IFS= read -r -d '' file; do
 ${MATCH_LINE}
@@ -852,6 +852,7 @@ const CHANGES_JOB = `  changes:
       - id: decide
         env:
           EVENT_NAME: \${{ github.event_name }}
+          BASE_REF: \${{ github.base_ref }}
         run: |
 ${indent(DECIDE_RUN, 10)}
 `;
@@ -901,6 +902,7 @@ interface DocsJob extends CiJob {
 
 const DOCS_OUTPUT = /^\$\{\{\s*steps\.decide\.outputs\.docs_only\s*\}\}$/;
 const EVENT_NAME_ENV = /^\$\{\{\s*github\.event_name\s*\}\}$/;
+const BASE_REF_ENV = /^\$\{\{\s*github\.base_ref\s*\}\}$/;
 const DOCS_IF =
   /^(?:\$\{\{\s*)?needs\.changes\.outputs\.docs_only\s*!=\s*'true'(?:\s*\}\})?$/;
 
@@ -991,8 +993,16 @@ function changesJobViolations(workflow: DocsWorkflow): string[] {
     return [...violations, 'o segundo passo não tem id: decide'];
   if (!EVENT_NAME_ENV.test(String(decide.env?.EVENT_NAME)))
     violations.push('o env EVENT_NAME não vem de github.event_name');
-  if (Object.keys(decide.env ?? {}).join() !== 'EVENT_NAME')
-    violations.push('o env do decide tem algo além do EVENT_NAME');
+  if (!BASE_REF_ENV.test(String(decide.env?.BASE_REF)))
+    violations.push('o env BASE_REF não vem de github.base_ref');
+  if (
+    Object.keys(decide.env ?? {})
+      .sort()
+      .join() !== 'BASE_REF,EVENT_NAME'
+  )
+    violations.push(
+      'o env do decide tem algo além do EVENT_NAME e do BASE_REF',
+    );
   const paths = docsPathsOf(workflow);
   if (
     JSON.stringify([...paths].sort()) !== JSON.stringify([...DOCS_PATHS].sort())
@@ -1003,6 +1013,8 @@ function changesJobViolations(workflow: DocsWorkflow): string[] {
   const run = decide.run ?? '';
   if (run.includes('${{'))
     violations.push('o run interpola uma expressão (passe por env)');
+  if (!run.includes('$BASE_REF'))
+    violations.push('o run não lê $BASE_REF do ambiente');
   if (!run.includes('GITHUB_OUTPUT'))
     violations.push('o run não escreve em GITHUB_OUTPUT');
   return [...violations, ...diffViolations(run)];
@@ -1239,6 +1251,8 @@ interface DecideCase {
   label: string;
   expected: 'true' | 'false';
   event?: string;
+  // O valor de github.base_ref que o GitHub entregaria ao passo; sem ele, `main`. Uma string vazia vale (PR sem base).
+  baseRef?: string;
   // `false`: o HEAD é o commit do PR (um commit comum), e não o commit de merge.
   merge?: boolean;
   // Muda a base antes de o PR sair dela (para criar o rename detectável).
@@ -1403,6 +1417,57 @@ const NEWLINE_NAME_CASE: DecideCase = {
   pr: touchAll(NEWLINE_NAME),
 };
 
+// AI-53, a base: o pulo só vale num PR contra a `main`. Um PR contra uma branch que já tem o código sairia só de
+// documentação e, com a base trocada para a `main` depois (o evento `edited` não roda o CI), levaria o ci-ok verde sem
+// testes. Todos mudam só o README.md num merge válido; a comparação com `main` é exata.
+const BASE_FEATURE_LABEL =
+  'só o README.md num PR contra chore/telemetry-catalog';
+const BASE_EMPTY_LABEL = 'só o README.md com a base vazia';
+const BASE_CASE_LABEL = 'só o README.md num PR contra Main (maiúscula)';
+const BASE_SPACE_LABEL = 'só o README.md num PR contra "main " (espaço no fim)';
+const BASE_MAIN_LABEL = 'só o README.md num PR contra main';
+const BASE_PUSH_LABEL = 'push com a base main e só o README.md';
+
+const DECIDE_BASE_CASES: DecideCase[] = [
+  {
+    label: BASE_FEATURE_LABEL,
+    expected: 'false',
+    baseRef: 'chore/telemetry-catalog',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: BASE_EMPTY_LABEL,
+    expected: 'false',
+    baseRef: '',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: BASE_CASE_LABEL,
+    expected: 'false',
+    baseRef: 'Main',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: BASE_SPACE_LABEL,
+    expected: 'false',
+    baseRef: 'main ',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: BASE_MAIN_LABEL,
+    expected: 'true',
+    baseRef: 'main',
+    pr: touchAll('README.md'),
+  },
+  {
+    label: BASE_PUSH_LABEL,
+    expected: 'false',
+    event: 'push',
+    baseRef: 'main',
+    pr: touchAll('README.md'),
+  },
+];
+
 // O caso do nome com quebra de linha só roda onde o sistema de arquivos aceita o nome (o Linux aceita; o Windows e
 // alguns volumes montados não). É uma limitação do ambiente, e nunca uma forma de esconder uma falha do passo.
 function filesystemAcceptsNewlineNames(): boolean {
@@ -1454,13 +1519,18 @@ function prepareDecideCase(repo: string, decideCase: DecideCase): void {
   git(repo, 'merge', '-q', '--no-ff', '-m', 'merge do pr', 'case-pr');
 }
 
-// O env do passo como o GitHub o entregaria: github.event_name vira o evento do caso; qualquer outra expressão é um
-// erro do teste, e não um passo que o teste sabe rodar.
-function envOfDecide(step: DecideStep, event: string): Record<string, string> {
+// O env do passo como o GitHub o entregaria: github.event_name vira o evento do caso e github.base_ref a base dele;
+// qualquer outra expressão é um erro do teste, e não um passo que o teste sabe rodar.
+function envOfDecide(
+  step: DecideStep,
+  event: string,
+  baseRef: string,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, raw] of Object.entries(step.env ?? {})) {
     const value = String(raw);
     if (EVENT_NAME_ENV.test(value)) env[name] = event;
+    else if (BASE_REF_ENV.test(value)) env[name] = baseRef;
     else if (value.includes('${{'))
       throw new Error(`expressão do env não suportada pelo teste: ${value}`);
     else env[name] = value;
@@ -1479,6 +1549,7 @@ function runDecide(
   step: DecideStep,
   repo: string,
   event = 'pull_request',
+  baseRef = 'main',
 ): DecideRun {
   const work = makeTempDir('decide-run-');
   const output = join(work, 'github-output');
@@ -1492,7 +1563,7 @@ function runDecide(
       env: {
         PATH: process.env.PATH ?? '',
         HOME: work,
-        ...envOfDecide(step, event),
+        ...envOfDecide(step, event, baseRef),
         GITHUB_OUTPUT: output,
       },
     },
@@ -1512,7 +1583,12 @@ function decideBehaviorViolations(
   const violations: string[] = [];
   for (const decideCase of cases) {
     prepareDecideCase(repo, decideCase);
-    const { status, value } = runDecide(step, repo, decideCase.event);
+    const { status, value } = runDecide(
+      step,
+      repo,
+      decideCase.event,
+      decideCase.baseRef,
+    );
     if (status !== 0 || value !== decideCase.expected)
       violations.push(
         `${decideCase.label}: saiu com ${String(status)} e docs_only=${value ?? '(ausente)'}, esperado 0 e ${decideCase.expected}`,
@@ -2329,6 +2405,7 @@ function refStep(run: string): DecideStep {
     run,
     env: {
       EVENT_NAME: '${{ github.event_name }}',
+      BASE_REF: '${{ github.base_ref }}',
       DOCS_ONLY_PATHS: DOCS_PATHS_TEXT,
     },
   };
@@ -2338,7 +2415,7 @@ function refStep(run: string): DecideStep {
 // falhou parece vazio.
 const DECIDE_SUBSTITUTION_RUN = String.raw`count=0
 docs_only=false
-if [ "$EVENT_NAME" = "pull_request" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null; then
+if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" = "main" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null; then
   docs_only=true
   while IFS= read -r -d '' file; do
     count=$((count + 1))
@@ -2418,6 +2495,87 @@ describe('AI-53 as conferências do passo decide enxergam o que procuram (contro
   });
 });
 
+// [rótulo, trecho do passo, trecho trocado, rótulos dos casos de base que têm de enxergar a diferença]
+type BaseMutation = readonly [
+  label: string,
+  from: string,
+  to: string,
+  caseLabels: string[],
+];
+
+const BASE_CONDITION = ' && [ "$BASE_REF" = "main" ]';
+
+const BASE_MUTATIONS: BaseMutation[] = [
+  [
+    'ignora a base (a versão anterior ao achado)',
+    BASE_CONDITION,
+    '',
+    [BASE_FEATURE_LABEL, BASE_EMPTY_LABEL, BASE_CASE_LABEL, BASE_SPACE_LABEL],
+  ],
+  [
+    'aceita a base vazia',
+    BASE_CONDITION,
+    ' && { [ -z "$BASE_REF" ] || [ "$BASE_REF" = "main" ]; }',
+    [BASE_EMPTY_LABEL],
+  ],
+  [
+    'compara a base por prefixo (main*)',
+    BASE_CONDITION,
+    ' && [[ "$BASE_REF" == main* ]]',
+    [BASE_SPACE_LABEL],
+  ],
+  [
+    'compara a base sem diferenciar maiúsculas',
+    BASE_CONDITION,
+    ' && [ "${BASE_REF,,}" = "main" ]',
+    [BASE_CASE_LABEL],
+  ],
+  [
+    'só recusa a branch do achado, em vez de exigir a main',
+    BASE_CONDITION,
+    ' && [ "$BASE_REF" != "chore/telemetry-catalog" ]',
+    [BASE_EMPTY_LABEL, BASE_CASE_LABEL, BASE_SPACE_LABEL],
+  ],
+];
+
+describe('AI-53 as conferências da base do passo decide enxergam o que procuram (controle negativo)', () => {
+  it('AI-53 o passo de referência dá true só no PR contra main e false na base de outra branch, vazia, Main, "main " e no push (controle positivo)', () => {
+    expect(
+      decideBehaviorViolations(refStep(DECIDE_RUN), DECIDE_BASE_CASES),
+    ).toEqual([]);
+  }, 60_000);
+
+  it.each(BASE_MUTATIONS)(
+    'AI-53 o decide que %s dá true onde devia dar false, e os casos de base enxergam',
+    (_label, from, to, caseLabels) => {
+      const violations = decideBehaviorViolations(
+        refStep(mutated(DECIDE_RUN, from, to)),
+        DECIDE_BASE_CASES,
+      );
+
+      expect(violations).toHaveLength(caseLabels.length);
+      caseLabels.forEach((caseLabel, index) => {
+        expect(violations[index]).toContain(caseLabel);
+        expect(violations[index]).toContain('docs_only=true');
+      });
+    },
+    60_000,
+  );
+
+  it('AI-53 o decide da versão anterior ao achado dá true no PR contra chore/telemetry-catalog e a conferência acusa', () => {
+    const feature = DECIDE_BASE_CASES.filter(
+      (c) => c.label === BASE_FEATURE_LABEL,
+    );
+    const ignoring = refStep(mutated(DECIDE_RUN, BASE_CONDITION, ''));
+
+    expect(feature).toHaveLength(1);
+    expect(feature[0]?.baseRef).toBe('chore/telemetry-catalog');
+    expect(decideBehaviorViolations(ignoring, feature)).toEqual([
+      `${BASE_FEATURE_LABEL}: saiu com 0 e docs_only=true, esperado 0 e false`,
+    ]);
+  });
+});
+
 describe('AI-53 os casos de borda do passo decide enxergam o que procuram (controle negativo)', () => {
   it('AI-53 o passo de referência dá true na remoção do README.md e do STATE.md e false no nome com espaço (controle positivo)', () => {
     expect(
@@ -2485,7 +2643,7 @@ describe('AI-53 os casos de borda do passo decide enxergam o que procuram (contr
       const perLine = String.raw`list=$(mktemp)
 git diff --name-only --no-renames HEAD^1 HEAD > "$list"
 docs_only=false
-if [ "$EVENT_NAME" = "pull_request" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null && [ -s "$list" ]; then
+if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" = "main" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null && [ -s "$list" ]; then
   docs_only=true
   while IFS= read -r file; do
 ${GREP_MATCH_LINE}
@@ -2794,7 +2952,43 @@ const STRUCTURE_CASES: StructureCase[] = [
     'uma lista no env do passo decide, e não no do topo',
     '          EVENT_NAME: ${{ github.event_name }}\n',
     '          EVENT_NAME: ${{ github.event_name }}\n          DOCS_ONLY_PATHS: x\n',
-    'o env do decide tem algo além do EVENT_NAME',
+    'o env do decide tem algo além do EVENT_NAME e do BASE_REF',
+  ],
+  [
+    'um passo decide sem o BASE_REF no env',
+    '          EVENT_NAME: ${{ github.event_name }}\n          BASE_REF: ${{ github.base_ref }}\n',
+    '          EVENT_NAME: ${{ github.event_name }}\n',
+    'o env BASE_REF não vem de github.base_ref',
+  ],
+  [
+    'um passo decide sem o BASE_REF no env (o env fica só com o EVENT_NAME)',
+    '          EVENT_NAME: ${{ github.event_name }}\n          BASE_REF: ${{ github.base_ref }}\n',
+    '          EVENT_NAME: ${{ github.event_name }}\n',
+    'o env do decide tem algo além do EVENT_NAME e do BASE_REF',
+  ],
+  [
+    'um passo decide com o BASE_REF vindo de github.head_ref',
+    '          BASE_REF: ${{ github.base_ref }}\n        run: |\n          list=',
+    '          BASE_REF: ${{ github.head_ref }}\n        run: |\n          list=',
+    'o env BASE_REF não vem de github.base_ref',
+  ],
+  [
+    'um passo decide com o BASE_REF fixo em main',
+    '          BASE_REF: ${{ github.base_ref }}\n        run: |\n          list=',
+    '          BASE_REF: main\n        run: |\n          list=',
+    'o env BASE_REF não vem de github.base_ref',
+  ],
+  [
+    'um passo decide com github.base_ref interpolado no run',
+    'list=$(mktemp)',
+    'list=$(mktemp) # ${{ github.base_ref }}',
+    'o run interpola uma expressão (passe por env)',
+  ],
+  [
+    'um passo decide cujo run não lê o BASE_REF do ambiente',
+    '[ "$BASE_REF" = "main" ]',
+    '[ "main" = "main" ]',
+    'o run não lê $BASE_REF do ambiente',
   ],
   [
     'um diff sem --no-renames',
@@ -3067,6 +3261,17 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
 
   it('AI-53 o passo decide real dá true só no PR com os arquivos da lista, e false em push, em diff vazio, em HEAD sem dois pais e em qualquer arquivo fora da lista', () => {
     expect(decideBehaviorViolations(decideStepWithList(ci))).toEqual([]);
+  }, 60_000);
+
+  it('AI-53 o passo decide real recebe a base por env (BASE_REF de github.base_ref), só com o EVENT_NAME e o BASE_REF, lê $BASE_REF e não interpola expressão no run', () => {
+    expect(changesJobViolations(ci)).toEqual([]);
+    expect(decideStepOf(ci)?.env?.BASE_REF).toBe('${{ github.base_ref }}');
+  });
+
+  it('AI-53 o passo decide real dá true só no PR contra a main: false contra chore/telemetry-catalog, com a base vazia, Main e "main ", false no push, true contra main', () => {
+    expect(
+      decideBehaviorViolations(decideStepWithList(ci), DECIDE_BASE_CASES),
+    ).toEqual([]);
   }, 60_000);
 
   it('AI-53 o passo decide real reprova o passo quando o git falha, e não escreve docs_only=true', () => {
