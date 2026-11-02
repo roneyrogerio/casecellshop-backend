@@ -64,10 +64,14 @@ jobs:
           head_line=$(git rev-list --parents -n 1 HEAD)
           read -ra commits <<< "$head_line"
           if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" = main ] && [ "${#commits[@]}" -eq 3 ]; then
-            mapfile -t allowed <<< "$DOCS_ONLY_PATHS"
+            # Laços de read, e não mapfile: o mapfile só existe a partir do bash 4, e o
+            # passo também roda nos testes, no bash 3.2 do macOS.
+            allowed=()
+            while IFS= read -r path; do allowed+=("$path"); done <<< "$DOCS_ONLY_PATHS"
             list=$(mktemp)
             git diff --name-only --no-renames -z HEAD^1 HEAD > "$list"
-            mapfile -d '' -t changed < "$list"
+            changed=()
+            while IFS= read -r -d '' file; do changed+=("$file"); done < "$list"
             if [ "${#changed[@]}" -gt 0 ]; then
               docs_only=true
               for file in "${changed[@]}"; do
@@ -196,14 +200,14 @@ jobs:
       # job no PR que só muda esses arquivos não perde nada.
       - name: Troca os arquivos que o AI-53 não testa por pastas
         run: |
-          mapfile -t paths <<< "$DOCS_ONLY_PATHS"
-          for path in "${paths[@]}"; do
+          # Laço de read, e não mapfile, pelo mesmo motivo do passo decide.
+          while IFS= read -r path; do
             # Uma pasta de verdade fica; um link para pasta sai, porque o teste
             # leria pelo link o que ele aponta.
             if [ -z "$path" ]; then continue; fi
             if [ ! -d "$path" ] || [ -L "$path" ]; then rm -f -- "$path"; fi
             mkdir -p -- "$path"
-          done
+          done <<< "$DOCS_ONLY_PATHS"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -295,14 +299,14 @@ jobs:
       # AI-53: como no job test.
       - name: Troca os arquivos que o AI-53 não testa por pastas
         run: |
-          mapfile -t paths <<< "$DOCS_ONLY_PATHS"
-          for path in "${paths[@]}"; do
+          # Laço de read, e não mapfile, pelo mesmo motivo do passo decide.
+          while IFS= read -r path; do
             # Uma pasta de verdade fica; um link para pasta sai, porque o teste
             # leria pelo link o que ele aponta.
             if [ -z "$path" ]; then continue; fi
             if [ ! -d "$path" ] || [ -L "$path" ]; then rm -f -- "$path"; fi
             mkdir -p -- "$path"
-          done
+          done <<< "$DOCS_ONLY_PATHS"
       - name: Cria o diretório do relatório
         # A imagem roda como uid 1000; montado sem existir, o diretório nasceria
         # com dono root e modo 755, e o Schemathesis sairia sem gravar (A25).
