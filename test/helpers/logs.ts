@@ -19,6 +19,15 @@ export interface CapturedLogs {
   ofOrder(orderId: string): LogLine[];
 }
 
+// As linhas cruas que escrevem alguma chave duas vezes no primeiro nível, com o texto e as chaves repetidas.
+export function repeatedKeys(
+  raw: readonly string[],
+): { line: string; keys: string[] }[] {
+  return raw
+    .map((line) => ({ line, keys: duplicateKeys(line) }))
+    .filter((found) => found.keys.length > 0);
+}
+
 // O destino em memória: guarda cada linha JSON que o logger escreve, já lida (`lines`) e no texto cru (`raw`).
 export function memoryDestination() {
   const lines: LogLine[] = [];
@@ -49,10 +58,7 @@ export function captureLogs(
     logger,
     lines,
     raw,
-    repeatedKeys: () =>
-      raw
-        .map((line) => ({ line, keys: duplicateKeys(line) }))
-        .filter((found) => found.keys.length > 0),
+    repeatedKeys: () => repeatedKeys(raw),
     rawOf: (event, orderId) =>
       raw.filter((_, at) => matches(lines[at] ?? {}, event, orderId)),
     eventsOf: (event, orderId) =>

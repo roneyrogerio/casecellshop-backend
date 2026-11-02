@@ -282,3 +282,57 @@ appLogger.child(bindings);`),
     );
   }, 60_000);
 });
+
+// A3: os campos que a linha já escreve (o pino e o logger) repetiriam a chave se um filho os fixasse.
+const RESERVED_LINE_FIELDS = [
+  'event',
+  'level',
+  'msg',
+  'time',
+  'service',
+  'env',
+  'version',
+] as const;
+
+describe('OBS-01 AppLogger: o child não aceita os nomes reservados da linha (A3)', () => {
+  it('OBS-01 controle: child com orderId, attempt e correlationId compila, também montado antes e no filho do filho', () => {
+    expectLogCompiles(
+      sample(`const direct: AppLogger = appLogger.child({ orderId: 'p', attempt: 1, correlationId: 'c' });
+const bindings = { orderId: 'p', attempt: 2 };
+const prebuilt: AppLogger = appLogger.child(bindings).child({ attempt: 3 });
+eventLogger(direct, EVENTS).info('casecellshop.demo.stopped', {}, 'm');
+eventLogger(prebuilt, EVENTS).info('casecellshop.demo.stopped', {}, 'm');`),
+    );
+  }, 60_000);
+
+  for (const name of RESERVED_LINE_FIELDS) {
+    it(`OBS-01 appLogger.child({ ${name} }) reprova no tsc, e o erro cita o campo`, () => {
+      expectLogTypeError(sample(`appLogger.child({ ${name}: 'x' });`), {
+        code: FIELD_ERROR_CODES,
+        text: name,
+      });
+    }, 60_000);
+  }
+
+  it('OBS-01 child com um nome reservado e outros campos reprova no tsc', () => {
+    expectLogTypeError(
+      sample("appLogger.child({ orderId: 'p', service: 'filho' });"),
+      { code: FIELD_ERROR_CODES, text: 'service' },
+    );
+  }, 60_000);
+
+  it('OBS-01 child com um objeto montado antes que tem um nome reservado reprova no tsc, e o erro cita o campo', () => {
+    expectLogTypeError(
+      sample(`const bindings = { orderId: 'p', version: '9' };
+appLogger.child(bindings);`),
+      { code: 'TS2345', text: 'version' },
+    );
+  }, 60_000);
+
+  it('OBS-01 o child do filho com um nome reservado também reprova no tsc', () => {
+    expectLogTypeError(
+      sample("appLogger.child({ orderId: 'p' }).child({ env: 'x' });"),
+      { code: FIELD_ERROR_CODES, text: 'env' },
+    );
+  }, 60_000);
+});

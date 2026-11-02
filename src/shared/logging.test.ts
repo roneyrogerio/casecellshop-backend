@@ -3,7 +3,7 @@ import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { pino, type DestinationStream } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { duplicateKeys } from '#test-helpers/duplicate-keys.ts';
-import { memoryDestination } from '#test-helpers/logs.ts';
+import { memoryDestination, repeatedKeys } from '#test-helpers/logs.ts';
 import { createLogger, eventLogger, fromPino, logContext } from './logging.ts';
 import type { LogEventSpec } from './telemetry-catalog.ts';
 import { createTelemetry } from './telemetry.ts';
@@ -477,13 +477,6 @@ describe('OBS-01 campos de correlação por contexto', () => {
   });
 });
 
-// As linhas cruas que escrevem alguma chave duas vezes no primeiro nível, com as chaves repetidas.
-function repeatedIn(raw: string[]): { line: string; keys: string[] }[] {
-  return raw
-    .map((line) => ({ line, keys: duplicateKeys(line) }))
-    .filter((found) => found.keys.length > 0);
-}
-
 describe('OBS-01 o detector de chave repetida lê o texto cru da linha', () => {
   it('OBS-01 controle: a linha com a mesma chave duas vezes no primeiro nível é acusada, e o JSON.parse não mostra a repetição', () => {
     const line =
@@ -528,7 +521,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       eventLogger(child, EVENTS).info('casecellshop.demo.stopped', {}, 'fim');
     });
 
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
       orderId: 'pedido-1',
@@ -544,7 +537,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       eventLogger(child, EVENTS).info('casecellshop.demo.stopped', {}, 'fim');
     });
 
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({ correlationId: 'mesmo' });
   });
 
@@ -560,7 +553,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
     });
 
     expect(ids.traceId).not.toBe(traceId);
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({ trace_id: traceId, span_id: spanId });
   });
 
@@ -584,7 +577,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       }),
     );
 
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({
       correlationId: 'corr-evento',
       trace_id: traceId,
@@ -603,7 +596,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       'fim',
     );
 
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({
       orderId: 'pedido-1',
       status: 2,
@@ -623,7 +616,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       'fim',
     );
 
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({
       orderId: 'pedido-1',
       attempt: 2,
@@ -656,7 +649,7 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
     );
 
     expect(lines).toHaveLength(2);
-    expect(repeatedIn(raw)).toEqual([]);
+    expect(repeatedKeys(raw)).toEqual([]);
     expect(lines[0]).toMatchObject({
       orderId: 'pedido-1',
       correlationId: 'corr-neto',
@@ -672,5 +665,74 @@ describe('OBS-01 cada chave sai uma vez só na linha, também com logger filho',
       expect(line['span_id'], 'o span_id do contexto fica').toMatch(
         /^[0-9a-f]{16}$/,
       );
+  });
+});
+
+// Um evento que declara o orderId, como os do billing, para o campo do evento poder colidir com o do filho.
+const ORDER_EVENTS = {
+  'casecellshop.demo.ordered': {
+    levels: ['warn'],
+    description: 'Um evento de pedido.',
+    fields: ['orderId', 'attempt', 'status'],
+  },
+} as const satisfies Record<string, LogEventSpec>;
+
+// A2: um campo do evento com valor `undefined` não apaga o do filho (o JSON.stringify descartaria a chave).
+describe('OBS-01 o campo undefined do evento não apaga o campo do filho', () => {
+  it('OBS-01 o evento com orderId undefined sai com o orderId do filho, uma vez só', () => {
+    const { logger, lines, raw } = capture();
+    const child = logger.child({ orderId: 'o2' });
+
+    eventLogger(child, ORDER_EVENTS).warn(
+      'casecellshop.demo.ordered',
+      { orderId: undefined },
+      'sem orderId no evento',
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ orderId: 'o2' });
+    expect(repeatedKeys(raw)).toEqual([]);
+  });
+
+  it('OBS-01 cada chave undefined do evento que o filho também tem sai com o valor do filho, e a que só o evento tem some', () => {
+    const { logger, lines, raw } = capture();
+    const child = logger.child({ orderId: 'o2', attempt: 3 });
+
+    eventLogger(child, ORDER_EVENTS).warn(
+      'casecellshop.demo.ordered',
+      { orderId: undefined, attempt: undefined, status: undefined },
+      'tudo undefined',
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ orderId: 'o2', attempt: 3 });
+    expect(lines[0]).not.toHaveProperty('status');
+    expect(repeatedKeys(raw)).toEqual([]);
+  });
+
+  it('OBS-01 o undefined do evento não apaga o campo do filho de um filho', () => {
+    const { logger, lines } = capture();
+    const grandchild = logger.child({ orderId: 'o1' }).child({ orderId: 'o2' });
+
+    eventLogger(grandchild, ORDER_EVENTS).warn(
+      'casecellshop.demo.ordered',
+      { orderId: undefined },
+      'neto',
+    );
+
+    expect(lines[0]).toMatchObject({ orderId: 'o2' });
+  });
+
+  it('OBS-01 controle: um valor definido no evento continua valendo sobre o do filho', () => {
+    const { logger, lines } = capture();
+    const child = logger.child({ orderId: 'o2' });
+
+    eventLogger(child, ORDER_EVENTS).warn(
+      'casecellshop.demo.ordered',
+      { orderId: 'o9' },
+      'evento vale',
+    );
+
+    expect(lines[0]).toMatchObject({ orderId: 'o9' });
   });
 });
