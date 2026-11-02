@@ -301,6 +301,30 @@
       }
     },
     {
+      "files": ["src/shared/**/*.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\./[^.]",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              },
+              {
+                "regex": "^\\.\\./\\.\\./(src/|\\.\\.)",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              },
+              {
+                "regex": "^pino(/|$)",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": [
         "src/contract/**/*.ts",
         "src/db/**/*.ts",
