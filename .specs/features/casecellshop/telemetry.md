@@ -14,7 +14,7 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.catalog.origin.active_loads` | `casecellshop_catalog_origin_active_loads` | UpDownCounter | `{load}` | Cargas do cache em andamento; o single-flight a mantém em no máximo 1 por instância. |
 | `casecellshop.catalog.origin.loads` | `casecellshop_catalog_origin_loads_total` | contador | `{load}` | Cargas do cache a partir do banco, por desfecho: o custo do cache em consultas à origem. |
 | `casecellshop.catalog.served_entry.age` | `casecellshop_catalog_served_entry_age` | histograma | `s` | Idade da entrada do cache servida, desde a carga que a gerou. |
-| `casecellshop.catalog.sync.age` | `casecellshop_catalog_sync_age` | gauge | `s` | Idade da última rodada completa da sincronização com o ERP; base do alerta de ERP fora. |
+| `casecellshop.catalog.sync.age` | `casecellshop_catalog_sync_age` | gauge | `s` | Idade da última rodada completa da sincronização com o ERP; base do alerta de sincronização parada. |
 | `casecellshop.catalog.sync.corrections` | `casecellshop_catalog_sync_corrections_total` | contador | `{correction}` | Campos que a sincronização corrigiu porque o ERP divergia do valor guardado no início da rodada. |
 | `casecellshop.catalog.sync.missing_skus` | `casecellshop_catalog_sync_missing_skus_total` | contador | `{sku}` | SKUs da loja ausentes do ERP numa rodada completa, zerados por ela. |
 | `casecellshop.checkout.gauge.read_failures` | `casecellshop_checkout_gauge_read_failures_total` | contador | `{read}` | Leituras dos gauges do estoque que falharam no scrape; os gauges seguem com o último valor lido. |

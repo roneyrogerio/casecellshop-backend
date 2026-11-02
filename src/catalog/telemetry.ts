@@ -51,7 +51,7 @@ export const CATALOG_METRICS = {
     instrument: 'gauge',
     unit: 's',
     description:
-      'Idade da última rodada completa da sincronização com o ERP; base do alerta de ERP fora.',
+      'Idade da última rodada completa da sincronização com o ERP; base do alerta de sincronização parada.',
     attributes: {},
   },
   'casecellshop.catalog.gauge.read_failures': {

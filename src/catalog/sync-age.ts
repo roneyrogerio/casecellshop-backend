@@ -26,7 +26,7 @@ export function registerSyncAgeGauge({
     'casecellshop.catalog.sync.age',
     async (observe) => {
       // Relógio do banco, o mesmo que grava `last_completed_at`. Sem rodada completa a marca é nula e o gauge
-      // não grava ponto: o alerta de ERP fora lê a ausência.
+      // não grava ponto: o alerta de sincronização parada lê a ausência.
       const row = await db
         .selectFrom('sync_state')
         .select((eb) =>
