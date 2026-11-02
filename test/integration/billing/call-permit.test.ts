@@ -252,7 +252,8 @@ describe('ORD-11 a permissão de chamada exclui duas chamadas simultâneas do me
 
 // A marca de envio (AD-031; design.md, "Worker: envio"): `create_calls` conta as criações mandadas ao ERP, somadas
 // antes de cada uma. Alimenta a regra dos candidatos da verificação tardia (`create_calls >= 2`, ou cancelado com
-// `>= 1`). A coluna é lida por SQL cru: os tipos gerados do Kysely só a conhecem depois da migração.
+// `>= 1`). A coluna é lida por SQL cru, como o resto do estado semeado com o relógio do banco: é o que o teste
+// observa, e não uma consulta da produção.
 describe('ORD-23 a permissão de chamada soma create_calls antes de cada criação mandada ao ERP', () => {
   const workerOptions = { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: true };
   const reconciliationOptions = {
