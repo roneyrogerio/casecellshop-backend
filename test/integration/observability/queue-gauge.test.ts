@@ -248,7 +248,7 @@ async function expectTwoVisibleOneInFlight(
 }
 
 describe('OBS-09 casecellshop.queue.messages conta as mensagens visíveis e as em voo', () => {
-  it('OBS-09 a mensagem da DLQ que a reconciliação recebeu e segura invisível (visibilidade de 300 s) segue contada: o gauge dlq mostra 1, durante a rodada e depois dela', async () => {
+  it('OBS-09 a mensagem da DLQ que a reconciliação recebeu e segura invisível (visibilidade de 300 s) segue contada durante a rodada, e no fim dela volta visível: o gauge dlq mostra 1 nos dois momentos', async () => {
     const { telemetry, world } = await createRig({ maxReceiveCount: 1 });
     const order = await submitOrder(suiteOf(), world);
     await markSentBefore(suiteOf().pool, order.orderId);
@@ -284,8 +284,8 @@ describe('OBS-09 casecellshop.queue.messages conta as mensagens visíveis e as e
 
       expect(
         await countsOf(world.emq, world.queues.dlqUrl),
-        'a rodada deixou a mensagem na DLQ, ainda escondida',
-      ).toEqual({ visible: 0, notVisible: 1 });
+        'a rodada deixou a mensagem na DLQ e devolveu a visibilidade 0: ela volta visível',
+      ).toEqual({ visible: 1, notVisible: 0 });
       expect((await readOrder(suiteOf().pool, order.orderId)).status).toBe(
         'pending',
       );
