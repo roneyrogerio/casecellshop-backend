@@ -813,6 +813,74 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
     });
   }
 
+  // A consulta ao ERP conta como chamada (AD-031): depois de erp_has_order ou de erp_unavailable, a permissão ficou
+  // tomada (last_call_at regravado, token novo) e a nova tentativa espera a janela, sem consultar o ERP de novo.
+  const QUERIED_REFUSALS: ReadonlyArray<{
+    name: string;
+    expected: CancelOrderResult;
+    prepare: (world: QueueWorld, order: AcceptedOrder) => Promise<void> | void;
+  }> = [
+    {
+      name: 'erp_has_order',
+      expected: { kind: 'erp_has_order' },
+      prepare: (world, order) => erpHasInvoice(world, order),
+    },
+    {
+      name: 'erp_unavailable',
+      expected: { kind: 'erp_unavailable' },
+      prepare: (world, order) => {
+        world.sim.script.enqueue(
+          { mode: 'unavailable' },
+          { op: 'findOrder', reference: order.orderId },
+        );
+      },
+    },
+  ];
+
+  for (const { name, expected, prepare } of QUERIED_REFUSALS) {
+    it(`ORD-26 depois de ${name}, a consulta conta como chamada ao ERP: regrava last_call_at e call_token, e um segundo cancel logo depois é recusado com too_recent perto da janela, sem consultar o ERP nem mudar o pedido e o estoque`, async () => {
+      const world = await createWorld(suite, { withoutH1b: true });
+      const order = await sentOrder(PAST_WINDOW_SECONDS);
+      await prepare(world, order);
+      const seeded = await readOutbox(suite.pool, order.orderId);
+      const footprint = await footprintOf(order);
+
+      const first = await cancel(world, order.orderId);
+
+      expect(first).toEqual(expected);
+      const afterFirst = await readOutbox(suite.pool, order.orderId);
+      expect(afterFirst.callToken).not.toBeNull();
+      expect(afterFirst.callToken).not.toBe(seeded.callToken);
+      expect(afterFirst.lastCallAt?.getTime() ?? 0).toBeGreaterThan(
+        seeded.lastCallAt?.getTime() ?? Number.POSITIVE_INFINITY,
+      );
+      expect(
+        afterFirst.sinceLastCallMs ?? Number.POSITIVE_INFINITY,
+      ).toBeLessThan(60_000);
+      expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+      const sendsAfterFirst = world.transport.sends.length;
+
+      const second = await cancel(world, order.orderId);
+
+      expect(second.kind).toBe('too_recent');
+      // A janela recomeçou na consulta: falta quase ela inteira, com folga para a latência do teste.
+      expect(retryInMsOf(second)).toBeGreaterThan(SETTLE_WINDOW_MS - 60_000);
+      expect(retryInMsOf(second)).toBeLessThanOrEqual(SETTLE_WINDOW_MS);
+      expect(world.transport.sends).toHaveLength(sendsAfterFirst);
+      expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+      // O segundo cancel não tomou a permissão: a linha da outbox ficou como a primeira consulta a deixou.
+      const afterSecond = await readOutbox(suite.pool, order.orderId);
+      expect(afterSecond.callToken).toBe(afterFirst.callToken);
+      expect(afterSecond.lastCallAt?.getTime()).toBe(
+        afterFirst.lastCallAt?.getTime(),
+      );
+      expect(await footprintOf(order)).toEqual(footprint);
+      expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+        'pending',
+      );
+    });
+  }
+
   it('ORD-26 se outra tentativa tomou a permissão entre a consulta e o cancelamento, recusa com permit_lost sem mudar o pedido nem o estoque e sem apagar o token dela', async () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const order = await sentOrder(PAST_WINDOW_SECONDS);
