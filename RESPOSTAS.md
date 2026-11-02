@@ -22,7 +22,7 @@ Seção: [Diagnóstico e arquitetura alvo](https://github.com/roneyrogerio/casec
 - **overselling:** `UPDATE` condicional atômico no banco da loja (escolhido), `SELECT … FOR UPDATE`, ou lock distribuído no Redis;
 - **checkout:** síncrono com timeout maior e retry, `202` com outbox no banco da loja e worker (escolhido), ou `202` com publicação direta num broker.
 
-**Arquitetura de 30 a 90 dias** (`DOC-DIA-04`). Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine **[M4]**, e observabilidade básica. Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard **[M5]**; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
+**Arquitetura de 30 a 90 dias** (`DOC-DIA-04`). Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine **[M4]**, e observabilidade básica (logs, métricas e traces do checkout e do worker; o que falta, **[M4, M5]**). Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard **[M5]**; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
 
 **Nuvem** (`DOC-DIA-05`). É hipótese de evolução do datacenter atual, não premissa: cada componente tem um serviço gerenciado (RDS ou Aurora, ECS no Fargate, SQS, ElastiCache, Datadog ou CloudWatch, Secrets Manager), justificado pelo esforço operacional que tira. O ERP fica no datacenter, e a conexão híbrida (VPN ou link dedicado) passa a ser uma fonte de latência e de falha; para a loja, a queda do link é uma queda do ERP, que o desenho já absorve.
 
@@ -35,19 +35,20 @@ Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casece
 **Camadas e o papel de cada uma** (`DOC-CAC-01`):
 
 - **rede de distribuição de conteúdo (CDN) e cache HTTP:** fora do escopo para o catálogo, que responde `Cache-Control: no-store` (`CAT-10`). Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas, e sem o cabeçalho um cache intermediário pode aplicar frescor heurístico (RFC 9111). Com uma CDN, ela serve os estáticos, e o catálogo passa a levar `max-age` igual ao tempo de vida (TTL) restante **[alvo]**;
-- **em processo (L1):** o catálogo inteiro numa entrada, de onde as páginas são fatiadas, com TTL de 5 s ± 10%. Absorve as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego;
+- **em processo (L1):** o catálogo inteiro numa entrada, de onde as páginas são fatiadas, com TTL de 5 s ± 10%. Absorve as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego **[M4]**;
 - **L2 compartilhado (Redis):** entre as instâncias da API, quando houver várias com taxa de acerto baixa **[alvo]**. Com uma instância, seria um contêiner e um modo de falha a mais sem ganho;
-- **banco da loja:** a cópia de catálogo, preço e estoque, atualizada pela sincronização a cada 60 s. É a origem do cache e a fonte de verdade do checkout, e é a camada que tira o ERP do caminho da vitrine.
+- **banco da loja:** a cópia de catálogo, preço e estoque, atualizada pela sincronização a cada 60 s. É a origem do cache e a fonte de verdade do checkout, e é a camada que tira o ERP do caminho da vitrine (o banco existe; a sincronização, **[M4]**).
 
 As defasagens somam: com o ERP respondendo, uma mudança chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização (60 s do intervalo mais 5,5 s do TTL; `CAT-06`).
 
 **TTL, invalidação, cache-aside × refresh-ahead, fallback e stampede** (`DOC-CAC-02`):
 
-- **TTL de 5 s ± 10%:** a maior parte da defasagem vem da sincronização; um TTL menor multiplicaria as consultas para ganhar segundos num limite de 65,5 s, e o jitter espalha as expirações entre instâncias (`CAT-02`);
-- **invalidação só por expiração:** um aviso entre processos a cada correção tiraria no máximo 5,5 s do limite e acrescentaria um caminho de falha que, quando falha, deixa o TTL como limite de qualquer jeito. O cache nunca decide: o preço que o cliente viu é conferido no banco (`409` com o preço atual, `CHK-06`), e a reserva é o `UPDATE` condicional (`CHK-01`). A disponibilidade em faixas ("disponível", "últimas unidades", "esgotado") muda menos que o número exato, então a defasagem aparece menos (`CAT-13`);
-- ***cache-aside*, e não *refresh-ahead*:** o *refresh-ahead* e o *stale-while-revalidate* escondem a latência de uma origem lenta. Aqui a origem é um banco local, e o que eles escondem é uma consulta a cada 5 s; a origem lenta era o ERP, que a arquitetura tirou do caminho;
-- **fallback:** com a origem em erro, a entrada vencida é servida até 60 s (*stale-if-error*), e por 5 s depois da falha sem tentar a origem; sem entrada, `503` com `Retry-After` (`CAT-04`); antes da primeira sincronização, `503` (`CAT-05`). O ERP fora não afeta a vitrine: a sincronização para, e o banco segue com o último estado conhecido;
-- **stampede:** *single-flight*, em que N leituras com a entrada vencida geram uma consulta à origem (`CAT-01`), uma chave só, a promessa rejeitada descartada, o jitter e a pausa depois da falha.
+- **TTL de 5 s ± 10%:** a maior parte da defasagem vem da sincronização; um TTL menor multiplicaria as consultas para ganhar segundos num limite de 65,5 s, e o jitter espalha as expirações entre instâncias (`CAT-02`) **[M4]**;
+- **invalidação só por expiração:** um aviso entre processos a cada correção tiraria no máximo 5,5 s do limite e acrescentaria um caminho de falha que, quando falha, deixa o TTL como limite de qualquer jeito **[M4]**. O cache nunca decide, e isso já vale: o preço que o cliente viu é conferido no banco (`409` com o preço atual, `CHK-06`), e a reserva é o `UPDATE` condicional (`CHK-01`);
+- **disponibilidade em faixas:** "disponível", "últimas unidades" ou "esgotado" muda menos que o número exato, então a defasagem aparece menos (`CAT-13`) **[M4]**;
+- ***cache-aside*, e não *refresh-ahead*:** o *refresh-ahead* e o *stale-while-revalidate* escondem a latência de uma origem lenta. Aqui a origem é um banco local, e o que eles escondem é uma consulta a cada 5 s; a origem lenta era o ERP, que a arquitetura tirou do caminho **[M4]**;
+- **fallback:** com a origem em erro, a entrada vencida é servida até 60 s (*stale-if-error*), e por 5 s depois da falha sem tentar a origem; sem entrada, `503` com `Retry-After` (`CAT-04`); antes da primeira sincronização, `503` (`CAT-05`). O ERP fora não afeta a vitrine: a sincronização para, e o banco segue com o último estado conhecido **[M4]**;
+- **stampede:** *single-flight*, em que N leituras com a entrada vencida geram uma consulta à origem (`CAT-01`), uma chave só, a promessa rejeitada descartada, o jitter e a pausa depois da falha **[M4]**.
 
 **Métricas de ganho de latência e de custo** (`DOC-CAC-03`):
 
@@ -67,7 +68,7 @@ As defasagens somam: com o ERP respondendo, uma mudança chega à vitrine em at�
 
 ## 3. Observabilidade
 
-Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01`, `OBS-02`, `OBS-05`, `OBS-07`, `FND-05`, `CHK-12` e `ORD-18`; `OBS-03`, `OBS-04` e `OBS-06` **[M5]**; `CAT-12` **[M4]**. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
+Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01`, `OBS-02`, `OBS-07`, `FND-05`, `CHK-12` e `ORD-18`; `OBS-03` a `OBS-06` **[M5]**; `CAT-12` **[M4]**. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
 
 Logs pelo pino, métricas e traces pelo OpenTelemetry, todos com a mesma correlação. Toda métrica e todo evento de log são declarados num catálogo tipado por pasta, e o `tsc` recusa o que estiver fora dele (`OBS-07`).
 
@@ -85,7 +86,7 @@ No Prometheus, o ponto vira sublinhado e o counter ganha `_total` (`casecellshop
 **Traces** (`DOC-OBS-03`):
 
 - **`GET /products`:** requisição → cache → repositório, este só numa falta; o trace mostra quanto a origem custou (`CAT-12`) **[M4]**;
-- **`POST /checkout` assíncrono:** a requisição responde `202`, e a transação grava o `traceparent` na linha da outbox (`CHK-12`); o relay o leva como atributo da mensagem no SQS, e cada tentativa do worker é um span filho da transação do checkout, com `orderId` e `attempt` (`ORD-18`); os spans das chamadas ao ERP, dentro de cada tentativa, entram no **[M5]**. Um trace por pedido, mesmo com retries de dezenas de minutos, para a cadeia requisição → worker → ERP aparecer numa visão só. Um `orderId` leva aos logs, e o `trace_id` deles, ao trace (`OBS-05`).
+- **`POST /checkout` assíncrono:** a requisição responde `202`, e a transação grava o `traceparent` na linha da outbox (`CHK-12`); o relay o leva como atributo da mensagem no SQS, e cada tentativa do worker é um span filho da transação do checkout, com `orderId` e `attempt` (`ORD-18`); os spans das chamadas ao ERP, dentro de cada tentativa, entram no **[M5]**. Um trace por pedido, mesmo com retries de dezenas de minutos, para a cadeia requisição → worker → ERP aparecer numa visão só. Um `orderId` leva aos logs, e o `trace_id` deles, ao trace: o `orderId` e o `trace_id` no log e o span da tentativa já existem (`OBS-01`, `ORD-18`); o trace até o ERP e o teste de ponta a ponta (`OBS-05`) entram no **[M5]**.
 
 **Indicadores e objetivos de nível de serviço (SLI e SLO), alertas, dashboard e runbook** (`DOC-OBS-04`), em 30 dias:
 

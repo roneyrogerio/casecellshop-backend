@@ -309,7 +309,7 @@ Os testes provam o mecanismo, e as métricas provam que ele funciona em produç�
 
 **Decisão:** três sinais com a mesma correlação. Logs JSON pelo pino; métricas pela API de métricas do OpenTelemetry, expostas em `/metrics` no formato Prometheus; e traces por spans manuais do OpenTelemetry, com o `traceparent` gravado na outbox para o worker continuar o trace do checkout. Toda métrica e todo evento de log são declarados num catálogo tipado, por pasta, e o `tsc` recusa o que estiver fora dele; o catálogo gerado é o [`telemetry.md`](.specs/features/casecellshop/telemetry.md) **[implementado: `src/shared/telemetry-catalog.ts`, `src/shared/logging.ts`, `OBS-07`]** (AD-008, AD-029).
 
-A observabilidade responde a duas causas do diagnóstico: no Problema 3, sem correlação por pedido não havia como saber o que aconteceu com um pedido; no Problema 2, não havia métrica que mostrasse o furo de estoque antes da reclamação. A meta é detectar degradação e furo de estoque antes do cliente, e seguir qualquer pedido da requisição ao ERP (`OBS-05`).
+A observabilidade responde a duas causas do diagnóstico: no Problema 3, sem correlação por pedido não havia como saber o que aconteceu com um pedido; no Problema 2, não havia métrica que mostrasse o furo de estoque antes da reclamação. A meta é detectar degradação e furo de estoque antes do cliente, e seguir qualquer pedido da requisição ao ERP (`OBS-05`) **[M5]**.
 
 **Por que assim:**
 
@@ -424,7 +424,7 @@ O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checko
 
 **Um trace por pedido, e não um por tentativa.** Com retries, o trace de um pedido pode durar dezenas de minutos. A alternativa, um trace por tentativa ligado ao checkout por *span link*, evita o trace longo, mas a cadeia requisição → worker → ERP deixa de aparecer numa visão só. Para quem investiga um pedido, essa visão é o que importa (AD-008).
 
-**De um pedido ao trace.** Um `orderId` leva aos logs, pelo campo `orderId`; cada log leva o `trace_id`; e o `trace_id` abre o trace inteiro, da requisição ao ERP (`OBS-05`). Os atributos `service`, `env` e `version` são os mesmos nos logs e nos traces, então o Datadog liga os dois sem configuração por consulta.
+**De um pedido ao trace.** Um `orderId` leva aos logs, pelo campo `orderId`; cada log leva o `trace_id`; e o `trace_id` abre o trace inteiro, da requisição ao ERP. O `orderId` e o `trace_id` no log e o span da tentativa já existem **[implementado, `OBS-01`, `ORD-18`]**; os spans do ERP e o teste de ponta a ponta entram no M5 **[M5, `OBS-05`]**. Os atributos `service`, `env` e `version` são os mesmos nos logs e nos traces, então o Datadog liga os dois sem configuração por consulta.
 
 ### SLI e SLO, alertas, dashboard e runbook
 
