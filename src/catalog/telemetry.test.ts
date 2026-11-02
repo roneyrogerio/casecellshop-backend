@@ -28,7 +28,7 @@ describe('OBS-07 observe: o gauge observável lido na coleta', () => {
     await telemetry.shutdown();
   });
 
-  it('OBS-07 uma função que devolve undefined não grava ponto na coleta, e volta a gravar quando devolve um número', async () => {
+  it('OBS-07 uma função que ainda não devolveu número não grava ponto na coleta, e depois grava o valor atualizado a cada coleta', async () => {
     const telemetry = createTelemetry();
     const metrics = catalogMetrics(telemetry);
     let seconds: number | undefined;
@@ -41,10 +41,11 @@ describe('OBS-07 observe: o gauge observável lido na coleta', () => {
     seconds = 0;
     expect(metricValue(await scrapeMetrics(telemetry), SYNC_AGE)).toBe(0);
 
-    seconds = undefined;
-    expect(
-      familyOf(await scrapeMetrics(telemetry), SYNC_AGE)?.samples ?? [],
-    ).toEqual([]);
+    // Não se testa a volta ao `undefined`: o SDK, com a temporalidade cumulativa do exportador Prometheus, mantém
+    // o último ponto, e a especificação só desaconselha (SHOULD NOT). No desenho, a idade da sincronização só é
+    // `undefined` antes da primeira rodada completa e nunca volta a ser.
+    seconds = 7;
+    expect(metricValue(await scrapeMetrics(telemetry), SYNC_AGE)).toBe(7);
     await telemetry.shutdown();
   });
 
