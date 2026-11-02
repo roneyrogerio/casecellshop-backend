@@ -1,8 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parser } from '@prometheus-io/lezer-promql';
+import GithubSlugger from 'github-slugger';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
+import { prometheusName } from '../../scripts/generate-telemetry-doc.ts';
+import { METRICS } from '../../scripts/telemetry-catalog.ts';
+import type {
+  AttributeSpec,
+  AttributeValues,
+  InstrumentKind,
+  MetricSpec,
+} from '../../src/shared/telemetry-catalog.ts';
 import { repoRoot } from '../helpers/repo-root.ts';
 
 // OBS-03: a seção "Operação" do README traz consultas PromQL (blocos `promql`) e regras de alerta (blocos `yaml` no
@@ -12,28 +22,28 @@ import { repoRoot } from '../helpers/repo-root.ts';
 // (`VectorSelector` com `Identifier`), rótulo de seletor (`LabelMatchers`) e valor (`StringLiteral`); os rótulos de
 // `by`/`without`/`on`/`ignoring` e os nomes de função ficam em nós que o teste não visita.
 //
-// O catálogo (telemetry.md, gerado de src/) é o oráculo: a coluna "No Prometheus", o instrumento e, por métrica, a
-// tabela de atributos. As funções que leem o README e o catálogo reais são as mesmas dos controles negativos, que
-// montam o texto no próprio teste.
+// O README é lido pelo parser CommonMark do micromark (`fromMarkdown`, do mdast-util-from-markdown): a árvore mdast
+// diz o que é cabeçalho (`heading`, com `depth`, ATX ou setext) e o que é bloco de código (`code`, com `lang` e
+// `value`, cercado por ``` ou ~~~), dentro ou fora de lista e de citação. A âncora de cada cabeçalho vem do
+// github-slugger, que recebe o texto simples do cabeçalho (o texto dos filhos do nó).
+//
+// O catálogo é o oráculo e vem da fonte tipada, não do telemetry.md: o METRICS (scripts/telemetry-catalog.ts) e o
+// prometheusName (scripts/generate-telemetry-doc.ts) geram a coluna "No Prometheus" do telemetry.md, e o OBS-07 confere
+// que o arquivo commitado é igual ao gerado. Os controles montam um catálogo de teste no mesmo formato da declaração.
 //
 // Fontes consultadas:
 // - Arquivo de regras do Prometheus (groups, rules, alert, expr, for, labels, annotations):
 //   https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+// - mdast-util-from-markdown 2.1.0 (`fromMarkdown(value)` devolve a árvore mdast; o parser segue o CommonMark) e o
+//   mdast (`heading.depth`, `code.lang`, `code.value`, `position.start.line`, `text.value`, `inlineCode.value`,
+//   `image.alt`, `children`).
+// - github-slugger 2.0.0: "pass the plain text value of the heading"; `new GithubSlugger()` e `slug(texto)`, uma
+//   instância por documento, repete a âncora com -1, -2... na ordem das chamadas.
 // - Âncoras de cabeçalho do GitHub ("Section links"):
 //   https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax
-//   A âncora tem as letras em minúscula, o espaço vira hífen, qualquer outra pontuação ou espaço em branco sai, o
-//   espaço das pontas sai, a marcação (crases, por exemplo) sai, e uma âncora repetida ganha -1, -2... A página não diz
-//   o que acontece com `-` e `_`, e o GitHub os mantém (como o github-slugger); os acentos ficam, porque são letras.
 
 const README_NAME = 'README.md';
 const README_FILE = join(repoRoot, README_NAME);
-const TELEMETRY_FILE = join(
-  repoRoot,
-  '.specs',
-  'features',
-  'casecellshop',
-  'telemetry.md',
-);
 
 // O runbook_url de uma regra: o README deste repositório, na branch main, mais a âncora de um cabeçalho da seção.
 const REPO_BLOB =
@@ -52,94 +62,62 @@ type TreeNode = ReturnType<typeof strictParser.parse>['topNode'];
 
 // --- leitura do Markdown ---------------------------------------------------------------------------------------------
 
-interface Heading {
-  level: number;
-  text: string;
-  line: number;
-}
+type MdNode = ReturnType<typeof fromMarkdown>['children'][number];
 
 interface Fence {
   info: string;
   content: string[];
+  // Linha do bloco no README, a partir de 1 (a posição do nó `code`).
   line: number;
 }
 
-const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})\s*([^\s`]*)/;
-const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
-const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+type Block =
+  | { kind: 'heading'; depth: number; text: string; anchor: string }
+  | { kind: 'fence'; fence: Fence };
 
-// Os cabeçalhos ATX e os blocos de código cercados (``` ou ~~~) do texto, na ordem; um `#` dentro de um bloco de código
-// não é cabeçalho. O conteúdo de um bloco perde o recuo da cerca que o abre. Cabeçalho setext (sublinhado) não existe
-// no README e não é lido.
-function scanMarkdown(text: string): { headings: Heading[]; fences: Fence[] } {
-  const headings: Heading[] = [];
-  const fences: Fence[] = [];
-  let open:
-    { char: string; size: number; indent: number; fence: Fence } | undefined;
-  for (const [line, content] of text.split('\n').entries()) {
-    if (open !== undefined) {
-      const close = FENCE_CLOSE.exec(content)?.[1];
-      if (close?.startsWith(open.char) && close.length >= open.size) {
-        open = undefined;
-      } else {
-        const lead = /^\s*/.exec(content)?.[0].length ?? 0;
-        open.fence.content.push(content.slice(Math.min(open.indent, lead)));
-      }
-      continue;
-    }
-    const opening = FENCE_OPEN.exec(content);
-    if (opening !== null) {
-      const fence: Fence = { info: opening[3] ?? '', content: [], line };
-      fences.push(fence);
-      open = {
-        char: (opening[2] ?? '`').charAt(0),
-        size: opening[2]?.length ?? 3,
-        indent: opening[1]?.length ?? 0,
-        fence,
-      };
-      continue;
-    }
-    const heading = ATX_HEADING.exec(content);
-    if (heading !== null)
-      headings.push({
-        level: heading[1]?.length ?? 0,
-        text: (heading[2] ?? '').trim(),
-        line,
+function childrenOf(node: MdNode): readonly MdNode[] {
+  return 'children' in node ? node.children : [];
+}
+
+// O texto simples de um cabeçalho: o texto dos filhos. O texto de um link ou de um destaque fica, a marcação sai, o
+// código em linha entra pelo valor, e a imagem entra pelo texto alternativo.
+function plainText(node: MdNode): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value;
+  if (node.type === 'image' || node.type === 'imageReference')
+    return node.alt ?? '';
+  return childrenOf(node).map(plainText).join('');
+}
+
+// Os cabeçalhos e os blocos de código do documento inteiro, na ordem do documento, inclusive os que estão dentro de lista
+// e de citação. Uma só instância do github-slugger por documento, chamada na ordem dos cabeçalhos, dá a âncora repetida
+// com -1, -2... contando todos os cabeçalhos do arquivo, e não só os da seção.
+function readBlocks(markdown: string): Block[] {
+  const slugger = new GithubSlugger();
+  const blocks: Block[] = [];
+  const visit = (node: MdNode): void => {
+    if (node.type === 'heading') {
+      const text = plainText(node);
+      blocks.push({
+        kind: 'heading',
+        depth: node.depth,
+        text,
+        anchor: slugger.slug(text),
       });
-  }
-  return { headings, fences };
-}
-
-// O texto visível de um cabeçalho: de um link `[texto](url)` fica o texto. Crases e asteriscos saem na regra de
-// pontuação da âncora.
-function visibleText(markdown: string): string {
-  return markdown.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1');
-}
-
-function slugBase(heading: string): string {
-  return visibleText(heading)
-    .normalize('NFC')
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}_\- ]/gu, '')
-    .replaceAll(' ', '-');
-}
-
-// A âncora de cada cabeçalho do documento inteiro, na ordem: a repetida ganha -1, -2... contando todos os cabeçalhos
-// do arquivo, e não só os da seção (a mesma conta do github-slugger).
-function anchorsOf(headings: Heading[]): string[] {
-  const seen = new Map<string, number>();
-  return headings.map(({ text }) => {
-    const base = slugBase(text);
-    let slug = base;
-    while (seen.has(slug)) {
-      const count = (seen.get(base) ?? 0) + 1;
-      seen.set(base, count);
-      slug = `${base}-${String(count)}`;
+      return;
     }
-    seen.set(slug, 0);
-    return slug;
-  });
+    if (node.type === 'code')
+      blocks.push({
+        kind: 'fence',
+        fence: {
+          info: node.lang ?? '',
+          content: node.value.split('\n'),
+          line: node.position?.start.line ?? 0,
+        },
+      });
+    childrenOf(node).forEach(visit);
+  };
+  fromMarkdown(markdown).children.forEach(visit);
+  return blocks;
 }
 
 interface Section {
@@ -147,24 +125,32 @@ interface Section {
   anchors: Set<string>;
 }
 
-// A seção vai do `## Operação` até o próximo cabeçalho de nível 2 fora de bloco de código; os `###` e `####` ficam
-// dentro. Devolve undefined quando o README não tem a seção.
+// A seção vai do cabeçalho de profundidade 2 com o texto "Operação" até o próximo de profundidade 2 (ATX ou setext, e
+// só fora de bloco de código, porque dentro dele não há nó `heading`); os de profundidade 3 e 4 ficam dentro. Devolve
+// undefined quando o README não tem a seção.
 function operationSection(readme: string): Section | undefined {
-  const { headings, fences } = scanMarkdown(readme);
-  const start = headings.find(
-    ({ level, text }) => level === 2 && text.normalize('NFC') === SECTION_TITLE,
+  const blocks = readBlocks(readme);
+  const start = blocks.findIndex(
+    (block) =>
+      block.kind === 'heading' &&
+      block.depth === 2 &&
+      block.text.normalize('NFC') === SECTION_TITLE,
   );
-  if (start === undefined) return undefined;
-  const end =
-    headings.find(({ level, line }) => level === 2 && line > start.line)
-      ?.line ?? Number.POSITIVE_INFINITY;
-  const inside = ({ line }: { line: number }): boolean =>
-    line >= start.line && line < end;
-  const anchors = anchorsOf(headings);
+  if (start < 0) return undefined;
+  const next = blocks.findIndex(
+    (block, index) =>
+      index > start && block.kind === 'heading' && block.depth === 2,
+  );
+  const inside = blocks.slice(start, next < 0 ? undefined : next);
   return {
-    fences: fences.filter(inside),
+    fences: inside.flatMap((block) =>
+      block.kind === 'fence' ? [block.fence] : [],
+    ),
+    // A âncora de um runbook_url é comparada em NFC: o navegador copia o acento composto.
     anchors: new Set(
-      anchors.filter((_, index) => inside(headings[index] ?? start)),
+      inside.flatMap((block) =>
+        block.kind === 'heading' ? [block.anchor.normalize('NFC')] : [],
+      ),
     ),
   };
 }
@@ -173,7 +159,7 @@ function operationSection(readme: string): Section | undefined {
 
 interface MetricEntry {
   series: string;
-  instrument: string;
+  instrument: InstrumentKind;
   histogram: boolean;
   // Rótulo do Prometheus -> valores da lista fechada, ou undefined quando a lista é aberta.
   attributes: Map<string, string[] | undefined>;
@@ -181,112 +167,31 @@ interface MetricEntry {
 
 type Catalog = Map<string, MetricEntry>;
 
-function cells(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim());
-}
-
-// A primeira tabela do trecho: cada linha vira um mapa coluna -> célula.
-function readTable(body: string[]): Record<string, string>[] {
-  const start = body.findIndex((line) => line.trimStart().startsWith('|'));
-  if (start < 0) return [];
-  const header = cells(body[start] ?? '');
-  const rows: Record<string, string>[] = [];
-  for (const line of body.slice(start + 2)) {
-    if (!line.trimStart().startsWith('|')) break;
-    const values = cells(line);
-    rows.push(
-      Object.fromEntries(
-        header.map((name, index) => [name, values[index] ?? '']),
-      ),
-    );
-  }
-  return rows;
-}
-
-function column(row: Record<string, string>, name: string): string {
-  const value = row[name];
-  if (value === undefined)
-    throw new Error(`o catálogo não tem a coluna "${name}"`);
-  return value;
-}
-
-const unticked = (cell: string): string => cell.replace(/^`|`$/g, '');
-
-// Lista fechada: só valores entre crases separados por vírgula. Qualquer outro texto ("template da rota") é lista aberta.
-function closedValues(cell: string): string[] | undefined {
-  if (!/^`[^`]+`(?:, `[^`]+`)*$/.test(cell)) return undefined;
-  return [...cell.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? '');
-}
-
+// O rótulo do Prometheus de um atributo OTel: o ponto vira sublinhado.
 const prometheusLabel = (attribute: string): string =>
   attribute.replaceAll('.', '_');
 
-function describeMetric(entry: MetricEntry, body: string[]): void {
-  if (body.some((line) => line.trim() === 'Sem atributos.')) return;
-  const rows = readTable(body);
-  if (rows.length === 0)
-    throw new Error(
-      `a métrica ${entry.series} não tem tabela de atributos nem "Sem atributos."`,
-    );
-  for (const row of rows)
-    entry.attributes.set(
-      prometheusLabel(unticked(column(row, 'Atributo'))),
-      closedValues(column(row, 'Valores')),
-    );
-}
-
-// Lê o telemetry.md: a tabela "## Métricas" (Nome, No Prometheus, Instrumento) e, em cada subseção "### `nome OTel`", a
-// tabela de atributos ("Atributo" e "Valores") ou "Sem atributos.". Um catálogo malformado lança erro.
-function parseCatalog(markdown: string): Catalog {
-  const lines = markdown.split('\n');
-  const { headings } = scanMarkdown(markdown);
-  const bodyOf = (index: number): string[] =>
-    lines.slice(
-      (headings[index]?.line ?? 0) + 1,
-      headings[index + 1]?.line ?? lines.length,
-    );
-  const metricsAt = headings.findIndex(
-    ({ level, text }) => level === 2 && text === 'Métricas',
-  );
-  if (metricsAt < 0) throw new Error('o catálogo não tem a seção "Métricas"');
-
-  const byOtelName = new Map<string, MetricEntry>();
+// O catálogo de uma declaração de métricas (o formato do METRICS): a série é a do prometheusName, o rótulo é o atributo
+// OTel com `.` trocado por `_`, e a lista é fechada só quando a declaração é `enum`; o código de status HTTP e a rota
+// são listas abertas.
+function buildCatalog(metrics: Readonly<Record<string, MetricSpec>>): Catalog {
   const catalog: Catalog = new Map();
-  for (const row of readTable(bodyOf(metricsAt))) {
-    const series = unticked(column(row, 'No Prometheus'));
-    const instrument = column(row, 'Instrumento');
-    const entry: MetricEntry = {
+  for (const [name, spec] of Object.entries(metrics)) {
+    const series = prometheusName(name, spec.instrument);
+    catalog.set(series, {
       series,
-      instrument,
-      histogram: instrument === 'histograma',
-      attributes: new Map(),
-    };
-    byOtelName.set(unticked(column(row, 'Nome')), entry);
-    catalog.set(series, entry);
+      instrument: spec.instrument,
+      histogram: spec.instrument === 'histogram',
+      attributes: new Map(
+        Object.entries(spec.attributes).map(
+          ([attribute, { values }]): [string, string[] | undefined] => [
+            prometheusLabel(attribute),
+            values.kind === 'enum' ? [...values.values] : undefined,
+          ],
+        ),
+      ),
+    });
   }
-
-  const described = new Set<MetricEntry>();
-  for (const [index, heading] of headings.entries()) {
-    if (index <= metricsAt) continue;
-    if (heading.level <= 2) break;
-    const otelName = /^`(.+)`$/.exec(heading.text)?.[1];
-    if (heading.level !== 3 || otelName === undefined) continue;
-    const entry = byOtelName.get(otelName);
-    if (entry === undefined)
-      throw new Error(`a subseção ${otelName} não está na tabela de métricas`);
-    describeMetric(entry, bodyOf(index));
-    described.add(entry);
-  }
-  for (const entry of catalog.values())
-    if (!described.has(entry))
-      throw new Error(
-        `a métrica ${entry.series} não tem subseção de atributos`,
-      );
   return catalog;
 }
 
@@ -543,7 +448,7 @@ function yamlBlockProblems(
   catalog: Catalog,
   report: Report,
 ): void {
-  const where = `bloco yaml da linha ${String(fence.line + 1)}`;
+  const where = `bloco yaml da linha ${String(fence.line)}`;
   let doc: unknown;
   try {
     doc = parseYaml(fence.content.join('\n'));
@@ -570,7 +475,7 @@ function checkOperation(readme: string, catalog: Catalog): Report {
     if (fence.info === 'promql')
       for (const query of promqlQueries(fence.content)) {
         report.queries += 1;
-        const where = `consulta (bloco promql da linha ${String(fence.line + 1)}) ${oneLine(query)}`;
+        const where = `consulta (bloco promql da linha ${String(fence.line)}) ${oneLine(query)}`;
         report.problems.push(
           ...queryProblems(query, catalog).map(
             (problem) => `${where}: ${problem}`,
@@ -591,53 +496,65 @@ function checkOperation(readme: string, catalog: Catalog): Report {
   return report;
 }
 
-// --- textos montados para os controles -------------------------------------------------------------------------------
+// --- textos e catálogo montados para os controles --------------------------------------------------------------------
 
-const FENCE = '`'.repeat(3);
-
-function fenced(info: string, ...lines: string[]): string {
-  return [`${FENCE}${info}`, ...lines, FENCE, ''].join('\n');
+function fencedWith(marker: string, info: string, ...lines: string[]): string {
+  return [`${marker}${info}`, ...lines, marker, ''].join('\n');
 }
 
-const CATALOG_TEXT = [
-  '# Catálogo de telemetria',
-  '',
-  '## Métricas',
-  '',
-  '| Nome | No Prometheus | Instrumento | Unidade | Descrição |',
-  '| --- | --- | --- | --- | --- |',
-  '| `app.requests` | `app_requests_total` | contador | `{request}` | Pedidos. |',
-  '| `app.duration` | `app_duration` | histograma | `s` | Duração. |',
-  '| `app.active` | `app_active` | UpDownCounter | `{operation}` | Em andamento. |',
-  '',
-  '### `app.requests`',
-  '',
-  '| Atributo | Exigência | Valores | Descrição |',
-  '| --- | --- | --- | --- |',
-  '| `app.outcome` | obrigatório | `ok`, `fail` | Desfecho. |',
-  '',
-  '### `app.duration`',
-  '',
-  'Fronteiras: 1, 5',
-  '',
-  '| Atributo | Exigência | Valores | Descrição |',
-  '| --- | --- | --- | --- |',
-  '| `app.operation` | obrigatório | `read`, `write` | Operação. |',
-  '| `http.route` | condicional | template da rota | Rota. |',
-  '',
-  '### `app.active`',
-  '',
-  'Sem atributos.',
-  '',
-  '## Eventos de log',
-  '',
-  '| Nome | Níveis | Campos | Descrição |',
-  '| --- | --- | --- | --- |',
-  '| `app.started` | `info` | — | Começou. |',
-  '',
-].join('\n');
+const FENCE = '`'.repeat(3);
+const TILDE_FENCE = '~'.repeat(3);
 
-const CATALOG = parseCatalog(CATALOG_TEXT);
+function fenced(info: string, ...lines: string[]): string {
+  return fencedWith(FENCE, info, ...lines);
+}
+
+// O prefixo em toda linha do texto: o recuo de um item de lista ou o `> ` de uma citação.
+function prefixLines(text: string, prefix: string): string {
+  return text
+    .split('\n')
+    .map((line) => `${prefix}${line}`)
+    .join('\n');
+}
+
+const attribute = (values: AttributeValues): AttributeSpec => ({
+  description: 'Atributo de teste.',
+  requirement: 'required',
+  values,
+});
+
+const closed = (...values: string[]): AttributeSpec =>
+  attribute({ kind: 'enum', values });
+
+// Um catálogo de teste no formato da declaração (o METRICS): um contador, um histograma com uma lista aberta de rota e
+// de código de status, e um UpDownCounter sem atributos.
+const TEST_METRICS: Readonly<Record<string, MetricSpec>> = {
+  'app.requests': {
+    instrument: 'counter',
+    unit: '{request}',
+    description: 'Pedidos.',
+    attributes: { 'app.outcome': closed('ok', 'fail') },
+  },
+  'app.duration': {
+    instrument: 'histogram',
+    unit: 's',
+    description: 'Duração.',
+    buckets: [1, 5],
+    attributes: {
+      'app.operation': closed('read', 'write'),
+      'http.route': attribute({ kind: 'http_route' }),
+      'http.response.status_code': attribute({ kind: 'http_status_code' }),
+    },
+  },
+  'app.active': {
+    instrument: 'up_down_counter',
+    unit: '{operation}',
+    description: 'Em andamento.',
+    attributes: {},
+  },
+};
+
+const CATALOG = buildCatalog(TEST_METRICS);
 
 type RuleField = 'alert' | 'expr' | 'for' | 'severity' | 'summary' | 'runbook';
 
@@ -745,30 +662,54 @@ const GOOD_README = readmeWith(goodBody());
 const check = (readme: string, catalog: Catalog = CATALOG): Report =>
   checkOperation(readme, catalog);
 
+const anchorsOfText = (text: string): string[] =>
+  readBlocks(text).flatMap((block) =>
+    block.kind === 'heading' ? [block.anchor] : [],
+  );
+
 // --- os testes -------------------------------------------------------------------------------------------------------
 
 describe('OBS-03 as consultas e as regras da seção Operação do README batem com o catálogo de telemetria', () => {
-  it('OBS-03 o README real: toda consulta e toda regra da seção Operação é válida e bate com o telemetry.md', () => {
+  it('OBS-03 o README real: toda consulta e toda regra da seção Operação é válida e bate com o METRICS', () => {
     const report = checkOperation(
       readFileSync(README_FILE, 'utf8'),
-      parseCatalog(readFileSync(TELEMETRY_FILE, 'utf8')),
+      buildCatalog(METRICS),
     );
 
     expect(report.problems).toEqual([]);
   });
 });
 
-describe('OBS-03 o leitor do catálogo (controles)', () => {
-  it('OBS-03 o telemetry.md real é lido: nomes, instrumentos, listas fechadas e abertas, sem atributos', () => {
-    const catalog = parseCatalog(readFileSync(TELEMETRY_FILE, 'utf8'));
+describe('OBS-03 o catálogo montado da declaração tipada (controles)', () => {
+  it('OBS-03 o METRICS real vira catálogo: uma série por métrica, com o nome do prometheusName', () => {
+    const catalog = buildCatalog(METRICS);
+    const expected = Object.entries(METRICS).map(([name, spec]) =>
+      prometheusName(name, spec.instrument),
+    );
+
+    expect(expected.length).toBeGreaterThan(0);
+    expect([...catalog.keys()].sort()).toEqual([...expected].sort());
+  });
+
+  it('OBS-03 o METRICS real é lido: instrumento, listas fechadas, listas abertas e métrica sem atributos', () => {
+    const catalog = buildCatalog(METRICS);
     const duration = catalog.get('http_server_request_duration');
     const checkout = catalog.get('casecellshop_checkout_requests_total');
+    const active = catalog.get('casecellshop_erp_client_active_operations');
 
     expect(duration?.histogram).toBe(true);
+    expect(duration?.instrument).toBe('histogram');
     expect(duration?.attributes.get('http_request_method')).toContain('_OTHER');
+    expect(duration?.attributes.get('url_scheme')).toEqual(['http', 'https']);
+    // A rota e o código de status HTTP são listas abertas: o atributo existe, sem lista de valores.
     expect(duration?.attributes.has('http_route')).toBe(true);
     expect(duration?.attributes.get('http_route')).toBeUndefined();
+    expect(duration?.attributes.has('http_response_status_code')).toBe(true);
+    expect(
+      duration?.attributes.get('http_response_status_code'),
+    ).toBeUndefined();
     expect(checkout?.histogram).toBe(false);
+    expect(checkout?.instrument).toBe('counter');
     expect(checkout?.attributes.get('casecellshop_checkout_outcome')).toEqual([
       'accepted',
       'replay',
@@ -777,38 +718,32 @@ describe('OBS-03 o leitor do catálogo (controles)', () => {
       'invalid',
       'unavailable',
     ]);
-    expect(
-      catalog.get('casecellshop_erp_client_active_operations')?.instrument,
-    ).toBe('UpDownCounter');
-    expect(
-      catalog.get('casecellshop_erp_client_active_operations')?.attributes.size,
-    ).toBe(0);
+    expect(active?.instrument).toBe('up_down_counter');
+    expect(active?.attributes.size).toBe(0);
   });
 
-  it('OBS-03 o catálogo montado no teste é lido: o ponto do atributo OTel vira _ e a lista aberta fica sem valores', () => {
+  it('OBS-03 o catálogo de teste no formato da declaração é lido: contador ganha _total, o ponto do atributo OTel vira _ e a lista aberta fica sem valores', () => {
     expect([...CATALOG.keys()]).toEqual([
       'app_requests_total',
       'app_duration',
       'app_active',
     ]);
+    expect(CATALOG.get('app_requests_total')?.instrument).toBe('counter');
+    expect(CATALOG.get('app_duration')?.histogram).toBe(true);
+    expect(CATALOG.get('app_active')?.instrument).toBe('up_down_counter');
     expect(
       CATALOG.get('app_duration')?.attributes.get('app_operation'),
     ).toEqual(['read', 'write']);
+    expect(CATALOG.get('app_duration')?.attributes.has('http_route')).toBe(
+      true,
+    );
     expect(
       CATALOG.get('app_duration')?.attributes.get('http_route'),
     ).toBeUndefined();
-  });
-
-  it('OBS-03 um catálogo com uma métrica sem subseção, ou com subseção sem tabela, reprova na leitura', () => {
-    const withoutSection = CATALOG_TEXT.replace(
-      '### `app.active`\n\nSem atributos.\n',
-      '',
-    );
-    const withoutTable = CATALOG_TEXT.replace('Sem atributos.', 'Nada.');
-
-    expect(() => parseCatalog(withoutSection)).toThrow('app_active');
-    expect(() => parseCatalog(withoutTable)).toThrow('app_active');
-    expect(() => parseCatalog('# vazio\n')).toThrow('Métricas');
+    expect(
+      CATALOG.get('app_duration')?.attributes.get('http_response_status_code'),
+    ).toBeUndefined();
+    expect(CATALOG.get('app_active')?.attributes.size).toBe(0);
   });
 });
 
@@ -837,6 +772,10 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
       'rate(app_duration_bucket{http_route="/orders/{orderId}/status"}[5m])',
     ],
     ['regex em lista aberta', 'app_duration_count{http_route=~"/orders/.*"}'],
+    [
+      'código de status HTTP (lista aberta)',
+      'app_duration_count{http_response_status_code="503"}',
+    ],
     ['le em _bucket', 'app_duration_bucket{le="1", app_operation="read"}'],
     ['_sum e _count de histograma', 'app_duration_sum / app_duration_count'],
     ['UpDownCounter sem atributos', 'app_active'],
@@ -1007,6 +946,11 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
       'app_requests_total{"app_outcome"}',
       'nome de métrica entre aspas',
     ],
+    [
+      'rótulo de status de outra métrica',
+      'app_requests_total{http_response_status_code="200"}',
+      'o rótulo http_response_status_code não é atributo de app_requests_total',
+    ],
   ];
 
   it.each(INVALID)(
@@ -1050,8 +994,8 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
     expect(queryProblems(bad, CATALOG)[0]).toContain('"boom"');
   });
 
-  it('OBS-03 as consultas do catálogo real: um nome com erro de digitação no prefixo e um valor fora da lista reprovam, os certos passam', () => {
-    const catalog = parseCatalog(readFileSync(TELEMETRY_FILE, 'utf8'));
+  it('OBS-03 as consultas do METRICS real: um nome com erro de digitação no prefixo e um valor fora da lista reprovam, os certos passam', () => {
+    const catalog = buildCatalog(METRICS);
     const real = (query: string): string[] => queryProblems(query, catalog);
 
     expect(
@@ -1064,6 +1008,11 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
         'histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_bucket{http_route="/orders/{orderId}/status"}[5m])))',
       ),
     ).toEqual([]);
+    expect(
+      real(
+        'sum(rate(http_server_request_duration_count{http_response_status_code="503"}[5m]))',
+      ),
+    ).toEqual([]);
     expect(real('rate(casecellshp_checkout_requests_total[5m])')).toHaveLength(
       1,
     );
@@ -1073,6 +1022,9 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
       ),
     ).toHaveLength(1);
     expect(
+      real('http_server_request_duration_bucket{http_request_method="BOGUS"}'),
+    ).toHaveLength(1);
+    expect(
       real(
         'casecellshop_erp_client_operation_duration_bucket{casecellshop_erp_outcome="timeout"}',
       ),
@@ -1080,59 +1032,174 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
   });
 });
 
-describe('OBS-03 a leitura das âncoras dos cabeçalhos (controles)', () => {
-  const anchorsOfText = (text: string): string[] =>
-    anchorsOf(scanMarkdown(text).headings);
-
-  it.each([
-    ['## Operação', 'operação'],
+describe('OBS-03 a leitura do Markdown e das âncoras (controles)', () => {
+  // [cabeçalho em Markdown, o texto simples que o github-slugger recebe, a âncora]
+  const ANCHORS: [string, string, string][] = [
+    ['## Operação', 'Operação', 'operação'],
     [
       '#### ERP falhando ou com erro de configuração',
+      'ERP falhando ou com erro de configuração',
       'erp-falhando-ou-com-erro-de-configuração',
     ],
     [
       '#### Burn rate da vitrine ou do checkout',
+      'Burn rate da vitrine ou do checkout',
       'burn-rate-da-vitrine-ou-do-checkout',
     ],
-    ['### Comando `redrive` e `cancel`', 'comando-redrive-e-cancel'],
-    ['### Pré-requisitos (M5)', 'pré-requisitos-m5'],
-    ['### ERP & fila: o que fazer?', 'erp--fila-o-que-fazer'],
-    ['### [Veja](http://x) o texto', 'veja-o-texto'],
-    ['### **Negrito** e _itálico_', 'negrito-e-_itálico_'],
-    ['###    Espaços   nas pontas   ', 'espaços---nas-pontas'],
-    ['## Título fechado ##', 'título-fechado'],
-  ])('OBS-03 a âncora do cabeçalho %s é %s', (heading, anchor) => {
-    expect(anchorsOfText(heading)).toEqual([anchor]);
-  });
+    [
+      '### Comando `redrive` e `cancel`',
+      'Comando redrive e cancel',
+      'comando-redrive-e-cancel',
+    ],
+    [
+      '### Fila (SQS): `redrive` & `cancel`',
+      'Fila (SQS): redrive & cancel',
+      'fila-sqs-redrive--cancel',
+    ],
+    ['### Pré-requisitos (M5)', 'Pré-requisitos (M5)', 'pré-requisitos-m5'],
+    [
+      '### ERP & fila: o que fazer?',
+      'ERP & fila: o que fazer?',
+      'erp--fila-o-que-fazer',
+    ],
+    ['### [Veja](http://x) o texto', 'Veja o texto', 'veja-o-texto'],
+    ['### **Negrito** e _itálico_', 'Negrito e itálico', 'negrito-e-itálico'],
+    [
+      '###    Espaços   nas pontas   ',
+      'Espaços   nas pontas',
+      'espaços---nas-pontas',
+    ],
+    ['## Título fechado ##', 'Título fechado', 'título-fechado'],
+    ['## Ação `Já` ok', 'Ação Já ok', 'ação-já-ok'],
+  ];
 
-  it('OBS-03 o cabeçalho repetido ganha -1, -2... contando o documento inteiro', () => {
+  it.each(ANCHORS)(
+    'OBS-03 a âncora do cabeçalho %s é a do github-slugger para o texto simples (%s): %s',
+    (heading, plain, anchor) => {
+      expect(anchorsOfText(heading)).toEqual([anchor]);
+      expect(new GithubSlugger().slug(plain)).toBe(anchor);
+    },
+  );
+
+  it('OBS-03 o cabeçalho repetido ganha -1, -2... contando o documento inteiro, na mesma conta do github-slugger', () => {
     const text = [
       '## Alertas',
       '',
       '### Alertas',
       '',
-      '### Alertas',
+      '### `Alertas`',
       '',
       '### Outro',
+      '',
+      '### Ação',
+      '',
+      '#### Ação',
     ].join('\n');
+    const slugger = new GithubSlugger();
 
     expect(anchorsOfText(text)).toEqual([
       'alertas',
       'alertas-1',
       'alertas-2',
       'outro',
+      'ação',
+      'ação-1',
     ]);
+    expect(
+      ['Alertas', 'Alertas', 'Alertas', 'Outro', 'Ação', 'Ação'].map((plain) =>
+        slugger.slug(plain),
+      ),
+    ).toEqual(anchorsOfText(text));
   });
 
-  it('OBS-03 um # dentro de bloco de código não é cabeçalho e não toma âncora', () => {
+  it('OBS-03 um cabeçalho setext de nível 2 (sublinhado com ---) toma âncora como um ATX, na mesma contagem de repetidos', () => {
+    const text = [
+      'Alertas',
+      '-------',
+      '',
+      '## Alertas',
+      '',
+      'Outro',
+      '=',
+    ].join('\n');
+
+    expect(anchorsOfText(text)).toEqual(['alertas', 'alertas-1', 'outro']);
+  });
+
+  it('OBS-03 um # dentro de bloco de código (cercado por crases, por ~~~ ou recuado) não é cabeçalho e não toma âncora', () => {
     const text = [
       '## Alertas',
       '',
       fenced('bash', '# Alertas', '## Falso'),
+      fencedWith(TILDE_FENCE, 'bash', '# Alertas'),
+      '    # Alertas',
+      '',
       '### Alertas',
     ].join('\n');
 
     expect(anchorsOfText(text)).toEqual(['alertas', 'alertas-1']);
+  });
+
+  it('OBS-03 um bloco promql dentro de uma lista ou de uma citação ainda é bloco, com a linha do bloco no README', () => {
+    const inList = [
+      '- Consulta do dashboard:',
+      '',
+      prefixLines(fenced('promql', 'app_requets_total'), '  '),
+    ].join('\n');
+    const inQuote = prefixLines(fenced('promql', 'foo bar'), '> ');
+    const body = [goodBody(), inList, '', inQuote].join('\n');
+    const { problems, queries } = check(readmeWith(body));
+
+    expect(queries).toBe(4);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain('app_requets_total não está na coluna');
+    expect(problems[1]).toContain('consulta inválida');
+    const line = readmeWith(body).split('\n').indexOf('  ```promql') + 1;
+    expect(line).toBeGreaterThan(0);
+    expect(problems[0]).toContain(`bloco promql da linha ${String(line)}`);
+  });
+
+  it('OBS-03 um bloco yaml com uma regra dentro de uma lista ainda é bloco: a regra com problema é acusada', () => {
+    const body = [
+      fenced('promql', 'app_active'),
+      '- Regra:',
+      '',
+      prefixLines(fenced('yaml', ...ruleFile({ for: null }).split('\n')), '  '),
+      ERP_SECTION,
+    ].join('\n');
+    const { problems, rules } = check(readmeWith(body));
+
+    expect(rules).toBe(1);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('alerta ErroAlto');
+    expect(problems[0]).toContain('falta o campo for');
+  });
+
+  it('OBS-03 uma cerca com ~~~ também conta: o promql e o yaml cercados por ~~~ são lidos', () => {
+    const body = [
+      fencedWith(TILDE_FENCE, 'promql', 'app_active', '', 'app_requets_total'),
+      fencedWith(TILDE_FENCE, 'yaml', ...ruleFile({ for: null }).split('\n')),
+      ERP_SECTION,
+    ].join('\n');
+    const { problems, queries, rules } = check(readmeWith(body));
+
+    expect(queries).toBe(2);
+    expect(rules).toBe(1);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain('app_requets_total');
+    expect(problems[1]).toContain('falta o campo for');
+  });
+
+  it('OBS-03 uma cerca longa guarda uma cerca curta: o promql dentro de um bloco de quatro crases não é lido', () => {
+    const longFence = '`'.repeat(4);
+    const body =
+      goodBody() +
+      '\n' +
+      fencedWith(longFence, 'markdown', fenced('promql', 'app_requets_total'));
+    const report = check(readmeWith(body));
+
+    expect(report.problems).toEqual([]);
+    expect(report.queries).toBe(2);
   });
 
   it('OBS-03 a seção vai do cabeçalho Operação até o próximo de nível 2 fora de bloco de código, com os níveis 3 e 4 dentro', () => {
@@ -1141,6 +1208,9 @@ describe('OBS-03 a leitura das âncoras dos cabeçalhos (controles)', () => {
         '### Dentro',
         '',
         fenced('bash', '## Não termina a seção', 'echo oi'),
+        fencedWith(TILDE_FENCE, 'bash', '## Também não termina'),
+        '    ## Nem este, recuado',
+        '',
         '#### Mais fundo',
         '',
         fenced('promql', 'app_requets_total'),
@@ -1153,10 +1223,57 @@ describe('OBS-03 a leitura das âncoras dos cabeçalhos (controles)', () => {
     expect(section?.anchors).toEqual(
       new Set(['operação', 'dentro', 'mais-fundo']),
     );
+    // O bloco recuado (sem cerca) também é um nó `code`, sem linguagem.
     expect(section?.fences.map((fence) => fence.info)).toEqual([
       'bash',
+      'bash',
+      '',
       'promql',
     ]);
+  });
+
+  // O cabeçalho que abre e o que encerra a seção, cada um em ATX ou em setext; o bloco promql inválido depois do
+  // encerramento fica fora da seção.
+  it.each([
+    ['abre', ['Operação', '--------'], ['## Limitações']],
+    ['encerra', ['## Operação'], ['Limitações', '----------']],
+  ])(
+    'OBS-03 um cabeçalho setext de nível 2 %s a seção como um ATX',
+    (_label, opening, closing) => {
+      const readme = [
+        '# Projeto',
+        '',
+        ...opening,
+        '',
+        goodBody(),
+        ...closing,
+        '',
+        fenced('promql', 'fora_da_secao_invalida'),
+      ].join('\n');
+      const report = check(readme);
+
+      expect(report.problems).toEqual([]);
+      expect(report.queries).toBe(2);
+      expect(report.rules).toBe(1);
+    },
+  );
+
+  it('OBS-03 um cabeçalho setext de nível 2 de outro nome não abre a seção, e um Operação setext de nível 1 (===) também não', () => {
+    const readme = [
+      '# Projeto',
+      '',
+      'Outra',
+      '-----',
+      '',
+      'Operação',
+      '========',
+      '',
+      goodBody(),
+    ].join('\n');
+    const { problems } = check(readme);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('não tem a seção "Operação"');
   });
 });
 
@@ -1424,7 +1541,7 @@ describe('OBS-03 a conferência da seção Operação (controles)', () => {
     ).toHaveLength(1);
   });
 
-  it('OBS-03 a âncora do runbook_url é a calculada do cabeçalho: crase, pontuação e acento do cabeçalho viram a âncora do GitHub', () => {
+  it('OBS-03 a âncora do runbook_url é a do github-slugger: crase, pontuação e acento do cabeçalho viram a âncora do GitHub', () => {
     const headings = [
       '#### ERP falhando ou com erro de configuração',
       '#### Burn rate da vitrine ou do checkout',

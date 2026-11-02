@@ -349,9 +349,9 @@ const EXCEPTIONS: Exception[] = [
   },
   {
     file: 'test/repo/readme-promql.test.ts',
-    citations: ['.specs', 'README.md'],
+    citations: ['README.md'],
     reason:
-      'lê o README.md da raiz e o telemetry.md sob .specs, e nenhum dos dois está na lista; a guarda compara pelo nome, e o .specs/README.md da lista tem o mesmo nome do README.md da raiz',
+      'lê o README.md da raiz, que não está na lista; a guarda compara pelo nome, e o .specs/README.md da lista tem o mesmo nome do README.md da raiz. O catálogo vem do METRICS, e nenhum arquivo sob .specs é lido',
   },
   {
     file: 'test/repo/rules-paths.test.ts',
