@@ -26,7 +26,10 @@ export function createCatalogRoutes(storefront: Storefront): CatalogRoutes {
     const raw = req.query['page'];
     const page = typeof raw === 'string' ? Number(raw) : 1;
     try {
-      res.json(await storefront.page(page));
+      const served = await storefront.page(page);
+      // Só no 200: o 400 e o 503 não servem entrada, então o log deles não leva o campo.
+      res.locals['cache'] = served.cache;
+      res.json(served.page);
     } catch (error) {
       // Só a falta de vitrine servível é 503; um defeito do código segue para o middleware único (500).
       if (

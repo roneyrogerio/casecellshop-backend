@@ -75,8 +75,8 @@ export const HTTP_LOG_EVENTS = {
   'casecellshop.http.request.completed': {
     levels: ['info', 'error'],
     description:
-      'Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta.',
-    fields: ['route', 'method', 'status', 'duration_ms', 'orderId'],
+      'Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta. O `cache` (`hit`, `miss` ou `stale`) vem só no 200 do GET /products.',
+    fields: ['route', 'method', 'status', 'duration_ms', 'orderId', 'cache'],
   },
   'casecellshop.http.request.failed': {
     levels: ['error'],

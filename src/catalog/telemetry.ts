@@ -48,7 +48,7 @@ export const CATALOG_METRICS = {
     attributes: {},
   },
   'casecellshop.catalog.sync.age': {
-    instrument: 'observable_gauge',
+    instrument: 'gauge',
     unit: 's',
     description:
       'Idade da última rodada completa da sincronização com o ERP; base do alerta de ERP fora.',

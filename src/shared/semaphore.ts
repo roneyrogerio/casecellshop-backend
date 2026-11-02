@@ -6,6 +6,21 @@ export interface Semaphore {
   release(count: number): void;
 }
 
+// Uma chamada ao ERP por vez, sob uma permissão: o limite vale para o processo todo. Toma as livres para
+// respeitar a fila e devolve de volta todas menos a sua, para as outras chamadas não esperarem à toa.
+export async function withPermit<T>(
+  semaphore: Semaphore,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const permits = await semaphore.acquireFree();
+  semaphore.release(permits - 1);
+  try {
+    return await fn();
+  } finally {
+    semaphore.release(1);
+  }
+}
+
 export function createSemaphore(size: number): Semaphore {
   let free = size;
   const waiters: ((count: number) => void)[] = [];

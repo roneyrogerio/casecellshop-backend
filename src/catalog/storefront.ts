@@ -1,6 +1,10 @@
 // A vitrine: a entrada única do cache, carregada do repositório, fatiada em páginas.
 import { SpanKind } from '@opentelemetry/api';
-import { createInMemoryCache, type Cache } from '../cache/cache.ts';
+import {
+  createInMemoryCache,
+  type Cache,
+  type CacheResult,
+} from '../cache/cache.ts';
 import { PRODUCTS_PAGE_SIZE, type ProductPage } from '../contract/index.ts';
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
@@ -27,10 +31,16 @@ export interface StorefrontDependencies {
   logger: AppLogger;
 }
 
+export interface StorefrontPage {
+  page: ProductPage;
+  // O resultado da leitura do cache, para o log da requisição.
+  cache: CacheResult;
+}
+
 export interface Storefront {
   // Página a partir de 1. Rejeita com CatalogNotSyncedError ou CacheUnavailableError (src/cache/), que a rota
   // converte em 503; o span `catalog.cache.get` envolve a leitura do cache.
-  page(page: number): Promise<ProductPage>;
+  page(page: number): Promise<StorefrontPage>;
 }
 
 // A carga mede a origem: quantas em andamento, o desfecho e o log da falha. O erro segue para o cache decidir.
@@ -110,7 +120,10 @@ export function createStorefront(deps: StorefrontDependencies): Storefront {
         lookup.ageMs / 1000,
       );
       if (lookup.value === null) throw new CatalogNotSyncedError();
-      return toPage(lookup.value, page, deps.config.lowStockMax);
+      return {
+        page: toPage(lookup.value, page, deps.config.lowStockMax),
+        cache: lookup.result,
+      };
     },
   };
 }

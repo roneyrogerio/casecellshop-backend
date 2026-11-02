@@ -7,7 +7,7 @@ import type { ErpCatalogItem, ErpClient } from '../erp/erp-client.ts';
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
-import type { Semaphore } from '../shared/semaphore.ts';
+import { withPermit, type Semaphore } from '../shared/semaphore.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import type { CatalogSyncConfig } from './config.ts';
 import {
@@ -60,18 +60,11 @@ type CatalogRead =
   | { kind: 'complete'; items: ErpCatalogItem[] }
   | { kind: 'partial'; items: ErpCatalogItem[]; cause: string; page: number };
 
-// Uma chamada ao ERP por vez, sob uma permissão do semáforo: o limite vale para o processo todo.
-async function listPage(
+function listPage(
   { erp, semaphore }: Context,
   page: number,
 ): ReturnType<ErpClient['listCatalog']> {
-  const permits = await semaphore.acquireFree();
-  semaphore.release(permits - 1);
-  try {
-    return await erp.listCatalog(page);
-  } finally {
-    semaphore.release(1);
-  }
+  return withPermit(semaphore, () => erp.listCatalog(page));
 }
 
 async function readCatalog(ctx: Context): Promise<CatalogRead> {
@@ -231,27 +224,20 @@ function createRoundLoop(
   { clock, config }: CatalogSyncDependencies,
   runRound: () => Promise<SyncRoundResult>,
 ) {
-  // Acorda o laço que dorme, sem depender de o relógio avançar.
-  let wake: (() => void) | undefined;
-  return createLoopRunner({
+  const runner = createLoopRunner({
+    clock,
     async run(isRunning) {
       while (isRunning()) {
         const startedAt = clock.now();
         await runRound();
         // A próxima começa um intervalo depois do início desta; se a rodada passou disso, começa logo.
         const remaining = config.intervalMs - (clock.now() - startedAt);
-        if (remaining > 0 && isRunning()) {
-          await Promise.race([
-            clock.sleep(remaining),
-            new Promise<void>((resolve) => {
-              wake = resolve;
-            }),
-          ]);
-        }
+        // O pause do runner acorda no stop(), sem depender de o relógio avançar.
+        if (remaining > 0 && isRunning()) await runner.pause(remaining);
       }
     },
-    onStopping: () => wake?.(),
   });
+  return runner;
 }
 
 export function createCatalogSync(deps: CatalogSyncDependencies): CatalogSync {
@@ -260,10 +246,13 @@ export function createCatalogSync(deps: CatalogSyncDependencies): CatalogSync {
     db: createDb(deps.pool),
     completedMark: { value: undefined },
   };
-  catalogMetrics(deps.telemetry).observe('casecellshop.catalog.sync.age', () =>
-    ctx.completedMark.value === undefined
-      ? undefined
-      : (deps.clock.now() - ctx.completedMark.value) / 1000,
+  // Sem rodada completa conhecida o gauge não grava: o alerta de ERP fora lê a ausência.
+  const removeAgeGauge = catalogMetrics(deps.telemetry).observe(
+    'casecellshop.catalog.sync.age',
+    (observe) => {
+      if (ctx.completedMark.value !== undefined)
+        observe((deps.clock.now() - ctx.completedMark.value) / 1000);
+    },
   );
 
   // Rodadas encadeadas: nunca duas ao mesmo tempo no processo, venham do laço ou de uma chamada direta.
@@ -287,7 +276,10 @@ export function createCatalogSync(deps: CatalogSyncDependencies): CatalogSync {
       await seedCompletedMark(ctx);
       await runner.start();
     },
-    stop: () => runner.stop(),
+    async stop() {
+      removeAgeGauge();
+      await runner.stop();
+    },
     runRound,
   };
 }
