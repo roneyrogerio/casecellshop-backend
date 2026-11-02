@@ -111,6 +111,11 @@ export async function cancelOrder(
   });
 }
 
+// Arredonda para cima e nunca mostra menos de 1 min: "0 min" levaria o operador a repetir de imediato.
+function minutesUp(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 60_000));
+}
+
 // A mensagem ao operador de cada resultado, e se o comando sai com erro (as recusas).
 export function describeCancel(
   orderId: string,
@@ -118,7 +123,7 @@ export function describeCancel(
   settleWindowMs: number = SETTLE_WINDOW_MS,
 ): { message: string; failed: boolean } {
   // Derivado da janela usada, para o texto não divergir do valor real.
-  const settleMinutes = Math.max(1, Math.ceil(settleWindowMs / 60_000));
+  const settleMinutes = minutesUp(settleWindowMs);
   switch (result.kind) {
     case 'cancelled':
       return {
@@ -132,7 +137,7 @@ export function describeCancel(
       };
     case 'too_recent':
       return {
-        message: `Pedido ${orderId} não cancelado: a última chamada ao ERP é recente; tente de novo em cerca de ${Math.max(1, Math.ceil(result.retryInMs / 60_000))} min.`,
+        message: `Pedido ${orderId} não cancelado: a última chamada ao ERP é recente; tente de novo em cerca de ${minutesUp(result.retryInMs)} min.`,
         failed: true,
       };
     case 'erp_has_order':
