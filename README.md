@@ -685,7 +685,7 @@ Se o alerta veio do counter de falhas de leitura, o gauge da pendência está co
 
 Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`).
 
-O gauge da DLQ conta as mensagens visíveis e as em voo (`OBS-09`): a reconciliação recebe cada mensagem e a deixa invisível por 5 min a cada rodada, e mesmo assim ela segue contada, e o alerta continua disparando enquanto a mensagem estiver na DLQ.
+O gauge da DLQ conta as mensagens visíveis e as em voo (`OBS-09`): durante uma rodada, a reconciliação deixa invisível cada mensagem que recebe, e a devolve no fim dela (`ORD-14`). A mensagem segue contada nos dois estados, e o alerta continua disparando enquanto ela estiver na DLQ.
 
 Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelado no último valor, e o log `casecellshop.billing.gauge.read_failed` traz o erro do `GetQueueAttributes`. Com o SQS fora do alcance do worker (`docker compose ps elasticmq`), a reconciliação também falha (`casecellshop.outbox.reconciliation.failed`), e as chegadas à DLQ só aparecem em `casecellshop.outbox.dead` na primeira rodada depois da volta. Se só o `GetQueueAttributes` falha (uma permissão faltando, por exemplo), a reconciliação segue registrando cada chegada.
 
@@ -698,7 +698,9 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    docker compose exec worker node src/main/runbook.ts redrive
    ```
 
-   É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`). No compose, o ElasticMQ tira da DLQ, sem entregá-la à fila, a mensagem que a reconciliação segura na hora do `redrive` (risco R12 do [`STATE.md`](.specs/project/STATE.md)). Por isso, guarde antes do `redrive` a lista dos pedidos que chegaram à DLQ e seguem pendentes; depois, um pedido dela que não apareça nos logs do worker (`docker compose logs worker`, pelo `orderId`) ficou fora da fila: trate-o pelos passos 3 e 5.
+   É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`). Rode-o fora de uma rodada da reconciliação, depois do log `casecellshop.outbox.reconciliation.completed`: no fim da rodada, as mensagens voltam a ficar visíveis (`ORD-14`). A saída diz quantas mensagens saíram da DLQ e quantas restam.
+
+   A documentação da AWS não diz o que o `StartMessageMoveTask` faz com a mensagem em voo durante uma rodada; no compose, o ElasticMQ a tira da DLQ sem entregá-la à fila (risco R12 do [`STATE.md`](.specs/project/STATE.md)). Se o `redrive` cruzou uma rodada, confira os pedidos que chegaram à DLQ e seguem pendentes; um deles que não apareça nos logs do worker (`docker compose logs worker`, pelo `orderId`) ficou fora da fila, e nenhum comando do runbook o publica de novo: confirme no ERP (passo 3); se o ERP não o tem, cancele-o (passo 5) e avise o atendimento.
 
    ```sql
    select o.id from orders o join outbox x on x.order_id = o.id where o.status = 'pending' and x.dead_at is not null;
