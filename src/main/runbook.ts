@@ -1,11 +1,7 @@
 // Linha de comando do runbook da DLQ: `node src/main/runbook.ts redrive` e
 // `node src/main/runbook.ts cancel <orderId>` (design.md, "Worker:
 // reconciliação e runbook").
-import {
-  cancelOrder,
-  describeCancel,
-  redriveDlq,
-} from '../billing/runbook.ts';
+import { cancelOrder, describeCancel, redriveDlq } from '../billing/runbook.ts';
 import { DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
 import { OrderId } from '../contract/orders.ts';
 import { createPool } from '../db/pool.ts';
