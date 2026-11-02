@@ -38,7 +38,13 @@ export interface CatalogSeed {
 
 // O catálogo é uma tabela só e cada arquivo tem o próprio banco: cada teste zera as linhas e a marca da
 // sincronização antes de semear, para uma vitrine de outro teste não aparecer na página.
+// Os pedidos que um teste de checkout deixou referenciam `products` (order_items.sku) e `orders`: saem primeiro,
+// na ordem das chaves estrangeiras, sem desligar nenhuma delas.
 export async function resetCatalog(pool: pg.Pool): Promise<void> {
+  await pool.query('delete from order_items');
+  await pool.query('delete from outbox');
+  await pool.query('delete from idempotency_keys');
+  await pool.query('delete from orders');
   await pool.query('delete from inventory');
   await pool.query('delete from products');
   await setSyncCompletedAt(pool, null);
