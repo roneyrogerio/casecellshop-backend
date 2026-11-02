@@ -38,7 +38,7 @@ Resultado, com cada troca aprovada pelo mantenedor e registrada no `STATE.md`:
 
 - o leitor de PromQL por expressões regulares foi descartado antes do commit; o teste lê as consultas pelo analisador oficial do PromQL (`@prometheus-io/lezer-promql`);
 - a segunda versão do teste ainda lia o Markdown por expressões regulares; o README passou a ser lido pelo parser CommonMark (`mdast-util-from-markdown`), a âncora do runbook pelo `github-slugger`, e o catálogo pela fonte que gera o `telemetry.md`, em vez das tabelas dele;
-- os alertas foram para o formato de arquivo de regras do Prometheus, conferido pelo `promtool check rules`;
+- os alertas foram para o formato de arquivo de regras do Prometheus, conferido pelo `promtool check rules`; errata (PR #43): nada no repositório roda o `promtool`, e a conferência das regras é a do teste do `OBS-03`, pelo analisador oficial do PromQL;
 - o burn rate seguiu a tabela do livro de SRE do Google, o que corrigiu o rascunho: o par de 6 h e 30 min é `page`, e não aviso.
 
 Os registros dos PRs anteriores não citam o mantenedor literalmente; as orientações abaixo são paráfrases do que cada PR registra.

@@ -3,6 +3,9 @@ import { createStuckOrderMonitor } from '../billing/stuck-orders.ts';
 import { registerOutboxAgeGauge } from '../billing/outbox-age.ts';
 import { registerSyncAgeGauge } from '../catalog/sync-age.ts';
 import { registerInventoryGauges } from '../checkout/inventory-gauges.ts';
+import { billingMetrics } from '../billing/telemetry.ts';
+import { catalogMetrics } from '../catalog/telemetry.ts';
+import { checkoutMetrics } from '../checkout/telemetry.ts';
 import { createPool } from '../db/pool.ts';
 import { systemClock } from '../shared/clock.ts';
 import { envPort, requireEnv } from '../shared/config.ts';
@@ -13,6 +16,11 @@ import { MAIN_LOG_EVENTS } from './telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-api' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-api' });
+// OBS-08: cria já na subida os instrumentos que esta entrada grava, para as séries nascerem em 0 sem depender da
+// ordem em que os módulos os pedem (o `increase()` não conta o primeiro evento de uma série que nasce com ele).
+checkoutMetrics(telemetry);
+catalogMetrics(telemetry);
+billingMetrics(telemetry);
 const pool = createPool(requireEnv('DATABASE_URL'), logger);
 const app = createApp({ pool, logger, telemetry });
 

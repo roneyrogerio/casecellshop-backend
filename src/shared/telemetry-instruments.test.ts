@@ -1,7 +1,13 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type { Meter, ObservableGauge } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { scrapeMetricsText as scrape } from '#test-helpers/metrics.ts';
+import {
+  parseExposition,
+  scrapeMetricsText as scrape,
+  valueOf,
+  type Exposition,
+  type Sample,
+} from '#test-helpers/metrics.ts';
 import type { MetricSpec } from './telemetry-catalog.ts';
 import { createInstruments, metricsOf } from './telemetry-instruments.ts';
 import { createTelemetry, type Telemetry } from './telemetry.ts';
@@ -411,3 +417,300 @@ async function rejectionOf(call: () => void | Promise<void>): Promise<unknown> {
   }
   return undefined;
 }
+
+// OBS-08: ao criar os instrumentos, cada counter e UpDownCounter de atributos todos `required` e de lista fechada
+// soma 0 uma vez por combinação dos valores, para o `increase()` de um alerta contar o primeiro evento. Estas
+// declarações são do teste: cobrem cada forma da regra e cada exclusão.
+
+const ZERO_SPECS = {
+  // Sem atributos: uma série só.
+  'casecellshop.zero.plain': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter sem atributos.',
+    attributes: {},
+  },
+  // Um atributo enum required: uma série por valor.
+  'casecellshop.zero.one_enum': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com um atributo enum.',
+    attributes: {
+      'casecellshop.zero.kind': {
+        description: 'Tipo.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['alpha', 'beta', 'gamma'] },
+      },
+    },
+  },
+  // Dois atributos enum required: o produto cartesiano, 2 x 3 = 6 séries.
+  'casecellshop.zero.two_enums': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com dois atributos enum.',
+    attributes: {
+      'casecellshop.zero.color': {
+        description: 'Cor.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['red', 'blue'] },
+      },
+      'casecellshop.zero.size': {
+        description: 'Tamanho.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['small', 'medium', 'large'] },
+      },
+    },
+  },
+  'casecellshop.zero.level': {
+    instrument: 'up_down_counter',
+    unit: '{item}',
+    description: 'UpDownCounter sem atributos.',
+    attributes: {},
+  },
+  'casecellshop.zero.latency': {
+    instrument: 'histogram',
+    unit: 's',
+    description: 'Histograma: a API do OpenTelemetry não cria um vazio.',
+    buckets: [1, 2],
+    attributes: {},
+  },
+  'casecellshop.zero.depth': {
+    instrument: 'gauge',
+    unit: '{item}',
+    description: 'Gauge: lido a cada coleta.',
+    attributes: {},
+  },
+  // Lista aberta: não há valores para combinar.
+  'casecellshop.zero.by_status': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com o status HTTP.',
+    attributes: {
+      'http.response.status_code': {
+        description: 'Status.',
+        requirement: 'required',
+        values: { kind: 'http_status_code' },
+      },
+    },
+  },
+  'casecellshop.zero.by_route': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com a rota.',
+    attributes: {
+      'http.route': {
+        description: 'Rota.',
+        requirement: 'required',
+        values: { kind: 'http_route' },
+      },
+    },
+  },
+  // Um enum required junto de uma lista aberta: a métrica inteira fica de fora.
+  'casecellshop.zero.enum_and_route': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com um enum e a rota.',
+    attributes: {
+      'casecellshop.zero.kind': {
+        description: 'Tipo.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['alpha', 'beta'] },
+      },
+      'http.route': {
+        description: 'Rota.',
+        requirement: 'required',
+        values: { kind: 'http_route' },
+      },
+    },
+  },
+  // `conditionally_required`: só vale quando a condição ocorre, e a combinação sem ele é outra série.
+  'casecellshop.zero.conditional': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter com um atributo condicional.',
+    attributes: {
+      'casecellshop.zero.kind': {
+        description: 'Tipo.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['alpha', 'beta'] },
+      },
+      'casecellshop.zero.reason': {
+        description: 'Motivo, só quando houve erro.',
+        requirement: 'conditionally_required',
+        values: { kind: 'enum', values: ['timeout', 'refused'] },
+      },
+    },
+  },
+  'casecellshop.zero.only_conditional': {
+    instrument: 'counter',
+    unit: '{event}',
+    description: 'Counter só com um atributo condicional.',
+    attributes: {
+      'casecellshop.zero.reason': {
+        description: 'Motivo, só quando houve erro.',
+        requirement: 'conditionally_required',
+        values: { kind: 'enum', values: ['timeout', 'refused'] },
+      },
+    },
+  },
+} as const satisfies Record<string, MetricSpec>;
+
+const PLAIN = 'casecellshop_zero_plain_total';
+const ONE_ENUM = 'casecellshop_zero_one_enum_total';
+const TWO_ENUMS = 'casecellshop_zero_two_enums_total';
+const LEVEL = 'casecellshop_zero_level';
+const EXCLUDED = [
+  'casecellshop_zero_latency',
+  'casecellshop_zero_depth',
+  'casecellshop_zero_by_status',
+  'casecellshop_zero_by_route',
+  'casecellshop_zero_enum_and_route',
+  'casecellshop_zero_conditional',
+  'casecellshop_zero_only_conditional',
+];
+const KINDS = ['alpha', 'beta', 'gamma'];
+const COLORS = ['red', 'blue'];
+const SIZES = ['small', 'medium', 'large'];
+
+function zeroTelemetry(): Telemetry {
+  const telemetry = createTelemetry({
+    spanExporter: new InMemorySpanExporter(),
+  });
+  telemetries.push(telemetry);
+  return telemetry;
+}
+
+async function exposition(telemetry: Telemetry): Promise<Exposition> {
+  return parseExposition(await scrape(telemetry));
+}
+
+function seriesOf(families: Exposition, name: string): Sample[] {
+  return families.get(name)?.samples ?? [];
+}
+
+// Os pares cor e tamanho das séries de `two_enums`, com o valor de cada um.
+function twoEnumsValues(families: Exposition): Map<string, number> {
+  return new Map(
+    seriesOf(families, TWO_ENUMS).map((sample) => [
+      `${sample.labels['casecellshop_zero_color']}/${sample.labels['casecellshop_zero_size']}`,
+      sample.value,
+    ]),
+  );
+}
+
+const ALL_PAIRS = COLORS.flatMap((color) =>
+  SIZES.map((size) => `${color}/${size}`),
+);
+
+describe('OBS-08 séries em 0 na criação dos instrumentos, antes de qualquer gravação', () => {
+  it('OBS-08 o counter sem atributos sai com uma série em 0 logo depois de criado, sem nenhuma gravação', async () => {
+    const telemetry = zeroTelemetry();
+    createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    const families = await exposition(telemetry);
+
+    expect(families.get(PLAIN)?.type).toBe('counter');
+    expect(seriesOf(families, PLAIN)).toHaveLength(1);
+    expect(valueOf(families, PLAIN)).toBe(0);
+  });
+
+  it('OBS-08 o counter com um atributo enum required sai com uma série em 0 por valor da lista', async () => {
+    const telemetry = zeroTelemetry();
+    createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    const families = await exposition(telemetry);
+
+    expect(seriesOf(families, ONE_ENUM)).toHaveLength(KINDS.length);
+    for (const kind of KINDS)
+      expect(
+        valueOf(families, ONE_ENUM, { casecellshop_zero_kind: kind }),
+        `série ${kind}`,
+      ).toBe(0);
+  });
+
+  it('OBS-08 o counter com dois atributos enum required sai com o produto cartesiano das listas: 2 x 3 = 6 séries em 0', async () => {
+    const telemetry = zeroTelemetry();
+    createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    const values = twoEnumsValues(await exposition(telemetry));
+
+    expect([...values.keys()].sort()).toEqual([...ALL_PAIRS].sort());
+    expect([...values.values()]).toEqual(ALL_PAIRS.map(() => 0));
+  });
+
+  it('OBS-08 o UpDownCounter sem atributos sai com uma série em 0', async () => {
+    const telemetry = zeroTelemetry();
+    createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    const families = await exposition(telemetry);
+
+    expect(seriesOf(families, LEVEL)).toHaveLength(1);
+    expect(valueOf(families, LEVEL)).toBe(0);
+  });
+
+  it('OBS-08 histograma, gauge, lista aberta (status HTTP e rota) e atributo conditionally_required ficam sem série, e os counters elegíveis da mesma declaração saem em 0', async () => {
+    const telemetry = zeroTelemetry();
+    createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    const text = await scrape(telemetry);
+    const families = parseExposition(text);
+
+    // O controle positivo na mesma leitura: sem ele a exclusão passaria também se nada fosse criado em 0.
+    expect(valueOf(families, PLAIN), 'o counter elegível sai em 0').toBe(0);
+    for (const name of EXCLUDED)
+      expect(text, `${name} não tem série`).not.toContain(name);
+  });
+
+  it('OBS-08 a série em 0 não muda a contagem: depois de add(1) com os atributos dela, só ela vale 1 e as outras seguem em 0', async () => {
+    const telemetry = zeroTelemetry();
+    const metrics = createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+
+    metrics.add('casecellshop.zero.two_enums', 1, {
+      'casecellshop.zero.color': 'blue',
+      'casecellshop.zero.size': 'medium',
+    });
+    metrics.add('casecellshop.zero.plain', 1);
+
+    const families = await exposition(telemetry);
+    const values = twoEnumsValues(families);
+    expect(values.size, 'continuam 6 séries, sem uma a mais').toBe(6);
+    for (const pair of ALL_PAIRS)
+      expect(values.get(pair), `série ${pair}`).toBe(
+        pair === 'blue/medium' ? 1 : 0,
+      );
+    expect(seriesOf(families, PLAIN)).toHaveLength(1);
+    expect(valueOf(families, PLAIN)).toBe(1);
+    expect(
+      valueOf(families, ONE_ENUM, { casecellshop_zero_kind: 'alpha' }),
+    ).toBe(0);
+  });
+
+  it('OBS-08 o UpDownCounter em 0 acompanha as gravações: add(3) e add(-1) deixam 2', async () => {
+    const telemetry = zeroTelemetry();
+    const metrics = createInstruments(telemetry.meter('test.zero'), ZERO_SPECS);
+    expect(valueOf(await exposition(telemetry), LEVEL), 'antes').toBe(0);
+
+    metrics.add('casecellshop.zero.level', 3);
+    metrics.add('casecellshop.zero.level', -1);
+
+    expect(valueOf(await exposition(telemetry), LEVEL)).toBe(2);
+  });
+
+  it('OBS-08 metricsOf chamado duas vezes para a mesma telemetria e escopo não duplica as séries nem zera de novo o valor gravado', async () => {
+    const telemetry = zeroTelemetry();
+    const first = metricsOf(telemetry, 'test.zero.shared', ZERO_SPECS);
+    first.add('casecellshop.zero.two_enums', 5, {
+      'casecellshop.zero.color': 'red',
+      'casecellshop.zero.size': 'large',
+    });
+
+    const second = metricsOf(telemetry, 'test.zero.shared', ZERO_SPECS);
+
+    expect(second).toBe(first);
+    const values = twoEnumsValues(await exposition(telemetry));
+    expect(values.size, 'sem séries duplicadas').toBe(6);
+    expect(values.get('red/large')).toBe(5);
+    expect(values.get('red/small')).toBe(0);
+    expect(valueOf(await exposition(telemetry), PLAIN)).toBe(0);
+  });
+});

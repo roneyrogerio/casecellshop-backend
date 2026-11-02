@@ -129,7 +129,7 @@ async function cancelUnchangedViaCli(
 }
 
 describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
-  it('ORD-07 redrive: sai com 0, imprime quantas mensagens saíram da DLQ e a DLQ fica vazia', async () => {
+  it('ORD-07 e OBS-09 redrive: sai com 0, imprime que 2 mensagens saíram da DLQ e quantas restam (0), e a DLQ fica vazia', async () => {
     const world = await createWorld(suite, { maxReceiveCount: 1 });
     const orders = [
       await submitOrder(suite, world),
@@ -140,7 +140,10 @@ describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
     const finished = await runRunbook(['redrive'], runbookEnv(world));
 
     expect(finished.code, finished.stderr).toBe(0);
+    // A saída diz quantas saíram da DLQ (before - remaining), e não quantas chegaram à fila (OBS-09).
+    expect(finished.stdout).toContain('saíram da DLQ');
     expect(finished.stdout).toMatch(/\b2\b/);
+    expect(finished.stdout).toMatch(/rest\w*\W{0,3}0\b/i);
     expect(await dlqTotal(world)).toBe(0);
   });
 
