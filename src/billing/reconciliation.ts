@@ -16,6 +16,7 @@ import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
+import { queueGaugeLifecycle } from './queue-gauge.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
@@ -268,7 +269,6 @@ export function createReconciler({
     ...DEFAULT_RECONCILER_CONFIG,
     ...config,
   };
-  let wake: (() => void) | undefined;
   const ctx: Context = {
     db: createDb(pool),
     dlq,
@@ -282,18 +282,15 @@ export function createReconciler({
   };
 
   const runner = createLoopRunner({
+    clock,
     async run(isRunning) {
       while (isRunning()) {
         await round(ctx);
         if (!isRunning()) break;
-        // O stop() acorda a espera: sem isso, o encerramento aguardaria o intervalo inteiro (5 min).
-        await Promise.race([
-          clock.sleep(settings.intervalMs),
-          new Promise<void>((resolve) => (wake = resolve)),
-        ]);
+        await runner.pause(settings.intervalMs);
       }
     },
-    onStopping: () => wake?.(),
+    ...queueGaugeLifecycle(telemetry, dlq, 'dlq', logger),
   });
 
   return {
