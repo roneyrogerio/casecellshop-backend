@@ -67,13 +67,15 @@ export const CHECKOUT_LOG_EVENTS = {
   },
   'casecellshop.checkout.rejected': {
     levels: ['warn'],
-    description: 'Checkout recusado; `reason` é o tipo do problem.',
-    fields: ['reason'],
+    description:
+      'Checkout recusado; `reason` é o tipo do problem. Na falta de estoque, `sku` é o SKU em que a reserva parou.',
+    fields: ['reason', 'sku'],
   },
   'casecellshop.checkout.price_changed': {
     levels: ['warn'],
-    description: 'Checkout recusado porque o preço informado mudou.',
-    fields: ['reason', 'items'],
+    description:
+      'Checkout recusado porque o preço informado mudou; `skus` lista os SKUs cujo preço mudou.',
+    fields: ['reason', 'items', 'skus'],
   },
   'casecellshop.checkout.gauge.read_failed': {
     levels: ['error'],

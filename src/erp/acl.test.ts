@@ -116,26 +116,36 @@ describe('classificação da criação', () => {
       body: { code: 'out_of_stock', sku: 'ACL-CAPA-AZUL' },
       reason: 'out_of_stock',
       label: 'out_of_stock (H2)',
+      sku: 'ACL-CAPA-AZUL',
     },
     {
       body: { code: 'unknown_product', sku: 'ACL-CAPA-AZUL' },
       reason: 'rejected',
       label: 'unknown_product',
+      sku: 'ACL-CAPA-AZUL',
     },
-    { body: { code: 'rejected' }, reason: 'rejected', label: 'rejected' },
+    {
+      body: { code: 'rejected' },
+      reason: 'rejected',
+      label: 'rejected',
+      sku: undefined,
+    },
     {
       body: { code: 'codigo_novo_do_erp' },
       reason: 'rejected',
       label: 'outro código',
+      sku: undefined,
     },
   ])(
     'ORD-21 criação com 422 e $label é permanente com o motivo $reason',
-    async ({ body, reason }) => {
+    async ({ body, reason, sku }) => {
       const { client } = clientOver(responding(422, body));
 
+      // O sku do corpo, quando vem, acompanha a recusa só para o log (OBS-01).
       expect(await client.createOrder(orderRequest)).toEqual({
         kind: 'permanent',
         reason,
+        ...(sku === undefined ? {} : { sku }),
       });
     },
   );

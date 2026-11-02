@@ -406,6 +406,8 @@ describe('OBS-01 logs do worker', () => {
         lines.filter((line) => line['event'] === (absent ?? 'nenhum.evento')),
       ).toEqual([]);
       for (const line of lines) expectAttemptLine(line, order, recorded, 1);
+      // Cada chave sai uma vez só no texto cru, sem o JSON.parse esconder a repetição do filho da tentativa.
+      expect(logs.repeatedKeys()).toEqual([]);
     },
   );
 
@@ -423,6 +425,7 @@ describe('OBS-01 logs do worker', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]?.['level']).toBe('info');
     expectAttemptLine(lines[0] ?? {}, order, recorded, 1);
+    expect(logs.repeatedKeys()).toEqual([]);
     expect(world.transport.sends).toHaveLength(0);
     expect(
       world.queue.deletesOf(order.orderId).map((call) => call.result),

@@ -25,6 +25,7 @@ import {
   type MetricName,
   type MetricType,
 } from '../../helpers/metrics.ts';
+import { expectNoSkuInMetricsText } from '../../helpers/sku-logs.ts';
 import {
   acceptOrder,
   buildWorker,
@@ -514,6 +515,21 @@ describe('OBS-07 nomes que o /metrics exporta, traduzidos pelo exportador do Pro
       );
       expect(outside, `fora do catálogo no /metrics de ${process}`).toEqual([]);
     }
+  });
+
+  it('OBS-01 o /metrics da API e o do worker, depois do checkout, do faturamento, da recusa do ERP e da sincronização, não têm rótulo sku nem skus nem valor de SKU', async () => {
+    const stored = await suite.pool.query<{ sku: string }>(
+      'select sku from products',
+    );
+    const skus = [
+      ...stored.rows.map((row) => row.sku),
+      'METRICS-NAMES-1',
+      'METRICS-NAMES-GONE',
+    ];
+    expect(skus.length, 'o fluxo criou produtos').toBeGreaterThan(2);
+
+    for (const text of [apiText, workerText])
+      expectNoSkuInMetricsText(text, skus);
   });
 
   it('OBS-07 só o contador termina em _total, uma vez só, e nenhum nome exportado traz a unidade', () => {

@@ -174,11 +174,13 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.catalog.origin.load_failed` | `warn` | `err` | A carga do cache a partir do banco falhou; a vitrine serve a entrada antiga até o teto ou responde 503. |
 | `casecellshop.catalog.sync.round.completed` | `info` | `skuCount`, `missingCount`, `duration_ms` | Fim de uma rodada completa da sincronização, com os SKUs lidos, os ausentes zerados e a duração. |
 | `casecellshop.catalog.sync.round.failed` | `warn` | `cause`, `page`, `err` | Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado. |
+| `casecellshop.catalog.sync.sku.corrected` | `info` | `sku`, `fields` | A sincronização corrigiu um SKU que divergia do ERP; `fields` lista os campos corrigidos (`price`, `name`, `on_hand`). |
+| `casecellshop.catalog.sync.sku.zeroed` | `warn` | `sku` | Um SKU com estoque ficou fora do ERP numa rodada completa e foi zerado. |
 | `casecellshop.checkout.accepted` | `info` | `orderId` | Checkout aceito, com o pedido criado. |
 | `casecellshop.checkout.db.unavailable` | `warn` | `err`, `step` | O banco não respondeu no checkout; a resposta é 503. |
 | `casecellshop.checkout.gauge.read_failed` | `error` | `gauge`, `err` | A leitura dos gauges do estoque falhou no scrape; os gauges seguem com o último valor lido. |
-| `casecellshop.checkout.price_changed` | `warn` | `reason`, `items` | Checkout recusado porque o preço informado mudou. |
-| `casecellshop.checkout.rejected` | `warn` | `reason` | Checkout recusado; `reason` é o tipo do problem. |
+| `casecellshop.checkout.price_changed` | `warn` | `reason`, `items`, `skus` | Checkout recusado porque o preço informado mudou; `skus` lista os SKUs cujo preço mudou. |
+| `casecellshop.checkout.rejected` | `warn` | `reason`, `sku` | Checkout recusado; `reason` é o tipo do problem. Na falta de estoque, `sku` é o SKU em que a reserva parou. |
 | `casecellshop.db.pool.failed` | `error` | `err` | Erro numa conexão ociosa do pool. |
 | `casecellshop.db.transaction.aborted` | `error` | `err` | A transação foi abortada antes do COMMIT. |
 | `casecellshop.erp.config.rejected` | `warn` | `status` | O ERP respondeu com erro de configuração (credencial ou rota); a mensagem volta para a fila. |
@@ -186,7 +188,7 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.http.request.completed` | `info`, `error` | `route`, `method`, `status`, `duration_ms`, `orderId`, `cache` | Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta. O `cache` (`hit`, `miss` ou `stale`) vem só no 200 do GET /products. |
 | `casecellshop.http.request.failed` | `error` | `err` | Erro sem tratamento numa rota; a resposta é o 500 genérico. |
 | `casecellshop.migration.completed` | `info` | — | As migrações dos dois schemas terminaram. |
-| `casecellshop.order.failed` | `warn` | `reason` | O pedido terminou sem faturamento; `reason` diz por quê. |
+| `casecellshop.order.failed` | `warn` | `reason`, `skus`, `sku` | O pedido terminou sem faturamento; `reason` diz por quê. Na recusa do ERP, `skus` lista os SKUs do pedido e `sku` é o que o ERP apontou, quando é um deles. |
 | `casecellshop.order.invoiced` | `info` | — | O ERP faturou o pedido. |
 | `casecellshop.order.stuck_check.failed` | `error` | `err` | A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo. |
 | `casecellshop.orders.db.unavailable` | `warn` | `err` | O banco não respondeu na leitura do status do pedido. |
