@@ -95,8 +95,9 @@ function escapeSamples(): Sample[] {
     '../../test/helpers/./x.ts',
     '../../src/db/x.ts',
     backslash,
-    // Uma amostra por padrão que nenhuma das de cima barra sozinha: `//` (o `file:///` não tem `..`), o `..` solto
-    // (o segundo padrão) e `../../test/helpers/` com a barra final (o penúltimo da lista, o de prefixo de test/helpers).
+    // Uma amostra por padrão que nenhuma das de cima barra sozinha, citando cada padrão pelo que ele barra e não pela
+    // posição na lista (que já mudou): o `//` (o `file:///` não tem `..`), o `..` sozinho ou `../..` (sem nada depois)
+    // e o prefixo de `test/helpers/` sem arquivo (`../../test/helpers/`, com a barra final).
     'file:///src/db/x.ts',
     '..',
     '../../test/helpers/',
