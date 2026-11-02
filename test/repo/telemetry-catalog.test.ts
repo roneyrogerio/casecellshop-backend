@@ -180,6 +180,27 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
     expect(age?.buckets).toBeUndefined();
     expect(Object.keys(age?.attributes ?? {})).toEqual([]);
   });
+
+  it('CAT-15 as falhas de leitura dos gauges do catálogo são um counter com o atributo gauge.name, e o evento gauge.read_failed é de erro', () => {
+    const failures = metricNamed('casecellshop.catalog.gauge.read_failures');
+    const gaugeName = Object.entries(failures?.attributes ?? {}).filter(
+      ([key]) => key === 'casecellshop.gauge.name',
+    );
+    expect([failures?.instrument, gaugeName.length]).toEqual(['counter', 1]);
+    expect(gaugeName[0]?.[1].values).toMatchObject({
+      values: ['catalog_sync_age'],
+    });
+    const failed = Object.entries<{ readonly levels: readonly string[] }>(
+      LOG_EVENTS,
+    ).find(([name]) => name === 'casecellshop.catalog.gauge.read_failed')?.[1];
+    expect(failed?.levels).toEqual(['error']);
+  });
+
+  it('CAT-15 o evento state.load_failed não está no catálogo: o worker não lê o banco na subida', () => {
+    expect(Object.keys(LOG_EVENTS)).not.toContain(
+      'casecellshop.catalog.sync.state.load_failed',
+    );
+  });
 });
 
 describe('OBS-07 o agregado junta a telemetria das pastas sem repetir nome', () => {

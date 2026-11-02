@@ -3,11 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createErpClient } from '../../../src/erp/acl.ts';
 import { counterValue, seedCatalog, skuRange } from '../../helpers/catalog.ts';
 import { ERP_TIMEOUT_MS } from '../../helpers/erp.ts';
-import {
-  familyOf,
-  metricValue,
-  type Exposition,
-} from '../../helpers/metrics.ts';
+import { familyOf, type Exposition } from '../../helpers/metrics.ts';
 import {
   expectOneDatabaseFailureLogged,
   failErpPageAfter,
@@ -21,8 +17,9 @@ import {
 } from '../../helpers/sync.ts';
 import { interceptPool } from '../../helpers/worker.ts';
 
-// OBS-02 e OBS-07 da sincronização: os contadores de correção e de SKU ausente, o gauge da idade, o span da rodada
-// e os dois eventos de log, todos lidos de onde o operador os vê (o /metrics, os spans e as linhas de log).
+// OBS-02 e OBS-07 da sincronização: os contadores de correção e de SKU ausente, a ausência do gauge da idade no
+// worker, o span da rodada e os dois eventos de log, todos lidos de onde o operador os vê (o /metrics, os spans e
+// as linhas de log).
 
 const db = useSyncDatabase();
 
@@ -146,40 +143,38 @@ function samplesOfAge(families: Exposition) {
   return familyOf(families, AGE)?.samples ?? [];
 }
 
-describe('OBS-07 o gauge da idade da última rodada completa', () => {
-  it('OBS-07 não tem ponto antes da primeira rodada completa, nem depois de uma rodada incompleta', async () => {
+// CAT-15 (AD-008): a idade da sincronização sai pela API, lida do banco (test/integration/catalog/sync-age-gauge.test.ts);
+// o worker não a expõe, nem com rodada completa gravada, nem com o banco guardando uma marca.
+describe('OBS-07 o worker não expõe o gauge da idade da sincronização', () => {
+  it('OBS-07 o /metrics do worker não tem ponto da idade antes da primeira rodada, depois de uma rodada incompleta nem depois de uma completa', async () => {
     await putErpProducts(db.erpPool, [{ sku: 'G-001' }]);
     const rig = db.rig();
 
     expect(samplesOfAge(await rig.scrape())).toEqual([]);
 
     failErpPageAfter(rig.world);
-    const result = await rig.sync.runRound();
+    const incomplete = await rig.sync.runRound();
+    expect(incomplete.complete).toBe(false);
+    expect(samplesOfAge(await rig.scrape())).toEqual([]);
 
-    expect(result.complete).toBe(false);
+    const complete = await rig.sync.runRound();
+    expect(complete.complete).toBe(true);
+    expect(await readLastCompleted(db.pool)).not.toBeNull();
     expect(samplesOfAge(await rig.scrape())).toEqual([]);
   });
 
-  it('OBS-07 depois de uma rodada completa a idade é 0 e cresce com o relógio; uma rodada incompleta não a zera, e a próxima completa sim', async () => {
+  it('OBS-07 o relógio do worker avançar não faz a idade aparecer no /metrics dele', async () => {
     await putErpProducts(db.erpPool, [{ sku: 'G-002' }]);
     const rig = db.rig();
     await rig.sync.runRound();
 
-    expect(metricValue(await rig.scrape(), AGE)).toBeCloseTo(0, 3);
-
     rig.clock.advance(42_000);
-    expect(metricValue(await rig.scrape(), AGE)).toBeCloseTo(42, 3);
 
-    rig.clock.advance(58_000);
-    failErpPageAfter(rig.world);
-    expect((await rig.sync.runRound()).complete).toBe(false);
-    expect(metricValue(await rig.scrape(), AGE)).toBeCloseTo(100, 3);
-
-    expect((await rig.sync.runRound()).complete).toBe(true);
-    expect(metricValue(await rig.scrape(), AGE)).toBeCloseTo(0, 3);
+    expect(await readLastCompleted(db.pool)).not.toBeNull();
+    expect(samplesOfAge(await rig.scrape())).toEqual([]);
   });
 
-  it('OBS-07 na subida lê o last_completed_at do banco: com o ERP fora, a idade parte dos 90 s gravados e cresce com o relógio', async () => {
+  it('OBS-07 com um last_completed_at de 90 s gravado e o ERP fora, o worker sobe sem expor a idade', async () => {
     await db.pool.query(
       "update sync_state set last_completed_at = now() - interval '90 seconds'",
     );
@@ -190,14 +185,7 @@ describe('OBS-07 o gauge da idade da última rodada completa', () => {
     await rig.untilRounds(1);
 
     expect(rig.logs.eventsOf(ROUND_COMPLETED)).toEqual([]);
-    const age = metricValue(await rig.scrape(), AGE);
-    expect(age).toBeGreaterThanOrEqual(90);
-    expect(age).toBeLessThan(95);
-
-    rig.clock.advance(30_000);
-    const later = metricValue(await rig.scrape(), AGE);
-    expect(later).toBeGreaterThanOrEqual(120);
-    expect(later).toBeLessThan(125);
+    expect(samplesOfAge(await rig.scrape())).toEqual([]);
   });
 });
 

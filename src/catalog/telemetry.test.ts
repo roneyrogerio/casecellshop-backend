@@ -5,7 +5,11 @@ import {
   scrapeMetrics,
 } from '../../test/helpers/metrics.ts';
 import { createTelemetry } from '../shared/telemetry.ts';
-import { catalogMetrics } from './telemetry.ts';
+import {
+  CATALOG_LOG_EVENTS,
+  CATALOG_METRICS,
+  catalogMetrics,
+} from './telemetry.ts';
 
 // OBS-07 (AD-029): o gauge é lido na coleta, por um callback registrado com `observe(name, callback)` (o
 // TypedMetrics de src/shared/telemetry-instruments.ts): o callback recebe a função que grava o valor, e o `observe`
@@ -106,5 +110,70 @@ describe('OBS-07 observe: o gauge lido na coleta', () => {
       ),
     ).toBe(1);
     await telemetry.shutdown();
+  });
+});
+
+// A forma que o teste lê, sem depender de como a declaração tipa o índice (o nome novo ainda não existe no tipo).
+interface MetricLike {
+  readonly instrument: string;
+  readonly unit: string;
+  readonly attributes: Readonly<
+    Record<
+      string,
+      {
+        readonly requirement: string;
+        readonly values: { readonly kind: string; readonly values?: unknown };
+      }
+    >
+  >;
+}
+
+interface EventLike {
+  readonly levels: readonly string[];
+  readonly fields: readonly string[];
+}
+
+describe('CAT-15 a declaração da telemetria da idade da sincronização', () => {
+  it('CAT-15 o counter de falhas de leitura dos gauges do catálogo tem o atributo gauge.name com o valor catalog_sync_age', () => {
+    const failures = Object.entries<MetricLike>(CATALOG_METRICS).find(
+      ([name]) => name === 'casecellshop.catalog.gauge.read_failures',
+    )?.[1];
+
+    expect(failures?.instrument).toBe('counter');
+    expect(failures?.unit).toBe('{read}');
+    expect(Object.keys(failures?.attributes ?? {})).toEqual([
+      'casecellshop.gauge.name',
+    ]);
+    const attribute = failures?.attributes['casecellshop.gauge.name'];
+    expect(attribute?.requirement).toBe('required');
+    expect(attribute?.values).toEqual({
+      kind: 'enum',
+      values: ['catalog_sync_age'],
+    });
+  });
+
+  it('CAT-15 o evento gauge.read_failed é de nível error e traz o gauge e o err', () => {
+    const failed = Object.entries<EventLike>(CATALOG_LOG_EVENTS).find(
+      ([name]) => name === 'casecellshop.catalog.gauge.read_failed',
+    )?.[1];
+
+    expect(failed?.levels).toEqual(['error']);
+    expect(failed?.fields).toEqual(['gauge', 'err']);
+  });
+
+  it('CAT-15 o evento state.load_failed saiu da declaração: o worker não lê o banco na subida', () => {
+    expect(Object.keys(CATALOG_LOG_EVENTS)).not.toContain(
+      'casecellshop.catalog.sync.state.load_failed',
+    );
+  });
+
+  it('CAT-15 o gauge da idade continua declarado, sem atributos', () => {
+    const age = Object.entries<MetricLike>(CATALOG_METRICS).find(
+      ([name]) => name === 'casecellshop.catalog.sync.age',
+    )?.[1];
+
+    expect(age?.instrument).toBe('gauge');
+    expect(age?.unit).toBe('s');
+    expect(Object.keys(age?.attributes ?? {})).toEqual([]);
   });
 });

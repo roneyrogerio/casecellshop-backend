@@ -9,9 +9,12 @@ import { DEFAULT_CATALOG_SYNC_CONFIG } from '../../../src/catalog/config.ts';
 import { createCatalogSync } from '../../../src/catalog/sync.ts';
 import { registerInventoryGauges } from '../../../src/checkout/inventory-gauges.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
-import { fromPino } from '../../../src/shared/logging.ts';
+import { fromPino, type AppLogger } from '../../../src/shared/logging.ts';
 import { createSemaphore } from '../../../src/shared/semaphore.ts';
-import { createTelemetry } from '../../../src/shared/telemetry.ts';
+import {
+  createTelemetry,
+  type Telemetry,
+} from '../../../src/shared/telemetry.ts';
 import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
@@ -54,6 +57,10 @@ interface ExportedMetric {
   // O processo cujo /metrics expõe a métrica: a API ou o worker.
   process: 'api' | 'worker';
 }
+
+// O counter de falhas de leitura dos gauges do catálogo (CAT-15) ainda não está declarado em src/catalog/telemetry.ts;
+// enquanto não estiver, este nome mantém a tabela abaixo tipada. Depois de declarado, a união o absorve.
+type PendingMetricName = 'casecellshop.catalog.gauge.read_failures';
 
 const EXPECTED = {
   'http.server.request.duration': {
@@ -101,14 +108,24 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'api',
   },
-  // As três da sincronização são do worker: o `exercise` roda uma rodada com uma correção e um SKU ausente.
+  // A idade da sincronização é da API (CAT-15, AD-008): lida do banco a cada coleta, para seguir crescendo com o
+  // worker parado. As duas outras da sincronização são do worker: o `exercise` roda uma rodada com uma correção e
+  // um SKU ausente.
   'casecellshop.catalog.sync.age': {
     exported: 'casecellshop_catalog_sync_age',
     type: 'gauge',
     unit: 's',
     labels: [],
     optionalLabels: [],
-    process: 'worker',
+    process: 'api',
+  },
+  'casecellshop.catalog.gauge.read_failures': {
+    exported: 'casecellshop_catalog_gauge_read_failures_total',
+    type: 'counter',
+    unit: '{read}',
+    labels: ['casecellshop_gauge_name'],
+    optionalLabels: [],
+    process: 'api',
   },
   'casecellshop.catalog.sync.corrections': {
     exported: 'casecellshop_catalog_sync_corrections_total',
@@ -246,7 +263,7 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'api',
   },
-} as const satisfies Record<MetricName, ExportedMetric>;
+} as const satisfies Record<MetricName | PendingMetricName, ExportedMetric>;
 
 const ENTRIES = Object.entries(EXPECTED) as [MetricName, ExportedMetric][];
 // O exportador acrescenta a si mesmo a série `target_info` (os atributos do recurso): não é do catálogo.
@@ -261,6 +278,22 @@ let worker: Exposition;
 const workerTelemetry = createTelemetry({
   spanExporter: new InMemorySpanExporter(),
 });
+
+// A função de registro do gauge da idade da sincronização ainda não existe; a importação por URL mantém o typecheck
+// e faz o teste falhar na execução até o implementer criar `src/catalog/sync-age.ts`.
+type RegisterSyncAgeGauge = (dependencies: {
+  pool: WorkerSuite['pool'];
+  telemetry: Telemetry;
+  logger: AppLogger;
+}) => () => void;
+
+async function loadRegisterSyncAgeGauge(): Promise<RegisterSyncAgeGauge> {
+  const url = new URL('../../../src/catalog/sync-age.ts', import.meta.url).href;
+  const loaded = (await import(/* @vite-ignore */ url)) as {
+    registerSyncAgeGauge: RegisterSyncAgeGauge;
+  };
+  return loaded.registerSyncAgeGauge;
+}
 
 // Exercita o que grava um ponto em cada métrica do catálogo, pelos mesmos caminhos de produção:
 // a API (checkout e duração HTTP) e o worker (relay, tentativa, ERP, aceite ao faturamento, rejeição por
@@ -362,11 +395,19 @@ async function exerciseApi(running: WorkerSuite): Promise<() => void> {
   });
   expect(await monitor.checkOnce(), 'o pedido atrasado foi marcado').toBe(1);
   const logger = fromPino(pino({ level: 'silent' }));
+  // A idade da sincronização só tem ponto com uma rodada completa gravada: a do `exercise`, no processo do worker.
+  const completed = await pool.query<{ done: boolean }>(
+    'select last_completed_at is not null as done from sync_state',
+  );
+  expect(completed.rows[0]?.done, 'há uma rodada completa gravada').toBe(true);
+  const registerSyncAgeGauge = await loadRegisterSyncAgeGauge();
   const gauges = {
     'idade da outbox': () =>
       registerOutboxAgeGauge({ pool, telemetry: checkout.telemetry, logger }),
     estoque: () =>
       registerInventoryGauges({ pool, telemetry: checkout.telemetry, logger }),
+    'idade da sincronização': () =>
+      registerSyncAgeGauge({ pool, telemetry: checkout.telemetry, logger }),
   };
 
   // Uma leitura que falha depois de uma boa, uma por gauge, para o counter de falhas de cada pasta ter o ponto. A
@@ -383,8 +424,8 @@ async function exerciseApi(running: WorkerSuite): Promise<() => void> {
   }
   expect(
     connect.mock.settledResults.filter((result) => result.type === 'rejected'),
-    'as duas falhas injetadas dispararam',
-  ).toHaveLength(2);
+    'as três falhas injetadas dispararam',
+  ).toHaveLength(3);
   connect.mockRestore();
 
   const removers = Object.values(gauges).map((register) => register());

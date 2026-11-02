@@ -269,6 +269,7 @@ export function roundsFinished(logs: CapturedLogs): number {
   );
 }
 
+// O evento da leitura do estado na subida, que saiu do worker (CAT-15): nenhum teste o espera mais, só a ausência.
 export const STATE_LOAD_FAILED = 'casecellshop.catalog.sync.state.load_failed';
 
 // O evento de falha saiu uma vez, em warn, com o `err` e sem a `cause` do ERP.
@@ -283,13 +284,6 @@ function expectOneWarnWithErr(logs: CapturedLogs, event: string): void {
 // Uma falha do banco numa rodada foi registrada, uma vez, no evento de falha de rodada.
 export function expectOneDatabaseFailureLogged(logs: CapturedLogs): void {
   expectOneWarnWithErr(logs, ROUND_FAILED);
-}
-
-// A falha ao ler o last_completed_at na subida (CAT-15): o evento próprio da leitura do estado; a falha de rodada
-// (`round.failed`) é de outra coisa e não pode carregá-la.
-export function expectOneStateLoadFailureLogged(logs: CapturedLogs): void {
-  expectOneWarnWithErr(logs, STATE_LOAD_FAILED);
-  expect(logs.eventsOf(ROUND_FAILED).length).toBe(0);
 }
 
 export interface SyncDatabase {
