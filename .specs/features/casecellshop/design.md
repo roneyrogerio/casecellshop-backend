@@ -270,7 +270,7 @@ Ficam no banco, sem par no SQS (AD-021): o início da última chamada (para o at
 - **Métricas,** instrumentadas com a API de métricas do OpenTelemetry e expostas em `/metrics` (formato Prometheus) na API e no worker. Counter para eventos, UpDownCounter ou gauge para estado, histogram para durações e idades, com fronteiras em segundos que incluem os limiares dos SLOs. Atributos de uma lista fechada (rota como template, método, código de status, resultado), nunca `orderId` nem `sku`; os nomes seguem a AD-029:
   - **HTTP:** duração por rota (histogram), base dos SLOs de latência;
   - **cache:** `hit`, `miss`, `stale` e consultas à origem (counters); cargas em andamento (gauge); latência da vitrine por resultado, idade da entrada servida e idade do dado desde a leitura do ERP (histograms);
-  - **checkout:** desfecho por resultado (counter, desde o M2), com o atributo `casecellshop.checkout.outcome` em `accepted`, `out_of_stock`, `price_changed`, `replay`, `invalid` ou `unavailable`;
+  - **checkout:** checkouts por desfecho (`casecellshop.checkout.outcome`, counter, desde o M2);
   - **fila:** pedidos sem desfecho em 60 s (counter) e aceite ao faturamento (histogram); idade da mensagem mais antiga, pendentes e DLQ (gauges); conclusões sem linha afetada (counter);
   - **estoque:** unidades reservadas e SKUs com `reserved > on_hand` (gauges);
   - **ERP:** duração por operação e desfecho (histogram, cujo `_count` conta as chamadas e os erros de configuração), chamadas em andamento (UpDownCounter) e rejeições por falta de estoque (counter);
