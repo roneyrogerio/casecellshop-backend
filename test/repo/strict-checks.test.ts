@@ -97,28 +97,50 @@ const TS_SAMPLES = [
   ...GENERATED_TYPE_FILES,
 ];
 
-// Caminhos .ts que não citam pasta nenhuma do projeto: raiz, uma pasta e duas pastas. Um glob negado com pasta
-// (`!src/*.[jt]s`) casa qualquer .ts fora dela, e é o `overrideFilesMatch`, que segue o `GlobSet` do oxlint, quem diz
-// isso por inteiro (o `!` nega pasta e nome juntos).
+// Caminhos .ts que não citam pasta nenhuma do projeto: raiz, uma pasta e duas pastas. Servem ao glob positivo, que o
+// `overrideFilesMatch` (o `GlobSet` do oxlint) confere por inteiro, pasta e nome.
 const OUTSIDE_TS_PATHS = [
   'arquivo.ts',
   'zz-fora/arquivo.ts',
   'zz-fora/zz/arquivo.ts',
 ];
 
-// O glob alcança .ts por um de dois critérios, e basta um:
-// 1. o `overrideFilesMatch` casa algum caminho .ts de `OUTSIDE_TS_PATHS`. Vale para qualquer glob, com `!` ou não, e
-//    é o que decide o glob negado: o `!` do início vale para o glob inteiro, pasta e nome, então `!src/*.[jt]s` não é
-//    "o complemento do nome `*.[jt]s`" e sim "tudo que não é src/<nome>.js|ts", que inclui `zz-fora/arquivo.ts`;
+// As formas de glob que casam todo .ts, de qualquer pasta e de qualquer nome (conferidas com o `overrideFilesMatch`
+// sobre nomes de várias iniciais, pastas fundas e pastas com ponto: ver o teste da lista). Sem `/`, o `GlobSet`
+// põe `**/` na frente, então `*.ts` e `**/*.ts` têm o mesmo efeito. Lista fechada: uma forma que não cobre todo .ts
+// não entra, e o glob negado com ela passa a valer como alcançando .ts.
+const COVERS_ALL_TS = [
+  '**/*.ts',
+  '**/*.[jt]s',
+  '**/*.[tj]s',
+  '**/*.?s',
+  '**/*.{js,ts}',
+  '**/*.{ts,js}',
+  '**/*',
+  '**',
+  '*.ts',
+  '*.?s',
+  '*.[jt]s',
+  '*',
+];
+
+// O glob alcança .ts por uma de duas regras, conforme o número de `!` no início.
+// Número ímpar de `!` (o glob inteiro é negado, pasta e nome juntos): o glob alcança .ts, a não ser que o corpo
+// positivo (sem os `!`) seja uma forma de `COVERS_ALL_TS`, e então o `!` exclui todo .ts. Não depende de amostra: um
+// `!**/a*.[jt]s` exclui os nomes "a…" e ainda alcança `src/http/server.ts`, que uma amostra de nome fixo não veria
+// (A4 da Revisão 2 do #35). `!src/*.[jt]s` também alcança, porque é "tudo que não é src/<nome>.js|ts".
+// Número par (zero inclusive: o glob positivo; `!!x` volta ao positivo), basta um dos critérios:
+// 1. o `overrideFilesMatch` casa algum caminho .ts de `OUTSIDE_TS_PATHS`;
 // 2. o último trecho casa um nome terminado em `.ts` (`*.ts`, `*`, `**`, `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou o glob
 //    termina em `.ts` ou num grupo `{…ts…}`. Este critério cobre o glob positivo com pasta, que o primeiro não vê:
 //    uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência. O último trecho é conferido
-//    como nome de arquivo, com o `globToRegExp`; o `!` do início fica junto dele, o que só vale quando o glob não tem
-//    pasta (com pasta, o critério 1 é quem decide, como acima).
+//    como nome de arquivo, com o `globToRegExp`.
 function reachesTs(glob: string): boolean {
+  const bangs = /^!*/.exec(glob)?.[0] ?? '';
+  if (bangs.length % 2 === 1)
+    return !COVERS_ALL_TS.includes(glob.slice(bangs.length));
   if (OUTSIDE_TS_PATHS.some((sample) => overrideFilesMatch([glob], sample)))
     return true;
-  const bangs = /^!*/.exec(glob)?.[0] ?? '';
   const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
   return (
     /(?:\.ts|\*)$/.test(glob) ||
@@ -274,6 +296,15 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
       ['x.js', '!lib/*.[jt]s'],
     ],
     ['dois negados, que voltam ao positivo', ['!!src/*.[jt]s']],
+    // A4 da Revisão 2 do #35: o `!` exclui um nome que nenhuma amostra tem (`arquivo.ts`), mas ainda alcança
+    // `src/http/server.ts`. A decisão não pode depender de a amostra casar com o glob negado.
+    ['a classe [jt] negada, com nome que exclui só os "a…"', ['!**/a*.[jt]s']],
+    [
+      'o coringa ?s negado, com nome que exclui só "a" a "m"',
+      ['!**/[a-m]*.?s'],
+    ],
+    ['um nome inteiro negado', ['!**/server.ts']],
+    ['três negados, que valem um', ['!!!**/a*.[jt]s']],
   ])(
     'AI-20 controle: um override para %s que desliga return-await reprova',
     (_label, files) => {
@@ -316,6 +347,73 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
           { files, rules: { 'typescript/return-await': 'off' } },
         ]),
       ).toEqual([]);
+    },
+  );
+
+  // A lista fechada de formas que cobrem todo .ts: cada uma casa, pelo `overrideFilesMatch`, .ts de várias iniciais,
+  // pastas fundas e pasta com ponto. Uma forma que falhar aqui sai da lista.
+  const TS_VARIED_PATHS = [
+    'a.ts',
+    'zebra.ts',
+    'Z.ts',
+    '1.ts',
+    '_x.ts',
+    'a-b.c.ts',
+    '.hidden.ts',
+    'x.test.ts',
+    'x.d.ts',
+    'src/app.ts',
+    'src/http/server.ts',
+    'a/b/c/d/e/f.ts',
+    '.claude/hooks/x.ts',
+    'a.b/c.d/e.ts',
+    '.git/x.ts',
+    'node_modules/p/i.ts',
+    'migrations/store/20260101000000_x.ts',
+  ];
+
+  it.each(COVERS_ALL_TS)(
+    'AI-20 controle: a forma %s casa todo .ts, então a lista fechada pode tê-la',
+    (form) => {
+      expect(
+        TS_VARIED_PATHS.filter((path) => !overrideFilesMatch([form], path)),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(COVERS_ALL_TS)(
+    'AI-20 controle: um override de !%s, que exclui todo .ts, pode desligar return-await; sem o ! reprova',
+    (form) => {
+      const off = { 'typescript/return-await': 'off' };
+
+      expect(
+        styleOverrideViolations([{ files: [`!${form}`], rules: off }]),
+      ).toEqual([]);
+      expect(
+        styleOverrideViolations([{ files: [form], rules: off }]),
+      ).toHaveLength(1);
+      // Número par de `!` volta ao positivo.
+      expect(
+        styleOverrideViolations([{ files: [`!!${form}`], rules: off }]),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['só os .js negados', ['!**/*.js']],
+    ['só os .md negados', ['!**/*.md']],
+    ['as chaves {js,mjs} negadas', ['!**/*.{js,mjs}']],
+    ['a classe [jm]s negada', ['!**/*.[jm]s']],
+    ['uma pasta negada com **', ['!src/**']],
+    ['os .test.ts negados', ['!**/*.test.ts']],
+  ])(
+    'AI-20 controle: um override para %s ainda alcança .ts, então desligar return-await reprova',
+    (_label, files) => {
+      expect(
+        styleOverrideViolations([
+          { files, rules: { 'typescript/return-await': 'off' } },
+        ]),
+      ).toHaveLength(1);
     },
   );
 
