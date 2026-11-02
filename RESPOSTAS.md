@@ -16,11 +16,39 @@ Seção: [Diagnóstico e arquitetura alvo](https://github.com/roneyrogerio/casec
 
 **Impacto** (`DOC-DIA-02`). Para o cliente: páginas lentas, compra confirmada e depois cancelada, pedido em dobro. Para o negócio: conversão menor no pico, estornos e faturas duplicadas, e o risco de a vitrine degradar o faturamento, que divide o mesmo ERP. Para a operação: cada pico vira incidente no ERP, e sem rastreabilidade por pedido cada caso exige procurar nos logs do ERP.
 
-**Caminhos comparados** (`DOC-DIA-03`), em custo, complexidade, latência, consistência e esforço operacional:
+**Caminhos comparados** (`DOC-DIA-03`), em custo, complexidade, latência, consistência e esforço operacional; o escolhido em negrito.
 
-- **vitrine:** cache na frente da API do ERP, banco da loja com sincronização e cache em memória (escolhido), ou captura de mudanças (CDC) do MySQL do ERP. A leitura direta do MySQL do ERP, que o enunciado permite, foi descartada: as tabelas internas não são contrato, e a carga continuaria no banco que fatura; fica só como plano B da consulta por referência;
-- **overselling:** `UPDATE` condicional atômico no banco da loja (escolhido), `SELECT … FOR UPDATE`, ou lock distribuído no Redis;
-- **checkout:** síncrono com timeout maior e retry, `202` com outbox no banco da loja e worker (escolhido), ou `202` com publicação direta num broker.
+Vitrine:
+
+| | Cache na frente da API do ERP | **Banco da loja, sincronização e cache em memória** | Captura de mudanças (CDC) do MySQL do ERP |
+| --- | --- | --- | --- |
+| Custo | Baixo | Médio: um banco e um worker | Alto: conector, broker e acesso de replicação |
+| Complexidade | Baixa | Média | Alta |
+| Latência | Boa no acerto; a falta chama o ERP | Boa sempre: a origem é um banco local | Boa sempre |
+| Consistência | Expira e volta ao ERP; um stampede na expiração derruba o ERP | Defasagem limitada: até 65,5 s mais uma rodada, com o ERP respondendo | Segundos |
+| Esforço operacional | Baixo | Médio: a rodada de sincronização e o alerta de idade | Alto: binlog, replicação e um broker para operar |
+
+A leitura direta do MySQL do ERP, que o enunciado permite, foi descartada: as tabelas internas não são contrato, e a carga continuaria no banco que fatura; fica só como plano B da consulta por referência.
+
+Overselling:
+
+| | **`UPDATE` condicional atômico no banco da loja** | `SELECT … FOR UPDATE` e depois `UPDATE` | Contador ou lock distribuído no Redis |
+| --- | --- | --- | --- |
+| Custo | Baixo | Baixo | Médio: mais um serviço |
+| Complexidade | Baixa: uma instrução por SKU | Média: duas idas ao banco e a checagem na aplicação | Alta: o lock precisa de prazo e de *fencing token* |
+| Latência | Uma ida ao banco por SKU | Duas idas ao banco por SKU | Uma ida ao Redis, mais o banco para o pedido |
+| Consistência | Forte, na mesma transação do pedido | Forte | Fora da transação do pedido; um failover pode perder uma escrita confirmada |
+| Esforço operacional | Nenhum além do banco | Nenhum além do banco | Um cluster Redis para operar |
+
+Checkout:
+
+| | Síncrono, com timeout maior e retry | **`202`, outbox no banco da loja e worker** | `202` com publicação direta num broker |
+| --- | --- | --- | --- |
+| Custo | Nenhum | Baixo: o banco já existe | Médio: um broker gerenciado ou operado |
+| Complexidade | Baixa, mas o retry precisa de idempotência no ERP | Média: worker, retry, DLQ e reconciliação | Alta: escrita dupla entre o banco e o broker, ou um relay a mais |
+| Latência para o cliente | A do ERP: segundos | A de uma transação curta, sem o ERP | A de uma transação mais a publicação |
+| Consistência | Duplica pedido sob retry sem idempotência | Pedido e mensagem na mesma transação: sem pedido nem mensagem fantasma | Publicar antes gera mensagem fantasma; depois, pedido fantasma |
+| Esforço operacional | Baixo, mas cada lentidão do ERP vira incidente | Médio: a DLQ e o runbook | Médio a alto: o broker e a DLQ dele |
 
 **Arquitetura de 30 a 90 dias** (`DOC-DIA-04`). Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine, e observabilidade básica (logs, métricas e traces da vitrine, do checkout e do worker). Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
 
