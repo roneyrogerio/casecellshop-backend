@@ -62,6 +62,7 @@ export interface Report {
 
 export interface OxlintRun {
   status: number | null;
+  stdout: string;
   stderr: string;
   reports: Report[];
 }
@@ -85,7 +86,12 @@ export function runOxlint(
       line: Number(match[2]),
     }),
   );
-  return { status: result.status, stderr: result.stderr, reports };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    reports,
+  };
 }
 
 // Sem as categorias, só a regra da vez fica ligada: o que sai da saída é o que a regra e o glob casaram.

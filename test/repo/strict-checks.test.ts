@@ -9,7 +9,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
-import { normalizeOverrideGlob, overrideFilesMatch } from '../helpers/glob.ts';
+import {
+  invalidGlobReason,
+  normalizeOverrideGlob,
+  overrideFilesMatch,
+} from '../helpers/glob.ts';
 import { typecheckSample } from '../helpers/lint-tree.ts';
 import { repoRoot as root } from '../helpers/repo-root.ts';
 import { runCommand } from '../helpers/run-node.ts';
@@ -134,8 +138,8 @@ function overrideReachesTs(files: readonly string[]): boolean {
 }
 
 // A exceção vale só quando cada glob que alcança .ts é, depois da normalização, `src/db/types/*.ts` ou um caminho
-// exato de `GENERATED_TYPE_FILES`. Lista fechada: nenhum outro glob prova que se limita aos gerados, nem o que casa
-// só `store.ts` entre as amostras (`**/s*.ts`).
+// exato de `GENERATED_TYPE_FILES`. Lista fechada: nenhum outro glob prova que se limita aos gerados, nem o `**/s*.ts`,
+// que entre os gerados casa só `store.ts` e também casa `src/http/server.ts`.
 function onlyReachesGeneratedFiles(files: readonly string[]): boolean {
   return files
     .filter(reachesTs)
@@ -160,6 +164,21 @@ interface Override {
 function styleOverrideViolations(overrides: readonly Override[]): string[] {
   const violations: string[] = [];
   for (const override of overrides) {
+    // Um glob inválido faz o oxlint recusar a configuração inteira: não há o que "alcançar", e o reachesTs não decide.
+    const invalid = override.files
+      .map((pattern) => ({
+        pattern,
+        reason: invalidGlobReason(normalizeOverrideGlob(pattern)),
+      }))
+      .filter(({ reason }) => reason !== undefined);
+    if (invalid.length > 0) {
+      violations.push(
+        `${override.files.join(', ')} tem glob inválido (${invalid
+          .map(({ pattern, reason }) => `${pattern}: ${String(reason)}`)
+          .join('; ')}): o oxlint recusa a configuração`,
+      );
+      continue;
+    }
     if (!overrideReachesTs(override.files)) continue;
     const disabled = STYLE_RULES.filter(
       (rule) =>
@@ -241,7 +260,7 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     },
   );
 
-  // Pastas que nenhum caminho de amostra cita: o glob alcança .ts pelo fim dele, e não por casar uma amostra.
+  // Uma pasta qualquer, que a regra não conhece (`src/http`): o glob alcança .ts pelo fim dele, não por citar uma pasta.
   it.each(STYLE_RULES)(
     'AI-20 controle: um override de src/http/**/*.ts que desliga %s reprova',
     (rule) => {
@@ -254,9 +273,9 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
   );
 
   it.each([
-    ['uma pasta fora das amostras, com **', ['src/http/**/*.ts']],
-    ['uma pasta fora das amostras, com *', ['src/http/*.ts']],
-    ['um arquivo fora das amostras', ['src/http/routes.ts']],
+    ['uma pasta qualquer, com **', ['src/http/**/*.ts']],
+    ['uma pasta qualquer, com *', ['src/http/*.ts']],
+    ['um arquivo numa pasta qualquer', ['src/http/routes.ts']],
     ['uma pasta e tudo dentro dela', ['src/http/**']],
     ['uma pasta e os arquivos dela, com *', ['src/http/*']],
     ['o grupo {js,ts}', ['src/http/**/*.{js,ts}']],
@@ -275,8 +294,8 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
       ['x.js', '!lib/*.[jt]s'],
     ],
     ['dois negados, que voltam ao positivo', ['!!src/*.[jt]s']],
-    // A4 da Revisão 2 do #35: o `!` exclui um nome que nenhuma amostra tem (`arquivo.ts`), mas ainda alcança
-    // `src/http/server.ts`. A decisão não pode depender de a amostra casar com o glob negado.
+    // A4 da Revisão 2 do #35: o `!` exclui só alguns nomes (os iniciados por "a", por exemplo), mas ainda alcança
+    // `src/http/server.ts`. A decisão olha o corpo do glob negado, e não um nome de arquivo escolhido.
     ['a classe [jt] negada, com nome que exclui só os "a…"', ['!**/a*.[jt]s']],
     [
       'o coringa ?s negado, com nome que exclui só "a" a "m"',
@@ -295,7 +314,7 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     },
   );
 
-  it('AI-20 controle: consistent-type-definitions desligada numa pasta fora das amostras reprova, porque ela não se limita aos tipos gerados', () => {
+  it('AI-20 controle: consistent-type-definitions desligada numa pasta qualquer (src/http) reprova, porque ela não se limita aos tipos gerados', () => {
     const off = { 'typescript/consistent-type-definitions': 'off' };
 
     expect(
@@ -344,8 +363,8 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     },
   );
 
-  // A6 da Revisão 3 do #35: o glob positivo cujo último trecho tem classe ou `?` e não casa o nome de amostra
-  // `arquivo.ts` ainda casa `src/http/server.ts`. A decisão não pode depender de nome de amostra.
+  // A6 da Revisão 3 do #35: o glob positivo cujo último trecho tem classe ou `?` pode não casar um nome qualquer
+  // (`arquivo.ts`) e ainda casar `src/http/server.ts`. A decisão olha o fim do glob, e não um nome de arquivo.
   it.each([['src/http/server.[jt]s'], ['src/http/server.?s'], ['**/s*.[jt]s']])(
     'AI-20 controle: o glob %s alcança .ts, então desligar qualquer das onze regras reprova (A6)',
     (glob) => {
@@ -361,7 +380,7 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
   );
 
   // A7 da Revisão 3 do #35: estes globs casam, entre os gerados, só `src/db/types/store.ts`, mas também casam
-  // `src/http/server.ts`. A exceção do `consistent-type-definitions` é uma lista fechada, sem amostra.
+  // `src/http/server.ts`. A exceção do `consistent-type-definitions` é uma lista fechada de globs.
   it.each([['**/s*.ts'], ['**/{store,server}.ts'], ['!**/[!s]*.ts']])(
     'AI-20 controle: o glob %s não vale como "só os tipos gerados", então desligar consistent-type-definitions reprova (A7)',
     (glob) => {
@@ -388,6 +407,28 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
         styleOverrideViolations([
           { files: [glob], rules: { 'typescript/return-await': 'off' } },
         ]),
+      ).toHaveLength(1);
+    },
+  );
+
+  // A9 da Revisão 4 do #35: com chave ou classe aberta o oxlint recusa a configuração inteira ("Invalid glob pattern",
+  // medido em `glob.test.ts`). O override não "alcança" nem "deixa de alcançar" .ts: o glob é inválido, e a conferência
+  // diz isso, com as regras desligadas ou não.
+  it.each([
+    ['**/{*.ts,*.js'],
+    ['src/{a.ts,b.js'],
+    ['**/[ab.ts'],
+    ['{src/**/*.ts,x.{js}'],
+  ])(
+    'AI-20 controle: o glob %s é inválido (o oxlint recusa a configuração), então o override reprova como glob inválido (A9)',
+    (glob) => {
+      for (const rules of [{ 'typescript/return-await': 'off' }, {}]) {
+        expect(styleOverrideViolations([{ files: [glob], rules }])).toEqual([
+          expect.stringContaining('glob inválido'),
+        ]);
+      }
+      expect(
+        styleOverrideViolations([{ files: ['**/*.js', glob] }]),
       ).toHaveLength(1);
     },
   );
