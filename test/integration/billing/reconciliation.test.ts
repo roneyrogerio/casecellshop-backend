@@ -763,7 +763,7 @@ async function seedAndFailSecondRead(rig: Rig): Promise<Injection> {
   return injection;
 }
 
-describe('ORD-14 a devolução da visibilidade para no primeiro erro que não seja stale', () => {
+describe('ORD-14 a devolução da visibilidade para no primeiro erro que não seja stale nem MessageNotInflight', () => {
   it('ORD-14 o primeiro changeVisibility da devolução lança: a devolução para ali, nenhuma outra chamada sai, as mensagens seguem em voo e a rodada não rejeita', async () => {
     const rig = await createRig();
     const { world } = rig;
