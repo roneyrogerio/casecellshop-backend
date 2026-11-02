@@ -240,9 +240,9 @@ sum(rate(http_server_request_duration_bucket{http_route="/checkout", http_reques
 sum(rate(http_server_request_duration_count{http_route="/checkout", http_request_method="POST"}[30d]))
 
 # SLI do aceite ao faturamento: os pedidos sem desfecho em 60 s, marcados uma vez pela API (OBS-04), sobre os aceitos.
-# Sem nenhum pedido sem desfecho, o counter ainda não existe; o "or vector(0)" o completa com zero.
+# O counter existe em 0 desde a subida da API (OBS-08).
 1 - (
-  (sum(increase(casecellshop_order_stuck_total[30d])) or vector(0))
+  sum(increase(casecellshop_order_stuck_total[30d]))
   /
   sum(increase(casecellshop_checkout_requests_total{casecellshop_checkout_outcome="accepted"}[30d]))
 )
@@ -319,6 +319,9 @@ histogram_quantile(0.99, sum by (le, casecellshop_erp_operation) (rate(casecells
 
 # ERP: chamadas em andamento (limite de 30)
 sum(casecellshop_erp_client_active_operations)
+
+# ERP: erros de configuração por operação, na última hora
+sum by (casecellshop_erp_operation) (increase(casecellshop_erp_config_errors_total[1h]))
 ```
 
 ```promql
@@ -356,7 +359,7 @@ As regras estão no formato de arquivo de regras do Prometheus ([regras de alert
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
 
-Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os eventos registrados antes da primeira coleta de cada série depois da subida do processo (por exemplo, a primeira rejeição por falta de estoque ou os primeiros `config_error`) podem não disparar o alerta; o próximo evento depois dessa coleta, dentro da janela, dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
+Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo, uma série por combinação dos valores dos atributos (`OBS-08`), como pede a documentação do Prometheus ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026): sem isso, a série nasceria com o primeiro evento, e o `increase` não contaria esse evento, porque não haveria amostra anterior. Um histograma não nasce em 0 (a API do OpenTelemetry não o permite), e por isso o alerta de erro de configuração do ERP lê o counter próprio dele, e não o `_count` do histograma de duração. Os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
@@ -566,7 +569,7 @@ groups:
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#furo-de-estoque
       - alert: CasecellshopErpErroDeConfiguracao
         expr: |
-          sum(increase(casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"}[5m])) > 0
+          sum(increase(casecellshop_erp_config_errors_total[5m])) > 0
         for: 0m
         labels:
           severity: page
