@@ -263,6 +263,13 @@ function mainFullViolations(workflow: NightlyWorkflow): string[] {
   const violations = openingViolations(workflow, 'main-full');
   if (job.name !== 'CI completo na main')
     violations.push(`nome ${String(job.name)}`);
+  // AI-53: o agendado não pula nada. O pulo do `test` em PR só de documentação é do ci.yml; a main roda tudo.
+  if (job.needs !== undefined)
+    violations.push('tem needs: o main-full não espera nenhum job');
+  if (job.if !== undefined)
+    violations.push('tem if: o main-full nunca é pulado');
+  if (JSON.stringify(job).includes('docs_only'))
+    violations.push('cita docs_only: o main-full não depende do changes');
   const steps = job.steps ?? [];
   for (const [label, pattern] of MAIN_FULL_CHECKS) {
     const found = steps.filter((step) => pattern.test((step.run ?? '').trim()));
@@ -881,6 +888,26 @@ const MAIN_FULL_CASES: Case[] = [
     '',
   ]),
   ['sem a cobertura', 'npm test -- --coverage', 'npm test'],
+  [
+    'com needs (esperando um job do nightly.yml)',
+    MAIN_FULL_NAME,
+    `${MAIN_FULL_NAME}    needs: [workflows]\n`,
+  ],
+  [
+    'com if de pulo (docs_only do ci.yml)',
+    MAIN_FULL_NAME,
+    `${MAIN_FULL_NAME}    if: needs.changes.outputs.docs_only != 'true'\n`,
+  ],
+  [
+    'com if qualquer',
+    MAIN_FULL_NAME,
+    `${MAIN_FULL_NAME}    if: github.ref == 'refs/heads/main'\n`,
+  ],
+  [
+    'citando docs_only no env',
+    MAIN_FULL_NAME,
+    `${MAIN_FULL_NAME}    env:\n      DOCS_ONLY: docs_only\n`,
+  ],
   ['com a ref diferente de main', 'ref: main', 'ref: ${{ github.sha }}'],
   ['com o nome trocado', MAIN_FULL_NAME, '    name: Nightly\n'],
   [
@@ -1286,6 +1313,18 @@ describe('AI-46 o nightly.yml do repositório', () => {
 
   it('AI-46 o main-full roda na main o CI do PR, a cobertura e os tipos do banco', () => {
     expect(mainFullViolations(workflow())).toEqual([]);
+  });
+
+  it('AI-53 o main-full não tem needs nem if de pulo e o nightly.yml não cita docs_only, mesmo com o ci.yml pulando o test', () => {
+    const main = workflow().jobs?.['main-full'];
+
+    // O ci.yml pula o test em PR só de documentação (job changes); o agendado não copia o pulo.
+    expect(readCi().jobs?.['changes']).toBeDefined();
+    expect(main).toBeDefined();
+    expect(main?.needs).toBeUndefined();
+    expect(main?.if).toBeUndefined();
+    expect(JSON.stringify(workflow())).not.toContain('docs_only');
+    expect(Object.keys(workflow().jobs ?? {})).not.toContain('changes');
   });
 
   it('AI-46 o flaky-hunt roda a suíte embaralhada em três pernas e guarda o resultado num artefato curto', () => {
