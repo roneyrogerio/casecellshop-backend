@@ -1,40 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { Clock } from './clock.ts';
+import { settle } from '../../test/helpers/async.ts';
+import { createManualClock } from '../../test/helpers/clock.ts';
+import { captureLogs } from '../../test/helpers/logs.ts';
 import { createShutdownHandler, SHUTDOWN_TIMEOUT_MS } from './lifecycle.ts';
-import { createLogger } from './logging.ts';
 
 // FND-17: o prazo do encerramento gracioso corre no relógio injetável. Tudo em memória: o `exit` é um registro dos
 // códigos, o `stop` é uma promessa que o teste resolve ou rejeita, e o tempo só anda em advance().
-
-type Line = Record<string, unknown>;
-
-// Deixa as continuações das promessas rodarem, sem relógio nem temporizador.
-async function settle(): Promise<void> {
-  for (let i = 0; i < 20; i += 1) await Promise.resolve();
-}
-
-// Relógio manual repetido aqui de test/helpers/clock.ts: a regra no-restricted-imports de .oxlintrc.json recusa em
-// src/shared/ todo import relativo que sobe de pasta (AD-026), inclusive ../../test/helpers.
-function createManualClock(): Clock & { advance: (ms: number) => void } {
-  let current = 0;
-  let sleepers: { dueAt: number; resolve: () => void }[] = [];
-  return {
-    now: () => current,
-    sleep(ms) {
-      return new Promise<void>((resolve) => {
-        sleepers = [...sleepers, { dueAt: current + ms, resolve }];
-      });
-    },
-    advance(ms) {
-      current += ms;
-      const due = sleepers.filter((sleeper) => sleeper.dueAt <= current);
-      sleepers = sleepers.filter((sleeper) => sleeper.dueAt > current);
-      due.forEach((sleeper) => {
-        sleeper.resolve();
-      });
-    },
-  };
-}
 
 interface Deferred {
   promise: Promise<void>;
@@ -52,32 +23,15 @@ function deferred(): Deferred {
   return { promise, resolve, reject };
 }
 
-// O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo `destination`.
+// O logger de produção (createLogger) escrevendo as linhas JSON em memória, pelo captureLogs.
 function rig() {
-  const written: string[] = [];
-  const destination = {
-    write(chunk: string): void {
-      written.push(chunk);
-    },
-  };
-  // As linhas lidas do que o logger escreveu até agora, na ordem.
-  const readLines = (): Line[] =>
-    written
-      .join('')
-      .split('\n')
-      .filter((text) => text.trim() !== '')
-      .map((text) => JSON.parse(text) as Line);
-  const logger = createLogger({
-    serviceName: 'casecellshop-api',
-    level: 'info',
-    destination,
-  });
+  const logs = captureLogs('casecellshop-api');
   const clock = createManualClock();
   const exits: number[] = [];
   const stopping = deferred();
   let stopCalls = 0;
   const handler = createShutdownHandler({
-    logger,
+    logger: logs.logger,
     clock,
     exit: (code) => {
       exits.push(code);
@@ -93,9 +47,8 @@ function rig() {
     exits,
     stopping,
     stopCalls: () => stopCalls,
-    eventsOf: (event: string) =>
-      readLines().filter((line) => line['event'] === event),
-    events: () => readLines().map((line) => line['event']),
+    eventsOf: (event: string) => logs.eventsOf(event),
+    events: () => logs.lines.map((line) => line['event']),
   };
 }
 

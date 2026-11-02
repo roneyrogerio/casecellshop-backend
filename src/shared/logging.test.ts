@@ -1,12 +1,16 @@
+import { SpanKind } from '@opentelemetry/api';
+import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { pino, type DestinationStream } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { createLogger, eventLogger, fromPino, logContext } from './logging.ts';
 import type { LogEventSpec } from './telemetry-catalog.ts';
+import { createTelemetry } from './telemetry.ts';
 
 // OBS-07 (AD-029): o logger tipado, em execução. `info`, `warn` e `error` escrevem uma linha no nível pedido, com o
 // nome do evento no campo `event`, os campos dados e a mensagem. O que o `tsc` aceita e recusa (o evento, o nível e
-// o campo fora da declaração) está em test/repo/event-logger-types.test.ts: um teste de `shared/` não importa os
-// helpers de `test/` (AD-025), e a prova de tipo precisa deles.
+// o campo fora da declaração) está em test/repo/event-logger-types.test.ts, que roda o tsc do projeto sobre uma
+// amostra e não pertence a uma pasta de `src/`. Um teste de `shared/` pode importar os helpers de `test/helpers/`;
+// só as outras pastas de `src/` seguem barradas (AD-025).
 
 type Line = Record<string, unknown>;
 
@@ -352,5 +356,133 @@ describe('OBS-07 AppLogger: só cria filhos, e o eventLogger é o único que esc
     log.warn('casecellshop.demo.degraded', { reason: 'x' }, 'degradado');
 
     expect(lines.map((line) => line['level'])).toEqual(['warn']);
+  });
+});
+
+// OBS-01 (decisão do mantenedor de 02/11/2026): o correlationId sai dentro de uma requisição ou de uma tentativa do
+// worker (o contexto assíncrono `logContext`); o trace_id e o span_id, dentro de qualquer span, inclusive fora de
+// requisição; um log do processo fora dos três contextos sai sem eles, mas com os campos de identificação.
+// A rodada da sincronização, dentro do span `catalog.sync.round`, está em test/integration/observability/.
+describe('OBS-01 campos de correlação por contexto', () => {
+  const IDENTIFICATION = [
+    'time',
+    'level',
+    'service',
+    'env',
+    'version',
+    'msg',
+    'event',
+  ];
+  const CORRELATION = ['correlationId', 'trace_id', 'span_id'];
+
+  // Abre um span ativo (como o withSpan da rodada da sincronização) e devolve os identificadores dele.
+  async function inSpan<T>(
+    fn: (ids: { traceId: string; spanId: string }) => T,
+  ): Promise<T> {
+    const telemetry = createTelemetry({
+      spanExporter: new InMemorySpanExporter(),
+    });
+    try {
+      return await telemetry.withSpan(
+        'obs01.span',
+        { kind: SpanKind.INTERNAL },
+        (span) => {
+          const { traceId, spanId } = span.spanContext();
+          return Promise.resolve(fn({ traceId, spanId }));
+        },
+      );
+    } finally {
+      await telemetry.shutdown();
+    }
+  }
+
+  it('OBS-01 um log fora de requisição, de tentativa e de span sai sem correlationId, trace_id e span_id, e com os campos de identificação', () => {
+    const { logger, lines } = capture();
+
+    eventLogger(logger, EVENTS).info(
+      'casecellshop.demo.stopped',
+      {},
+      'log do processo',
+    );
+
+    expect(lines).toHaveLength(1);
+    const line = lines[0] ?? {};
+    for (const key of IDENTIFICATION) expect(line, key).toHaveProperty(key);
+    for (const key of CORRELATION) expect(line, key).not.toHaveProperty(key);
+  });
+
+  it('OBS-01 controle: o mesmo log dentro de uma requisição leva o correlationId, e sem span não leva trace_id nem span_id', () => {
+    const { logger, lines } = capture();
+
+    logContext.run({ correlationId: 'req-1' }, () => {
+      eventLogger(logger, EVENTS).info(
+        'casecellshop.demo.stopped',
+        {},
+        'log da requisição',
+      );
+    });
+
+    expect(lines[0]).toMatchObject({ correlationId: 'req-1' });
+    expect(lines[0]).not.toHaveProperty('trace_id');
+    expect(lines[0]).not.toHaveProperty('span_id');
+  });
+
+  it('OBS-01 um log dentro de um span, fora de requisição, leva o trace_id e o span_id do span e não leva correlationId', async () => {
+    const { logger, lines } = capture();
+
+    const ids = await inSpan((spanIds) => {
+      eventLogger(logger, EVENTS).info(
+        'casecellshop.demo.stopped',
+        {},
+        'log do span',
+      );
+      return spanIds;
+    });
+
+    expect(ids.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(ids.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      trace_id: ids.traceId,
+      span_id: ids.spanId,
+    });
+    expect(lines[0]).not.toHaveProperty('correlationId');
+    for (const key of IDENTIFICATION) expect(lines[0], key).toHaveProperty(key);
+  });
+
+  it('OBS-01 um log dentro de uma requisição e de um span leva os três campos', async () => {
+    const { logger, lines } = capture();
+
+    const ids = await inSpan((spanIds) =>
+      logContext.run({ correlationId: 'req-2' }, () => {
+        eventLogger(logger, EVENTS).info(
+          'casecellshop.demo.stopped',
+          {},
+          'log da requisição no span',
+        );
+        return spanIds;
+      }),
+    );
+
+    expect(lines[0]).toMatchObject({
+      correlationId: 'req-2',
+      trace_id: ids.traceId,
+      span_id: ids.spanId,
+    });
+  });
+
+  it('OBS-01 depois de o span terminar, o log do processo volta a sair sem trace_id e span_id', async () => {
+    const { logger, lines } = capture();
+    await inSpan(() => undefined);
+
+    eventLogger(logger, EVENTS).info(
+      'casecellshop.demo.stopped',
+      {},
+      'depois do span',
+    );
+
+    expect(lines).toHaveLength(1);
+    for (const key of CORRELATION)
+      expect(lines[0], key).not.toHaveProperty(key);
   });
 });

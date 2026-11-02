@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createManualClock } from '../../test/helpers/clock.ts';
 import type { Clock } from './clock.ts';
 import {
   createLoopRunner,
@@ -45,26 +46,8 @@ async function resolvedWithin(promise: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-// Relógio manual repetido aqui de test/helpers/clock.ts: a regra no-restricted-imports de .oxlintrc.json recusa em
-// src/shared/ todo import relativo que sobe de pasta (AD-026), inclusive ../../test/helpers. O tempo só anda em advance().
-function createManualClock(): Clock & { advance: (ms: number) => void } {
-  let current = 0;
-  const timers: { at: number; wake: () => void }[] = [];
-  return {
-    now: () => current,
-    sleep: (ms) =>
-      new Promise<void>((wake) => {
-        timers.push({ at: current + ms, wake });
-      }),
-    advance(ms) {
-      current += ms;
-      for (const timer of timers.splice(0)) {
-        if (timer.at <= current) timer.wake();
-        else timers.push(timer);
-      }
-    },
-  };
-}
+// O relógio manual é o de test/helpers/clock.ts, começando em 0 para os testes lerem `clock.now()` como tempo decorrido.
+const newClock = () => createManualClock(0);
 
 // Laço que dorme em `pause(intervalMs)` a cada volta, como a reconciliação e o monitor de pedidos sem desfecho.
 function createSleepingLoop(intervalMs: number, clock: Clock) {
@@ -292,7 +275,7 @@ describe('executor de laço (createLoopRunner)', () => {
   });
 
   it('ORD-14 o stop() acorda o laço que dorme em pause() sem o relógio andar, já com o estado em stopping', async () => {
-    const clock = createManualClock();
+    const clock = newClock();
     const { runner, state } = createSleepingLoop(60_000, clock);
     await runner.start();
     await settle();
@@ -314,7 +297,7 @@ describe('executor de laço (createLoopRunner)', () => {
   });
 
   it('OBS-04 sem stop(), o sono do pause() termina quando o relógio passa o intervalo, e não antes', async () => {
-    const clock = createManualClock();
+    const clock = newClock();
     const { runner, state } = createSleepingLoop(1000, clock);
     await runner.start();
     await settle();
@@ -338,7 +321,7 @@ describe('executor de laço (createLoopRunner)', () => {
   });
 
   it('ORD-14 um pause() chamado depois de o stop() começar resolve na hora, sem o relógio andar', async () => {
-    const clock = createManualClock();
+    const clock = newClock();
     const harness = createLoopHarness();
     const runner = createLoopRunner({ run: harness.run, clock });
     await runner.start();

@@ -10,8 +10,10 @@ import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
 // OBS-07 (AD-029): o que o `tsc` aceita e recusa no `eventLogger` de src/shared/logging.ts: o evento fora da
 // declaração, o evento num nível que ele não declara e o campo que o evento não declara reprovam. A prova é o tsc do
 // projeto sobre uma amostra que importa o `eventLogger` real: um erro de tipo não se prova por execução. Fica em
-// `test/repo/` porque um teste de `src/shared/` não importa os helpers de `test/` (AD-025). A linha que sai, em
-// execução, está em src/shared/logging.test.ts; a declaração real da borda HTTP, em src/http/log-events.test.ts.
+// `test/repo/` porque roda o tsc do projeto sobre uma amostra e não pertence a uma pasta de `src/`; um teste de
+// `src/shared/` pode importar os helpers de `test/helpers/`, e só as outras pastas de `src/` seguem barradas
+// (AD-025). A linha que sai, em execução, está em src/shared/logging.test.ts; a declaração real da borda HTTP, em
+// src/http/log-events.test.ts.
 
 afterAll(cleanupTempDirs);
 
