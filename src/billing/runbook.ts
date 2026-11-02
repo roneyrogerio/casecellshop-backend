@@ -71,6 +71,15 @@ export async function cancelOrder(
   orderId: string,
 ): Promise<CancelOrderResult> {
   const db = createDb(pool);
+  // Pedido que já não está pendente não toma a permissão: regravar last_call_at/call_token reiniciaria
+  // a janela da verificação tardia. A corrida posterior a esta leitura fica no compare-and-set final.
+  const current = await db
+    .selectFrom('orders')
+    .select('status')
+    .where('id', '=', orderId)
+    .executeTakeFirst();
+  if (current && current.status !== 'pending') return { kind: 'unchanged' };
+
   // A janela no lugar do atraso mínimo: o mesmo UPDATE confere que a última chamada é antiga e impede
   // outra tentativa de chamar o ERP enquanto o cancelamento consulta. Sem somar create_calls nem zerar dead_at.
   const permit = await takeCallPermit(db, orderId, {
