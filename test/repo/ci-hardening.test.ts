@@ -765,7 +765,7 @@ describe('AI-05 o ci.yml é endurecido', () => {
   });
 });
 
-// AI-53 e AI-05: o job `changes` e os passos de limpeza do `test` e do `api-fuzz` rodam no PR, então entram nas regras
+// AI-53 e AI-05: o job `changes` e os passos de troca por pastas do `test` e do `api-fuzz` rodam no PR, então entram nas regras
 // do ci.yml: action fixada por SHA, checkout sem a credencial e nenhum valor do contexto interpolado no `run:` (o
 // valor entra pelo `env`).
 function jobOnly(workflow: Workflow, id: string): Workflow {
@@ -781,6 +781,8 @@ function interpolatedRuns(steps: Step[]): string[] {
 }
 
 const CHANGES_NAME = 'Mudanças do PR';
+// O passo do test e do api-fuzz que troca cada arquivo da lista por uma pasta vazia (o nome vem do critério AI-53).
+const SWAP_NAME = 'Troca os arquivos que o AI-53 não testa por pastas';
 
 const GOOD_CHANGES = parse(`
 jobs:
@@ -822,12 +824,10 @@ describe('AI-53 as regras de endurecimento enxergam o job changes (controle nega
   });
 });
 
-describe('AI-53 o job changes e os passos de limpeza do ci.yml seguem as regras de endurecimento', () => {
+describe('AI-53 o job changes e os passos de troca por pastas do ci.yml seguem as regras de endurecimento', () => {
   const changes = jobOnly(ci, 'changes');
   const cleanupSteps = ['test', 'api-fuzz'].flatMap((id) =>
-    stepsOf(jobOnly(ci, id)).filter((step) =>
-      (step.run ?? '').includes('DOCS_ONLY_PATHS'),
-    ),
+    stepsOf(jobOnly(ci, id)).filter((step) => step.name === SWAP_NAME),
   );
 
   it('AI-05 o job changes tem o checkout fixado por SHA de 40 hexadecimais e sem guardar a credencial', () => {
@@ -849,9 +849,14 @@ describe('AI-53 o job changes e os passos de limpeza do ci.yml seguem as regras 
     expect(interpolatedRuns(stepsOf(changes))).toEqual([]);
   });
 
-  it('AI-05 os passos de limpeza do test e do api-fuzz leem a lista do ambiente e não interpolam expressão no run', () => {
+  it('AI-05 os passos que trocam os arquivos por pastas, no test e no api-fuzz, leem a lista do ambiente (rm -f --, mkdir -p --) e não interpolam expressão no run', () => {
     expect(cleanupSteps).toHaveLength(2);
     expect(interpolatedRuns(cleanupSteps)).toEqual([]);
+    for (const step of cleanupSteps) {
+      expect(step.run ?? '').toContain('$DOCS_ONLY_PATHS');
+      expect(step.run ?? '').toContain('rm -f --');
+      expect(step.run ?? '').toContain('mkdir -p --');
+    }
   });
 
   it('AI-05 nenhum run: do ci.yml interpola github.base_ref nem github.head_ref, com o job changes incluído', () => {

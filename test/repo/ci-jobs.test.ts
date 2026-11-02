@@ -1,8 +1,11 @@
 import {
   existsSync,
+  lstatSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -174,7 +177,7 @@ function placementViolations(workflow: CiWorkflow): string[] {
   return violations;
 }
 
-// Checkout, setup-node e npm ci abrem o job; todo o resto vem depois deles. O passo de limpeza do AI-53 (que o `test`
+// Checkout, setup-node e npm ci abrem o job; todo o resto vem depois deles. O passo de troca por pastas do AI-53 (que o `test`
 // tem logo depois do checkout) fica fora desta conta; a posição dele é conferida por cleanupViolations.
 function openingViolations(workflow: CiWorkflow, id: string): string[] {
   const steps = stepsOfJob(workflow, id).filter(
@@ -293,15 +296,17 @@ function ciOkViolations(workflow: CiWorkflow): string[] {
   const run = step.run ?? '';
   if (run.includes('${{'))
     violations.push('interpola uma expressão no run (passe por env)');
-  for (const word of ['failure', 'cancelled'])
-    if (!run.includes(word)) violations.push(`o run não cita ${word}`);
-  // AI-53: o job pulado conta como verde, então o passo lê o RESULTS com jq e confere a saída docs_only do changes.
+  // AI-53: o job pulado conta como verde, então o passo lê o RESULTS com jq e aceita só o que o critério lista:
+  // `success`, e `skipped` do test e do api-fuzz com a saída docs_only do changes. A regra não nomeia failure nem
+  // cancelled: qualquer outro resultado reprova, e o comportamento prova cada um.
   if (!DOCS_ONLY_ENV.test(String(step.env?.DOCS_ONLY)))
     violations.push(
       'o env DOCS_ONLY não vem de needs.changes.outputs.docs_only',
     );
-  for (const word of ['DOCS_ONLY', 'skipped', 'jq'])
+  for (const word of ['success', 'skipped', 'jq', 'DOCS_ONLY'])
     if (!run.includes(word)) violations.push(`o run não cita ${word}`);
+  if (!run.includes('length > 0'))
+    violations.push('o run não exige length > 0 no RESULTS');
   return violations;
 }
 
@@ -368,8 +373,8 @@ function runOkCases(step: CiStep, cases: OkCase[]): string[] {
   return violations;
 }
 
-// failure e cancelled de qualquer job reprovam, e tudo success passa. O skipped tem a regra própria do AI-53, em
-// ciOkSkipViolations.
+// failure, cancelled e um resultado desconhecido (neutral) de qualquer job reprovam, e tudo success passa. O skipped
+// tem a regra própria do AI-53, em ciOkSkipViolations; o RESULTS sem result ou fora do formato, em ciOkShapeViolations.
 function ciOkBehaviorViolations(workflow: CiWorkflow): string[] {
   const step = ciOkStep(workflow);
   if (step === undefined) return ['não tem um único passo run'];
@@ -388,6 +393,12 @@ function ciOkBehaviorViolations(workflow: CiWorkflow): string[] {
       {
         label: `${id} cancelled`,
         results: { ...allSuccess, [id]: 'cancelled' },
+        docsOnly,
+        passes: false,
+      },
+      {
+        label: `${id} neutral`,
+        results: { ...allSuccess, [id]: 'neutral' },
         docsOnly,
         passes: false,
       },
@@ -466,7 +477,37 @@ const INVALID_RESULTS: ReadonlyArray<readonly [label: string, raw: string]> = [
   ['RESULTS vazio', ''],
 ];
 
+// AI-53 (achado A2): um RESULTS que é JSON mas não descreve os jobs também reprova. A regra aceita só o que lista, então
+// um job sem `result`, um `result` desconhecido, um objeto vazio e um job que não é objeto saem com código diferente
+// de 0; o `ci-ok` por lista de proibidos aprovava todos eles.
+const SHAPE_RESULTS: ReadonlyArray<readonly [label: string, raw: string]> = [
+  ['RESULTS {} sem nenhum job', '{}'],
+  ['RESULTS com um job sem result', '{"test":{}}'],
+  ['RESULTS com result neutral', '{"test":{"result":"neutral"}}'],
+  ['RESULTS com result desconhecido', '{"test":{"result":"desconhecido"}}'],
+  ['RESULTS com um job que não é objeto', '{"test":1}'],
+  [
+    'RESULTS com success e um job sem result',
+    '{"checks":{"result":"success"},"test":{}}',
+  ],
+  [
+    'RESULTS com success e um job neutral',
+    '{"checks":{"result":"success"},"test":{"result":"neutral"}}',
+  ],
+];
+
 function ciOkInvalidResultsViolations(workflow: CiWorkflow): string[] {
+  return ciOkRawResultsViolations(workflow, INVALID_RESULTS);
+}
+
+function ciOkShapeViolations(workflow: CiWorkflow): string[] {
+  return ciOkRawResultsViolations(workflow, SHAPE_RESULTS);
+}
+
+function ciOkRawResultsViolations(
+  workflow: CiWorkflow,
+  cases: ReadonlyArray<readonly [label: string, raw: string]>,
+): string[] {
   const step = ciOkStep(workflow);
   if (step === undefined) return ['não tem um único passo run'];
   const name = Object.entries(step.env ?? {}).find(([, value]) =>
@@ -484,7 +525,7 @@ function ciOkInvalidResultsViolations(workflow: CiWorkflow): string[] {
     // Sem este controle um jq que falta na máquina (saída 127) passaria por "reprovou".
     if (runStep(step, valid) !== 0 && docsOnly === 'false')
       violations.push('tudo success não saiu com 0');
-    for (const [label, raw] of INVALID_RESULTS) {
+    for (const [label, raw] of cases) {
       const status = runStep(step, { ...valid, [name]: raw });
       if (status === 0)
         violations.push(
@@ -497,11 +538,16 @@ function ciOkInvalidResultsViolations(workflow: CiWorkflow): string[] {
 
 // --- linhas de base em memória ----------------------------------------------------------------------------------
 
-const CI_OK_SKIP_LINE = `if echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" 'any(to_entries[]; .value.result == "skipped" and ($docs != "true" or (.key != "test" and .key != "api-fuzz")))' > /dev/null; then`;
+// AI-53 (achado A2): o ci-ok aceita só o que a regra lista, em vez de reprovar uma lista de proibidos. O `jq -e` dentro
+// de `if !` trata o erro do jq (saída 5, como em `{"test":1}`) como "não passou"; a guarda antes exige um objeto com
+// pelo menos um job, porque `all` de um objeto vazio é verdadeiro e `{}` aprovaria o ci-ok.
+const OK_FILTER = `.value.result == "success" or (.value.result == "skipped" and $docs == "true" and (.key == "test" or .key == "api-fuzz"))`;
+const CI_OK_RULE_LINE = `if ! echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" 'all(to_entries[]; ${OK_FILTER})' > /dev/null; then`;
+const CI_OK_JSON_GUARD = `echo "$RESULTS" | jq -e 'type == "object" and length > 0' > /dev/null || { echo "O RESULTS não é o JSON do needs."; exit 1; }`;
 
-// O `jq -e` dentro de um `if` sai com 5 diante de um texto que não é JSON, e o `if` lê isso como "nenhum job falhou":
-// sem esta conferência antes, um RESULTS quebrado aprovaria o ci-ok.
-const CI_OK_JSON_GUARD = `echo "$RESULTS" | jq -e 'type == "object"' > /dev/null || { echo "O RESULTS não é o JSON do needs."; exit 1; }`;
+// A mesma regra com a polaridade errada: o `if jq -e` sai com 5 diante de um texto que não é JSON, e o `if` lê isso
+// como "nenhum job reprova"; sem a guarda antes, um RESULTS quebrado aprovaria o ci-ok.
+const CI_OK_FAIL_OPEN_RULE_LINE = `if echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" 'any(to_entries[]; (${OK_FILTER}) | not)' > /dev/null; then`;
 
 const ciOkJob = (needs: string): string => `  ci-ok:
     name: ci-ok
@@ -513,17 +559,37 @@ const ciOkJob = (needs: string): string => `  ci-ok:
           DOCS_ONLY: \${{ needs.changes.outputs.docs_only }}
         run: |
           ${CI_OK_JSON_GUARD}
-          if echo "$RESULTS" | jq -e 'any(.[]; .result | test("^(failure|cancelled)$"))' > /dev/null; then
-            echo "Um job falhou ou foi cancelado."
-            exit 1
-          fi
-          ${CI_OK_SKIP_LINE}
-            echo "Um job foi pulado sem o changes dizer que só há documentação."
+          ${CI_OK_RULE_LINE}
+            echo "Um job não passou: falhou, foi cancelado, foi pulado sem o changes dizer que só há documentação ou tem um resultado desconhecido."
             exit 1
           fi
 `;
 
-const CI_OK_FAILURE_LINE = `if echo "$RESULTS" | jq -e 'any(.[]; .result | test("^(failure|cancelled)$"))' > /dev/null; then`;
+// O ci-ok anterior ao A2, por lista de proibidos: reprova só failure, cancelled e o pulado fora da regra. É o controle
+// de comportamento: `{"test":{}}` e `neutral` saem com 0, e as conferências acusam.
+const LEGACY_FAILURE_LINE = `if echo "$RESULTS" | jq -e 'any(.[]; .result | test("^(failure|cancelled)$"))' > /dev/null; then`;
+const LEGACY_SKIP_LINE = `if echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" 'any(to_entries[]; .value.result == "skipped" and ($docs != "true" or (.key != "test" and .key != "api-fuzz")))' > /dev/null; then`;
+const LEGACY_JSON_GUARD = `echo "$RESULTS" | jq -e 'type == "object"' > /dev/null || { echo "O RESULTS não é o JSON do needs."; exit 1; }`;
+
+const legacyCiOkJob = (needs: string): string => `  ci-ok:
+    name: ci-ok
+    needs: [${needs}]
+    if: always()
+    steps:
+      - env:
+          RESULTS: \${{ toJSON(needs) }}
+          DOCS_ONLY: \${{ needs.changes.outputs.docs_only }}
+        run: |
+          ${LEGACY_JSON_GUARD}
+          ${LEGACY_FAILURE_LINE}
+            echo "Um job falhou ou foi cancelado."
+            exit 1
+          fi
+          ${LEGACY_SKIP_LINE}
+            echo "Um job foi pulado sem o changes dizer que só há documentação."
+            exit 1
+          fi
+`;
 
 const GOOD_CI_OK = `
 jobs:
@@ -586,19 +652,29 @@ describe('AI-42 as conferências do ci-ok enxergam o que procuram (controle nega
     ).toEqual(['needs não tem extra']);
   });
 
-  it('AI-42 um ci-ok que não reprova cancelled reprova, mesmo citando a palavra num comentário', () => {
-    const onlyFailure = variant((t) =>
-      t.replace('(failure|cancelled)', '(failure)'),
+  // A regra do ci-ok não nomeia failure nem cancelled (aceita só o que lista), então a forma não os exige; o que prova
+  // que cada um reprova é o comportamento do passo.
+  const ACCEPTS_SUCCESS = '.value.result == "success" or';
+
+  it('AI-42 um ci-ok que aceita cancelled reprova no comportamento, mesmo citando a palavra num comentário', () => {
+    const acceptsCancelled = variant((t) =>
+      t.replace(
+        ACCEPTS_SUCCESS,
+        () => `${ACCEPTS_SUCCESS} .value.result == "cancelled" or`,
+      ),
     );
     const mentionsOnly = variant((t) =>
       t
-        .replace('(failure|cancelled)', '(failure)')
+        .replace(
+          ACCEPTS_SUCCESS,
+          () => `${ACCEPTS_SUCCESS} .value.result == "cancelled" or`,
+        )
         .replace('then\n', 'then # cancelled\n'),
     );
 
-    expect(ciOkViolations(onlyFailure)).toContain('o run não cita cancelled');
+    expect(ciOkViolations(acceptsCancelled)).toEqual([]);
     expect(ciOkViolations(mentionsOnly)).toEqual([]);
-    expect(ciOkBehaviorViolations(onlyFailure)).toEqual([
+    expect(ciOkBehaviorViolations(acceptsCancelled)).toEqual([
       'checks cancelled: saiu com 0, esperado diferente de 0',
       'test cancelled: saiu com 0, esperado diferente de 0',
       'changes cancelled: saiu com 0, esperado diferente de 0',
@@ -606,16 +682,39 @@ describe('AI-42 as conferências do ci-ok enxergam o que procuram (controle nega
     expect(ciOkBehaviorViolations(mentionsOnly)).not.toEqual([]);
   });
 
-  it('AI-42 um ci-ok que só reprova cancelled, ou que reprova sempre, reprova no comportamento', () => {
-    expect(
-      ciOkBehaviorViolations(
-        variant((t) => t.replace('(failure|cancelled)', '(cancelled)')),
-      ),
-    ).toHaveLength(3);
+  it('AI-42 um ci-ok que aceita failure, ou um resultado desconhecido (neutral), ou que reprova sempre, reprova no comportamento', () => {
     expect(
       ciOkBehaviorViolations(
         variant((t) =>
-          t.replace('(failure|cancelled)', '(success|failure|cancelled)'),
+          t.replace(
+            ACCEPTS_SUCCESS,
+            () => `${ACCEPTS_SUCCESS} .value.result == "failure" or`,
+          ),
+        ),
+      ),
+    ).toEqual([
+      'checks failure: saiu com 0, esperado diferente de 0',
+      'test failure: saiu com 0, esperado diferente de 0',
+      'changes failure: saiu com 0, esperado diferente de 0',
+    ]);
+    expect(
+      ciOkBehaviorViolations(
+        variant((t) =>
+          t.replace(
+            ACCEPTS_SUCCESS,
+            () => `${ACCEPTS_SUCCESS} .value.result == "neutral" or`,
+          ),
+        ),
+      ),
+    ).toEqual([
+      'checks neutral: saiu com 0, esperado diferente de 0',
+      'test neutral: saiu com 0, esperado diferente de 0',
+      'changes neutral: saiu com 0, esperado diferente de 0',
+    ]);
+    expect(
+      ciOkBehaviorViolations(
+        variant((t) =>
+          t.replace(ACCEPTS_SUCCESS, () => '.value.result == "x" or'),
         ),
       ).length,
     ).toBeGreaterThan(0);
@@ -767,9 +866,17 @@ ${indent(DOCS_PATHS_TEXT, 4)}
 const NEEDS_BASE = 'changes, checks, test, workflows';
 const NEEDS_WITH_FUZZ = `${NEEDS_BASE}, api-fuzz`;
 
-const CLEANUP_NAME = 'Tira os arquivos que o AI-53 não testa';
-// `if` em vez de `&&`: com o bash -e, o laço que termina numa linha vazia sairia com 1 e reprovaria o passo.
+const CLEANUP_NAME = 'Troca os arquivos que o AI-53 não testa por pastas';
+// AI-53 (achado A1): só apagar o arquivo deixa passar um teste que lista a pasta e lê o que achou (o arquivo some da
+// listagem); uma pasta vazia de mesmo nome fica na listagem, e a leitura reprova com EISDIR. O `rm -f --` tira o
+// arquivo ou o link (sem seguir o link) e o `mkdir -p --` cria a pasta, com a pasta pai quando falta. Uma pasta que já
+// está lá (segunda execução) fica como está: `rm -f` numa pasta reprovaria o passo. `if` em vez de `&&`: com o
+// bash -e, o laço que termina numa linha vazia sairia com 1 e reprovaria o passo.
 const CLEANUP_RUN = String.raw`printf '%s\n' "$DOCS_ONLY_PATHS" | while IFS= read -r path; do
+  if [ -n "$path" ] && { [ -L "$path" ] || [ ! -d "$path" ]; }; then rm -f -- "$path"; mkdir -p -- "$path"; fi
+done`;
+// O passo anterior ao A1, que só apagava: o controle de comportamento do teste inventado.
+const DELETE_ONLY_RUN = String.raw`printf '%s\n' "$DOCS_ONLY_PATHS" | while IFS= read -r path; do
   if [ -n "$path" ]; then rm -f -- "$path"; fi
 done`;
 const CLEANUP_STEP = `      - name: ${CLEANUP_NAME}
@@ -925,7 +1032,7 @@ function testSkipViolations(workflow: CiWorkflow): string[] {
 }
 
 // O passo logo depois do checkout (antes do setup-node e do npm ci no `test`; antes do relatório e do compose no
-// `api-fuzz`) apaga os arquivos da lista, lendo $DOCS_ONLY_PATHS do ambiente do workflow.
+// `api-fuzz`) troca cada arquivo da lista por uma pasta vazia, lendo $DOCS_ONLY_PATHS do ambiente do workflow.
 function cleanupStepOf(workflow: CiWorkflow, id: string): CiStep | undefined {
   return stepsOfJob(workflow, id).find((step) => step.name === CLEANUP_NAME);
 }
@@ -939,55 +1046,160 @@ function cleanupViolations(workflow: CiWorkflow, id: string): string[] {
     (candidate.uses ?? '').startsWith('actions/checkout@'),
   );
   if (checkoutAt < 0 || steps.indexOf(step) !== checkoutAt + 1)
-    violations.push(
-      `${id}: o passo de limpeza não vem logo depois do checkout`,
-    );
+    violations.push(`${id}: o passo de troca não vem logo depois do checkout`);
   const run = step.run ?? '';
   if (!/\$\{?DOCS_ONLY_PATHS\b/.test(run))
-    violations.push(`${id}: o passo de limpeza não lê $DOCS_ONLY_PATHS`);
+    violations.push(`${id}: o passo de troca não lê $DOCS_ONLY_PATHS`);
   if (!run.includes('rm -f --'))
-    violations.push(`${id}: o passo de limpeza não apaga com rm -f --`);
+    violations.push(`${id}: o passo de troca não apaga com rm -f --`);
+  if (!run.includes('mkdir -p --'))
+    violations.push(`${id}: o passo de troca não cria a pasta com mkdir -p --`);
   if (run.includes('${{'))
-    violations.push(`${id}: o passo de limpeza interpola uma expressão`);
+    violations.push(`${id}: o passo de troca interpola uma expressão`);
   return violations;
 }
 
-// O run real do passo de limpeza, num diretório temporário com os arquivos da lista e outros que têm de ficar.
+// O run real do passo de troca, em diretórios temporários: um com os arquivos da lista e outros que têm de ficar, um
+// vazio (nem a pasta pai existe) e um com um link simbólico no lugar do README.md.
 const KEPT_FILES = [
   '.specs/features/casecellshop/spec.md',
   'src/app.ts',
   'CONTRIBUTING.md',
 ];
+const KEPT_CONTENT = 'conteúdo\n';
+
+function errorCodeOf(error: unknown): string {
+  return error instanceof Error && 'code' in error
+    ? String(error.code)
+    : 'erro sem código';
+}
+
+// O código do erro da leitura do caminho, ou 'sem erro' quando ela funciona.
+function readOutcome(full: string): string {
+  try {
+    readFileSync(full);
+    return 'sem erro';
+  } catch (error) {
+    return errorCodeOf(error);
+  }
+}
+
+// O "teste inventado" do achado A1: lista a raiz, filtra os `.md` e lê cada um que achou. Com o arquivo apagado ele some
+// da listagem e o teste passa sem conferi-lo; com uma pasta no lugar, a leitura reprova com EISDIR.
+function enumeratingTestOutcome(dir: string): string {
+  try {
+    for (const name of readdirSync(dir).filter((entry) =>
+      entry.endsWith('.md'),
+    ))
+      readFileSync(join(dir, name));
+    return 'sem erro';
+  } catch (error) {
+    return errorCodeOf(error);
+  }
+}
+
+// Uma pasta de verdade (não um link) e vazia; devolve o que está errado, ou undefined.
+function emptyDirProblem(dir: string, path: string): string | undefined {
+  const full = join(dir, path);
+  let stat;
+  try {
+    stat = lstatSync(full);
+  } catch {
+    return `${path} não existe`;
+  }
+  if (stat.isSymbolicLink()) return `${path} continua um link`;
+  if (!stat.isDirectory()) return `${path} não virou pasta`;
+  if (readdirSync(full).length > 0) return `${path} não está vazia`;
+  return undefined;
+}
 
 function cleanupBehaviorViolations(
   step: DecideStep | undefined,
   listText: string,
 ): string[] {
-  if (step === undefined) return ['falta o passo de limpeza'];
-  const dir = makeTempDir('cleanup-');
-  for (const path of [...DOCS_PATHS, ...KEPT_FILES])
-    writeFileIn(dir, path, 'conteúdo\n');
+  if (step === undefined) return ['falta o passo de troca'];
   const script = join(makeTempDir('cleanup-script-'), 'step.sh');
   writeFileSync(script, step.run ?? '');
-  const run = (): number | null =>
+  const run = (cwd: string): number | null =>
     runCommand('bash', ['--noprofile', '--norc', '-e', script], {
-      cwd: dir,
+      cwd,
       env: { PATH: process.env.PATH ?? '', DOCS_ONLY_PATHS: listText },
     }).status;
   const violations: string[] = [];
-  const first = run();
-  if (first !== 0) violations.push(`saiu com ${String(first)}, esperado 0`);
-  for (const path of DOCS_PATHS)
-    if (existsSync(join(dir, path))) violations.push(`não apagou ${path}`);
+  const problems = (scenario: string, dir: string): void => {
+    for (const path of DOCS_PATHS) {
+      const problem = emptyDirProblem(dir, path);
+      if (problem !== undefined) violations.push(`${scenario}: ${problem}`);
+      else if (readOutcome(join(dir, path)) !== 'EISDIR')
+        violations.push(`${scenario}: a leitura de ${path} não deu EISDIR`);
+    }
+  };
+
+  // Os arquivos da lista existem: viram pastas vazias, o resto fica, e a segunda execução sai com 0 e deixa as pastas.
+  const populated = makeTempDir('cleanup-');
+  for (const path of [...DOCS_PATHS, ...KEPT_FILES])
+    writeFileIn(populated, path, KEPT_CONTENT);
+  if (enumeratingTestOutcome(populated) !== 'sem erro')
+    violations.push('com os arquivos no lugar o teste inventado já reprova');
+  const first = run(populated);
+  if (first !== 0)
+    violations.push(`com os arquivos: saiu com ${String(first)}, esperado 0`);
+  problems('com os arquivos', populated);
   for (const path of KEPT_FILES)
-    if (!existsSync(join(dir, path))) violations.push(`apagou ${path}`);
-  // Um caminho que já não existe não reprova o passo.
-  const second = run();
-  if (second !== 0)
+    if (!existsSync(join(populated, path)))
+      violations.push(`com os arquivos: apagou ${path}`);
+    else if (readFileSync(join(populated, path), 'utf8') !== KEPT_CONTENT)
+      violations.push(`com os arquivos: mudou ${path}`);
+  const listing = enumeratingTestOutcome(populated);
+  if (listing !== 'EISDIR')
     violations.push(
-      `com os arquivos já apagados saiu com ${String(second)}, esperado 0`,
+      `com os arquivos: o teste inventado que lista a raiz e lê os .md deu "${listing}", esperado EISDIR`,
     );
+  const second = run(populated);
+  if (second !== 0)
+    violations.push(`segunda execução: saiu com ${String(second)}, esperado 0`);
+  problems('segunda execução', populated);
+
+  // Nenhum caminho existe, nem a pasta pai: o passo cria tudo.
+  const bare = makeTempDir('cleanup-bare-');
+  const bareStatus = run(bare);
+  if (bareStatus !== 0)
+    violations.push(
+      `sem os arquivos: saiu com ${String(bareStatus)}, esperado 0`,
+    );
+  problems('sem os arquivos', bare);
+
+  // Um link simbólico no lugar de um arquivo da lista vira uma pasta de verdade; o destino do link não é tocado.
+  const linked = makeTempDir('cleanup-link-');
+  const target = makeTempDir('cleanup-target-');
+  writeFileIn(target, 'dentro.txt', KEPT_CONTENT);
+  symlinkSync(target, join(linked, 'README.md'));
+  const linkedStatus = run(linked);
+  if (linkedStatus !== 0)
+    violations.push(
+      `com um link: saiu com ${String(linkedStatus)}, esperado 0`,
+    );
+  problems('com um link', linked);
+  if (!existsSync(join(target, 'dentro.txt')))
+    violations.push('com um link: apagou o conteúdo do destino do link');
   return violations;
+}
+
+// O que o achado A1 pede: com o passo de referência o teste inventado reprova (EISDIR), e com o passo que só apaga
+// ele passa sem erro, sem conferir o arquivo.
+function enumeratingOutcomeAfter(run: string): string {
+  const dir = makeTempDir('cleanup-enumerate-');
+  for (const path of [...DOCS_PATHS, ...KEPT_FILES])
+    writeFileIn(dir, path, KEPT_CONTENT);
+  const script = join(makeTempDir('cleanup-script-'), 'step.sh');
+  writeFileSync(script, run);
+  const status = runCommand('bash', ['--noprofile', '--norc', '-e', script], {
+    cwd: dir,
+    env: { PATH: process.env.PATH ?? '', DOCS_ONLY_PATHS: DOCS_PATHS_TEXT },
+  }).status;
+  return status === 0
+    ? enumeratingTestOutcome(dir)
+    : `o passo saiu com ${String(status)}`;
 }
 
 // Sem paths-ignore nem paths: um workflow que não roda deixaria o ci-ok exigido pendente.
@@ -1618,7 +1830,7 @@ interface FuzzWorkflow extends CiWorkflow {
 
 // O PR roda a versão leve: o job é a mesma conferência do agendado, mas sem semente nem número de exemplos no
 // ambiente (valem os padrões fixos do compose, para a execução ser repetível), e com o down pelo perfil fuzz. AI-53:
-// roda em paralelo ao `test`, depende só do `changes` e é pulado só com docs_only == 'true', com o passo de limpeza
+// roda em paralelo ao `test`, depende só do `changes` e é pulado só com docs_only == 'true', com o passo de troca por pastas
 // logo depois do checkout.
 function ciFuzzViolations(workflow: FuzzWorkflow): string[] {
   const job = jobOf(workflow, 'api-fuzz');
@@ -1900,7 +2112,11 @@ describe('FND-16 as conferências do api-fuzz do CI enxergam o que procuram (con
 
   it('FND-16 o ci-ok que não reprova quando o api-fuzz falha ou é cancelado reprova no comportamento', () => {
     const lenient = parseWorkflow(
-      mutated(GOOD_WITH_FUZZ, CI_OK_FAILURE_LINE, `if false; then`),
+      mutated(
+        GOOD_WITH_FUZZ,
+        '.value.result == "success" or',
+        '.value.result == "success" or .value.result == "failure" or .value.result == "cancelled" or',
+      ),
     );
 
     expect(ciOkRejectsFuzzViolations(lenient)).toEqual([
@@ -2297,28 +2513,35 @@ describe('AI-53 as conferências do ci-ok contra um RESULTS que não é JSON enx
     'RESULTS com JSON cortado com docs_only false: saiu com 0, esperado diferente de 0',
     'RESULTS vazio com docs_only false: saiu com 0, esperado diferente de 0',
   ];
-  const failedOrTrue = `failed=$(echo "$RESULTS" | jq -r 'any(.[]; .result | test("^(failure|cancelled)$"))' || true); if [ "$failed" = "true" ]; then`;
+  // A regra com a polaridade de reprovar o que não passa, lida por `jq ... || true` numa substituição: o erro do jq
+  // vira texto vazio, e o texto vazio não é "true".
+  const failedOrTrue = `bad=$(echo "$RESULTS" | jq -r --arg docs "$DOCS_ONLY" 'any(to_entries[]; (${OK_FILTER}) | not)' || true); if [ "$bad" = "true" ]; then`;
 
   it.each([
     [
-      'trata o erro do jq como "nenhum job falhou" (if jq -e sem validar o JSON antes)',
-      (text: string) => text.replace(CI_OK_JSON_GUARD, () => ''),
+      'trata o erro do jq como "nenhum job reprova" (if jq -e sem validar o JSON antes)',
+      (text: string) =>
+        text
+          .replace(CI_OK_JSON_GUARD, () => '')
+          .replace(CI_OK_RULE_LINE, () => CI_OK_FAIL_OPEN_RULE_LINE),
     ],
     [
       'ignora o erro do jq da validação com || true',
       (text: string) =>
-        text.replace(
-          CI_OK_JSON_GUARD,
-          () =>
-            `echo "$RESULTS" | jq -e 'type == "object"' > /dev/null || true`,
-        ),
+        text
+          .replace(
+            CI_OK_JSON_GUARD,
+            () =>
+              `echo "$RESULTS" | jq -e 'type == "object" and length > 0' > /dev/null || true`,
+          )
+          .replace(CI_OK_RULE_LINE, () => CI_OK_FAIL_OPEN_RULE_LINE),
     ],
     [
-      'lê a falha por jq ... || true dentro de uma substituição',
+      'lê a regra por jq ... || true dentro de uma substituição',
       (text: string) =>
         text
           .replace(CI_OK_JSON_GUARD, () => '')
-          .replace(CI_OK_FAILURE_LINE, () => failedOrTrue),
+          .replace(CI_OK_RULE_LINE, () => failedOrTrue),
     ],
   ])(
     'AI-53 um ci-ok que %s aprova o RESULTS inválido e reprova no comportamento, sem reprovar o failure nem o skipped',
@@ -2333,37 +2556,197 @@ describe('AI-53 as conferências do ci-ok contra um RESULTS que não é JSON enx
   );
 });
 
-describe('AI-53 as conferências do passo de limpeza enxergam o que procuram (controle negativo)', () => {
-  it('AI-53 o passo de limpeza de referência apaga os oito arquivos, deixa os outros e aceita caminho que não existe (controle positivo)', () => {
+describe('AI-53 as conferências do ci-ok contra um RESULTS que é JSON mas não descreve os jobs enxergam o que procuram (controle negativo)', () => {
+  const labelsOf = (cases: typeof SHAPE_RESULTS): string[] =>
+    ['true', 'false'].flatMap((docsOnly) =>
+      cases.map(
+        ([label]) =>
+          `${label} com docs_only ${docsOnly}: saiu com 0, esperado diferente de 0`,
+      ),
+    );
+  const only = (...labels: string[]): typeof SHAPE_RESULTS =>
+    SHAPE_RESULTS.filter(([label]) => labels.includes(label));
+
+  it('AI-53 o ci-ok de referência reprova {}, um job sem result, neutral, um resultado desconhecido e um job que não é objeto, com docs_only true e false (controle positivo)', () => {
+    expect(ciOkShapeViolations(parseWorkflow(GOOD_CI_OK))).toEqual([]);
+  }, 60_000);
+
+  it('AI-53 o ci-ok anterior, por lista de proibidos, sai com 0 com {"test":{}} e com neutral, e a conferência acusa (controle de comportamento)', () => {
+    const legacy = parseWorkflow(
+      GOOD_CI_OK.replace(ciOkJob('checks, test, changes'), () =>
+        legacyCiOkJob('checks, test, changes'),
+      ),
+    );
+
+    const violations = ciOkShapeViolations(legacy);
+
+    expect(violations).toContain(
+      'RESULTS com um job sem result com docs_only false: saiu com 0, esperado diferente de 0',
+    );
+    expect(violations).toContain(
+      'RESULTS com result neutral com docs_only false: saiu com 0, esperado diferente de 0',
+    );
+    expect(violations).toEqual(labelsOf(SHAPE_RESULTS));
+    expect(ciOkBehaviorViolations(legacy)).toEqual([
+      'checks neutral: saiu com 0, esperado diferente de 0',
+      'test neutral: saiu com 0, esperado diferente de 0',
+      'changes neutral: saiu com 0, esperado diferente de 0',
+    ]);
+    expect(ciOkViolations(legacy)).toEqual([
+      'o run não cita success',
+      'o run não exige length > 0 no RESULTS',
+    ]);
+  }, 60_000);
+
+  it.each([
+    [
+      'sem exigir pelo menos um job na guarda (all de um objeto vazio é verdadeiro)',
+      (text: string) => text.replace(CI_OK_JSON_GUARD, () => LEGACY_JSON_GUARD),
+      only('RESULTS {} sem nenhum job'),
+    ],
+    [
+      'com a guarda do objeto vazio ignorada por || true',
+      (text: string) =>
+        text.replace(
+          CI_OK_JSON_GUARD,
+          () =>
+            `echo "$RESULTS" | jq -e 'type == "object" and length > 0' > /dev/null || true`,
+        ),
+      only('RESULTS {} sem nenhum job'),
+    ],
+    [
+      'que trata um job sem result como success',
+      (text: string) =>
+        text.replace(
+          '.value.result == "success"',
+          () => '(.value.result // "success") == "success"',
+        ),
+      only(
+        'RESULTS com um job sem result',
+        'RESULTS com success e um job sem result',
+      ),
+    ],
+    [
+      'que passa quando algum job é success (any no lugar de all)',
+      (text: string) =>
+        text.replace('all(to_entries[];', () => 'any(to_entries[];'),
+      only(
+        'RESULTS com success e um job sem result',
+        'RESULTS com success e um job neutral',
+      ),
+    ],
+  ])(
+    'AI-53 um ci-ok %s aprova o RESULTS sem o job certo e reprova na conferência de forma do RESULTS',
+    (_label, edit, accused) => {
+      const workflow = variant(edit);
+
+      expect(ciOkShapeViolations(workflow)).toEqual(labelsOf(accused));
+      expect(ciOkInvalidResultsViolations(workflow)).toEqual([]);
+    },
+    60_000,
+  );
+});
+
+describe('AI-53 as conferências do passo de troca por pastas enxergam o que procuram (controle negativo)', () => {
+  it('AI-53 o passo de troca de referência faz do arquivo, do caminho que não existia e do link uma pasta vazia, deixa os outros e sai com 0 na segunda execução (controle positivo)', () => {
     expect(
       cleanupBehaviorViolations(refStep(CLEANUP_RUN), DOCS_PATHS_TEXT),
     ).toEqual([]);
   });
 
   it.each([
-    ['sem -f (caminho que não existe reprova o passo)', 'rm -f --', 'rm --'],
     [
-      'apagando também o src/app.ts',
+      'só apaga, sem criar a pasta (rm sem mkdir)',
+      '; mkdir -p -- "$path"',
+      '',
+      'não existe',
+    ],
+    [
+      'cria a pasta sem -p (a pasta pai que falta reprova o passo)',
+      'mkdir -p --',
+      'mkdir --',
+      'sem os arquivos: saiu com',
+    ],
+    [
+      'não trata o link (o link fica)',
+      '[ -L "$path" ] || ',
+      '',
+      'com um link: README.md continua um link',
+    ],
+    [
+      'cria a pasta antes de apagar (mkdir antes do rm)',
+      'rm -f -- "$path"; mkdir -p -- "$path"',
+      'mkdir -p -- "$path"; rm -f -- "$path"',
+      'com os arquivos: saiu com',
+    ],
+    [
+      'troca sempre, até a pasta que já está lá (a segunda execução reprova o passo)',
+      '[ -n "$path" ] && { [ -L "$path" ] || [ ! -d "$path" ]; }',
+      '[ -n "$path" ]',
+      'segunda execução: saiu com',
+    ],
+    [
+      'sem -f (caminho que não existe reprova o passo)',
+      'rm -f --',
+      'rm --',
+      'sem os arquivos: saiu com',
+    ],
+    [
+      'trocando também o src/app.ts',
       'rm -f -- "$path"',
       'rm -f -- "$path" src/app.ts',
+      'com os arquivos: apagou src/app.ts',
     ],
     [
-      'sem ler a lista (apaga só o README.md)',
+      'sem ler a lista (troca só o README.md)',
       '"$DOCS_ONLY_PATHS"',
       '"README.md"',
+      'com os arquivos: .specs/README.md não',
     ],
     [
-      'apagando só o primeiro caminho da lista',
+      'trocando só o primeiro caminho da lista',
       '"$DOCS_ONLY_PATHS" |',
       '"$DOCS_ONLY_PATHS" | head -n 1 |',
+      'com os arquivos: .specs/README.md não',
     ],
-  ])('AI-53 o passo de limpeza %s reprova no comportamento', (_l, from, to) => {
-    expect(
-      cleanupBehaviorViolations(
+  ])(
+    'AI-53 o passo de troca %s reprova no comportamento',
+    (_label, from, to, fragment) => {
+      const violations = cleanupBehaviorViolations(
         refStep(mutated(CLEANUP_RUN, from, to)),
         DOCS_PATHS_TEXT,
+      );
+
+      expect(violations.join('\n')).toContain(fragment);
+    },
+  );
+
+  it('AI-53 um teste inventado que lista a raiz e lê os .md reprova com EISDIR depois da troca, e passa sem erro depois de só apagar (o achado A1)', () => {
+    expect(enumeratingOutcomeAfter(CLEANUP_RUN)).toBe('EISDIR');
+    expect(enumeratingOutcomeAfter(DELETE_ONLY_RUN)).toBe('sem erro');
+    expect(
+      cleanupBehaviorViolations(refStep(DELETE_ONLY_RUN), DOCS_PATHS_TEXT).join(
+        '\n',
       ),
-    ).not.toEqual([]);
+    ).toContain(
+      'o teste inventado que lista a raiz e lê os .md deu "sem erro"',
+    );
+  });
+
+  it('AI-53 a leitura de cada um dos oito caminhos da lista depois da troca lança EISDIR', () => {
+    const dir = makeTempDir('cleanup-eisdir-');
+    for (const path of DOCS_PATHS) writeFileIn(dir, path, KEPT_CONTENT);
+    const script = join(makeTempDir('cleanup-script-'), 'step.sh');
+    writeFileSync(script, CLEANUP_RUN);
+    const status = runCommand('bash', ['--noprofile', '--norc', '-e', script], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? '', DOCS_ONLY_PATHS: DOCS_PATHS_TEXT },
+    }).status;
+
+    expect(status).toBe(0);
+    expect(DOCS_PATHS.map((path) => readOutcome(join(dir, path)))).toEqual(
+      DOCS_PATHS.map(() => 'EISDIR'),
+    );
   });
 });
 
@@ -2504,28 +2887,40 @@ const STRUCTURE_CASES: StructureCase[] = [
     'o checkout guarda a credencial (persist-credentials)',
   ],
   [
-    'um test sem o passo que tira os arquivos da lista',
+    'um test sem o passo que troca os arquivos da lista por pastas',
     CLEANUP_STEP,
     '',
     `test: falta o passo "${CLEANUP_NAME}"`,
   ],
   [
-    'um test com o passo que tira os arquivos depois do npm ci',
+    'um test com o passo que troca os arquivos por pastas depois do npm ci',
     `${CLEANUP_STEP}      - uses: actions/setup-node@${SHA}\n      - run: npm ci\n`,
     `      - uses: actions/setup-node@${SHA}\n      - run: npm ci\n${CLEANUP_STEP}`,
-    'test: o passo de limpeza não vem logo depois do checkout',
+    'test: o passo de troca não vem logo depois do checkout',
   ],
   [
-    'um test com o passo que tira os arquivos sem ler a lista',
+    'um test com o passo que troca os arquivos por pastas sem ler a lista',
     String.raw`printf '%s\n' "$DOCS_ONLY_PATHS" | while`,
     String.raw`printf '%s\n' "README.md" | while`,
-    'test: o passo de limpeza não lê $DOCS_ONLY_PATHS',
+    'test: o passo de troca não lê $DOCS_ONLY_PATHS',
   ],
   [
-    'um test com o passo que tira os arquivos sem rm -f --',
+    'um test com o passo que troca os arquivos por pastas sem rm -f --',
     'rm -f --',
     'rm -f',
-    'test: o passo de limpeza não apaga com rm -f --',
+    'test: o passo de troca não apaga com rm -f --',
+  ],
+  [
+    'um test com o passo que troca os arquivos por pastas sem mkdir -p --',
+    'mkdir -p --',
+    'mkdir --',
+    'test: o passo de troca não cria a pasta com mkdir -p --',
+  ],
+  [
+    'um test com o passo que só apaga os arquivos (o nome antigo, sem o mkdir)',
+    `name: ${CLEANUP_NAME}`,
+    'name: Tira os arquivos que o AI-53 não testa',
+    `test: falta o passo "${CLEANUP_NAME}"`,
   ],
   [
     'um ci-ok sem o env DOCS_ONLY',
@@ -2534,15 +2929,27 @@ const STRUCTURE_CASES: StructureCase[] = [
     'o env DOCS_ONLY não vem de needs.changes.outputs.docs_only',
   ],
   [
-    'um ci-ok que não confere o skipped',
-    CI_OK_SKIP_LINE,
+    'um ci-ok que não confere o skipped nem o success',
+    CI_OK_RULE_LINE,
     'if false; then',
     'o run não cita skipped',
+  ],
+  [
+    'um ci-ok que não cita o success',
+    '.value.result == "success" or',
+    '.value.result == "ok" or',
+    'o run não cita success',
+  ],
+  [
+    'um ci-ok com a guarda sem o length > 0 (o objeto vazio passaria)',
+    CI_OK_JSON_GUARD,
+    LEGACY_JSON_GUARD,
+    'o run não exige length > 0 no RESULTS',
   ],
 ];
 
 describe('AI-53 as conferências do pulo do test enxergam o que procuram (controle negativo)', () => {
-  it('AI-53 a estrutura correta passa em todas as conferências do changes, do test, da limpeza e do ci-ok (controle positivo)', () => {
+  it('AI-53 a estrutura correta passa em todas as conferências do changes, do test, da troca por pastas e do ci-ok (controle positivo)', () => {
     const good = parseWorkflow(GOOD_STRUCTURE);
 
     expect(docsOnlyViolations(good)).toEqual([]);
@@ -2578,15 +2985,23 @@ describe('AI-53 as conferências do pulo do test enxergam o que procuram (contro
   });
 
   it.each([
-    ['não confere o skipped', CI_OK_SKIP_LINE, 'if false; then'],
-    ['ignora o DOCS_ONLY (pulado nunca passa)', '$docs != "true" or ', ''],
     [
-      'deixa qualquer job pulado com docs_only true',
-      ' or (.key != "test" and .key != "api-fuzz")',
+      'aceita o skipped de qualquer job, com ou sem docs_only',
+      '.value.result == "skipped" and $docs == "true" and (.key == "test" or .key == "api-fuzz")',
+      '.value.result == "skipped"',
+    ],
+    [
+      'ignora o DOCS_ONLY (o test e o api-fuzz pulados passam sempre)',
+      '$docs == "true" and ',
       '',
     ],
     [
-      'pula o api-fuzz e o test em qualquer caso',
+      'deixa qualquer job pulado com docs_only true',
+      ' and (.key == "test" or .key == "api-fuzz")',
+      '',
+    ],
+    [
+      'nunca aceita o pulado (reprova o test e o api-fuzz pulados com docs_only true)',
       '.value.result == "skipped" and',
       '.value.result == "nothing" and',
     ],
@@ -2602,7 +3017,7 @@ describe('AI-53 as conferências do pulo do test enxergam o que procuram (contro
 
   it('AI-53 um ci-ok que deixa o job pulado de outro job passar com docs_only true reprova com o rótulo do job', () => {
     const lenient = variant((t) =>
-      t.replace(' or (.key != "test" and .key != "api-fuzz")', () => ''),
+      t.replace(' and (.key == "test" or .key == "api-fuzz")', () => ''),
     );
 
     expect(ciOkSkipViolations(lenient)).toEqual([
@@ -2632,7 +3047,7 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
     expect(skipConditionViolations(ci, 'api-fuzz')).toEqual([]);
   });
 
-  it('AI-53 o test e o api-fuzz tiram os arquivos da lista logo depois do checkout, lendo DOCS_ONLY_PATHS', () => {
+  it('AI-53 o test e o api-fuzz trocam os arquivos da lista por pastas logo depois do checkout, lendo DOCS_ONLY_PATHS, com rm -f -- e mkdir -p --', () => {
     expect([
       ...cleanupViolations(ci, 'test'),
       ...cleanupViolations(ci, 'api-fuzz'),
@@ -2657,13 +3072,13 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
     expect(decideGitErrorViolations(decideStepWithList(ci))).toEqual([]);
   });
 
-  it('AI-53 o passo de limpeza real do test apaga os oito arquivos, deixa os outros e aceita caminho que não existe', () => {
+  it('AI-53 o passo de troca real do test faz uma pasta vazia de cada um dos oito caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a raiz reprova com EISDIR', () => {
     expect(
       cleanupBehaviorViolations(cleanupStepOf(ci, 'test'), docsPathsTextOf(ci)),
     ).toEqual([]);
   });
 
-  it('AI-53 o passo de limpeza real do api-fuzz apaga os oito arquivos, deixa os outros e aceita caminho que não existe', () => {
+  it('AI-53 o passo de troca real do api-fuzz faz uma pasta vazia de cada um dos oito caminhos (existam ou não, link inclusive), deixa os outros, sai com 0 na segunda execução e o teste inventado que lista a raiz reprova com EISDIR', () => {
     expect(
       cleanupBehaviorViolations(
         cleanupStepOf(ci, 'api-fuzz'),
@@ -2694,5 +3109,10 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
 
   it('AI-53 o passo de shell do ci-ok real reprova um RESULTS que não é JSON (lixo, cortado, vazio), com docs_only true e false', () => {
     expect(ciOkInvalidResultsViolations(ci)).toEqual([]);
+  }, 60_000);
+
+  it('AI-53 o passo de shell do ci-ok real aceita só success (e skipped do test e do api-fuzz com docs_only true): {}, um job sem result, neutral, um resultado desconhecido e um job que não é objeto reprovam', () => {
+    expect(ciOkShapeViolations(ci)).toEqual([]);
+    expect(ciOkBehaviorViolations(ci)).toEqual([]);
   }, 60_000);
 });
