@@ -168,7 +168,9 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
 - **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
-- **Pular o job `test` em PR que só muda `.specs/**` ou o `README.md`** (depois do B3): calculado no próprio YAML, com uma lista estreita de caminhos que nenhum teste lê, e nunca por `paths-ignore`, que deixaria o `ci-ok` pendente.
+- **Pular também o `Fuzzing da API` em PR só de documentação** (depois do AI-53): o `api-fuzz` sobe o compose inteiro e não lê os arquivos da lista `DOCS_ONLY_PATHS`; pode depender do `changes` como o `test`.
+- **Guarda de leitura do AI-53 é estática:** um teste que varre a árvore inteira (`git ls-files` sem filtro) e lê todo arquivo escaparia dela; até haver um rastreio das leituras na execução, a revisão cobre esse caso.
+- **Prova ao vivo do AI-53:** conferir no primeiro PR só de documentação depois do merge que o `test` sai pulado e o `ci-ok` verde.
 - **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor:**
   - feitas em 01/11/2026:
