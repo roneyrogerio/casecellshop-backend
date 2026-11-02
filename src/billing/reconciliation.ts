@@ -205,7 +205,11 @@ async function releaseHeld(dlq: Queue, held: Set<string>): Promise<void> {
     try {
       // O resultado 'stale' é ignorado: a mensagem já mudou de dono e o laço segue.
       await dlq.changeVisibility(handle, 0);
-    } catch {
+    } catch (error) {
+      // A AWS lança MessageNotInflight quando a visibilidade já venceu (rodada acima de 5 min):
+      // a mensagem já está visível, como o 'stale', e as outras ainda precisam voltar.
+      if ((error as { name?: unknown } | null)?.name === 'MessageNotInflight')
+        continue;
       // Não esconde o erro original da rodada. Para no primeiro erro: com o SQS fora, cada
       // chamada esperaria o timeout de 5 s e 100 mensagens passariam do prazo de 25 s do
       // encerramento; a visibilidade de 5 min vence sozinha.
