@@ -115,7 +115,10 @@ export async function cancelOrder(
 export function describeCancel(
   orderId: string,
   result: CancelOrderResult,
+  settleWindowMs: number = SETTLE_WINDOW_MS,
 ): { message: string; failed: boolean } {
+  // Derivado da janela usada, para o texto não divergir do valor real.
+  const settleMinutes = Math.max(1, Math.ceil(settleWindowMs / 60_000));
   switch (result.kind) {
     case 'cancelled':
       return {
@@ -139,12 +142,12 @@ export function describeCancel(
       };
     case 'erp_unavailable':
       return {
-        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (15 min).`,
+        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (${settleMinutes} min).`,
         failed: true,
       };
     case 'permit_lost':
       return {
-        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (15 min).`,
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (${settleMinutes} min).`,
         failed: true,
       };
   }
