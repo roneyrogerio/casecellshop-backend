@@ -11,11 +11,12 @@ import {
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
-import type { Semaphore } from '../shared/semaphore.ts';
+import { withPermit, type Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
+import { queueGaugeLifecycle } from './queue-gauge.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
@@ -70,20 +71,6 @@ interface Context {
   clock: Clock;
   settings: ReconcilerConfig;
   isStopping: () => boolean;
-}
-
-// Uma consulta ao ERP por vez, sob uma permissão do semáforo: o limite vale para todo o processo.
-async function withSemaphore<T>(
-  semaphore: Semaphore,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const permits = await semaphore.acquireFree();
-  semaphore.release(permits - 1);
-  try {
-    return await fn();
-  } finally {
-    semaphore.release(1);
-  }
 }
 
 // O dead_at marca a chegada à DLQ uma vez; a permissão de chamada do worker o zera.
@@ -177,7 +164,7 @@ async function settleMessage(
     return 'closed';
   }
 
-  return withSemaphore(semaphore, () =>
+  return withPermit(semaphore, () =>
     invoiceIfFound(ctx, received, message, log),
   );
 }
@@ -268,7 +255,6 @@ export function createReconciler({
     ...DEFAULT_RECONCILER_CONFIG,
     ...config,
   };
-  let wake: (() => void) | undefined;
   const ctx: Context = {
     db: createDb(pool),
     dlq,
@@ -282,18 +268,15 @@ export function createReconciler({
   };
 
   const runner = createLoopRunner({
+    clock,
     async run(isRunning) {
       while (isRunning()) {
         await round(ctx);
         if (!isRunning()) break;
-        // O stop() acorda a espera: sem isso, o encerramento aguardaria o intervalo inteiro (5 min).
-        await Promise.race([
-          clock.sleep(settings.intervalMs),
-          new Promise<void>((resolve) => (wake = resolve)),
-        ]);
+        await runner.pause(settings.intervalMs);
       }
     },
-    onStopping: () => wake?.(),
+    ...queueGaugeLifecycle(telemetry, dlq, 'dlq', logger),
   });
 
   return {

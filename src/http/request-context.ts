@@ -49,6 +49,12 @@ interface ConcludedRequest {
   startedAt: bigint;
 }
 
+// Valor de texto que um handler deixou em `res.locals`, ou nada.
+function stringLocal(res: Response, key: string): string | undefined {
+  const value: unknown = res.locals[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
 function matchedRouteOf(res: Response): string | undefined {
   return typeof res.locals['route'] === 'string'
     ? res.locals['route']
@@ -135,12 +141,12 @@ function concludeRequest({
   );
   // Campos explícitos: o evento 'finish' pode correr fora do contexto assíncrono da requisição.
   // O orderId entra só quando o handler o gravou (pedido existente).
-  const orderId =
-    typeof res.locals['orderId'] === 'string'
-      ? res.locals['orderId']
-      : undefined;
+  const orderId = stringLocal(res, 'orderId');
+  // O resultado da leitura do cache da vitrine, gravado pela rota só no 200.
+  const cache = stringLocal(res, 'cache');
   const fields = {
     ...(orderId === undefined ? {} : { orderId }),
+    ...(cache === undefined ? {} : { cache }),
     ...(status === undefined ? {} : { status }),
     correlationId,
     trace_id: spanContext.traceId,

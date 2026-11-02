@@ -30,7 +30,6 @@ const DB_NAME = 'casecellshop';
 // SKU do catálogo de exemplo do erp_sim (o seed do serviço migrate), com o preço e o estoque do ERP.
 const SKU = 'CAPA-MOTO-G84';
 const PRICE_CENTS = 4990;
-const STORE_ON_HAND = 10;
 const QUANTITY = 2;
 // Outro SKU do seed para o teste de métricas, para o estoque do primeiro teste ser só dele.
 const METRICS_SKU = 'CABO-USBC-1M';
@@ -40,6 +39,8 @@ let environment: StartedDockerComposeEnvironment;
 let projectName: string;
 // Lida do Docker depois do `up`: a porta do host é escolhida por ele (API_PORT=0), sem janela de corrida.
 let apiPort: number;
+// O estoque do SKU no erp_sim, lido antes do checkout: a sincronização do worker o grava na loja na primeira rodada.
+let erpOnHand: number;
 
 function composeCli(args: string[]): Promise<string> {
   return runCompose(projectName, args);
@@ -63,8 +64,7 @@ async function collectServiceLogs(): Promise<string> {
   }
 }
 
-// O catálogo da loja vem da sincronização (M4): o teste grava o SKU direto no PostgreSQL do contêiner.
-// Essa semeadura por psql existe só até a sincronização do M4; então o teste passa a esperar a primeira rodada dela.
+// Consulta direta ao PostgreSQL do contêiner, para ler o erp_sim e o estado da loja.
 async function psql(sql: string): Promise<string> {
   const result = await environment
     .getContainer('postgres-1')
@@ -94,18 +94,28 @@ beforeAll(async () => {
     collectServiceLogs,
   );
   apiPort = publishedPort(environment, 'api-1', 3000);
-  for (const [sku, name, price] of [
-    [SKU, 'Capa Moto G84 antichoque', PRICE_CENTS],
-    [METRICS_SKU, 'Cabo USB-C de 1 m', METRICS_PRICE_CENTS],
-  ] as const) {
-    await psql(
-      `insert into products (sku, name, price_cents) values ('${sku}', '${name}', ${price}) on conflict (sku) do nothing`,
-    );
-    await psql(
-      `insert into inventory (sku, on_hand, reserved) values ('${sku}', ${STORE_ON_HAND}, 0) on conflict (sku) do nothing`,
-    );
-  }
+  erpOnHand = await awaitFirstSyncRound();
 }, 480_000);
+
+// O catálogo da loja vem do ERP simulado pela sincronização do worker (AD-009), que roda na subida e a cada 60 s.
+// O GET /products só responde 200 depois da primeira rodada completa: o checkout espera por ela, sem corrida com
+// o estoque que a rodada grava. Devolve o estoque do SKU no erp_sim, que a rodada deixou na loja.
+async function awaitFirstSyncRound(): Promise<number> {
+  await vi.waitFor(
+    async () => {
+      expect((await getJson('/products')).status).toBe(200);
+    },
+    { timeout: 2 * WAIT_GUARD_MS, interval: 500 },
+  );
+  const onHand = await psql(
+    `select on_hand from erp_sim.products where sku = '${SKU}'`,
+  );
+  expect(
+    await psql(`select on_hand from inventory where sku = '${SKU}'`),
+    'o estoque da loja vem do ERP simulado',
+  ).toBe(onHand);
+  return Number(onHand);
+}
 
 afterAll(async () => {
   await environment?.down({ removeVolumes: true, timeout: 5 });
@@ -186,7 +196,7 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
       await psql(
         `select on_hand || ',' || reserved || ',' || sold_total from inventory where sku = '${SKU}'`,
       ),
-    ).toBe(`${STORE_ON_HAND - QUANTITY},0,${QUANTITY}`);
+    ).toBe(`${erpOnHand - QUANTITY},0,${QUANTITY}`);
     expect(
       await psql(
         `select published_at is not null from outbox where order_id = '${orderId}'`,
@@ -236,5 +246,35 @@ describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compo
     expect(
       familyOf(families, 'casecellshop.order.accept_to_invoice.duration')?.type,
     ).toBe('histogram');
+  }, 60_000);
+
+  it('OBS-02 o /metrics do processo da API no compose expõe os gauges lidos do banco: idade da sincronização, idade da outbox e o estoque', async () => {
+    // Os gauges lidos do banco saem pela API, não pelo worker (AD-008): nenhum outro teste sobe o main/api.ts, então
+    // só este vê se ele registra cada um. A leitura sai de dentro do contêiner da API, como a do worker.
+    const script =
+      "fetch('http://127.0.0.1:3000/metrics').then((r) => r.text()).then((t) => process.stdout.write(t))";
+    const result = await environment
+      .getContainer('api-1')
+      .exec(['node', '-e', script]);
+    expect(result.exitCode, result.output).toBe(0);
+
+    const families = parseExposition(result.stdout);
+    const gauges = [
+      'casecellshop.catalog.sync.age',
+      'casecellshop.outbox.oldest_pending.age',
+      'casecellshop.inventory.reserved',
+      'casecellshop.inventory.oversold_skus',
+    ] as const;
+    for (const gauge of gauges) {
+      expect(familyOf(families, gauge)?.type, `${gauge} é um gauge`).toBe(
+        'gauge',
+      );
+      // Sem atributos: uma série só; a primeira rodada completa (esperada no beforeAll) já deu valor à idade da
+      // sincronização, que não grava ponto sem rodada completa.
+      expect(
+        metricValue(families, gauge),
+        `${gauge} tem valor`,
+      ).toBeGreaterThanOrEqual(0);
+    }
   }, 60_000);
 });

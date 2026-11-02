@@ -20,6 +20,7 @@ const HEADER = [
 
 const INSTRUMENT_LABEL: Record<InstrumentKind, string> = {
   counter: 'contador',
+  gauge: 'gauge',
   histogram: 'histograma',
   up_down_counter: 'UpDownCounter',
 };

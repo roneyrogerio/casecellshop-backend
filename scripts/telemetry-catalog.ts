@@ -7,6 +7,10 @@ import {
   BILLING_METRICS,
 } from '../src/billing/telemetry.ts';
 import {
+  CATALOG_LOG_EVENTS,
+  CATALOG_METRICS,
+} from '../src/catalog/telemetry.ts';
+import {
   CHECKOUT_LOG_EVENTS,
   CHECKOUT_METRICS,
 } from '../src/checkout/telemetry.ts';
@@ -31,6 +35,7 @@ export function repeatedNames(parts: readonly object[]): string[] {
 
 const METRIC_PARTS = [
   HTTP_METRICS,
+  CATALOG_METRICS,
   CHECKOUT_METRICS,
   BILLING_METRICS,
   ERP_METRICS,
@@ -38,6 +43,7 @@ const METRIC_PARTS = [
 
 const EVENT_PARTS = [
   HTTP_LOG_EVENTS,
+  CATALOG_LOG_EVENTS,
   CHECKOUT_LOG_EVENTS,
   BILLING_LOG_EVENTS,
   DB_LOG_EVENTS,
@@ -53,6 +59,7 @@ if (repeated.length > 0)
 
 export const METRICS = {
   ...HTTP_METRICS,
+  ...CATALOG_METRICS,
   ...CHECKOUT_METRICS,
   ...BILLING_METRICS,
   ...ERP_METRICS,
@@ -60,6 +67,7 @@ export const METRICS = {
 
 export const LOG_EVENTS = {
   ...HTTP_LOG_EVENTS,
+  ...CATALOG_LOG_EVENTS,
   ...CHECKOUT_LOG_EVENTS,
   ...BILLING_LOG_EVENTS,
   ...DB_LOG_EVENTS,

@@ -199,7 +199,7 @@ Este arquivo guarda as decisões de projeto no formato ADR (contexto, decisão, 
 
 ### AD-009 · Sincronização periódica de preço e estoque, sem devolver unidade vendida
 
-**Status:** aceita (29/10/2026)
+**Status:** aceita (29/10/2026). A gravação de todo SKU em toda rodada é alterada pela AD-030.
 
 **Contexto.** Uma carga única na subida deixaria preço e estoque congelados. A loja baixa o `on_hand` localmente no faturamento, então uma leitura do ERP feita **antes** de um faturamento e gravada **depois** da baixa local devolveria a unidade vendida. Pular a linha nesse caso evitaria isso, mas um SKU que vende sem parar nunca seria atualizado.
 
@@ -856,6 +856,39 @@ O princípio adotado é a verificação determinística e independente de quem i
 - [OpenTelemetry, *HTTP spans*](https://opentelemetry.io/docs/specs/semconv/http/http-spans/), consultado em 01/11/2026: o nome do span (`{method} {target}`, `HTTP` com `_OTHER`) e os níveis de exigência do `http.route`, do `http.response.status_code` e do `url.query`.
 - [TypeScript, *FAQ*](https://github.com/microsoft/TypeScript/wiki/FAQ), consultado em 01/11/2026: os tipos de objeto são abertos e a conferência de propriedade a mais só vale para objeto literal; tipos exatos são o pedido #12936, ainda sem sintaxe.
 - [type-fest, `Exact`](https://github.com/sindresorhus/type-fest/blob/main/source/exact.d.ts), consultado em 01/11/2026: a técnica de recusar as chaves a mais com `Record<Exclude<keyof Entrada, keyof Parâmetro>, never>` num parâmetro genérico.
+
+---
+
+### AD-030 · A sincronização lê o catálogo inteiro, mas grava só o que mudou
+
+**Status:** proposta (02/11/2026). Altera, na AD-009, "um `UPDATE` por SKU" e "Toda rodada atualiza todos os SKUs".
+
+**Contexto.** A AD-009 manda um comando por SKU em toda rodada. Com alguns milhares de SKUs e uma rodada por minuto, são dois comandos por SKU por minuto (produto e estoque), mesmo quando nada mudou no ERP: com 5 mil SKUs, 10 mil comandos curtos por minuto que reescrevem o mesmo valor. A leitura do ERP continua completa: para o catálogo, a API do ERP expõe só a consulta de produtos, preços e estoque (`PROJECT.md`, "Restrições"), então não se pode contar com um filtro "alterados desde", e só a leitura completa mostra os SKUs removidos (`CAT-11`).
+
+**Decisão.**
+
+- Altera uma parte da AD-009, que segue valendo no resto: a rodada guarda em `t0` o preço, o nome, o `on_hand` e o `sold_total` de cada SKU e, depois de ler o ERP, decide por tabela. Preço e nome iguais aos guardados: nenhum comando em `products`. Estoque igual: nenhum comando em `inventory`. Os SKUs alterados, os novos e os ausentes de uma rodada completa recebem o comando da AD-009; uma rodada completa sem nenhuma escrita ainda grava o `last_completed_at` (`CAT-14`).
+- O valor gravado fica o mesmo da AD-009: com o estoque do ERP igual ao guardado em `t0`, o valor da fórmula da AD-009 é o que a loja já tem depois das próprias baixas, porque o faturamento baixa o `on_hand` com o mesmo piso em zero.
+- Detalhes: [`design.md`, "Sincronização"](../features/casecellshop/design.md#sincronização-ad-009).
+
+**Alternativas consideradas:**
+
+- **Regravar todo SKU a cada rodada (AD-009 como estava).** Simples, mas o número de comandos cresce com o catálogo, e não com as mudanças.
+- **Ler do ERP só o que mudou** (por data de alteração), com uma leitura completa em intervalo maior para pegar os removidos. É o desenho comum nas integrações de loja com ERP, mas depende de a API do ERP oferecer esse filtro, que nenhuma hipótese garante.
+- **Buscar o produto no ERP só quando alguém o pede** (cache-aside sobre o ERP). Põe o ERP, cuja chamada tem timeout de 10 s e que pode cair, no caminho da vitrine (meta de 200 ms); a vitrine é uma lista paginada, que precisa do catálogo inteiro; e o checkout reserva no banco, sem chamar o ERP na transação.
+- **Avançar o `synced_at` do SKU pulado.** Manteria a garantia contra leitura antiga mesmo com réplicas do worker, mas volta a escrever todo SKU a cada rodada.
+
+**Trade-off.** Uma rodada que pula um SKU não avança o `synced_at` dele. A garantia da AD-009 de que uma leitura mais antiga nunca sobrescreve uma mais nova passa a depender de as rodadas não se sobreporem, o que vale com um worker só (AD-009); com réplicas, uma rodada mais antiga ainda em curso pode gravar um valor anterior, corrigido na rodada seguinte.
+
+**Rever quando:** a API do ERP oferecer "alterados desde", ou o worker passar a ter réplicas. Aí, a leitura só do que mudou com a reconciliação completa periódica, e a coordenação entre réplicas da AD-009.
+
+**Referências:**
+
+- [Microsoft, padrão *Materialized View*](https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view), consultado em 02/11/2026: o modelo de leitura atualizado por agenda ou por evento, por reconstrução completa ou incremental, servindo a última versão completa e com alerta pela idade.
+- [Microsoft, padrão *Cache-Aside*](https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside), consultado em 02/11/2026: o padrão não serve quando os dados cabem no cache; aí, carregar tudo na subida.
+- [Martin Fowler, *What do you mean by "Event-Driven"?*](https://martinfowler.com/articles/201701-event-driven.html), consultado em 02/11/2026: o estado replicado dá resiliência, latência menor e menos carga na origem, ao custo de cópia e de lógica em quem recebe.
+- [commercetools, *Plan your integration landscape*](https://docs.commercetools.com/learning-integrate-with-composable-commerce/integration-patterns/integrate-with-external-product-and-inventory-data.md), consultado em 02/11/2026: depois da carga inicial, só o que mudou, com fluxos separados para preço e estoque.
+- [Dutchie, *Incremental Sync*](https://api.pos.dutchie.com/pages/incremental-sync.html), consultado em 02/11/2026: a carga completa de base e depois "alterados desde"; os registros apagados não aparecem na carga incremental.
 
 ## Escolhas de ferramenta
 
