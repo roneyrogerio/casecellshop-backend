@@ -342,7 +342,7 @@ As regras estão no formato de arquivo de regras do Prometheus ([regras de alert
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
 
-Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os alertas que disparam num evento só (furo de estoque e erro de configuração) também disparam quando a série aparece na janela (`x unless x offset <janela>`). Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Os alertas foram conferidos com o `promtool test rules`, inclusive na primeira rejeição por falta de estoque.
+Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, o primeiro evento de cada série depois da subida do processo não dispara alerta (a primeira rejeição por falta de estoque, o primeiro `config_error`), e só o segundo dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio.
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
@@ -538,8 +538,6 @@ groups:
           max(casecellshop_inventory_oversold_skus) > 0
           or
           sum(increase(casecellshop_erp_out_of_stock_rejections_total[15m])) > 0
-          or
-          sum(casecellshop_erp_out_of_stock_rejections_total unless casecellshop_erp_out_of_stock_rejections_total offset 15m) > 0
         for: 0m
         labels:
           severity: page
@@ -549,11 +547,6 @@ groups:
       - alert: CasecellshopErpErroDeConfiguracao
         expr: |
           sum(increase(casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"}[5m])) > 0
-          or
-          sum(
-            casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"}
-            unless casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"} offset 5m
-          ) > 0
         for: 0m
         labels:
           severity: page
@@ -634,12 +627,12 @@ Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`)
    ```
 
    O pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`). O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Se o ERP tem o pedido, não cancele: use o `redrive` ou espere a reconciliação.
-6. Uma mensagem com o corpo fora do schema fica na DLQ: a reconciliação a deixa para o runbook sem consultar o ERP (`ORD-14`), e um `redrive` só a devolve à DLQ, porque o worker a rejeita de novo (`ORD-12`). Se o corpo traz o `orderId`, trate o pedido pelos passos 3 a 5. O runbook ainda não tem um comando que apague uma mensagem da DLQ; até ter, silencie o alerta `CasecellshopDLQ` no Alertmanager enquanto ela for a única mensagem na DLQ.
+6. Uma mensagem com o corpo fora do schema fica na DLQ: a reconciliação a deixa para o runbook sem consultar o ERP (`ORD-14`), e um `redrive` só a devolve à DLQ, porque o worker a rejeita de novo (`ORD-12`). Se o corpo traz o `orderId`, trate o pedido pelos passos 3 e 5. O runbook ainda não tem um comando que apague uma mensagem da DLQ; até ter, silencie o alerta `CasecellshopDLQ` no Alertmanager com uma expiração curta e, antes de renovar o silêncio, confira no dashboard que `casecellshop_queue_messages{casecellshop_queue_name="dlq"}` ainda é 1, para não esconder uma mensagem que chegue depois.
 
 #### ERP falhando ou com erro de configuração
 
 1. No painel do ERP, veja a operação e o desfecho.
-2. `config_error`: o ERP recusou a credencial ou a rota (`400`, `401` ou um `404` sem o corpo esperado). O log `casecellshop.erp.config.rejected` traz o status. Corrija a configuração do cliente do ERP no worker e reinicie o worker (`docker compose restart worker`). Nenhum pedido falha por isso: a mensagem volta à fila (`ORD-09`, `ORD-10`). No ERP simulado, esse desfecho só sai por falha injetada.
+2. `config_error`: o ERP recusou a credencial ou a rota (`400`, `401`, `403`, ou um `404` sem o corpo esperado na consulta; na criação e no catálogo, todo `404`). O log `casecellshop.erp.config.rejected` traz o status. Corrija a configuração do cliente do ERP no worker e reinicie o worker (`docker compose restart worker`). Nenhum pedido falha por isso: a mensagem volta à fila (`ORD-09`, `ORD-10`). No ERP simulado, esse desfecho só sai por falha injetada.
 3. `transient` ou `ambiguous`: o ERP está lento ou fora. O worker repete com espera crescente, uma chamada por pedido a cada 45 s. Fale com o time do ERP; não reinicie o worker em laço, porque isso não acelera nada.
 4. Se a falha durar mais que a janela de retry (cerca de 23 min em média), os pedidos chegam à DLQ: siga [DLQ](#dlq) quando o ERP voltar.
 
