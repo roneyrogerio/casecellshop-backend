@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MIN_CALL_DELAY_MS,
+  SETTLE_WINDOW_MS,
   takeCallPermit,
 } from '../../../src/billing/call-permit.ts';
 import { createRelay } from '../../../src/billing/relay.ts';
@@ -862,4 +863,34 @@ describe('ORD-26 mensagem do comando para cada resultado', () => {
     ).toMatch(/ERP/);
     expect(new Set(messages).size).toBe(CASES.length);
   });
+
+  // Os minutos saem da janela de assentamento usada, não de um texto fixo.
+  const WINDOW_RESULTS: ReadonlyArray<CancelOrderResult> = [
+    { kind: 'erp_unavailable' },
+    { kind: 'permit_lost' },
+  ];
+  const WINDOW_CASES: ReadonlyArray<{
+    windowMs: number | undefined;
+    minutes: number;
+    why: string;
+  }> = [
+    {
+      windowMs: undefined,
+      minutes: SETTLE_WINDOW_MS / 60_000,
+      why: 'o padrão é SETTLE_WINDOW_MS',
+    },
+    { windowMs: 120_000, minutes: 2, why: '120000 ms são 2 minutos' },
+    { windowMs: 90_000, minutes: 2, why: '90000 ms arredondam para cima' },
+    { windowMs: 30_000, minutes: 1, why: 'menos de 1 minuto vira 1 minuto' },
+  ];
+
+  for (const result of WINDOW_RESULTS) {
+    for (const { windowMs, minutes, why } of WINDOW_CASES) {
+      it(`ORD-26 ${result.kind} cita ${minutes} min da janela de assentamento (${why})`, () => {
+        const { message } = describeCancel(ORDER_ID, result, windowMs);
+
+        expect(message).toContain(`(${minutes} min)`);
+      });
+    }
+  }
 });
