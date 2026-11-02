@@ -4,10 +4,22 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado: serve o catálogo do banco da loja, reserva o estoque de forma atômica no checkout e envia os pedidos ao ERP de forma assíncrona, por uma outbox e uma fila SQS. Node.js 26, TypeScript, PostgreSQL e OpenTelemetry. O ERP é simulado no processo do worker, atrás da porta `ErpClient`.
 
-**Estado:** vitrine com cache e sincronização, checkout, faturamento assíncrono, retry, DLQ, reconciliação e a operação (SLOs, dashboard, alertas e runbooks) prontos (marcos M1 a M5). A entrega final (M6) está no [`ROADMAP.md`](.specs/project/ROADMAP.md).
+## Em resumo
+
+| Problema do desafio | Causa raiz | Solução | Prova |
+| --- | --- | --- | --- |
+| Vitrine lenta | o ERP está no caminho de cada leitura | banco próprio da loja, sincronizado com o ERP, e cache em processo com TTL, *single-flight* e *stale-if-error* | `CAT-01` a `CAT-15` |
+| Venda além do estoque | o estoque é conferido num momento e baixado em outro | reserva atômica com `UPDATE` condicional e idempotência pela `Idempotency-Key` | `CHK-01` a `CHK-05` |
+| Checkout que depende do ERP | o faturamento é síncrono | `202` na hora; outbox, fila SQS e worker com retry, DLQ e reconciliação | `ORD-01` a `ORD-22` |
+
+- **Rodar:** `docker compose up --build`, e o [exemplo de ponta a ponta](#rodar).
+- **Respostas às cinco perguntas:** [`RESPOSTAS.md`](RESPOSTAS.md); os detalhes de cada uma estão no [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- **Operação:** SLOs, dashboard, alertas e runbooks na seção [Operação](#operação).
+- **Uso de IA:** [Como a IA foi usada](#como-a-ia-foi-usada) e [`PROMPTS.md`](PROMPTS.md).
 
 ## Índice
 
+- [Em resumo](#em-resumo)
 - [Pré-requisitos](#pré-requisitos)
 - [Rodar](#rodar)
 - [Testar](#testar)
@@ -83,11 +95,11 @@ Os testes de integração rodam contra PostgreSQL e ElasticMQ reais, pelo Testco
 As checagens que o CI roda:
 
 ```sh
-npm run verify       # lint, formato, tipos, testes unitários, openapi.yaml gerado, instruções, migrações, código sem uso e repetido
+npm run verify       # lint, formato, tipos, testes unitários, openapi.yaml gerado e o lint dele, instruções, migrações, scripts do package.json, código sem uso e repetido
 npm run verify:full  # o mesmo, com a suíte inteira no Docker e os tipos do banco
 ```
 
-O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) sai das declarações de cada pasta; os dois são conferidos contra o gerado (`npm run openapi -- --check` e `npm run telemetry-doc -- --check`). O que cada job do CI confere está no [`CONTRIBUTING.md`](CONTRIBUTING.md).
+O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) sai das declarações de cada pasta; os dois são conferidos contra o gerado: o `openapi.yaml` pelo `npm run openapi -- --check`, e o catálogo pelo teste `OBS-07`, que o `npm run telemetry-doc -- --check` também roda à mão. O que cada job do CI confere está no [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## O que o desafio pede e onde está
 
@@ -97,27 +109,27 @@ O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/fea
 | `POST /checkout` responde `202` com `orderId` e status | [`src/checkout/`](src/checkout/) | `CHK-09` | pronto |
 | `GET /orders/{orderId}/status` | [`src/orders/`](src/orders/) | `CHK-11`, `ORD-19` | pronto |
 | Contrato com schemas de sucesso e erro | [`openapi.yaml`](openapi.yaml), gerado de [`src/contract/`](src/contract/); erros em `application/problem+json` (RFC 9457) | `FND-03`, `FND-07` | pronto |
-| Logs estruturados com `correlationId` e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts), eventos no [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) | `OBS-01`, `OBS-07` | pronto |
+| Logs estruturados com `correlationId` (o `X-Request-Id`) e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts), eventos no [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) | `OBS-01`, `OBS-07` | pronto |
 | Métricas de cache, checkout e fila | `/metrics` da API e do worker, nomes no catálogo de telemetria | `OBS-02`, `OBS-04`, `OBS-06`, `OBS-07` | pronto |
 | Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18`, `CAT-12`, `OBS-05` | pronto |
 | Exemplo de dashboard, alerta ou runbook | [Operação](#operação): SLOs, dashboard, alertas em regras do Prometheus e um runbook por alerta | `OBS-03`; runbook da DLQ: `ORD-15` | pronto |
 | Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | `CHK-01`, `CHK-02` (controle negativo) | pronto |
 | Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | `CHK-03` a `CHK-05` | pronto |
 | Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | `ORD-01` a `ORD-22` | pronto |
-| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | tabela critério × teste do CI | pronto |
-| Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | `DOC-OPS-01`, `DOC-IDX-01` | pronto |
+| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código; a tabela critério × teste sai em cada execução do CI | regra de negócio: `CHK-03` a `CHK-12`, `ORD-01` a `ORD-22`; cache: `CAT-01` a `CAT-05`; concorrência: `CHK-01`, `CHK-02`, `CHK-07` | pronto |
+| Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | conferidos na revisão (`DOC-OPS-01`, `DOC-IDX-01`) | pronto |
 
 ## As cinco perguntas
 
-As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada uma com os critérios `DOC-*` que a conferem; o texto entregue, na ordem do enunciado, está no [`RESPOSTAS.md`](RESPOSTAS.md) (`DOC-ENT-01`). A coluna "Implementação" diz se o código que a resposta descreve já está pronto ou em qual marco entra.
+As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada uma com os critérios `DOC-*` que a conferem; o texto entregue, na ordem do enunciado, está no [`RESPOSTAS.md`](RESPOSTAS.md) (`DOC-ENT-01`).
 
-| Pergunta | Seção do `ARCHITECTURE.md` | Critérios | Implementação |
-| --- | --- | --- | --- |
-| 1. Diagnóstico, trade-offs e arquitetura alvo | "Diagnóstico e arquitetura alvo" | `DOC-DIA-01` a `06` | pronto |
-| 2. Cache, invalidação e vitrine | "Cache e performance da vitrine" | `DOC-CAC-01` a `04` | pronto |
-| 3. Observabilidade | "Observabilidade"; SLOs, alertas, dashboard e runbooks na [Operação](#operação) deste README | `DOC-OBS-01` a `04` | pronto |
-| 4. Concorrência, estoque e idempotência | "Concorrência e idempotência" | `DOC-CON-01` a `04` | pronto |
-| 5. Mensageria, resiliência, contrato e IA | "Mensageria e resiliência" | `DOC-MSG-01` a `04` | pronto |
+| Pergunta | Seção do `ARCHITECTURE.md` | Critérios |
+| --- | --- | --- |
+| 1. Diagnóstico, trade-offs e arquitetura alvo | [Diagnóstico e arquitetura alvo](ARCHITECTURE.md#diagnóstico-e-arquitetura-alvo) | `DOC-DIA-01` a `06` |
+| 2. Cache, invalidação e vitrine | [Cache e performance da vitrine](ARCHITECTURE.md#cache-e-performance-da-vitrine) | `DOC-CAC-01` a `04` |
+| 3. Observabilidade | [Observabilidade](ARCHITECTURE.md#observabilidade); SLOs, alertas, dashboard e runbooks na [Operação](#operação) deste README | `DOC-OBS-01` a `04` |
+| 4. Concorrência, estoque e idempotência | [Concorrência e idempotência](ARCHITECTURE.md#concorrência-e-idempotência) | `DOC-CON-01` a `04` |
+| 5. Mensageria, resiliência, contrato e IA | [Mensageria e resiliência](ARCHITECTURE.md#mensageria-e-resiliência) | `DOC-MSG-01` a `04` |
 
 ## Decisões e trade-offs
 
@@ -739,7 +751,7 @@ Os commits feitos com IA levam o trailer `Assisted-by: <papel>:<modelo>`, na con
 | Tamanho, complexidade e sentido das dependências do código | [`.oxlintrc.json`](.oxlintrc.json) (AD-026) | lint no CI |
 | A `main` só muda por PR aprovado e com CI verde | ruleset do GitHub (AD-013) | — |
 
-Os prompts que governam os agentes, as orientações do mantenedor que mudaram o rumo de cada marco e os erros da IA pegos antes do merge, com o relatório de revisão de cada um, estão no [`PROMPTS.md`](PROMPTS.md); os exemplos do M2 e do começo do M3, no `ARCHITECTURE.md`, seção "Prompts de IA relevantes".
+Os prompts que governam os agentes, as orientações do mantenedor que mudaram o rumo de cada marco e os erros da IA pegos antes do merge, com o relatório de revisão de cada um, estão no [`PROMPTS.md`](PROMPTS.md); os trechos que governam a fila e as respostas da IA recusadas ou corrigidas, no `ARCHITECTURE.md`, seção "Prompts de IA relevantes".
 
 ## Documentação
 
