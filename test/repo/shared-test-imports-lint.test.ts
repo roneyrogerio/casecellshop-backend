@@ -3,8 +3,8 @@ import { cleanupTempDirs } from '../helpers/git-sandbox.ts';
 import { lintFilesByLine, type LintReport } from '../helpers/lint-tree.ts';
 
 // AI-40 (AD-025): a regra de imports de `src/shared/`. O teste da pasta importa os helpers de `test/helpers/` só pelo
-// atalho `#test-helpers/`; em toda a pasta, qualquer segmento `..` e qualquer barra invertida no import são barrados,
-// e o código de produção não importa atalho `#` nenhum. O que vale é o que o oxlint decide, com o .oxlintrc.json do
+// atalho `#test-helpers/`; em toda a pasta, qualquer segmento `..`, qualquer barra invertida e qualquer caminho
+// absoluto no import são barrados, e o código de produção não importa atalho `#` nenhum. O que vale é o que o oxlint decide, com o .oxlintrc.json do
 // projeto numa árvore temporária (nada é escrito no repositório).
 
 const RESTRICTED = /no-restricted-imports/;
@@ -140,7 +140,7 @@ function report(): LintReport {
 
 afterAll(cleanupTempDirs);
 
-describe('AI-40 o lint de src/shared/ deixa o teste importar #test-helpers/ e barra o .. e a barra invertida', () => {
+describe('AI-40 o lint de src/shared/ deixa o teste importar #test-helpers/ e barra o .., a barra invertida e o caminho absoluto', () => {
   it.each(SAMPLES)('AI-40 $label ($file: $path)', (entry) => {
     const lines =
       report().byFile.get(entry.file) ?? new Map<number, string[]>();
