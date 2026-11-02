@@ -67,6 +67,10 @@ const SAMPLES: Sample[] = [
 // da regra não pode depender de lookahead (o oxlint ignora um padrão com lookahead sem avisar), então o que vale
 // aqui é o resultado do oxlint sobre cada caminho.
 function escapeSamples(): Sample[] {
+  // O Node e o tsc leem a barra invertida como separador, então `./..\db\` sai da pasta. O arquivo da amostra leva
+  // `\\` (duas barras) em cada separador: com uma só, o parser leria `\d` como `d` e o specifier perderia a barra
+  // invertida que a regra tem de barrar. Por isso o literal abaixo tem quatro barras por separador.
+  const backslash = './..\\\\db\\\\database.ts';
   const blockedInTest = [
     '.././db/database.ts',
     '../../test/../src/db/database.ts',
@@ -77,23 +81,31 @@ function escapeSamples(): Sample[] {
     '../../test/helpers/../x.ts',
     '../../test/helpers/./x.ts',
     '../../src/db/x.ts',
+    backslash,
   ];
-  // Um nome por import: dois imports com o mesmo nome no arquivo seriam erro de sintaxe e o oxlint não leria a amostra.
-  const samples: Sample[] = blockedInTest.map((path, index) => ({
-    file: 'src/shared/escape.test.ts',
-    import: `import { x${index} } from '${path}';`,
-    expected: 'blocked',
-    label: `o teste de src/shared/ tenta escapar por ${path}`,
-  }));
-  samples.push(
-    {
-      file: 'src/shared/escape.test.ts',
+  // O logging.test.ts tem um override próprio (a lista é uma cópia da dos testes da pasta): passa por ele cada amostra
+  // dos testes da pasta, para uma divergência entre as duas cópias reprovar o teste.
+  const testFiles = ['src/shared/escape.test.ts', 'src/shared/logging.test.ts'];
+  const samples: Sample[] = [];
+  for (const file of testFiles) {
+    // Um nome por import: dois imports com o mesmo nome no arquivo seriam erro de sintaxe e o oxlint não leria a amostra.
+    blockedInTest.forEach((path, index) =>
+      samples.push({
+        file,
+        import: `import { x${index} } from '${path}';`,
+        expected: 'blocked',
+        label: `o teste de src/shared/ tenta escapar por ${path}`,
+      }),
+    );
+    samples.push({
+      file,
       import: "import { sub } from '../../test/helpers/sub/x.ts';",
       expected: 'pass',
       label:
         'o teste de src/shared/ importa uma subpasta de test/helpers/ sem ..',
-    },
-    // O arquivo do override próprio do logging.test.ts: a mesma regra, pelo nome dele.
+    });
+  }
+  samples.push(
     {
       file: 'src/shared/logging.test.ts',
       import: "import { clock } from '../../test/helpers/clock.ts';",
@@ -118,6 +130,18 @@ function escapeSamples(): Sample[] {
       import: "import { slashDot } from '.././db/database.ts';",
       expected: 'blocked',
       label: 'o código de produção de src/shared/ tenta escapar por .././db/',
+    },
+    {
+      file: 'src/shared/escape.ts',
+      import: `import { backslash } from '${backslash}';`,
+      expected: 'blocked',
+      label: `o código de produção de src/shared/ tenta escapar por ${backslash}`,
+    },
+    {
+      file: 'src/shared/logging.ts',
+      import: `import { backslash } from '${backslash}';`,
+      expected: 'blocked',
+      label: `o logging.ts tenta escapar por ${backslash}`,
     },
   );
   return samples;
