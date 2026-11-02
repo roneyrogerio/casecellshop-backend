@@ -919,8 +919,16 @@ describe('OBS-02 counter de desfecho do checkout', () => {
           async () => {
             const { outcomes } = await checkoutOutcomes(own.app);
             expect(outcomes.get('unavailable')).toBe(1);
-            // Nenhum outro desfecho foi contado: só há a série unavailable.
-            expect([...outcomes.keys()]).toEqual(['unavailable']);
+            // Nenhum outro desfecho foi contado: com o OBS-08 todas as séries da lista existem, e as
+            // outras valem 0.
+            const closedList: readonly string[] =
+              METRICS['casecellshop.checkout.requests'].attributes[
+                'casecellshop.checkout.outcome'
+              ].values.values;
+            for (const other of closedList.filter(
+              (name) => name !== 'unavailable',
+            ))
+              expect(outcomes.get(other), `outcome ${other}`).toBe(0);
           },
           { timeout: WAIT_GUARD_MS },
         );

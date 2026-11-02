@@ -377,12 +377,13 @@ Um exemplo, do checkout aceito:
 | Fila | `casecellshop.outbox.published.messages` | counter | O relay está publicando | **[implementado: `src/billing/telemetry.ts`]** |
 | Fila | `casecellshop.outbox.attempts` | counter: `invoiced`, `failed`, `retry`, `deferred`, `closed`, `lease_short`, `dead` | Desfecho de cada tentativa | **[implementado]** |
 | Fila | `casecellshop.outbox.orphan_conclusions` | counter | Conclusões sem efeito, com o *receipt handle* vencido | **[implementado]** |
-| Fila | `casecellshop.queue.messages` | gauge, com `casecellshop.queue.name`: `billing`, `dlq` | Mensagens na fila e na DLQ, pelo `GetQueueAttributes` do SQS, no worker | **[implementado: `src/billing/queue-gauge.ts`, `OBS-02`]** |
+| Fila | `casecellshop.queue.messages` | gauge, com `casecellshop.queue.name`: `billing`, `dlq` | Mensagens na fila e na DLQ, visíveis e em voo, pelo `GetQueueAttributes` do SQS, no worker: a mensagem que a reconciliação segura continua contada | **[implementado: `src/billing/queue-gauge.ts`, `OBS-02`, `OBS-09`]** |
 | Fila | `casecellshop.outbox.oldest_pending.age` | gauge | Idade do pedido mais antigo sem desfecho; o SQS não a expõe pela API, então sai da outbox | **[implementado: `src/billing/outbox-age.ts`, `OBS-02`]** |
 | Fila | `casecellshop.order.accept_to_invoice.duration` | histogram, com fronteira em 60 s | Tempo do aceite ao faturamento | **[implementado]** |
 | Fila | `casecellshop.order.stuck` | counter | Pedidos sem desfecho em 60 s, cada um contado uma vez | **[implementado: `src/billing/stuck-orders.ts`, `OBS-04`]** |
 | ERP | `casecellshop.erp.client.operation.duration` | histogram, por operação e desfecho | Latência do ERP; o `_count` conta as chamadas, inclusive as de erro de configuração | **[implementado: `src/erp/telemetry.ts`]** |
 | ERP | `casecellshop.erp.client.active_operations` | UpDownCounter | Chamadas em andamento; perto de 30, o semáforo está cheio | **[implementado]** |
+| ERP | `casecellshop.erp.config_errors` | counter, com `casecellshop.erp.operation` | Chamadas recusadas por credencial ou rota; existe porque o histograma de duração não nasce em 0 | **[implementado, `OBS-02`, `OBS-08`]** |
 | ERP | `casecellshop.erp.out_of_stock.rejections` | counter | Pedidos que o ERP recusou por falta de estoque | **[implementado, `OBS-06`]** |
 | Gauges | `casecellshop.billing.gauge.read_failures`, `casecellshop.checkout.gauge.read_failures`, `casecellshop.catalog.gauge.read_failures` | counter, com `casecellshop.gauge.name` | Leituras de gauge que falharam; o gauge segue com o último valor, e o alerta dispara também por este counter | **[implementado, `OBS-02`, `CAT-15`]** |
 
@@ -390,7 +391,7 @@ Um exemplo, do checkout aceito:
 
 **O que é lido do banco sai da API.** Os gauges e counters derivados do banco (a idade da sincronização, a idade do pedido mais antigo, os pedidos sem desfecho, o estoque) saem da API, e não do worker, que é o processo monitorado: se o worker cai, as séries continuam e o alerta dispara.
 
-**Série ausente.** Um counter só aparece no `/metrics` depois do primeiro registro, então, nos alertas sobre counters, a série ausente quer dizer que nada aconteceu. Os gauges que precisam existir têm um `absent` próprio: o da fila, que sai do worker, e o da idade da sincronização, que sai da API e por isso também avisa quando a API sai do ar. O que sobra, o primeiro registro de um counter que o `increase` não conta, está declarado na seção "Alertas" do README.
+**Séries em zero.** Cada counter de lista fechada sai no `/metrics` em 0 desde a subida, uma série por combinação dos valores dos atributos; sem isso, a série nasceria com o primeiro evento, e o `increase` de um alerta não contaria esse evento **[implementado: `src/shared/telemetry-instruments.ts`, `OBS-08`]**. O histograma não nasce em 0, e por isso o erro de configuração do ERP tem um counter próprio. Os gauges que precisam existir têm um `absent` próprio: o da fila, que sai do worker, e o da idade da sincronização, que sai da API. A API fora do ar tem alerta próprio, pelo `up` que o Prometheus grava a cada coleta.
 
 ### Traces de `GET /products` e do `POST /checkout` assíncrono
 
@@ -454,8 +455,10 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 | Consumo do orçamento do SLO, em duas janelas | `http.server.request.duration`, `casecellshop.order.stuck` | Avisa cedo de uma queda rápida e de uma degradação lenta, sem disparar por um pico isolado (*multiwindow, multi-burn-rate*) |
 | Mensagem na DLQ; fila envelhecendo | `casecellshop.queue.messages` (`dlq`), `casecellshop.outbox.oldest_pending.age`, `casecellshop.billing.gauge.read_failures` | Pedido parado com a reserva feita |
 | Furo de estoque | `casecellshop.inventory.oversold_skus`, `casecellshop.erp.out_of_stock.rejections`, `casecellshop.checkout.gauge.read_failures` | A loja prometeu mais do que o ERP tem (`OBS-06`) |
-| Erro de configuração no ERP | `casecellshop.erp.client.operation.duration` com o desfecho `config_error` | Uma credencial vencida faz todos os pedidos voltarem à fila |
+| Erro de configuração no ERP | `casecellshop.erp.config_errors` | Uma credencial vencida faz todos os pedidos voltarem à fila |
 | Sincronização parada | `casecellshop.catalog.sync.age`, também com a série ausente, `casecellshop.catalog.gauge.read_failures` | A vitrine está ficando velha |
+| API fora do ar | `up`, a série que o Prometheus grava a cada coleta | Sem a API não há série de requisição, e nenhum *burn rate* dispara |
+| Vitrine com dado errado | `casecellshop.checkout.requests` com `price_changed` e `out_of_stock` | O cliente viu preço ou estoque que o checkout recusa; o alerta chega antes da reclamação |
 
 **Dashboard,** na ordem da jornada do cliente: vitrine (requisições, p99, `5xx`, taxa de acerto, idade da entrada servida e da sincronização), checkout (desfechos, p99, taxa de `price_changed`), fila e ERP (publicadas, tentativas por desfecho, DLQ, idade do mais antigo, aceite ao faturamento, chamadas em andamento contra o limite de 30, erros de configuração) e estoque (unidades reservadas, SKUs com furo).
 

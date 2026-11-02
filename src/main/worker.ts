@@ -2,7 +2,10 @@ import { createServer } from 'node:http';
 import { createReconciler } from '../billing/reconciliation.ts';
 import { createRelay } from '../billing/relay.ts';
 import { createWorker, DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
+import { billingMetrics } from '../billing/telemetry.ts';
 import { DEFAULT_CATALOG_SYNC_CONFIG } from '../catalog/config.ts';
+import { catalogMetrics } from '../catalog/telemetry.ts';
+import { erpMetrics } from '../erp/telemetry.ts';
 import { createCatalogSync } from '../catalog/sync.ts';
 import { createQueue } from '../queue/sqs.ts';
 import { createSqsClientFromEnv } from './sqs-client.ts';
@@ -19,6 +22,11 @@ import { MAIN_LOG_EVENTS } from './telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-worker' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-worker' });
+// OBS-08: cria já na subida os instrumentos que esta entrada grava, para as séries nascerem em 0 sem depender da
+// ordem em que os módulos os pedem (o `increase()` não conta o primeiro evento de uma série que nasce com ele).
+billingMetrics(telemetry);
+catalogMetrics(telemetry);
+erpMetrics(telemetry);
 const databaseUrl = requireEnv('DATABASE_URL');
 // Pools separados (10 cada): a chamada ao ERP simulado não disputa conexão com a loja.
 const pool = createPool(databaseUrl, logger);

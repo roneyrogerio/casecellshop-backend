@@ -40,7 +40,7 @@ try {
         clock: systemClock,
       });
       process.stdout.write(
-        `${before - remaining} mensagens movidas da DLQ para a fila (restam ${remaining})\n`,
+        `${before - remaining} mensagens saíram da DLQ (restam ${remaining})\n`,
       );
     } finally {
       client.destroy();

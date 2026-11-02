@@ -32,6 +32,10 @@ import { repoRoot } from '../helpers/repo-root.ts';
 // prometheusName (scripts/generate-telemetry-doc.ts) geram a coluna "No Prometheus" do telemetry.md, e o OBS-07 confere
 // que o arquivo commitado é igual ao gerado. Os controles montam um catálogo de teste no mesmo formato da declaração.
 //
+// A única série aceita fora do catálogo é o `up` (o Prometheus o grava a cada coleta): só com `job` e `instance`, sem
+// sufixo, e com cada `job` literal igual a um `job_name` de um bloco yaml da seção com a chave de topo `scrape_configs`
+// (esse bloco não é arquivo de regras e não conta regra). O `instance` é lista aberta.
+//
 // Fontes consultadas:
 // - Arquivo de regras do Prometheus (groups, rules, alert, expr, for, labels, annotations):
 //   https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
@@ -135,6 +139,30 @@ function readBlocks(markdown: string): Block[] {
 interface Section {
   fences: Fence[];
   anchors: Set<string>;
+  // Os `job_name` dos blocos yaml da seção com a chave de topo `scrape_configs`: os únicos `job` aceitos no `up`.
+  jobs: Set<string>;
+}
+
+// Os `job_name` dos blocos yaml com `scrape_configs` na chave de topo, lidos pelo mesmo YAML da conferência das regras.
+// Um bloco que não é YAML válido não dá nome nenhum (yamlBlockProblems já o acusa).
+function scrapeJobNames(fences: readonly Fence[]): Set<string> {
+  const jobs = new Set<string>();
+  for (const fence of fences) {
+    if (fence.info !== 'yaml') continue;
+    let doc: unknown;
+    try {
+      doc = parseYaml(fence.content.join('\n'));
+    } catch {
+      continue;
+    }
+    const configs = field(doc, 'scrape_configs');
+    if (!Array.isArray(configs)) continue;
+    for (const config of configs) {
+      const name = filled(field(config, 'job_name'));
+      if (name !== undefined) jobs.add(name);
+    }
+  }
+  return jobs;
 }
 
 // A seção vai do cabeçalho de profundidade 2 com o texto "Operação" até o próximo de profundidade 2 (ATX ou setext, e
@@ -154,10 +182,12 @@ function operationSection(readme: string): Section | undefined {
       index > start && block.kind === 'heading' && block.depth === 2,
   );
   const inside = blocks.slice(start, next < 0 ? undefined : next);
+  const fences = inside.flatMap((block) =>
+    block.kind === 'fence' ? [block.fence] : [],
+  );
   return {
-    fences: inside.flatMap((block) =>
-      block.kind === 'fence' ? [block.fence] : [],
-    ),
+    fences,
+    jobs: scrapeJobNames(fences),
     // A âncora de um runbook_url é comparada em NFC: o navegador copia o acento composto.
     anchors: new Set(
       inside.flatMap((block) =>
@@ -314,7 +344,7 @@ function labelProblem(
     if (regex && (REGEX_METACHARS.test(literal) || REGEX_REPEAT.test(literal)))
       return `o valor "${value}" de ${label} tem metacaractere de regex (só alternativas literais separadas por |)`;
     if (!allowed.includes(alternative))
-      return `o valor "${alternative}" ${rejection} (${allowed.join(', ')})`;
+      return `o valor "${alternative}" ${rejection} (${allowed.length > 0 ? allowed.join(', ') : 'lista vazia: a seção não tem bloco yaml com scrape_configs e job_name'})`;
   }
   return undefined;
 }
@@ -335,15 +365,39 @@ function matcherProblem(
   return labelProblem(resolved, label, op, value);
 }
 
+// A única série fora do catálogo: o `up`, que o próprio Prometheus grava a cada coleta, com os rótulos `job` e `instance`
+// e sem sufixo (o nome é comparado inteiro, então `up_total` e `up_bucket` seguem como métrica desconhecida). O `job` é
+// lista fechada pelos `job_name` dos blocos `scrape_configs` da seção; o `instance` é lista aberta. A conferência dos
+// valores (inclusive as alternativas literais de um regex) é a mesma das outras listas fechadas, em labelProblem.
+const UP_SERIES = 'up';
+
+function upEntry(jobs: ReadonlySet<string>): MetricEntry {
+  return {
+    series: UP_SERIES,
+    instrument: 'gauge',
+    histogram: false,
+    attributes: new Map<string, string[] | undefined>([
+      ['job', [...jobs]],
+      ['instance', undefined],
+    ]),
+    routeLabels: new Set(),
+    bucketBounds: [],
+  };
+}
+
 function selectorProblems(
   node: TreeNode,
   source: string,
   catalog: Catalog,
+  jobs: ReadonlySet<string>,
 ): string[] {
   const selector = source.slice(node.from, node.to);
   const name = textOf(node.getChild('Identifier'), source);
   if (name === undefined) return [`seletor ${selector}: sem nome de métrica`];
-  const resolved = resolveMetric(name, catalog);
+  const resolved =
+    name === UP_SERIES
+      ? { series: UP_SERIES, entry: upEntry(jobs), suffix: '' }
+      : resolveMetric(name, catalog);
   if ('problem' in resolved)
     return [`seletor ${selector}: ${resolved.problem}`];
   const problems: string[] = [];
@@ -355,8 +409,15 @@ function selectorProblems(
   return problems;
 }
 
+// Sem bloco scrape_configs na seção não há `job_name` aceito.
+const NO_JOBS: ReadonlySet<string> = new Set();
+
 // Os problemas de uma consulta; vazio quando ela é válida e todo seletor bate com o catálogo.
-function queryProblems(query: string, catalog: Catalog): string[] {
+function queryProblems(
+  query: string,
+  catalog: Catalog,
+  jobs: ReadonlySet<string> = NO_JOBS,
+): string[] {
   let tree;
   try {
     tree = strictParser.parse(query);
@@ -368,7 +429,7 @@ function queryProblems(query: string, catalog: Catalog): string[] {
   tree.iterate({
     enter(ref) {
       if (ref.name === 'VectorSelector')
-        problems.push(...selectorProblems(ref.node, query, catalog));
+        problems.push(...selectorProblems(ref.node, query, catalog, jobs));
     },
   });
   return problems;
@@ -441,7 +502,7 @@ function ruleProblems(
   const expr = field(rule, 'expr');
   if (typeof expr !== 'string' || expr.trim() === '')
     problems.push('falta o campo expr');
-  else problems.push(...queryProblems(expr, catalog));
+  else problems.push(...queryProblems(expr, catalog, section.jobs));
   const duration = field(rule, 'for');
   if (filled(duration) === undefined) problems.push('falta o campo for');
   else if (!isPrometheusDuration(String(duration)))
@@ -525,7 +586,7 @@ function checkOperation(readme: string, catalog: Catalog): Report {
         report.queries += 1;
         const where = `consulta (bloco promql da linha ${String(fence.line)}) ${oneLine(query)}`;
         report.problems.push(
-          ...queryProblems(query, catalog).map(
+          ...queryProblems(query, catalog, section.jobs).map(
             (problem) => `${where}: ${problem}`,
           ),
         );
@@ -1869,4 +1930,329 @@ describe('OBS-03 a duração do for na gramática do Prometheus (controles)', ()
       expect(problems[0]).toContain('alerta ErroAlto');
     },
   );
+});
+
+describe('OBS-03 a série up, a única fora do catálogo (controles)', () => {
+  const API = 'casecellshop-api';
+  const WORKER = 'casecellshop-worker';
+  const JOBS: ReadonlySet<string> = new Set([API, WORKER]);
+  const ACCEPTED = `(${API}, ${WORKER})`;
+  const FORA_DA_LISTA = `não está na lista fechada de job ${ACCEPTED}`;
+  const NO_BLOCK = 'a seção não tem bloco yaml com scrape_configs e job_name';
+  // A regra de indisponibilidade da API: o `up` some quando o alvo cai, e o absent() cobre o alvo que nunca apareceu.
+  const DOWN_EXPR = `max(up{job="${API}"}) == 0 or absent(up{job="${API}"})`;
+
+  const upProblems = (
+    query: string,
+    jobs: ReadonlySet<string> = JOBS,
+  ): string[] => queryProblems(query, CATALOG, jobs);
+
+  // Um bloco de configuração de coleta do Prometheus com um alvo por job.
+  const scrapeFile = (...jobs: string[]): string =>
+    [
+      'scrape_configs:',
+      ...jobs.flatMap((job) => [
+        `  - job_name: ${JSON.stringify(job)}`,
+        '    static_configs:',
+        '      - targets: ["app:3000"]',
+      ]),
+    ].join('\n');
+
+  const scrapeBlock = (...jobs: string[]): string =>
+    fenced('yaml', ...scrapeFile(...jobs).split('\n'));
+
+  // Um README com uma regra de `expr` dado e, na seção, o bloco scrape_configs (`null` não põe bloco).
+  const readmeUp = (
+    expr: string,
+    scrape: string | null = scrapeBlock(API, WORKER),
+    before = '',
+    after = '',
+  ): string =>
+    readmeWith(
+      goodBody(ruleFile({ expr })) + (scrape === null ? '' : `\n${scrape}`),
+      before,
+      after,
+    );
+
+  const VALID_UP: [string, string][] = [
+    ['job de um job_name', `up{job="${API}"}`],
+    ['o outro job_name', `up{job="${WORKER}"}`],
+    ['dentro de absent()', `absent(up{job="${API}"})`],
+    ['dentro de max()', `max(up{job="${API}"})`],
+    ['a regra de indisponibilidade da API', DOWN_EXPR],
+    ['alternativas literais de job_name com =~', `up{job=~"${API}|${WORKER}"}`],
+    ['job com !=', `up{job!="${WORKER}"}`],
+    ['job com !~ e alternativas de job_name', `up{job!~"${WORKER}|${API}"}`],
+    ['job entre aspas no rótulo', `up{"job"="${API}"}`],
+    ['instance com valor qualquer (lista aberta)', 'up{instance="api:3000"}'],
+    ['instance com regex (lista aberta)', 'up{instance=~"api:.*"}'],
+    ['job e instance juntos', `up{job="${API}", instance="api:3000"}`],
+    ['sem rótulos', 'up'],
+    ['em agregação com by', 'sum by (job) (up)'],
+    [
+      'duas séries up na mesma consulta',
+      `up{job="${API}"} + up{job="${WORKER}"}`,
+    ],
+    [
+      'junto de uma métrica do catálogo',
+      `app_active * on (instance) group_left up{job="${API}"}`,
+    ],
+  ];
+
+  it.each(VALID_UP)('OBS-03 up passa: %s', (_label, query) => {
+    expect(upProblems(query)).toEqual([]);
+  });
+
+  const INVALID_UP: [string, string, string][] = [
+    [
+      'job que não é job_name',
+      'up{job="outro"}',
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    ['job vazio', 'up{job=""}', `o valor "" ${FORA_DA_LISTA}`],
+    [
+      'job que não é job_name dentro de absent()',
+      'absent(up{job="outro"})',
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    [
+      'job que não é job_name dentro de max()',
+      'max(up{job="outro"}) == 0',
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    [
+      'job com != fora da lista',
+      'up{job!="outro"}',
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    [
+      'job com !~ fora da lista',
+      `up{job!~"${API}|outro"}`,
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    [
+      'uma alternativa de =~ fora da lista',
+      `up{job=~"${API}|outro"}`,
+      `o valor "outro" ${FORA_DA_LISTA}`,
+    ],
+    [
+      'job em maiúscula (a comparação é exata)',
+      `up{job="${API.toUpperCase()}"}`,
+      `o valor "${API.toUpperCase()}" ${FORA_DA_LISTA}`,
+    ],
+    ['regex em job (.*)', `up{job=~"${API}.*"}`, 'metacaractere de regex'],
+    ['regex em job (.+ sozinha)', 'up{job=~".+"}', 'metacaractere de regex'],
+    ['grupo de regex em job', `up{job=~"(${API})"}`, 'metacaractere de regex'],
+    [
+      'rótulo fora de job e instance',
+      'up{foo="x"}',
+      'o rótulo foo não é atributo de up (atributos: job, instance)',
+    ],
+    [
+      'rótulo de outra métrica',
+      'up{app_outcome="ok"}',
+      'o rótulo app_outcome não é atributo de up',
+    ],
+    ['le num up', 'up{le="1"}', 'o rótulo le só existe em _bucket'],
+    [
+      'rótulo fora ao lado de job válido',
+      `up{job="${API}", foo="x"}`,
+      'o rótulo foo não é atributo de up',
+    ],
+    ['sufixo _total', 'up_total', 'up_total não está na coluna'],
+    ['sufixo _bucket', 'up_bucket', 'up_bucket não está na coluna'],
+    ['sufixo _count', 'rate(up_count[5m])', 'up_count não está na coluna'],
+    ['sufixo _sum', 'up_sum', 'up_sum não está na coluna'],
+    [
+      'sufixo com job válido',
+      `up_total{job="${API}"}`,
+      'up_total não está na coluna',
+    ],
+    ['nome com outra caixa', 'UP', 'UP não está na coluna'],
+    ['nome que só começa com up', 'upstream', 'upstream não está na coluna'],
+  ];
+
+  it.each(INVALID_UP)(
+    'OBS-03 up reprova com a mensagem certa: %s',
+    (_label, query, fragment) => {
+      const problems = upProblems(query);
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(fragment);
+    },
+  );
+
+  // O controle negativo da exceção: só o `up` escapa do catálogo; qualquer outra série fora dele segue reprovando, com
+  // ou sem rótulo de job válido.
+  it.each([
+    ['down', 'down'],
+    ['down com job válido', `down{job="${API}"}`],
+    ['process_cpu_seconds_total', 'process_cpu_seconds_total'],
+    [
+      'process_cpu_seconds_total com job válido',
+      `rate(process_cpu_seconds_total{job="${API}"}[5m])`,
+    ],
+    ['scrape_duration_seconds', 'scrape_duration_seconds{instance="x"}'],
+  ])(
+    'OBS-03 série fora do catálogo que não é o up segue reprovando: %s',
+    (_label, query) => {
+      const problems = upProblems(query);
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatch(/não está na coluna "No Prometheus"/);
+    },
+  );
+
+  it('OBS-03 up sem nenhum job_name conhecido: qualquer job literal reprova e a mensagem diz que falta o bloco scrape_configs', () => {
+    for (const query of [
+      `up{job="${API}"}`,
+      `up{job=~"${API}|${WORKER}"}`,
+      `absent(up{job="${API}"})`,
+    ]) {
+      const problems = upProblems(query, new Set());
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(NO_BLOCK);
+    }
+    // Sem job literal não há o que conferir: o instance (lista aberta) e o up sem rótulos passam.
+    expect(upProblems('up{instance="api:3000"}', new Set())).toEqual([]);
+    expect(upProblems('up', new Set())).toEqual([]);
+  });
+
+  it('OBS-03 up numa consulta com outro seletor inválido: cada seletor é acusado pelo seu texto', () => {
+    const problems = upProblems(
+      `up{job="outro"} == 0 and rate(app_requets_total[5m]) > 0`,
+    );
+
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain('seletor up{job="outro"}');
+    expect(problems[1]).toContain('seletor app_requets_total');
+  });
+
+  describe('a leitura dos job_name na seção do README', () => {
+    it('OBS-03 a regra de indisponibilidade da API passa com o bloco scrape_configs na seção, e o bloco não conta como regra', () => {
+      const report = check(readmeUp(DOWN_EXPR));
+
+      expect(report.problems).toEqual([]);
+      expect(report.rules).toBe(1);
+      expect(report.queries).toBe(2);
+    });
+
+    it('OBS-03 os job_name vêm de todos os blocos scrape_configs da seção, um ou vários por bloco', () => {
+      const readme = readmeUp(
+        DOWN_EXPR,
+        [scrapeBlock(API), scrapeBlock('outro-a', 'outro-b')].join('\n'),
+      );
+
+      expect(operationSection(readme)?.jobs).toEqual(
+        new Set([API, 'outro-a', 'outro-b']),
+      );
+      expect(check(readme).problems).toEqual([]);
+    });
+
+    it('OBS-03 up{job=...} também passa num bloco promql da seção, e reprova com um job que não é job_name', () => {
+      const body = [
+        goodBody(),
+        fenced('promql', `up{job="${API}"}`, '', 'up{job="outro"}'),
+        scrapeBlock(API, WORKER),
+      ].join('\n');
+      const { problems, queries } = check(readmeWith(body));
+
+      expect(queries).toBe(4);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('bloco promql');
+      expect(problems[0]).toContain(`o valor "outro" ${FORA_DA_LISTA}`);
+    });
+
+    it('OBS-03 up{job="outro"} na regra reprova, e a mensagem cita os job_name aceitos e o alerta', () => {
+      const { problems } = check(readmeUp('up{job="outro"} == 0'));
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('alerta ErroAlto');
+      expect(problems[0]).toContain(`o valor "outro" ${FORA_DA_LISTA}`);
+    });
+
+    it('OBS-03 sem bloco scrape_configs na seção, qualquer job literal reprova', () => {
+      const { problems } = check(readmeUp(DOWN_EXPR, null));
+
+      // O `job` aparece duas vezes na expressão: um problema por seletor.
+      expect(problems).toHaveLength(2);
+      for (const problem of problems) {
+        expect(problem).toContain('alerta ErroAlto');
+        expect(problem).toContain(NO_BLOCK);
+      }
+    });
+
+    it('OBS-03 sem bloco scrape_configs, o up só com instance passa', () => {
+      expect(
+        check(readmeUp('up{instance="api:3000"} == 0', null)).problems,
+      ).toEqual([]);
+    });
+
+    it('OBS-03 um bloco scrape_configs fora da seção Operação não conta, antes nem depois dela', () => {
+      const outside = scrapeBlock(API, WORKER);
+      const readme = readmeUp(DOWN_EXPR, null, outside, outside);
+
+      expect(operationSection(readme)?.jobs).toEqual(new Set());
+      const { problems } = check(readme);
+      expect(problems).toHaveLength(2);
+      expect(problems[0]).toContain(NO_BLOCK);
+    });
+
+    it('OBS-03 só conta o bloco yaml com scrape_configs na chave de topo: aninhado, em outra chave ou sem job_name não vale', () => {
+      const blocks = [
+        fenced(
+          'yaml',
+          'prometheus:',
+          '  scrape_configs:',
+          `    - job_name: ${API}`,
+        ),
+        fenced('yaml', 'targets:', `  - job_name: ${API}`),
+        fenced('yaml', 'scrape_configs:', '  - static_configs: []'),
+        fenced('yaml', 'scrape_configs: {}'),
+        fenced('yaml', 'scrape_configs:', `  - job_name: ""`),
+        fenced('bash', 'scrape_configs:', `  - job_name: ${API}`),
+      ].join('\n');
+      const readme = readmeUp(DOWN_EXPR, blocks);
+
+      expect(operationSection(readme)?.jobs).toEqual(new Set());
+      expect(check(readme).problems).toHaveLength(2);
+    });
+
+    it('OBS-03 o bloco scrape_configs numa lista ou numa cerca de ~~~ conta, pela mesma leitura de blocos', () => {
+      const inList = [
+        '- Coleta:',
+        '',
+        prefixLines(scrapeBlock(API), '  '),
+      ].join('\n');
+      const tilde = fencedWith(
+        TILDE_FENCE,
+        'yaml',
+        ...scrapeFile(WORKER).split('\n'),
+      );
+
+      expect(check(readmeUp(`up{job="${API}"} == 0`, inList)).problems).toEqual(
+        [],
+      );
+      expect(
+        check(readmeUp(`up{job="${WORKER}"} == 0`, tilde)).problems,
+      ).toEqual([]);
+    });
+
+    it('OBS-03 uma seção só com o bloco scrape_configs de regras não tem regra: o bloco não é arquivo de regras e não conta', () => {
+      const body = fenced('promql', 'app_active') + '\n' + scrapeBlock(API);
+      const report = check(readmeWith(body));
+
+      expect(report.rules).toBe(0);
+      expect(report.problems).toHaveLength(1);
+      expect(report.problems[0]).toContain('não tem nenhuma regra');
+    });
+
+    it('OBS-03 o catálogo não ganha o up: série fora do catálogo que não é o up reprova na regra, com o bloco scrape_configs presente', () => {
+      const { problems } = check(readmeUp(`down{job="${API}"} == 0`));
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('down não está na coluna "No Prometheus"');
+    });
+  });
 });

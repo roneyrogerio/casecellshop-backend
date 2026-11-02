@@ -198,9 +198,32 @@ function inSettleSpan(
   });
 }
 
-async function reconcileOnce(ctx: Context): Promise<ReconcileResult> {
+// Devolve a visibilidade (0) do que ficou na DLQ: sem isso a mensagem segue em voo até a
+// rodada seguinte, o redrive não a move e, no ElasticMQ, a perde (risco R12).
+async function releaseHeld(dlq: Queue, held: Set<string>): Promise<void> {
+  for (const handle of held) {
+    try {
+      // O resultado 'stale' é ignorado: a mensagem já mudou de dono e o laço segue.
+      await dlq.changeVisibility(handle, 0);
+    } catch (error) {
+      // A AWS lança MessageNotInflight quando a visibilidade já venceu (rodada acima de 5 min):
+      // a mensagem já está visível, como o 'stale', e as outras ainda precisam voltar.
+      if ((error as { name?: unknown } | null)?.name === 'MessageNotInflight')
+        continue;
+      // Não esconde o erro original da rodada. Para no primeiro erro: com o SQS fora, cada
+      // chamada esperaria o timeout de 5 s e 100 mensagens passariam do prazo de 25 s do
+      // encerramento; a visibilidade de 5 min vence sozinha.
+      return;
+    }
+  }
+}
+
+async function receiveAndSettle(
+  ctx: Context,
+  result: ReconcileResult,
+  held: Set<string>,
+): Promise<void> {
   const { dlq, settings } = ctx;
-  const result: ReconcileResult = { seen: 0, invoiced: 0, closed: 0 };
   // Só o stop() marca 'stopping': uma chamada direta com o reconciliador parado processa tudo.
   while (result.seen < settings.maxMessages && !ctx.isStopping()) {
     const batch = await dlq.receive({
@@ -210,14 +233,29 @@ async function reconcileOnce(ctx: Context): Promise<ReconcileResult> {
     });
     if (batch.length === 0) break;
     result.seen += batch.length;
+    // Toda recebida entra aqui; só o que foi apagado sai (as não tratadas pelo stop() ficam).
+    for (const received of batch) held.add(received.receiptHandle);
     for (const received of batch) {
-      if (ctx.isStopping()) return result;
+      if (ctx.isStopping()) return;
       const parsed = parseBillingMessage(received.body);
       // Corpo fora do schema fica na DLQ para o runbook.
       if (!parsed.valid) continue;
       const outcome = await inSettleSpan(ctx, received, parsed.message);
-      if (outcome !== 'kept') result[outcome] += 1;
+      if (outcome === 'kept') continue;
+      held.delete(received.receiptHandle);
+      result[outcome] += 1;
     }
+  }
+}
+
+async function reconcileOnce(ctx: Context): Promise<ReconcileResult> {
+  const result: ReconcileResult = { seen: 0, invoiced: 0, closed: 0 };
+  const held = new Set<string>();
+  try {
+    await receiveAndSettle(ctx, result, held);
+  } finally {
+    // Só ao fim de receber: dentro da rodada a mensagem voltaria visível e o laço a receberia de novo.
+    await releaseHeld(ctx.dlq, held);
   }
   return result;
 }
