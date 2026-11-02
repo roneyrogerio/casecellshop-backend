@@ -1,9 +1,10 @@
-// Ciclo de vida comum dos laços em segundo plano (worker, relay e reconciliação): start() e
-// stop() idempotentes, com a ordem das chamadas protegida.
+// Ciclo de vida comum dos laços em segundo plano (worker, relay, reconciliação e monitor de pedidos
+// sem desfecho): start() e stop() idempotentes, com a ordem das chamadas protegida.
 
 import { systemClock, type Clock } from './clock.ts';
 
-// Espera `ms` pelo relógio do runner e resolve antes se o stop() começar.
+// Espera `ms` pelo relógio do runner e resolve antes se o stop() começar; com o runner fora de
+// execução (`stopping` ou `stopped`), resolve na hora.
 export type Pause = (ms: number) => Promise<void>;
 
 export interface LoopRunnerOptions {
@@ -11,8 +12,6 @@ export interface LoopRunnerOptions {
   run: (isRunning: () => boolean) => Promise<void>;
   // Relógio do `pause` do runner; o do sistema quando omitido.
   clock?: Clock;
-  // Logo depois de o estado virar 'stopping' e antes da espera: acorda um laço que dorme.
-  onStopping?: () => void;
   // Espera extra do encerramento, além do laço (as tentativas em andamento do worker).
   drain?: () => Promise<unknown>;
   onStarted?: () => void;
@@ -28,15 +27,21 @@ export interface LoopRunner {
 }
 
 export interface SleepingLoopRunner extends LoopRunner {
-  // O sono do laço: espera `ms` pelo relógio do runner e resolve antes se o stop() começar. Sem ele, o
+  // O sono do laço, e o que acorda um laço que dorme: espera `ms` pelo relógio do runner e resolve
+  // antes se o stop() começar; com o runner fora de execução, resolve na hora. Sem ele, o
   // encerramento aguardaria o intervalo inteiro.
   pause: Pause;
 }
 
 // Cada sono guarda o seu `resolve` num conjunto; o stop() resolve todos, e a corrida solta o sono do relógio.
-function createPause(clock: Clock): { pause: Pause; wakeAll: () => void } {
+function createPause(
+  clock: Clock,
+  isRunning: () => boolean,
+): { pause: Pause; wakeAll: () => void } {
   const sleepers = new Set<() => void>();
   const pause: Pause = async (ms) => {
+    // Fora de execução ninguém chamaria o wakeAll() de novo: dormir prenderia o encerramento.
+    if (!isRunning()) return;
     const { promise, resolve } = Promise.withResolvers<void>();
     sleepers.add(resolve);
     try {
@@ -66,7 +71,10 @@ export function createLoopRunner(
   let lastStopCall = 0;
 
   const isRunning = () => state === 'running';
-  const { pause, wakeAll } = createPause(options.clock ?? systemClock);
+  const { pause, wakeAll } = createPause(
+    options.clock ?? systemClock,
+    isRunning,
+  );
 
   async function waitForLoop(): Promise<void> {
     try {
@@ -99,7 +107,6 @@ export function createLoopRunner(
       if (state !== 'running') return Promise.resolve();
       state = 'stopping';
       wakeAll();
-      options.onStopping?.();
       stopped = waitForLoop();
       return stopped;
     },
