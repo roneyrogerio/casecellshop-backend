@@ -316,6 +316,7 @@ const EXCEPTIONS: Exception[] = [
     file: 'test/repo/ci-jobs.test.ts',
     citations: [
       '*README.md',
+      '.specs',
       '.specs/',
       '.specs/*',
       '.specs/**',
@@ -324,6 +325,7 @@ const EXCEPTIONS: Exception[] = [
       '.specs/features/casecellshop/design.md',
       '.specs/features/casecellshop/spec.md',
       '.specs/features/casecellshop/telemetry.md',
+      '.specs/project',
       '.specs/project/NOVO.md',
       '.specs/project/PROJECT.md',
       '.specs/project/ROADMAP.md',
