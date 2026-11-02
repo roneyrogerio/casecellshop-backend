@@ -655,6 +655,11 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
         '\n',
       ),
     ),
+    // O único `port` do objeto, mesmo com a chave em string, vale como porta fixa.
+    ok(
+      "um listen({ 'port': 8080 }) com a chave em string (único port, fixo), num arquivo com compose",
+      [UP, "server.listen({ 'port': 8080 });"].join('\n'),
+    ),
     ok(
       'um listen(handler) num arquivo sem compose (controle: a regra só vale com o compose)',
       'server.listen(handler);',
@@ -787,6 +792,36 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
     bad(
       'um listen(0) antes da chamada do upComposeProject',
       ['server.listen(0);', UP].join('\n'),
+    ),
+    // A1: um objeto com spread, com chave calculada ou com mais de um `port` não tem porta fixa garantida: o valor
+    // que vale é o último, e o spread ou a chave calculada pode trazer um `port` que sobrescreve o literal.
+    bad(
+      'um listen({ port: 8080, ...opts }) com spread depois da porta, num arquivo com compose',
+      [UP, 'server.listen({ port: 8080, ...opts });'].join('\n'),
+    ),
+    bad(
+      'um listen({ ...opts, port: 8080 }) com spread antes da porta, num arquivo com compose',
+      [UP, 'server.listen({ ...opts, port: 8080 });'].join('\n'),
+    ),
+    bad(
+      'um listen({ port: 8080, port: 0 }) com port repetido, num arquivo com compose',
+      [UP, 'server.listen({ port: 8080, port: 0 });'].join('\n'),
+    ),
+    bad(
+      "um listen({ port: 8080, 'port': 0 }) com port repetido e a segunda chave em string, num arquivo com compose",
+      [UP, "server.listen({ port: 8080, 'port': 0 });"].join('\n'),
+    ),
+    bad(
+      "um listen({ 'port': 8080, port: 0 }) com port repetido e a primeira chave em string, num arquivo com compose",
+      [UP, "server.listen({ 'port': 8080, port: 0 });"].join('\n'),
+    ),
+    bad(
+      'um listen({ port: 8080, [key]: 0 }) com chave calculada depois da porta, num arquivo com compose',
+      [UP, 'server.listen({ port: 8080, [key]: 0 });'].join('\n'),
+    ),
+    bad(
+      'um listen({ [key]: 0, port: 8080 }) com chave calculada antes da porta, num arquivo com compose',
+      [UP, 'server.listen({ [key]: 0, port: 8080 });'].join('\n'),
     ),
     bad(
       'um import nomeado de valor do node:net, num arquivo com compose',
