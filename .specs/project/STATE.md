@@ -1055,6 +1055,13 @@ Um envio está em dúvida quando a criação pode ter tido efeito sem a loja sab
 **Solução.** Um push novo depois do horário gravado (`b87bf36`, sem mudança de arquivo), e a aprovação do dono depois dele.
 **Previne.** Mexer no ruleset sem causa. O registro de atividade mostra o push que o GitHub considera o último; a próxima vez em que a hora se repete é 07/11/2027, entre 08:00 e 09:00 UTC.
 
+### L-009 · Sem o hook de commit no clone, um cabeçalho longo só aparece no CI, e o force push é bloqueado
+
+**Contexto.** Em 02/11/2026, no PR #44 (AD-031), a sessão na nuvem commitou um `fix:` com cabeçalho de 104 caracteres; o `commitlint` do CI reprovou o PR inteiro depois de sete rodadas de revisão.
+**Problema.** O clone da sessão estava sem `core.hooksPath`, então o hook `commit-msg` de `.githooks/` não rodou e o limite de 100 caracteres não foi conferido no commit. Corrigir a mensagem exige reescrever o histórico, e o ruleset recusa force push em qualquer branch (`GH013`), também para o mantenedor.
+**Solução.** O histórico reescrito, com a árvore idêntica, foi publicado numa branch nova (`fix/fatura-tardia-reescrita`) e num PR substituto, que leva as revisões do #44 pelo link; o `core.hooksPath` foi configurado no clone.
+**Previne.** Commitar sem o hook. Antes do primeiro commit de uma sessão, conferir `git config core.hooksPath` (ou rodar `npm run setup:local`); um commit já publicado com mensagem fora da regra só sai por branch nova.
+
 ## Ideias adiadas
 
 Além da lista "Adicionais" do roadmap:
