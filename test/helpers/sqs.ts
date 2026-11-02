@@ -380,7 +380,8 @@ export interface ObservedQueue extends Queue {
     times?: number,
   ): void;
   // Faz as próximas `times` chamadas da operação lançarem, sem chegar ao SQS. É só falha: nunca devolve dado.
-  inject(operation: QueueOperation, times?: number): Injection;
+  // `error` troca o erro lançado (por exemplo, o `MessageNotInflight` que só a AWS produz).
+  inject(operation: QueueOperation, times?: number, error?: Error): Injection;
 }
 
 function orderIdOfBody(body: string): string | undefined {
@@ -409,7 +410,7 @@ export function observeQueue(inner: Queue): ObservedQueue {
   }[] = [];
   const injections = new Map<
     QueueOperation,
-    { remaining: number; state: { fired: number } }
+    { remaining: number; state: { fired: number }; error?: Error | undefined }
   >();
   let completedReceives = 0;
 
@@ -426,7 +427,7 @@ export function observeQueue(inner: Queue): ObservedQueue {
     if (!injection || injection.remaining <= 0) return;
     injection.remaining -= 1;
     injection.state.fired += 1;
-    throw new Error(`falha injetada no SQS (${operation})`);
+    throw injection.error ?? new Error(`falha injetada no SQS (${operation})`);
   }
 
   async function handleCall(
@@ -509,9 +510,9 @@ export function observeQueue(inner: Queue): ObservedQueue {
     afterReceive(hook, times = 1) {
       after.push({ remaining: times, hook });
     },
-    inject(operation, times = 1) {
+    inject(operation, times = 1, error) {
       const state = { fired: 0 };
-      injections.set(operation, { remaining: times, state });
+      injections.set(operation, { remaining: times, state, error });
       return {
         get fired() {
           return state.fired;

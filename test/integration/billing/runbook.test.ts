@@ -38,7 +38,7 @@ import {
   WITHIN_WINDOW_SECONDS,
 } from '../../helpers/late-check.ts';
 import { captureLogs } from '../../helpers/logs.ts';
-import { visibleCount } from '../../helpers/sqs.ts';
+import { countsOf, visibleCount } from '../../helpers/sqs.ts';
 import {
   acceptOrder,
   ageLastCall,
@@ -173,12 +173,16 @@ async function expectUnchangedWithoutTouchingErp(
   );
 }
 
-function redrive(world: QueueWorld): ReturnType<typeof redriveDlq> {
+function redrive(
+  world: QueueWorld,
+  timeoutMs?: number,
+): ReturnType<typeof redriveDlq> {
   return driveClock(
     redriveDlq({
       client: world.queues.client,
       dlqUrl: world.queues.dlqUrl,
       clock: world.clock,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     }),
     world,
   );
@@ -292,6 +296,40 @@ describe('ORD-07 redrive em lote da DLQ', () => {
     const world = await createWorld(suite, { maxReceiveCount: 1 });
 
     await expect(redrive(world)).resolves.toEqual({ before: 0, remaining: 0 });
+  });
+
+  it('OBS-09 o before do redrive conta a DLQ pelas visíveis e as em voo', async () => {
+    const world = await createWorld(suite, {
+      withoutH1b: true,
+      maxReceiveCount: 1,
+    });
+    const orders = [
+      await submitOrder(suite, world),
+      await submitOrder(suite, world),
+    ];
+    await deadOrders(world, orders);
+    // A reconciliação recebe a mensagem com visibilidade longa e a deixa na DLQ, em voo.
+    const [held] = await world.queues.dlq.receive({
+      max: 1,
+      waitSeconds: 0,
+      visibilitySeconds: 300,
+    });
+    expect(held).toBeDefined();
+    // Os atributos crus confirmam a premissa: uma visível e uma em voo.
+    await vi.waitFor(
+      async () =>
+        expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+          visible: 1,
+          notVisible: 1,
+        }),
+      { timeout: WAIT_GUARD_MS, interval: 50 },
+    );
+
+    const result = await redrive(world, 5_000);
+
+    // O contrato é só o before: conta a visível e a em voo. O destino da mensagem
+    // em voo e o restante dependem do emulador (R12) e não são afirmados.
+    expect(result.before).toBe(2);
   });
 });
 
