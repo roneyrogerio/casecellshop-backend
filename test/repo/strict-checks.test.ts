@@ -97,13 +97,27 @@ const TS_SAMPLES = [
   ...GENERATED_TYPE_FILES,
 ];
 
-// O glob alcança .ts quando o último trecho dele casa um nome terminado em `.ts` (`*.ts`, `*`, `**`,
-// `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou quando termina em `.ts` ou num grupo `{…ts…}`. Os caminhos de amostra
-// não servem para decidir: uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência.
-// O último trecho é conferido como nome de arquivo, com o `globToRegExp` e não com o `overrideFilesMatch`: o
-// `GlobSet` põe `**/` na frente de um trecho sem `/`, o que não muda o casamento de um nome solto, mas atrapalha o
-// `!` do início (`**/!*.js` é um nome literal), e o `!` do glob inteiro tem de continuar valendo para o trecho.
+// Caminhos .ts que não citam pasta nenhuma do projeto: raiz, uma pasta e duas pastas. Um glob negado com pasta
+// (`!src/*.[jt]s`) casa qualquer .ts fora dela, e é o `overrideFilesMatch`, que segue o `GlobSet` do oxlint, quem diz
+// isso por inteiro (o `!` nega pasta e nome juntos).
+const OUTSIDE_TS_PATHS = [
+  'arquivo.ts',
+  'zz-fora/arquivo.ts',
+  'zz-fora/zz/arquivo.ts',
+];
+
+// O glob alcança .ts por um de dois critérios, e basta um:
+// 1. o `overrideFilesMatch` casa algum caminho .ts de `OUTSIDE_TS_PATHS`. Vale para qualquer glob, com `!` ou não, e
+//    é o que decide o glob negado: o `!` do início vale para o glob inteiro, pasta e nome, então `!src/*.[jt]s` não é
+//    "o complemento do nome `*.[jt]s`" e sim "tudo que não é src/<nome>.js|ts", que inclui `zz-fora/arquivo.ts`;
+// 2. o último trecho casa um nome terminado em `.ts` (`*.ts`, `*`, `**`, `*.{js,ts}`, `*.[jt]s`, `*.?s`), ou o glob
+//    termina em `.ts` ou num grupo `{…ts…}`. Este critério cobre o glob positivo com pasta, que o primeiro não vê:
+//    uma pasta que nenhuma amostra cita (src/http/**/*.ts) escaparia da conferência. O último trecho é conferido
+//    como nome de arquivo, com o `globToRegExp`; o `!` do início fica junto dele, o que só vale quando o glob não tem
+//    pasta (com pasta, o critério 1 é quem decide, como acima).
 function reachesTs(glob: string): boolean {
+  if (OUTSIDE_TS_PATHS.some((sample) => overrideFilesMatch([glob], sample)))
+    return true;
   const bangs = /^!*/.exec(glob)?.[0] ?? '';
   const lastSegment = glob.slice(glob.lastIndexOf('/') + 1);
   return (
@@ -250,6 +264,16 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['a classe [jt] na raiz', ['**/*.[jt]s']],
     ['o coringa ?s (A6 do #12)', ['src/http/*.?s']],
     ['o coringa ?s com **', ['**/*.?s']],
+    // O `!` do glob inteiro nega pasta e nome juntos (A1 do #35): `!src/*.[jt]s` casa todo arquivo que não é
+    // `src/<nome>.js|ts`, então alcança .ts fora de `src/`.
+    ['a classe [jt] negada, com pasta', ['!src/*.[jt]s']],
+    ['o coringa ?s e a classe [a-z] negados, com pasta', ['!src/[a-z]*.?s']],
+    ['o coringa ?s negado, com pasta e **', ['!src/**/*.?s']],
+    [
+      'a classe [jt] negada, com pasta, entre dois globs',
+      ['x.js', '!lib/*.[jt]s'],
+    ],
+    ['dois negados, que voltam ao positivo', ['!!src/*.[jt]s']],
   ])(
     'AI-20 controle: um override para %s que desliga return-await reprova',
     (_label, files) => {
@@ -281,6 +305,9 @@ describe('AI-20 os overrides do .oxlintrc.json que alcançam .ts não desligam a
     ['os .json', ['src/http/*.json']],
     ['a classe [jm]s, que não casa .ts', ['src/http/**/*.[jm]s']],
     ['o coringa ?js, que não casa .ts', ['src/http/*.?js']],
+    // O `!` com `**/` na frente nega todo .ts, de qualquer pasta: o override só alcança o que não é .ts.
+    ['a classe [jt] negada em qualquer pasta', ['!**/*.[jt]s']],
+    ['o coringa ?s negado em qualquer pasta', ['!**/*.?s']],
   ])(
     'AI-20 controle: um override para %s, que não alcança .ts, pode desligar return-await',
     (_label, files) => {

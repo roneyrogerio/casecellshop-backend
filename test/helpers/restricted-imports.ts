@@ -65,8 +65,17 @@ function pathEntry(entry: string | RestrictionEntry): RestrictionEntry {
   return typeof entry === 'string' ? { name: entry } : entry;
 }
 
-// Os nomes importados que o item trava: sem `importNames` nem `allowImportNames` o item trava o módulo todo.
-function namesRestricted(entry: RestrictionEntry, importName: string): boolean {
+// O import de que se pergunta: o nome importado (`import { a } from 'x'` é `a`, `import x from 'x'` é `default`), ou
+// `undefined` para o import sem nome (`import 'x'`).
+type ImportName = string | undefined;
+
+// Os nomes importados que o item trava: sem `importNames` nem `allowImportNames` o item trava o módulo todo. No import
+// sem nome (medido no 1.90.0) um item com `importNames` não trava nada, e um com `allowImportNames` trava o módulo.
+function namesRestricted(
+  entry: RestrictionEntry,
+  importName: ImportName,
+): boolean {
+  if (importName === undefined) return entry.importNames === undefined;
   if (entry.importNames !== undefined)
     return entry.importNames.includes(importName);
   if (entry.allowImportNames !== undefined)
@@ -77,24 +86,32 @@ function namesRestricted(entry: RestrictionEntry, importName: string): boolean {
 // Os itens do `patterns` na ordem do oxlint (medido no 1.90.0): o `group` de qualquer item, antes ou depois, é
 // anulado por um padrão negado (`!x`) de algum item (o módulo sai da lista); o `regex` é conferido na hora e só é
 // anulado por um padrão negado do mesmo item ou de um item ANTERIOR. O `regex` não depende do `caseSensitive`.
+// Para um import com nome, um item só vale se trava o nome (`importNames`, `allowImportNames`): o padrão negado de um
+// item que não o trava não anula nada (`{ group: ['foo/*', '!foo/baz'], importNames: ['a'] }` deixa
+// `import { b } from 'foo/baz'` ser reprovado por outro item). No import sem nome o `group` vale sempre, o `importNames`
+// do item não o limita, e o padrão negado também anula; só o `regex` respeita o `importNames`.
 function patternsMatch(
   entries: readonly RestrictionEntry[],
   module: string,
-  importName: string,
+  importName: ImportName,
 ): boolean {
   let whitelisted = false;
   let groupFound = false;
   for (const entry of entries) {
-    const result = restrictedGroupResult(
-      entry.group ?? [],
-      module,
-      entry.caseSensitive,
-    );
-    if (result === 'whitelist') whitelisted = true;
-    if (!namesRestricted(entry, importName)) continue;
-    if (result === 'found') groupFound = true;
+    const restricted = namesRestricted(entry, importName);
+    if (restricted || importName === undefined) {
+      const result = restrictedGroupResult(
+        entry.group ?? [],
+        module,
+        entry.caseSensitive,
+      );
+      if (result === 'whitelist') whitelisted = true;
+      if (result === 'found') groupFound = true;
+    }
     const regexFound =
-      entry.regex !== undefined && new RegExp(entry.regex).test(module);
+      restricted &&
+      entry.regex !== undefined &&
+      new RegExp(entry.regex).test(module);
     if (regexFound && !whitelisted) return true;
   }
   return groupFound && !whitelisted;
@@ -105,7 +122,7 @@ function patternsMatch(
 export function restrictedImportMatches(
   options: RestrictionOptions,
   module: string,
-  importName: string,
+  importName: ImportName,
 ): boolean {
   const inPaths = (options.paths ?? [])
     .map(pathEntry)

@@ -174,25 +174,42 @@ const FILE_SAMPLES = [
   'a/b/c.ts',
 ];
 
-const OVERRIDE_GLOBS = [
-  'a[!x]b.js',
-  'a[^x]b.js',
-  'a[/y]b.js',
-  'a[xy]b.js',
-  'a?b.js',
-  '*.ts',
-  './x.ts',
-  'sub/*.ts',
-  '**/*.ts',
-  'a/**',
-  '{a,sub}/**/*.ts',
-  '!**/*.js',
-  '!*.ts',
-  '!!**/*.js',
-  'x.ts',
-  './sub/x.ts',
-  './*.ts',
+// Cada caso é o `files` inteiro de um override: um padrão só, ou vários (o `GlobSet` casa se algum casar).
+const OVERRIDE_FILES: string[][] = [
+  ['a[!x]b.js'],
+  ['a[^x]b.js'],
+  ['a[/y]b.js'],
+  ['a[xy]b.js'],
+  ['a?b.js'],
+  ['*.ts'],
+  ['./x.ts'],
+  ['sub/*.ts'],
+  ['**/*.ts'],
+  ['a/**'],
+  ['{a,sub}/**/*.ts'],
+  ['!**/*.js'],
+  ['!*.ts'],
+  ['!!**/*.js'],
+  ['x.ts'],
+  ['./sub/x.ts'],
+  ['./*.ts'],
+  // O `!` vale para o glob inteiro, pasta e nome (A1 do #35).
+  ['!sub/*.[jt]s'],
+  ['!sub/[a-z]*.?s'],
+  ['!**/*.[jt]s'],
+  // Mais de um padrão (A3 do #35): o conjunto casa se algum padrão casar, e um `!` dentro dele não exclui nada.
+  ['**/*.ts', '!x.ts'],
+  ['!x.ts', '**/*.ts'],
+  ['sub/*.ts', 'x.ts'],
+  ['!sub/*.ts', '!x.ts'],
+  // Controle: o `!x.ts` sozinho (sem `/`, vira `**/!x.ts`, um nome literal) não casa nada, então o `x.ts` que o
+  // conjunto `['**/*.ts', '!x.ts']` reporta vem do `**/*.ts`, e não do `!x.ts`.
+  ['!x.ts'],
 ];
+
+function filesLabel(files: readonly string[]): string {
+  return JSON.stringify(files);
+}
 
 describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
   const measured = new Map<string, string[]>();
@@ -201,17 +218,20 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
   beforeAll(() => {
     const tree = makeTempDir('glob-parity-');
     for (const file of FILE_SAMPLES) writeFileIn(tree, file, 'debugger;\n');
-    OVERRIDE_GLOBS.forEach((glob, index) => {
+    OVERRIDE_FILES.forEach((files, index) => {
       const run = runOxlint(
         tree,
-        singleRuleConfig([
-          { files: [glob], rules: { 'no-debugger': 'error' } },
-        ]),
+        singleRuleConfig([{ files, rules: { 'no-debugger': 'error' } }]),
         `override-${String(index)}.json`,
       );
       if (run.stderr !== '' || (run.status !== 0 && run.status !== 1))
-        failures.push(`${glob}: status ${String(run.status)} ${run.stderr}`);
-      measured.set(glob, run.reports.map((report) => report.file).sort());
+        failures.push(
+          `${filesLabel(files)}: status ${String(run.status)} ${run.stderr}`,
+        );
+      measured.set(
+        filesLabel(files),
+        run.reports.map((report) => report.file).sort(),
+      );
     });
   }, PARITY_TIMEOUT_MS);
 
@@ -224,16 +244,26 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
     );
     expect(reportedSomething).toBe(true);
     // O oxlint também deixa de reportar o que o glob não casa: o `?` não casa a `/`, então a/b.js fica de fora.
-    expect(measured.get('a?b.js')).toEqual(['axb.js', 'ayb.js']);
+    expect(measured.get(filesLabel(['a?b.js']))).toEqual(['axb.js', 'ayb.js']);
+    // Um `!x.ts` dentro do conjunto não exclui o `x.ts`: sozinho ele não casa nada, e o conjunto reporta o `x.ts`
+    // pelo outro padrão, em qualquer ordem.
+    expect(measured.get(filesLabel(['!x.ts']))).toEqual([]);
+    expect(measured.get(filesLabel(['**/*.ts', '!x.ts']))).toContain('x.ts');
+    expect(measured.get(filesLabel(['!x.ts', '**/*.ts']))).toContain('x.ts');
   });
 
-  it.each(OVERRIDE_GLOBS)(
+  it.each(
+    OVERRIDE_FILES.map((files): [string, string[]] => [
+      filesLabel(files),
+      files,
+    ]),
+  )(
     'FND-13 o overrideFilesMatch casa as mesmas amostras que o oxlint: %s',
-    (glob) => {
+    (label, files) => {
       const expected = FILE_SAMPLES.filter((file) =>
-        overrideFilesMatch([glob], file),
+        overrideFilesMatch(files, file),
       ).sort();
-      expect(expected).toEqual(measured.get(glob));
+      expect(expected).toEqual(measured.get(label));
     },
   );
 });

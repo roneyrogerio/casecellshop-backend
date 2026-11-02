@@ -660,6 +660,20 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
       "um listen({ 'port': 8080 }) com a chave em string (único port, fixo), num arquivo com compose",
       [UP, "server.listen({ 'port': 8080 });"].join('\n'),
     ),
+    // A2 do #35: uma chave numérica escrita no código não é spread, nem chave calculada, nem segundo `port`; o único
+    // `port` segue fixo.
+    ok(
+      'um listen({ 0: x, port: 8080 }) com chave numérica antes da porta, num arquivo com compose',
+      [UP, 'server.listen({ 0: x, port: 8080 });'].join('\n'),
+    ),
+    ok(
+      'um listen({ port: 8080, 0: x }) com chave numérica depois da porta, num arquivo com compose',
+      [UP, 'server.listen({ port: 8080, 0: x });'].join('\n'),
+    ),
+    ok(
+      'um listen({ 1.5: x, port: 8080 }) com chave numérica decimal, num arquivo com compose',
+      [UP, 'server.listen({ 1.5: x, port: 8080 });'].join('\n'),
+    ),
     ok(
       'um listen(handler) num arquivo sem compose (controle: a regra só vale com o compose)',
       'server.listen(handler);',
@@ -822,6 +836,15 @@ ruleTester.run('no-port-before-up', plugin.rules['no-port-before-up'], {
     bad(
       'um listen({ [key]: 0, port: 8080 }) com chave calculada antes da porta, num arquivo com compose',
       [UP, 'server.listen({ [key]: 0, port: 8080 });'].join('\n'),
+    ),
+    // A2 do #35: objeto sem `port`, só com chave numérica, continua sem porta fixa.
+    bad(
+      'um listen({ 0: 8080 }) com chave numérica e sem port, num arquivo com compose',
+      [UP, 'server.listen({ 0: 8080 });'].join('\n'),
+    ),
+    bad(
+      'um listen({ 0: x, port: 8080, port: 0 }) com chave numérica e port repetido, num arquivo com compose',
+      [UP, 'server.listen({ 0: x, port: 8080, port: 0 });'].join('\n'),
     ),
     bad(
       'um import nomeado de valor do node:net, num arquivo com compose',
