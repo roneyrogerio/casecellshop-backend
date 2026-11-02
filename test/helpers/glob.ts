@@ -1,200 +1,581 @@
-// Casamento de glob dos testes que leem a configuração do lint (.oxlintrc.json) como dado. Cada função imita uma
-// decisão do oxlint, para a conferência liberar e reprovar os mesmos arquivos que o lint de verdade:
+// Casamento de glob dos testes que leem a configuração do lint (.oxlintrc.json) como dado: um porte, byte a byte, do
+// `glob_match` e do `validate` do fast-glob 1.1.1, que o oxlint 1.90.0 traz. Assim a conferência libera e reprova os
+// mesmos arquivos que o lint de verdade, inclusive nos cantos em que um casador por expressão regular erra (a pilha de
+// chaves, o salto de volta ao `**`, o `*` único que guarda só o último ponto de retorno).
 //
-// - `globToRegExp` segue o `fast_glob::glob_match` 1.1.1, que o oxlint 1.90.0 traz: `*` e `?` não casam `/`; `**`
-//   casa pastas; `{a,b}` vale aninhado e a vírgula fora de chaves é literal; a classe `[…]`, negada (`[!x]`, `[^x]`)
-//   ou não, casa também `/`; um `!` no início do glob nega o resultado.
-// - `overrideFilesMatch` segue o `GlobSet::is_match` (`crates/oxc_config/src/glob_set.rs` do oxc).
+// Porte de https://github.com/oxc-project/fast-glob/blob/3b6c31c39a676257fd1d95c338025b64f3f0395a/src/lib.rs
+// (tag v1.1.1, commit 3b6c31c39a676257fd1d95c338025b64f3f0395a). A estrutura e os nomes seguem o Rust (`State`,
+// `Wildcard`, a pilha de chaves com limite 10, `skip_globstars`, `skip_to_separator`, `skip_branch`, `match_brace`,
+// `match_start` da negação), para que uma nova versão do fast-glob se compare com este arquivo linha a linha.
 //
-// A decisão do `no-restricted-imports`, que usa o `globToRegExp`, fica em `restricted-imports.ts`.
+// MIT License
 //
-// A paridade é conferida contra o oxlint instalado em `glob.test.ts`, que roda o binário do projeto: quando um oxlint
-// novo trouxer o fast-glob 1.1.2 (em que a classe não casa `/`), essa paridade reprova e o helper muda junto. Ler o
-// código-fonte sozinho não basta, porque uma versão nova muda o comportamento sem aviso.
+// Copyright (c) 2023 Devon Govett
 //
-// O oxlint valida cada glob dos `files` antes de usar (`fast_glob::validate`, chamado pelo `GlobSet::try_new`) e, se um
-// for inválido, recusa a configuração inteira ("Failed to parse oxlint configuration file ... Invalid glob pattern").
-// `invalidGlobReason` diz por que um glob seria recusado, e o `globToRegExp` lança um erro em vez de adivinhar um
-// casamento que o oxlint nunca faria. Cobre o que a paridade em `glob.test.ts` mede: chave aberta, classe aberta e `\`
-// no fim. O `validate` também recusa chaves aninhadas demais, o que a configuração não usa e a paridade não mede.
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions:
 //
-// Na classe `[…]`, o primeiro `]` depois do `[` e do `!` ou `^` opcional é membro, e não o fecho (medido: `a[]]b.js`
-// casa `a]b.js`, e `a[]b.js` e `a[!]b.js` são recusados). A classe fecha no `]` seguinte.
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+// Software.
 //
-// A `\` escapa o caractere seguinte, dentro e fora da classe (medido: `a[\]]b.js` casa `a]b.js`, `a\[b.js` casa
-// `a[b.js`, `a\*b.js` casa `a*b.js`). Um `\]` não fecha a classe, e a `\` sozinha no fim é recusada. O que o `\x` vale
-// segue o `unescape` do fast-glob 1.1.1 (ver `escapedChar`): `\n`, `\r`, `\t` e `\b` não são letras.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+// WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
-// O intervalo invertido (`[z-a]`) é vazio: o oxlint aceita o glob e a classe não casa nada, e a negada (`[!z-a]`) casa
-// qualquer caractere (medido: `q/a[z-a]b.js` e `q/a[m-a]b.js` não casam `q/azb.js`, `q/aab.js` nem `q/amb.js`;
-// `q/a[!z-a]b.js` casa todos). A regex do JavaScript recusaria o intervalo com "Range out of order", então ele sai da
-// classe antes de a regex ser montada.
+// O que fica de fora do porte: o `overrideFilesMatch` segue o `GlobSet::is_match` (`crates/oxc_config/src/glob_set.rs`
+// do oxc), e a decisão do `no-restricted-imports`, que também usa o `globMatch`, fica em `restricted-imports.ts`.
 //
-// A `}` sem `{` aberta é literal (medido: `q/a}b.js` casa `q/a}b.js`), e a `}` numa classe dentro de chaves não as
-// fecha (medido: `q/{a,[}]}b.js` casa `q/ab.js` e `q/}b.js`).
-interface GlobClass {
-  negated: boolean;
-  // Os membros já em sintaxe de classe de expressão regular: `]`, `^` e os escapados levam `\`.
-  members: string;
-  end: number;
+// Como o porte é conferido: o código-fonte lido sozinho não basta, porque uma versão nova do oxlint muda o
+// comportamento sem aviso (o fast-glob 1.1.2 faz a classe deixar de casar `/`). A paridade em `glob.test.ts` roda o
+// binário do projeto e compara, com casos fixos e com uma propriedade que gera globs, o que ele casa com o que o
+// `overrideFilesMatch` casa. Quando ela reprova, este arquivo muda junto.
+
+// O fast-glob trabalha em bytes (`&[u8]`), e o porte também: um `Buffer` do glob e outro do caminho. Os caracteres do
+// glob que importam (`*`, `?`, `[`, `{`, `,`, `}`, `/`, `\`, `!`, `^`, `-`, `]`) são ASCII.
+const BANG = 0x21;
+const STAR = 0x2a;
+const COMMA = 0x2c;
+const DASH = 0x2d;
+const SLASH = 0x2f;
+const QUESTION = 0x3f;
+const OPEN_BRACKET = 0x5b;
+const BACKSLASH = 0x5c;
+const CLOSE_BRACKET = 0x5d;
+const CARET = 0x5e;
+const OPEN_BRACE = 0x7b;
+const CLOSE_BRACE = 0x7d;
+
+// O limite da pilha de chaves (`MAX_BRACE_NESTING`): um glob com mais chaves abertas ao mesmo tempo é inválido.
+const MAX_BRACE_NESTING = 10;
+
+// O byte do glob na posição, ou -1 fora dele: o Rust entra em pânico num índice fora do vetor, e o porte nunca chega
+// lá (cada leitura é protegida como no original), então -1 só serve para o TypeScript, que não conhece o limite.
+function byteAt(bytes: Uint8Array, index: number): number {
+  return bytes[index] ?? -1;
 }
 
-// Um membro da classe: o trecho de regex, o código do caractere (para comparar as pontas de um intervalo) e se é o `-`
-// sem escape, que é o que forma o intervalo.
-interface ClassToken {
-  source: string;
-  code: number;
-  dash: boolean;
+// Se os bytes a partir de `index` são os do texto ASCII (a comparação de fatias `&glob[a..b] == b"/**/"` do Rust).
+function hasBytesAt(bytes: Uint8Array, index: number, text: string): boolean {
+  for (let offset = 0; offset < text.length; offset += 1)
+    if (byteAt(bytes, index + offset) !== text.charCodeAt(offset)) return false;
+  return true;
 }
 
-// O caractere vira literal na expressão regular (fora de letras e dígitos, a `\` na frente só o torna literal).
-// Os de controle (LF, CR, TAB e 0x08, que o `\n`, `\r`, `\t` e `\b` do glob produzem) vão por `\xNN`.
-function escapeLiteral(char: string): string {
-  const code = char.charCodeAt(0);
-  if (code < 0x20) return `\\x${code.toString(16).padStart(2, '0')}`;
-  return char.replace(/[^A-Za-z0-9]/g, '\\$&');
+// `std::path::is_separator` no Unix: só a `/`.
+function isSeparator(byte: number): boolean {
+  return byte === SLASH;
 }
 
-// O `\x` do glob, como o `unescape` do fast-glob 1.1.1 (`src/lib.rs`, tag v1.1.1) o lê, dentro e fora da classe (nas
-// duas pontas de um intervalo também): `\b` é o byte 0x08, `\n` é LF, `\r` é CR, `\t` é TAB, `\a` é `a`, e qualquer
-// outro caractere é ele mesmo. Devolve o trecho de expressão regular que casa só esse caractere. Medido no oxlint
-// 1.90.0: `q/a\nb.js` não casa `q/anb.js`, e `q/a\ab.js` casa `q/aab.js`.
+// Onde a classe `[…]` que abre em `index` termina (o índice depois do `]`), ou `undefined` se ela não fecha. O primeiro
+// caractere depois do `[` e do `!` ou `^` opcional é membro, mesmo um `]` (medido: `a[]]b.js` casa `a]b.js`), e a `\`
+// escapa o caractere seguinte (um `\]` não fecha a classe).
+function skipClass(glob: Uint8Array, index: number): number | undefined {
+  let next = index + 1;
+  if (byteAt(glob, next) === CARET || byteAt(glob, next) === BANG) next += 1;
+  let first = true;
+  for (;;) {
+    if (next >= glob.length) return undefined;
+    const byte = byteAt(glob, next);
+    if (byte === CLOSE_BRACKET && !first) return next + 1;
+    if (byte === BACKSLASH) next += 1;
+    first = false;
+    next += 1;
+  }
+}
+
+// Os quatro motivos do `validate`, na ordem em que o Rust os acha. O oxlint chama o `validate` em cada glob dos `files`
+// (`GlobSet::try_new`) e, se um for inválido, recusa a configuração inteira ("Failed to parse oxlint configuration
+// file ... Invalid glob pattern"). Os `!` do início não fazem parte do padrão. Uma `}` sem `{` aberta é um caractere
+// comum (medido: `q/a}b.js` casa `q/a}b.js`).
+export function invalidGlobReason(glob: string): string | undefined {
+  const bytes = Buffer.from(glob);
+  let index = 0;
+  while (index < bytes.length && byteAt(bytes, index) === BANG) index += 1;
+
+  let openBraces = 0;
+  while (index < bytes.length) {
+    const byte = byteAt(bytes, index);
+    if (byte === BACKSLASH) {
+      if (index + 1 >= bytes.length) return 'barra invertida no fim';
+      index += 2;
+    } else if (byte === OPEN_BRACKET) {
+      const next = skipClass(bytes, index);
+      if (next === undefined)
+        return 'classe de caracteres aberta (falta o "]")';
+      index = next;
+    } else if (byte === OPEN_BRACE) {
+      if (openBraces >= MAX_BRACE_NESTING)
+        return `chaves aninhadas demais (mais de ${String(MAX_BRACE_NESTING)})`;
+      openBraces += 1;
+      index += 1;
+    } else if (byte === CLOSE_BRACE) {
+      openBraces = Math.max(0, openBraces - 1);
+      index += 1;
+    } else {
+      index += 1;
+    }
+  }
+  if (openBraces > 0) return 'chave aberta (falta o "}")';
+  return undefined;
+}
+
+// Um ponto de retorno do `*` ou do `**`. É um valor (`Copy` no Rust): atribuir um a outro copia.
+interface Wildcard {
+  globIndex: number;
+  pathIndex: number;
+  braceDepth: number;
+}
+
+function newWildcard(): Wildcard {
+  return { globIndex: 0, pathIndex: 0, braceDepth: 0 };
+}
+
+function copyWildcard(wildcard: Wildcard): Wildcard {
+  return { ...wildcard };
+}
+
+// A pilha de chaves: para cada `{` em tentativa, o índice dela e o do ramo (alternativa) que está sendo casado.
+type BraceStack = [openBraceIndex: number, branchIndex: number][];
+
+// O resultado de ler um `\x` (o `unescape` do Rust): o byte que o `\x` produz, ou `undefined` se a `\` está no fim.
+// `\a` é `a`, `\b` é 0x08, `\n` é LF, `\r` é CR, `\t` é TAB, e qualquer outro caractere é ele mesmo (medido no oxlint:
+// `q/a\nb.js` não casa `q/anb.js`, e `q/a\ab.js` casa `q/aab.js`).
 const CONTROL_ESCAPES = new Map([
-  ['b', '\x08'],
-  ['n', '\n'],
-  ['r', '\r'],
-  ['t', '\t'],
+  [0x61, 0x61],
+  [0x62, 0x08],
+  [0x6e, 0x0a],
+  [0x72, 0x0d],
+  [0x74, 0x09],
 ]);
 
-// O caractere que o `\x` do glob produz (o `unescape` descrito acima).
-function unescapedChar(char: string): string {
-  return CONTROL_ESCAPES.get(char) ?? char;
+// Como o Rust passa `invalid_pattern` por referência (`&mut bool`), o porte passa um objeto.
+interface InvalidFlag {
+  value: boolean;
 }
 
-function escapedChar(char: string): string {
-  return escapeLiteral(unescapedChar(char));
-}
+class State {
+  pathIndex = 0;
+  globIndex = 0;
+  braceDepth = 0;
+  wildcard: Wildcard = newWildcard();
+  globstar: Wildcard = newWildcard();
 
-function classToken(char: string, escaped: boolean): ClassToken {
-  const real = escaped ? unescapedChar(char) : char;
-  const literal = escaped || char === ']' || char === '^';
-  return {
-    source: literal ? escapeLiteral(real) : char,
-    code: real.charCodeAt(0),
-    dash: !escaped && char === '-',
-  };
-}
+  clone(): State {
+    const copy = new State();
+    copy.pathIndex = this.pathIndex;
+    copy.globIndex = this.globIndex;
+    copy.braceDepth = this.braceDepth;
+    copy.wildcard = copyWildcard(this.wildcard);
+    copy.globstar = copyWildcard(this.globstar);
+    return copy;
+  }
 
-// Os membros em sintaxe de classe de expressão regular, sem os intervalos invertidos (vazios, como no oxlint).
-function classMembers(tokens: readonly ClassToken[]): string {
-  let members = '';
-  for (let index = 0; index < tokens.length; index += 1) {
-    const low = tokens[index];
-    const high = tokens[index + 2];
-    if (low !== undefined && high !== undefined && tokens[index + 1]?.dash) {
-      if (low.code <= high.code) members += `${low.source}-${high.source}`;
-      index += 2;
-    } else {
-      members += low?.source ?? '';
+  // Volta ao último `*` guardado: o `*` consome mais um byte do caminho a cada volta.
+  backtrack(): void {
+    this.globIndex = this.wildcard.globIndex;
+    this.pathIndex = this.wildcard.pathIndex;
+    this.braceDepth = this.wildcard.braceDepth;
+  }
+
+  // Junta uma sequência de `**/**/` num só: salta os `/**/` do meio e o `/**` do fim, e deixa o `globIndex` nos dois
+  // últimos `*`. O `/**` só junta se vem no fim do glob; `q/**/**b.js` não junta (o segundo `**` vira um `*`).
+  skipGlobstars(glob: Uint8Array): void {
+    let globIndex = this.globIndex + 2;
+    while (globIndex + 4 <= glob.length && hasBytesAt(glob, globIndex, '/**/'))
+      globIndex += 3;
+    if (glob.length - globIndex === 3 && hasBytesAt(glob, globIndex, '/**'))
+      globIndex += 3;
+    this.globIndex = globIndex - 2;
+  }
+
+  // Depois de um `**` que é o trecho inteiro: o ponto de retorno passa a ser a próxima `/` do caminho (o `**` não
+  // para no meio de um trecho), e vira também o ponto de retorno do `**`.
+  skipToSeparator(path: Uint8Array, isEndInvalid: boolean): void {
+    if (this.pathIndex === path.length) {
+      this.wildcard.pathIndex += 1;
+      return;
+    }
+    let pathIndex = this.pathIndex;
+    while (pathIndex < path.length && !isSeparator(byteAt(path, pathIndex)))
+      pathIndex += 1;
+    if (isEndInvalid || pathIndex !== path.length) pathIndex += 1;
+    this.wildcard.pathIndex = pathIndex;
+    this.globstar = copyWildcard(this.wildcard);
+  }
+
+  // Salta o resto do ramo de chaves em que o casamento está, até depois da `}` que o fecha: o ramo que acabou de casar
+  // não tenta os ramos seguintes (quem tenta é o `match_brace`).
+  skipBranch(glob: Uint8Array): void {
+    const endBraceDepth = this.braceDepth - 1;
+    while (this.globIndex < glob.length) {
+      const byte = byteAt(glob, this.globIndex);
+      if (byte === OPEN_BRACE) {
+        this.braceDepth += 1;
+      } else if (byte === CLOSE_BRACE) {
+        this.braceDepth -= 1;
+        if (this.braceDepth === endBraceDepth) {
+          this.globIndex += 1;
+          return;
+        }
+      } else if (this.skipClassOrEscape(glob, byte)) {
+        continue;
+      }
+      this.globIndex += 1;
     }
   }
-  return members;
-}
 
-function classAt(glob: string, open: number): GlobClass | undefined {
-  const negated =
-    glob.charAt(open + 1) === '!' || glob.charAt(open + 1) === '^';
-  const tokens: ClassToken[] = [];
-  let index = open + 1 + (negated ? 1 : 0);
-  // O primeiro caractere da classe, mesmo um `]`, é membro: só um `]` seguinte fecha.
-  for (let first = true; index < glob.length; first = false) {
-    const char = glob.charAt(index);
-    if (char === ']' && !first)
-      return { negated, members: classMembers(tokens), end: index };
-    if (char === '\\') {
-      if (index + 1 >= glob.length) return undefined;
-      tokens.push(classToken(glob.charAt(index + 1), true));
-      index += 2;
-    } else {
-      tokens.push(classToken(char, false));
-      index += 1;
+  // O `skip_branch` e o `match_brace` andam pelo glob byte a byte e tratam igual a classe e o escape: a classe `[…]` é
+  // saltada inteira (uma classe aberta engole o resto do glob, e deixa a chave aberta também), e a `\` pula o byte
+  // seguinte. Devolve se o byte era uma classe, caso em que o chamador não avança mais um byte.
+  skipClassOrEscape(glob: Uint8Array, byte: number): boolean {
+    if (byte === OPEN_BRACKET) {
+      this.globIndex = skipClass(glob, this.globIndex) ?? glob.length;
+      return true;
     }
+    if (byte === BACKSLASH) this.globIndex += 1;
+    return false;
   }
-  return undefined;
-}
 
-export function invalidGlobReason(glob: string): string | undefined {
-  let depth = 0;
-  for (let index = 0; index < glob.length; index += 1) {
-    const char = glob.charAt(index);
-    if (char === '\\') {
-      if (index + 1 >= glob.length) return 'barra invertida no fim';
-      index += 1;
-    } else if (char === '[') {
-      const charClass = classAt(glob, index);
-      if (charClass === undefined)
-        return 'classe de caracteres aberta (falta o "]")';
-      index = charClass.end;
-    } else if (char === '{') {
-      depth += 1;
-    } else if (char === '}' && depth > 0) {
-      depth -= 1;
+  // Lê um `\x` em `glob[globIndex]` (o `unescape` do Rust): devolve o byte que ele produz, avançando o `globIndex` para o
+  // caractere escapado, ou `undefined` (com o glob marcado como inválido) se a `\` está no fim.
+  unescape(
+    byte: number,
+    glob: Uint8Array,
+    invalidPattern: InvalidFlag,
+  ): number | undefined {
+    if (byte !== BACKSLASH) return byte;
+    this.globIndex += 1;
+    if (this.globIndex >= glob.length) {
+      invalidPattern.value = true;
+      return undefined;
     }
+    const escaped = byteAt(glob, this.globIndex);
+    return CONTROL_ESCAPES.get(escaped) ?? escaped;
   }
-  if (depth > 0) return 'chave aberta (falta o "}")';
-  return undefined;
-}
 
-export function globToRegExp(glob: string): RegExp {
-  const invalid = invalidGlobReason(glob);
-  if (invalid !== undefined)
-    throw new Error(
-      `Glob "${glob}" inválido (${invalid}): o oxlint recusa a configuração com esse glob.`,
+  // Casa o resto do glob com o caminho a partir de um ramo `branchIndex` do `{` em `openBraceIndex`, sobre uma cópia do
+  // estado: o chamador continua de onde estava para tentar o próximo ramo.
+  matchBraceBranch(
+    glob: Uint8Array,
+    path: Uint8Array,
+    openBraceIndex: number,
+    branchIndex: number,
+    braceStack: BraceStack,
+    invalidPattern: InvalidFlag,
+  ): boolean {
+    // Chaves aninhadas além da pilha: o glob é inválido (o `validate` também o recusa).
+    if (braceStack.length >= MAX_BRACE_NESTING) {
+      invalidPattern.value = true;
+      return false;
+    }
+    braceStack.push([openBraceIndex, branchIndex]);
+
+    const branchState = this.clone();
+    branchState.globIndex = branchIndex;
+    branchState.braceDepth = braceStack.length;
+
+    const matched = branchState.globMatchFrom(
+      glob,
+      path,
+      branchIndex,
+      braceStack,
+      invalidPattern,
     );
-  // Cada `!` do início inverte o casamento (`!!x` volta ao positivo, medido); o resto do glob traduz como sempre.
-  const bangs = /^!*/.exec(glob)?.[0].length ?? 0;
-  const negated = bangs % 2 === 1;
-  const body = glob.slice(bangs);
-  let source = '';
-  // Quantas chaves estão abertas: um grupo já fechado não faz a vírgula seguinte virar alternativa.
-  let depth = 0;
-  for (let index = 0; index < body.length; index += 1) {
-    const char = body.charAt(index);
-    if (char === '\\') {
-      // `\x` segue o `unescape` do fast-glob (`escapedChar`); a `\` no fim já foi recusada na validação.
-      source += escapedChar(body.charAt(index + 1));
-      index += 1;
-    } else if (char === '*' && body.charAt(index + 1) === '*') {
-      const slash = body.charAt(index + 2) === '/';
-      source += slash ? '(?:.*/)?' : '.*';
-      index += slash ? 2 : 1;
-    } else if (char === '*') {
-      source += '[^/]*';
-    } else if (char === '?') {
-      source += '[^/]';
-    } else if (char === '[') {
-      // Classe de caracteres (`[jt]`): os membros valem como estão (intervalos `a-c` incluídos). No glob a negação é
-      // `[!…]` ou `[^…]`, e na expressão regular é `[^…]`. A classe casa a `/` também (fast-glob 1.1.1), como a da
-      // regex. `]` e `^` membros e os caracteres escapados com `\` já vêm com escape, para a classe JavaScript ter o
-      // mesmo conjunto.
-      const charClass = classAt(body, index);
-      if (charClass === undefined) throw new Error('classe aberta já validada');
-      source += `[${charClass.negated ? '^' : ''}${charClass.members}]`;
-      index = charClass.end;
-    } else if (char === '{') {
-      depth += 1;
-      source += '(?:';
-    } else if (char === '}' && depth > 0) {
-      depth -= 1;
-      source += ')';
-    } else if (char === ',' && depth > 0) {
-      source += '|';
-    } else {
-      source += char.replace(/[.+^$()|[\]\\]/g, '\\$&');
-    }
+
+    braceStack.pop();
+    return matched;
   }
-  // A negação vira uma olhada à frente: a expressão regular não tem "tudo menos isto" de outro jeito.
-  return new RegExp(negated ? `^(?!(?:${source})$)` : `^${source}$`);
+
+  // Num `{`: tenta cada ramo (alternativa) do grupo, cada um casando o resto do glob. Casa se algum ramo casa. As
+  // alternativas vazias (`{}`, `{a,}`) são ramos vazios, e a `,` e a `}` só contam no nível do próprio `{`.
+  matchBrace(
+    glob: Uint8Array,
+    path: Uint8Array,
+    braceStack: BraceStack,
+    invalidPattern: InvalidFlag,
+  ): boolean {
+    let braceDepth = 0;
+    let hasClosingBrace = false;
+    let matched = false;
+
+    const openBraceIndex = this.globIndex;
+    let branchIndex = 0;
+
+    while (this.globIndex < glob.length) {
+      const byte = byteAt(glob, this.globIndex);
+      if (byte === OPEN_BRACE) {
+        braceDepth += 1;
+        if (braceDepth === 1) branchIndex = this.globIndex + 1;
+      } else if (byte === CLOSE_BRACE) {
+        braceDepth -= 1;
+        if (braceDepth === 0) {
+          hasClosingBrace = true;
+          if (
+            this.matchBraceBranch(
+              glob,
+              path,
+              openBraceIndex,
+              branchIndex,
+              braceStack,
+              invalidPattern,
+            )
+          )
+            matched = true;
+          break;
+        }
+      } else if (byte === COMMA && braceDepth === 1) {
+        if (
+          this.matchBraceBranch(
+            glob,
+            path,
+            openBraceIndex,
+            branchIndex,
+            braceStack,
+            invalidPattern,
+          )
+        )
+          matched = true;
+        branchIndex = this.globIndex + 1;
+      } else if (this.skipClassOrEscape(glob, byte)) {
+        continue;
+      }
+      this.globIndex += 1;
+    }
+
+    if (!hasClosingBrace) {
+      invalidPattern.value = true;
+      return false;
+    }
+    return matched;
+  }
+
+  // O laço do casamento. A ordem dos braços do `match` do Rust importa: um braço cujo guard falha passa para o seguinte,
+  // então o `?` diante de uma `/` (ou no fim do caminho) e o `,` ou `}` fora de chaves caem no braço do literal. Já o `[`
+  // que entrou e não casou vai direto para o retorno, sem cair no literal.
+  globMatchFrom(
+    glob: Uint8Array,
+    path: Uint8Array,
+    matchStart: number,
+    braceStack: BraceStack,
+    invalidPattern: InvalidFlag,
+  ): boolean {
+    while (this.globIndex < glob.length || this.pathIndex < path.length) {
+      if (this.globIndex < glob.length) {
+        const byte = byteAt(glob, this.globIndex);
+        const hasPath = this.pathIndex < path.length;
+        if (byte === STAR) {
+          const isGlobstar =
+            this.globIndex + 1 < glob.length &&
+            byteAt(glob, this.globIndex + 1) === STAR;
+          if (isGlobstar) this.skipGlobstars(glob);
+
+          this.wildcard.globIndex = this.globIndex;
+          this.wildcard.pathIndex = this.pathIndex + 1;
+          this.wildcard.braceDepth = this.braceDepth;
+
+          let inGlobstar = false;
+          if (isGlobstar) {
+            this.globIndex += 2;
+
+            const isEndInvalid = this.globIndex !== glob.length;
+
+            // O `**` é o trecho inteiro se começa um trecho (o início do glob ou do ramo, ou depois de uma `/`) e vem
+            // antes de uma `/` ou do fim do glob. Em qualquer outro lugar (`q/**.js`, `a**b`, `***`) vale como um `*`.
+            if (
+              (Math.max(0, this.globIndex - matchStart) < 3 ||
+                byteAt(glob, this.globIndex - 3) === SLASH) &&
+              (!isEndInvalid || byteAt(glob, this.globIndex) === SLASH)
+            ) {
+              if (isEndInvalid) this.globIndex += 1;
+              this.skipToSeparator(path, isEndInvalid);
+              inGlobstar = true;
+            }
+          } else {
+            this.globIndex += 1;
+          }
+
+          // O `*` que começa numa `/` não consome nada: o ponto de retorno passa a ser o do `**` anterior.
+          if (
+            !inGlobstar &&
+            this.pathIndex < path.length &&
+            isSeparator(byteAt(path, this.pathIndex))
+          )
+            this.wildcard = copyWildcard(this.globstar);
+
+          continue;
+        } else if (
+          byte === QUESTION &&
+          hasPath &&
+          !isSeparator(byteAt(path, this.pathIndex))
+        ) {
+          this.globIndex += 1;
+          this.pathIndex += 1;
+          continue;
+        } else if (byte === OPEN_BRACKET && hasPath) {
+          this.globIndex += 1;
+
+          let negated = false;
+          if (
+            this.globIndex < glob.length &&
+            (byteAt(glob, this.globIndex) === CARET ||
+              byteAt(glob, this.globIndex) === BANG)
+          ) {
+            negated = true;
+            this.globIndex += 1;
+          }
+
+          let first = true;
+          let isMatch = false;
+          const pathByte = byteAt(path, this.pathIndex);
+          while (
+            this.globIndex < glob.length &&
+            (first || byteAt(glob, this.globIndex) !== CLOSE_BRACKET)
+          ) {
+            const low = this.unescape(
+              byteAt(glob, this.globIndex),
+              glob,
+              invalidPattern,
+            );
+            if (low === undefined) return false;
+
+            this.globIndex += 1;
+
+            // O `-` só forma intervalo logo depois de um membro e se o byte seguinte não é o `]` que fecha a classe.
+            // O intervalo invertido (`z-a`) não casa nada.
+            let high = low;
+            if (
+              this.globIndex + 1 < glob.length &&
+              byteAt(glob, this.globIndex) === DASH &&
+              byteAt(glob, this.globIndex + 1) !== CLOSE_BRACKET
+            ) {
+              this.globIndex += 1;
+              const end = this.unescape(
+                byteAt(glob, this.globIndex),
+                glob,
+                invalidPattern,
+              );
+              if (end === undefined) return false;
+              this.globIndex += 1;
+              high = end;
+            }
+
+            if (low <= pathByte && pathByte <= high) isMatch = true;
+
+            first = false;
+          }
+
+          if (this.globIndex >= glob.length) {
+            invalidPattern.value = true;
+            return false;
+          }
+
+          this.globIndex += 1;
+          if (isMatch !== negated) {
+            this.pathIndex += 1;
+            continue;
+          }
+          // A classe que não casou vai para o retorno, sem cair no literal. A classe casa a `/` também (fast-glob
+          // 1.1.1), e a negada casa qualquer byte fora dela.
+        } else if (byte === OPEN_BRACE) {
+          const resumed = braceStack.find(
+            ([openBraceIndex]) => openBraceIndex === this.globIndex,
+          );
+          if (resumed !== undefined) {
+            // Voltar a um `{` já em tentativa (o retorno de um `*` de dentro do ramo) retoma o mesmo ramo.
+            this.globIndex = resumed[1];
+            this.braceDepth += 1;
+            continue;
+          }
+          return this.matchBrace(glob, path, braceStack, invalidPattern);
+        } else if (
+          (byte === COMMA || byte === CLOSE_BRACE) &&
+          this.braceDepth > 0
+        ) {
+          this.skipBranch(glob);
+          continue;
+        } else if (hasPath) {
+          const literal = this.unescape(byte, glob, invalidPattern);
+          if (literal === undefined) return false;
+
+          const isMatch =
+            literal === SLASH
+              ? isSeparator(byteAt(path, this.pathIndex))
+              : byteAt(path, this.pathIndex) === literal;
+
+          if (isMatch) {
+            this.globIndex += 1;
+            this.pathIndex += 1;
+
+            if (literal === SLASH) this.wildcard = copyWildcard(this.globstar);
+
+            continue;
+          }
+        }
+      }
+
+      if (
+        this.wildcard.pathIndex > 0 &&
+        this.wildcard.pathIndex <= path.length
+      ) {
+        this.backtrack();
+        continue;
+      }
+
+      return false;
+    }
+
+    return true;
+  }
+}
+
+// O `glob_match_internal`: devolve se casou e se o padrão é inválido. Cada `!` do início inverte o resultado; o `!`
+// não faz parte do padrão, e o `matchStart` marca onde o padrão começa (o `**` do início do glob é um trecho inteiro).
+function globMatchInternal(
+  glob: Uint8Array,
+  path: Uint8Array,
+): { matched: boolean; invalidPattern: boolean } {
+  const state = new State();
+
+  let negated = false;
+  while (
+    state.globIndex < glob.length &&
+    byteAt(glob, state.globIndex) === BANG
+  ) {
+    negated = !negated;
+    state.globIndex += 1;
+  }
+
+  const braceStack: BraceStack = [];
+  const invalidPattern: InvalidFlag = { value: false };
+  const matchStart = state.globIndex;
+  const matched = state.globMatchFrom(
+    glob,
+    path,
+    matchStart,
+    braceStack,
+    invalidPattern,
+  );
+
+  // Um glob negado que não casou e é inválido não casa: negar um padrão inválido não o torna válido.
+  if (
+    negated &&
+    !matched &&
+    !invalidPattern.value &&
+    invalidGlobReason(Buffer.from(glob).toString()) !== undefined
+  )
+    return { matched: false, invalidPattern: true };
+
+  return { matched: negated !== matched, invalidPattern: invalidPattern.value };
+}
+
+// `fast_glob::glob_match`: casa o glob com o caminho. Um glob inválido nunca casa (o oxlint, que valida antes, recusa a
+// configuração; quem decide o que fazer com o glob inválido é o chamador, com o `invalidGlobReason`).
+export function globMatch(glob: string, path: string): boolean {
+  const result = globMatchInternal(Buffer.from(glob), Buffer.from(path));
+  return result.matched && !result.invalidPattern;
 }
 
 // Os `files` de um override do .oxlintrc.json, como o `GlobSet` do oxlint os casa. Cada padrão perde o `./` do início;
@@ -213,10 +594,15 @@ export function overrideFilesMatch(
   files: readonly string[],
   path: string,
 ): boolean {
-  // Compila todos antes de casar: o oxlint valida o conjunto inteiro e recusa a configuração com um glob inválido,
+  // Valida todos antes de casar: o oxlint valida o conjunto inteiro e recusa a configuração com um glob inválido,
   // mesmo que outro padrão, antes dele, já casasse o arquivo.
-  const compiled = files.map((pattern) =>
-    globToRegExp(normalizeOverrideGlob(pattern)),
-  );
-  return compiled.some((regExp) => regExp.test(path));
+  const globs = files.map(normalizeOverrideGlob);
+  for (const glob of globs) {
+    const invalid = invalidGlobReason(glob);
+    if (invalid !== undefined)
+      throw new Error(
+        `Glob "${glob}" inválido (${invalid}): o oxlint recusa a configuração com esse glob.`,
+      );
+  }
+  return globs.some((glob) => globMatch(glob, path));
 }

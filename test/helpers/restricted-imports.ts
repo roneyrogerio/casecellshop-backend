@@ -1,11 +1,11 @@
-import { globToRegExp, invalidGlobReason } from './glob.ts';
+import { globMatch } from './glob.ts';
 
 // Decisão do `no-restricted-imports` dos testes que leem a configuração do lint (.oxlintrc.json) como dado. Cada função
 // imita uma decisão do oxlint 1.90.0, para a conferência reprovar os mesmos módulos que o lint de verdade:
 //
 // - `restrictedGroupResult` segue o `get_group_glob_result`
 //   (`crates/oxc_linter/src/rules/eslint/no_restricted_imports.rs` do oxc); o casamento de cada padrão do `group` usa
-//   o `globToRegExp` de `glob.ts`, que segue o `fast_glob::glob_match` 1.1.1. Um padrão inválido (`foo/[ab`, `foo/{ab`,
+//   o `globMatch` de `glob.ts`, o porte do `fast_glob::glob_match` 1.1.1. Um padrão inválido (`foo/[ab`, `foo/{ab`,
 //   `foo/ab\`) não é recusado como nos `files` dos overrides: o `glob_match` devolve "não casa", a configuração é aceita
 //   e o resultado do `group` não muda por ele. Medido no oxlint 1.90.0 em `restricted-imports.test.ts`.
 // - `restrictedImportMatches` junta o `paths` e o `patterns` do `no-restricted-imports` como o oxlint os decide.
@@ -37,10 +37,9 @@ export function restrictedGroupResult(
     const withFolders = bare.includes('/') ? bare : `**/${bare}`;
     const glob =
       caseSensitive === true ? withFolders : asciiLowerCase(withFolders);
-    // Padrão inválido não casa: o oxlint aceita a configuração e o resultado não muda por ele (medido na paridade).
-    if (invalidGlobReason(glob) !== undefined) continue;
-    if (globToRegExp(glob).test(subject))
-      result = negated ? 'whitelist' : 'found';
+    // Padrão inválido não casa: o `glob_match` devolve "não casa", o oxlint aceita a configuração e o resultado não
+    // muda por ele (medido na paridade). O porte faz o mesmo, sem tratamento à parte.
+    if (globMatch(glob, subject)) result = negated ? 'whitelist' : 'found';
   }
   return result;
 }

@@ -1,10 +1,14 @@
+import * as fc from 'fast-check';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { globToRegExp, overrideFilesMatch } from './glob.ts';
+import { globMatch, invalidGlobReason, overrideFilesMatch } from './glob.ts';
 import { cleanupTempDirs, makeTempDir, writeFileIn } from './git-sandbox.ts';
 import { PARITY_TIMEOUT_MS, runOxlint, singleRuleConfig } from './lint-tree.ts';
+import { propertyTimeoutMs, readPropertyConfig } from './property-setup.ts';
 
 // FND-13 e FND-14: a conferência do lint lida como dado (`files` dos overrides do .oxlintrc.json) decide pelo
-// `globToRegExp`; se ele traduz errado, a conferência libera ou reprova o arquivo errado sem avisar.
+// `globMatch` (o porte do `glob_match` do fast-glob 1.1.1); se ele casa errado, a conferência libera ou reprova o
+// arquivo errado sem avisar. FND-15: a
+// comparação diferencial por propriedade, no fim do arquivo, usa a semente e o número de casos globais do fast-check.
 
 interface GlobCase {
   glob: string;
@@ -308,12 +312,224 @@ const NESTED_BRACES: GlobCase[] = [
   },
 ];
 
+// O `**` só casa pastas quando é o trecho inteiro (A13/A14 da Revisão 6, divergência 1 do script diferencial): no começo
+// do glob, depois de `/`, depois de `{` ou de `,` em chaves, e antes de `/` ou do fim do glob. Em qualquer outro lugar
+// (`q/**.js`, `q/**b.js`, `q/a**b.js`, `q/a**`, `***`) vale como um `*` (medido no oxlint 1.90.0, ver as amostras em
+// `FILE_SAMPLES` e a paridade abaixo). Um `**` seguido de `/**` que é o trecho inteiro junta-se num só.
+const STAR_RUNS: GlobCase[] = [
+  {
+    glob: 'q/**.js',
+    matches: ['q/a.js', 'q/ab.js'],
+    rejects: ['q/r/ab.js', 'q/r/s/ab.js'],
+  },
+  {
+    glob: 'q/**b.js',
+    matches: ['q/ab.js', 'q/a-b.js', 'q/a]b.js', 'q/b.js'],
+    rejects: ['q/r/ab.js', 'q/a/b.js'],
+  },
+  {
+    glob: 'q/a**b.js',
+    matches: ['q/ab.js', 'q/a-b.js'],
+    rejects: ['q/a/b.js'],
+  },
+  {
+    glob: 'q/a**',
+    matches: ['q/a.js', 'q/ab.js'],
+    rejects: ['q/a/b.js'],
+  },
+  {
+    glob: 'q/**',
+    matches: ['q/a.js', 'q/r/ab.js', 'q/r/s/ab.js'],
+    rejects: ['r/a.js'],
+  },
+  {
+    glob: 'q/***/b.js',
+    matches: ['q/r/b.js'],
+    rejects: ['q/r/s/b.js', 'q/b.js'],
+  },
+  {
+    glob: 'q/**/b.js',
+    matches: ['q/b.js', 'q/r/b.js', 'q/r/s/b.js'],
+    rejects: ['q/r/ab.js'],
+  },
+  {
+    glob: 'q/{**/b.js,a.js}',
+    matches: ['q/b.js', 'q/r/s/b.js', 'q/a.js'],
+    rejects: ['q/r/ab.js'],
+  },
+  {
+    glob: 'q/{a,**}/b.js',
+    matches: ['q/a/b.js', 'q/r/b.js'],
+    rejects: ['q/r/s/b.js', 'q/b.js'],
+  },
+  {
+    glob: 'q/{**}/b.js',
+    matches: ['q/r/b.js'],
+    rejects: ['q/r/s/b.js'],
+  },
+  // A chave escapada não abre trecho, e a barra escapada abre.
+  {
+    glob: 'q/\\{**/b.js',
+    matches: ['q/{a/b.js'],
+    rejects: ['q/{a/s/b.js'],
+  },
+  {
+    glob: 'q/a\\/**/b.js',
+    matches: ['q/a/b.js', 'q/a/s/b.js'],
+    rejects: ['q/ab.js'],
+  },
+  // `**/**` é o trecho inteiro mesmo depois de outro caractere; `/**` que continua num nome não junta.
+  {
+    glob: 'q/x**/**',
+    matches: ['q/xb.js', 'q/xy.js', 'q/x/y.js'],
+    rejects: ['q/ab.js'],
+  },
+  {
+    glob: 'q/x**/**/y.js',
+    matches: ['q/xy.js', 'q/x/y.js'],
+    rejects: ['q/xb.js'],
+  },
+  {
+    glob: 'q/x**/**.js',
+    matches: ['q/x/y.js'],
+    rejects: ['q/xb.js', 'q/xy.js'],
+  },
+];
+
+// Intervalo invertido seguido de `-` (A13 da Revisão 6, divergência 2): o `-` só forma intervalo logo depois de um
+// membro, então o `-` que sobra quando o intervalo vazio some é um membro, e não o começo de um intervalo novo.
+const DASH_AFTER_EMPTY_RANGE: GlobCase[] = [
+  {
+    glob: 'q/a[az-a-c]b.js',
+    matches: ['q/aab.js', 'q/a-b.js', 'q/acb.js'],
+    rejects: ['q/abb.js', 'q/azb.js'],
+  },
+  {
+    glob: 'q/a[xz-a-c]b.js',
+    matches: ['q/axb.js', 'q/a-b.js', 'q/acb.js'],
+    rejects: ['q/abb.js', 'q/aab.js', 'q/azb.js'],
+  },
+  // O caso do script: o `{-a-a` fica `{-a` (vazio), o `-` é membro e o `a-a` é uma letra.
+  {
+    glob: 'q/**/[^[x][!b-bx][\\!{-a-a].js',
+    matches: ['q/r/aa-.js', 'q/r/aa!.js'],
+    rejects: ['q/r/aa,.js', 'q/r/aab.js', 'q/r/xab.js'],
+  },
+];
+
+// Chaves vazias e `!` dentro de chaves (divergência 3 do script): `{}`, `{a,}` e `{,a}` têm uma alternativa vazia, o `!`
+// dentro de chaves é literal, e a `}` solta de um grupo só (ou de grupos aninhados) é literal.
+const EMPTY_AND_LOOSE_BRACES: GlobCase[] = [
+  {
+    glob: 'q/a{}b.js',
+    matches: ['q/ab.js'],
+    rejects: ['q/a.js', 'q/b.js'],
+  },
+  {
+    glob: 'q/{a,}b.js',
+    matches: ['q/ab.js', 'q/b.js'],
+    rejects: ['q/a.js'],
+  },
+  {
+    glob: 'q/{,a}b.js',
+    matches: ['q/ab.js', 'q/b.js'],
+    rejects: ['q/a.js'],
+  },
+  {
+    glob: 'q/a{b,}.js',
+    matches: ['q/a.js', 'q/ab.js'],
+    rejects: ['q/b.js'],
+  },
+  {
+    glob: 'q/{a,{b,}}.js',
+    matches: ['q/a.js', 'q/b.js'],
+    rejects: ['q/ab.js'],
+  },
+  {
+    glob: 'q/{!a,b}.js',
+    matches: ['q/!a.js', 'q/b.js'],
+    rejects: ['q/a.js'],
+  },
+  {
+    glob: 'q/a{!,b}.js',
+    matches: ['q/a!.js', 'q/ab.js'],
+    rejects: ['q/a.js'],
+  },
+  {
+    glob: 'q/a{b}}.js',
+    matches: ['q/ab}.js'],
+    rejects: ['q/ab.js'],
+  },
+  {
+    glob: 'q/{a}}{b}.js',
+    matches: ['q/a}b.js'],
+    rejects: ['q/ab.js'],
+  },
+];
+
+// Os globs em que o oxlint casa de um jeito que uma expressão regular não reproduz (a pilha de chaves, o `*` único que
+// guarda só o último ponto de retorno, o salto de volta ao `**`). O porte do `glob_match` os acompanha porque tem a
+// mesma estrutura do Rust. O oráculo é o que o oxlint casa (`matches`) e o que ele não casa (`rejects`), medido na
+// paridade abaixo; o que a regex de antes diria vai no comentário de cada caso.
+const OXLINT_QUIRKS: GlobCase[] = [
+  // O `}` sobrante some depois do segundo grupo; a regex pediria o `}` no nome (`q/ab}.js`).
+  { glob: 'q/{a}{b}}.js', matches: ['q/ab.js'], rejects: ['q/ab}.js'] },
+  // A `,` solta vira separador de alternativas depois do segundo grupo: não casa nada, nem `q/ab,c.js`.
+  { glob: 'q/{a}{b},c.js', matches: [], rejects: ['q/ab,c.js'] },
+  // O que sobra depende do caminho: a pasta `a` faz o primeiro grupo casar e o segundo falhar, e o `}` volta a ser
+  // literal. A regex casaria `q/a/ab.js` e não `q/a/ab}.js`.
+  {
+    glob: '**/{a}{b}}.js',
+    matches: ['ab.js', 'q/ab.js', 'q/b/ab.js', 'q/a/ab}.js'],
+    rejects: ['ab}.js', 'q/ab}.js', 'q/a/ab.js'],
+  },
+  // As duas divergências de chaves do script diferencial (sementes 7, 23, 42 e 101).
+  {
+    glob: '**/a{}*{?,!![\\acc]}}.js',
+    matches: ['ab.js', 'a}.js'],
+    rejects: ['ab}.js'],
+  },
+  {
+    glob: 'a/{a,{^a,a.\\{},\\{[x-x]^}{{[^c\\^]?,a,}!\\?,[{\\]],*[a-bb\\[\\^]{!a},[!]-],?}}c.js',
+    matches: ['a/abc.js'],
+    rejects: [],
+  },
+  // O oxlint guarda só o último `*` para voltar atrás: o segundo `*`, que para na `/`, apaga o primeiro. A regex
+  // casaria `q/a/b.js` (`*` = `a`, a classe negada = `/`, `*` vazio); o oxlint casa só `q/ab.js`.
+  { glob: 'q/*[^c]*b.js', matches: ['q/ab.js'], rejects: ['q/a/b.js'] },
+  // O gap do helper por regex: um `?` antes de `**/` e um grupo depois. O oxlint casa `b/xa.js` (o `**` que não é
+  // trecho inteiro e o salto de volta ao `**` do começo); a regex não casaria.
+  {
+    glob: '**/?**/{a}.js',
+    matches: ['b/a.js', 'b/xa.js', 'ba/a.js'],
+    rejects: ['a.js'],
+  },
+  // O `**` no começo de uma alternativa de um grupo que abre no meio de um trecho: `ax.js` casa e `a/ax.js` não (a regex
+  // casaria os dois).
+  {
+    glob: '**/a{**/x}.js',
+    matches: ['ax.js', 'a/x.js'],
+    rejects: ['a/ax.js'],
+  },
+];
+
+// Os vizinhos que a regex também acertava: `}` solta com um grupo só, grupos em sequência sem `}` ou `,` soltos depois,
+// e a classe que casa a `/` com um `*` só.
+const OXLINT_NEIGHBOURS = [
+  'q/a{b}}.js',
+  'q/{a}}{b}.js',
+  'q/{a}{b}.js',
+  'q/{a,b}/{c,d}/*.ts',
+  'q/{a{b}}}.js',
+  'q/*[^c]b.js',
+  'q/[^c]*b.js',
+];
+
 function expectCase({ glob, matches, rejects }: GlobCase) {
-  const regExp = globToRegExp(glob);
   expect({
     glob,
-    matched: matches.filter((sample) => regExp.test(sample)),
-    rejected: rejects.filter((sample) => !regExp.test(sample)),
+    matched: matches.filter((sample) => globMatch(glob, sample)),
+    rejected: rejects.filter((sample) => !globMatch(glob, sample)),
   }).toEqual({ glob, matched: matches, rejected: rejects });
 }
 
@@ -333,9 +549,11 @@ const INVALID_GLOBS: string[][] = [
   // O inválido entre válidos também recusa a configuração toda, em qualquer posição.
   ['**/*.js', '**/[ab.ts'],
   ['{src/**/*.ts,x.{js}', '**/*.js'],
+  // Chaves aninhadas além do limite de 10 do `validate` (`MAX_BRACE_NESTING`): 11 abertas ao mesmo tempo.
+  ['{{{{{{{{{{{a}}}}}}}}}}}.js'],
 ];
 
-describe('FND-13 globToRegExp', () => {
+describe('FND-13 globMatch', () => {
   it.each(INVALID_GLOBS)(
     'FND-13 o glob inválido lança um erro que diz que o oxlint recusa a configuração: %s',
     (...files) => {
@@ -352,8 +570,32 @@ describe('FND-13 globToRegExp', () => {
     ['a[!x]'],
     ['**/*.{ts,js}'],
     ['a\\\\'],
-  ])('FND-13 o glob com chaves e classes fechadas não lança: %s', (glob) => {
-    expect(() => globToRegExp(glob)).not.toThrow();
+  ])('FND-13 o glob com chaves e classes fechadas é válido: %s', (glob) => {
+    expect(invalidGlobReason(glob)).toBeUndefined();
+  });
+
+  it.each([
+    ['**/{*.ts,*.js', 'chave aberta'],
+    ['**/[ab.ts', 'classe de caracteres aberta'],
+    ['a\\', 'barra invertida no fim'],
+    ['{{{{{{{{{{{a}}}}}}}}}}}.js', 'chaves aninhadas demais'],
+    // Os `!` do início não fazem parte do padrão, e a `}` solta não fecha nada.
+    ['!!**/{*.ts', 'chave aberta'],
+  ])(
+    'FND-13 invalidGlobReason diz o motivo do glob recusado: %s',
+    (glob, reason) => {
+      expect(invalidGlobReason(glob)).toContain(reason);
+    },
+  );
+
+  it('FND-13 dez chaves aninhadas são válidas e onze são recusadas (o limite do validate)', () => {
+    const nested = (depth: number) =>
+      `${'{'.repeat(depth)}a${'}'.repeat(depth)}`;
+    expect(invalidGlobReason(nested(10))).toBeUndefined();
+    expect(invalidGlobReason(nested(11))).toContain('chaves aninhadas demais');
+    // Um glob inválido nunca casa, nem negado (o `!` não o torna válido).
+    expect(globMatch(nested(11), 'a')).toBe(false);
+    expect(globMatch(`!${nested(11)}`, 'b')).toBe(false);
   });
 
   it.each(SUPPORTED)(
@@ -411,6 +653,47 @@ describe('FND-13 globToRegExp', () => {
       expectCase(testCase);
     },
   );
+
+  it.each(STAR_RUNS)(
+    'FND-13 o ** só casa pastas quando é o trecho inteiro, e vale como * em qualquer outro lugar: $glob',
+    (testCase) => {
+      expectCase(testCase);
+    },
+  );
+
+  it.each(DASH_AFTER_EMPTY_RANGE)(
+    'FND-13 o - que sobra depois de um intervalo invertido é membro, e não o começo de outro intervalo: $glob',
+    (testCase) => {
+      expectCase(testCase);
+    },
+  );
+
+  it.each(EMPTY_AND_LOOSE_BRACES)(
+    'FND-13 chaves vazias, ! dentro de chaves e } solta de um grupo só seguem a regex: $glob',
+    (testCase) => {
+      expectCase(testCase);
+    },
+  );
+
+  it.each(OXLINT_QUIRKS)(
+    'FND-13 o porte acompanha o oxlint onde uma expressão regular erraria: $glob',
+    (testCase) => {
+      const files = [testCase.glob];
+      expect({
+        glob: testCase.glob,
+        matched: testCase.matches.filter((sample) =>
+          overrideFilesMatch(files, sample),
+        ),
+        rejected: testCase.rejects.filter(
+          (sample) => !overrideFilesMatch(files, sample),
+        ),
+      }).toEqual({
+        glob: testCase.glob,
+        matched: testCase.matches,
+        rejected: testCase.rejects,
+      });
+    },
+  );
 });
 
 // ---------------------------------------------------------------- paridade com o oxlint instalado
@@ -453,6 +736,50 @@ const FILE_SAMPLES = [
   'q/}b.js',
   'q/a}b.js',
   'q/a/b.js',
+  // Níveis de pasta diferentes para o `**` (`q/`, `q/r/`, `q/r/s/`), e nomes de uma letra: `q/**.js` e `q/**b.js` não
+  // descem para `q/r/`, e `q/***/b.js` para em `q/r/b.js`.
+  'q/a.js',
+  'q/b.js',
+  'q/r/ab.js',
+  'q/r/a-b.js',
+  'q/r/b.js',
+  'q/r/s/ab.js',
+  'q/r/s/b.js',
+  'q/a/s/b.js',
+  // Pastas `{a` (o `\{**` não abre trecho), `x` (cadeia `x**/**`) e nomes `xb`, `xy`.
+  'q/{a/b.js',
+  'q/{a/s/b.js',
+  'q/xb.js',
+  'q/xy.js',
+  'q/x/y.js',
+  // Nomes de três letras para as classes em sequência (`[^[x][!b-bx][\!{-a-a]`): o terceiro é `-`, `!`, `,` ou `b`.
+  'q/r/aa-.js',
+  'q/r/aa!.js',
+  'q/r/aa,.js',
+  'q/r/aab.js',
+  'q/r/xab.js',
+  // Chaves vazias, `!` em chaves e a `}` solta: `}` e `!` e `,` nos nomes.
+  'q/!a.js',
+  'q/a!.js',
+  'q/ab}.js',
+  'q/ab,c.js',
+  'ab.js',
+  'a-.js',
+  'a}.js',
+  'ab}.js',
+  'a/abc.js',
+  // Os caminhos dos globs em que o oxlint foge da regex (o `}` sobrante depende do caminho que o casamento fez).
+  'q/b/ab.js',
+  'q/a/ab.js',
+  'q/a/ab}.js',
+  // O `**/?**/{a}.js` e o `**/a{**/x}.js`.
+  'a.js',
+  'b/a.js',
+  'b/xa.js',
+  'ba/a.js',
+  'ax.js',
+  'a/x.js',
+  'a/ax.js',
 ];
 
 // Intervalo invertido (`z-a`) e `}` solta, medidos no oxlint 1.90.0: o intervalo invertido é vazio (a classe não casa
@@ -510,6 +837,11 @@ const OVERRIDE_FILES: string[][] = [
       ...RANGE_AND_BRACE_EXPECTED.map(([glob]) => glob),
       ...EMPTY_RANGES.map(({ glob }) => glob),
       ...LOOSE_BRACES.map(({ glob }) => glob),
+      ...STAR_RUNS.map(({ glob }) => glob),
+      ...DASH_AFTER_EMPTY_RANGE.map(({ glob }) => glob),
+      ...EMPTY_AND_LOOSE_BRACES.map(({ glob }) => glob),
+      ...OXLINT_QUIRKS.map(({ glob }) => glob),
+      ...OXLINT_NEIGHBOURS,
     ]),
   ].map((glob) => [glob]),
   ['a[!x]b.js'],
@@ -682,6 +1014,20 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
     ).toEqual([]);
   });
 
+  it.each(OXLINT_QUIRKS)(
+    'FND-13 o oxlint casa fora da regex, no oráculo fixo, e o overrideFilesMatch o acompanha: $glob',
+    ({ glob, matches, rejects }) => {
+      const reported = measured.get(filesLabel([glob])) ?? [];
+      expect({
+        glob,
+        matched: matches.filter((sample) => reported.includes(sample)),
+        unmatched: rejects.filter((sample) => !reported.includes(sample)),
+      }).toEqual({ glob, matched: matches, unmatched: rejects });
+      // O controle da medição: o oxlint reportou o arquivo de algum glob do oráculo (a regra rodou).
+      expect(reported.length > 0 || matches.length === 0).toBe(true);
+    },
+  );
+
   it.each(
     INVALID_GLOBS.map((files): [string, string[]] => [
       filesLabel(files),
@@ -710,5 +1056,329 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
       ).sort();
       expect(expected).toEqual(measured.get(label));
     },
+  );
+});
+
+// ---------------------------------------------------------------- comparação diferencial por propriedade (FND-15)
+
+// Os casos fixos acima pegam a classe de divergência que alguém já viu; a propriedade pega a que ninguém viu. Ela gera
+// globs pela gramática do script de conferência da sessão principal (nomes curtos com os caracteres que o glob trata
+// de modo especial; `*`, `?`, classes com intervalos, escapes e membros soltos; grupos de até três alternativas, com
+// dois níveis; pasta na frente; `!` no começo) e acrescenta o `**`, a `/` e a `\/` no meio do glob, que o script só
+// gera por acaso (`**`, `/`, `**/`, `/**`, `/**/`, `\/`, `***`). Para cada glob roda o oxlint uma vez, sobre uma
+// árvore de amostras fixas, e compara o que ele reporta com o `overrideFilesMatch`. O helper é um porte do
+// `glob_match`, então não há glob que ele recuse por não saber casar: só o inválido, que o oxlint recusa também. As
+// amostras não são as do script (que sorteia as dele a cada execução): são fixas, para o teste não variar com nada
+// além da semente do fast-check.
+
+const PROPERTY_NAME_CHARS = [
+  'a',
+  'b',
+  'c',
+  'x',
+  '-',
+  ']',
+  '[',
+  '^',
+  '!',
+  '{',
+  '}',
+  ',',
+  '*',
+  '?',
+  '.',
+];
+
+// Gerador pseudoaleatório pequeno e fixo: as amostras não mudam de uma execução para outra, senão o teste ficaria
+// instável (o que varia por execução é só a semente do fast-check, e ela é impressa na falha).
+function mulberry32(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Nomes de uma a três letras sorteadas dos caracteres especiais, em cinco pastas, mais nomes fixos. O nome `.js`
+// (sem nada antes do ponto) fica de fora: o oxlint não lê esse arquivo.
+function propertySamples(): string[] {
+  const random = mulberry32(99);
+  const samples = new Set<string>();
+  const fixedNames = [
+    'a.js',
+    'ab.js',
+    'a-b.js',
+    'abc.js',
+    'x.js',
+    'a]b.js',
+    '-.js',
+    'b.js',
+    'ab}.js',
+    'a}.js',
+    'a,b.js',
+    'a/b.js',
+  ];
+  for (const folder of ['', 'q/', 'q/r/', 'a/', 'a/b/']) {
+    for (let count = 0; count < 16; count += 1) {
+      const length = 1 + Math.floor(random() * 3);
+      let name = '';
+      for (let letter = 0; letter < length; letter += 1)
+        name +=
+          PROPERTY_NAME_CHARS[
+            Math.floor(random() * PROPERTY_NAME_CHARS.length)
+          ] ?? '';
+      if (name !== '.') samples.add(`${folder}${name}.js`);
+    }
+    for (const name of fixedNames) samples.add(`${folder}${name}`);
+  }
+  return [...samples];
+}
+
+const PROPERTY_SAMPLES = propertySamples();
+
+const propertyLetter = fc.constantFrom('a', 'b', 'c', 'x', 'z');
+
+const classItem = fc.oneof(
+  {
+    weight: 35,
+    arbitrary: fc
+      .tuple(propertyLetter, propertyLetter)
+      .map(([low, high]) => `${low}-${high}`),
+  },
+  {
+    weight: 15,
+    arbitrary: fc
+      .constantFrom('-', ']', '^', 'a', '!', '[')
+      .map((char) => `\\${char}`),
+  },
+  {
+    weight: 50,
+    arbitrary: fc.constantFrom(
+      'a',
+      'b',
+      'c',
+      'x',
+      '-',
+      ']',
+      '^',
+      '!',
+      '[',
+      '{',
+      '}',
+      ',',
+      '.',
+    ),
+  },
+);
+
+const characterClass = fc
+  .tuple(
+    fc.oneof(
+      { weight: 7, arbitrary: fc.constant('') },
+      { weight: 3, arbitrary: fc.constantFrom('!', '^') },
+    ),
+    fc.array(classItem, { minLength: 1, maxLength: 4 }),
+  )
+  .map(([negation, items]) => `[${negation}${items.join('')}]`);
+
+const escapedPart = fc
+  .constantFrom('*', '?', '[', ']', '{', '}', ',', 'a', '-')
+  .map((char) => `\\${char}`);
+
+// O `**` e a `/` no meio do glob, que o script só gera por acaso.
+const slashPart = fc.constantFrom(
+  '**',
+  '/',
+  '**/',
+  '/**',
+  '/**/',
+  '\\/',
+  '*/',
+  '/*',
+  '***',
+  'q/',
+  'r/',
+);
+
+// Os pesos do script (25% de caractere solto, 15% de `*` ou `?`, 25% de classe, 10% de escape, 15% de grupo até o
+// segundo nível, 10% de `a` ou `b`) valem para 70% das partes; os outros 30% são do `slashPart`.
+function partArbitrary(depth: number): fc.Arbitrary<string> {
+  const options: { weight: number; arbitrary: fc.Arbitrary<string> }[] = [
+    { weight: 30, arbitrary: slashPart },
+    {
+      weight: 17,
+      arbitrary: fc.constantFrom(
+        'a',
+        'b',
+        'c',
+        'x',
+        '-',
+        '.',
+        ',',
+        '}',
+        '^',
+        '!',
+      ),
+    },
+    { weight: 10, arbitrary: fc.constantFrom('*', '?') },
+    { weight: 18, arbitrary: characterClass },
+    { weight: 7, arbitrary: escapedPart },
+    { weight: 7, arbitrary: fc.constantFrom('a', 'b') },
+  ];
+  if (depth < 2) options.push({ weight: 10, arbitrary: groupArbitrary(depth) });
+  return fc.oneof(...options);
+}
+
+function segmentArbitrary(depth: number): fc.Arbitrary<string> {
+  return fc
+    .array(partArbitrary(depth), { minLength: 1, maxLength: 3 })
+    .map((parts) => parts.join(''));
+}
+
+function groupArbitrary(depth: number): fc.Arbitrary<string> {
+  return fc
+    .array(segmentArbitrary(depth + 1), { minLength: 1, maxLength: 3 })
+    .map((items) => `{${items.join(',')}}`);
+}
+
+const globArbitrary = fc
+  .tuple(
+    fc.oneof(
+      { weight: 90, arbitrary: fc.constant('') },
+      { weight: 8, arbitrary: fc.constant('!') },
+      { weight: 2, arbitrary: fc.constant('!!') },
+    ),
+    fc.constantFrom('', 'q/', '**/', 'q/**/', '*/', 'q/r/', 'a/'),
+    segmentArbitrary(0),
+    fc.constantFrom('.js', '.js', '.js', '.js', '', '/**', '**'),
+  )
+  .map(([bang, folder, segment, tail]) => `${bang}${folder}${segment}${tail}`);
+
+// Os nomes começam por `expect` para o `vitest/expect-expect` reconhecê-los como asserção (.oxlintrc.json).
+function expectFalsifiedByParity(failed: boolean): void {
+  expect(failed).toBe(true);
+}
+
+function expectParityProperty(
+  property: fc.IPropertyWithHooks<[string]>,
+  numRuns: number,
+): void {
+  fc.assert(property, { numRuns });
+}
+
+describe('FND-15 comparação diferencial dos files dos overrides com o oxlint', () => {
+  let tree = '';
+
+  beforeAll(() => {
+    tree = makeTempDir('glob-property-');
+    for (const file of PROPERTY_SAMPLES) writeFileIn(tree, file, 'debugger;\n');
+  });
+
+  afterAll(cleanupTempDirs);
+
+  // Cada caso custa um processo do oxlint (medido: cerca de 64 ms sobre estas amostras, 3,2 s para 50 casos), e o `unit`
+  // inteiro tem de caber no que uma pré-push aguenta. O padrão de 100 casos custaria cerca de 6,4 s só neste teste,
+  // acima do que um teste de propriedade comum gasta; a metade, 50 casos, mede o suficiente com a semente fixa do PR, e
+  // o agendado, que passa mais casos (`FAST_CHECK_NUM_RUNS`), roda a metade deles. O prazo conta cada caso como quatro
+  // dos testes comuns (`propertyTimeoutMs(numRuns * 4)`: 160 ms por caso mais 5 s), porque um processo por caso é
+  // mais lento que o caso comum de propriedade.
+  const numRuns = Math.max(20, Math.floor(readPropertyConfig().numRuns / 2));
+
+  interface Counters {
+    compared: number;
+    invalid: number;
+  }
+
+  // O que o helper diz de um glob: as amostras que casa, ou que o glob é inválido (o oxlint recusa a configuração).
+  // Qualquer outro erro é um defeito e sobe.
+  function verdictFor(
+    glob: string,
+    match: (glob: string, sample: string) => boolean,
+  ): 'invalid' | string[] {
+    try {
+      return PROPERTY_SAMPLES.filter((sample) => match(glob, sample)).sort();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/inválido/.test(message)) return 'invalid';
+      throw error;
+    }
+  }
+
+  // O que a propriedade confere para um glob: o que o oxlint reporta é o que `match` diz. O `match` é o
+  // `overrideFilesMatch` de verdade, ou, no controle negativo, uma versão quebrada dele.
+  function compareWithOxlint(
+    glob: string,
+    match: (glob: string, sample: string) => boolean,
+    counters: Counters,
+  ): void {
+    const verdict = verdictFor(glob, match);
+    const run = runOxlint(
+      tree,
+      singleRuleConfig([{ files: [glob], rules: { 'no-debugger': 'error' } }]),
+      'property.json',
+    );
+    const invalid = verdict === 'invalid';
+    expect({ glob, refused: oxlintRefusedGlob(run) }).toEqual({
+      glob,
+      refused: invalid,
+    });
+    expect({
+      glob,
+      // Com o glob inválido a recusa pode sair em stderr; o que se confere nele é só a recusa, acima.
+      stderr: invalid ? '' : run.stderr,
+      matched: [...new Set(run.reports.map((report) => report.file))].sort(),
+    }).toEqual({
+      glob,
+      stderr: '',
+      matched: invalid ? [] : verdict,
+    });
+    counters[invalid ? 'invalid' : 'compared'] += 1;
+  }
+
+  it(
+    'FND-15 o overrideFilesMatch casa as mesmas amostras que o oxlint para globs gerados',
+    () => {
+      const counters: Counters = { compared: 0, invalid: 0 };
+      expectParityProperty(
+        fc.property(globArbitrary, (glob) => {
+          compareWithOxlint(
+            glob,
+            (pattern, sample) => overrideFilesMatch([pattern], sample),
+            counters,
+          );
+        }),
+        numRuns,
+      );
+      // A propriedade só vale se comparou: o glob inválido é raro, e o oxlint rodou em quase todos.
+      expect(counters.compared).toBeGreaterThan(numRuns * 0.8);
+      expect(counters.invalid).toBeLessThan(numRuns * 0.2);
+    },
+    propertyTimeoutMs(numRuns * 4),
+  );
+
+  // Controle negativo: um helper que trata o `**` como um `*` (o defeito da divergência 1) tem de ser reprovado pela
+  // mesma propriedade. Sem ele, uma propriedade que nunca compara (amostras erradas, `match` ignorado) passaria sempre.
+  it(
+    'FND-15 controle negativo: um helper que trata o ** como * é reprovado pela propriedade',
+    () => {
+      const counters: Counters = { compared: 0, invalid: 0 };
+      const outcome = fc.check(
+        fc.property(globArbitrary, (glob) => {
+          compareWithOxlint(
+            glob,
+            (pattern, sample) =>
+              overrideFilesMatch([pattern.replaceAll('**', '*')], sample),
+            counters,
+          );
+        }),
+        { numRuns: 50, endOnFailure: true },
+      );
+      expectFalsifiedByParity(outcome.failed);
+      // A reprovação vem de uma asserção da comparação com o oxlint, e não de um erro qualquer do helper.
+      expect(String(outcome.errorInstance)).toMatch(/^AssertionError/);
+    },
+    propertyTimeoutMs(50 * 4),
   );
 });
