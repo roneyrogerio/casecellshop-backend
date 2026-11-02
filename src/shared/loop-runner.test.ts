@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { Clock } from './clock.ts';
 import {
   createLoopRunner,
   type LoopRunner,
   type LoopRunnerOptions,
+  type SleepingLoopRunner,
 } from './loop-runner.ts';
 
 // Deixa as continuações das promessas rodarem, sem relógio nem temporizador.
@@ -43,6 +45,43 @@ async function resolvedWithin(promise: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
+// Relógio manual local: os testes de src/shared/ não importam test/helpers (AD-025). O tempo só anda em advance().
+function createManualClock(): Clock & { advance: (ms: number) => void } {
+  let current = 0;
+  const timers: { at: number; wake: () => void }[] = [];
+  return {
+    now: () => current,
+    sleep: (ms) =>
+      new Promise<void>((wake) => {
+        timers.push({ at: current + ms, wake });
+      }),
+    advance(ms) {
+      current += ms;
+      for (const timer of timers.splice(0)) {
+        if (timer.at <= current) timer.wake();
+        else timers.push(timer);
+      }
+    },
+  };
+}
+
+// Laço que dorme em `pause(intervalMs)` a cada volta, como a reconciliação e o monitor de pedidos sem desfecho.
+function createSleepingLoop(intervalMs: number, clock: Clock) {
+  const state = { iterations: 0, endedStopping: [] as boolean[] };
+  const runner: SleepingLoopRunner = createLoopRunner({
+    clock,
+    run: async (isRunning) => {
+      while (isRunning()) {
+        state.iterations += 1;
+        await runner.pause(intervalMs);
+      }
+      // Quando o laço acorda, o estado já tem de ser 'stopping' (o stop() ainda espera por ele).
+      state.endedStopping.push(runner.isStopping());
+    },
+  });
+  return { runner, state };
+}
+
 // Versão ingênua do controle negativo: só uma flag `running`, sem a contagem de chamadas. É o que o
 // createLoopRunner seria sem a proteção de ordem do A28.
 function createNaiveRunner(options: LoopRunnerOptions): LoopRunner {
@@ -61,7 +100,6 @@ function createNaiveRunner(options: LoopRunnerOptions): LoopRunner {
       if (stopping) return stopping;
       if (!running) return Promise.resolve();
       running = false;
-      options.onStopping?.();
       const finished = (async () => {
         await loop;
         await options.drain?.();
@@ -148,20 +186,23 @@ describe('executor de laço (createLoopRunner)', () => {
     expect(runner.isStopping()).toBe(false);
   });
 
-  it('ORD-20 um stop() com o laço parado resolve sem chamar onStopping nem drain', async () => {
+  it('ORD-20 um stop() com o laço parado resolve sem chamar o drain', async () => {
     let calls = 0;
     const runner = createLoopRunner({
       run: createLoopHarness().run,
-      onStopping: () => (calls += 1),
       drain: () => {
         calls += 1;
         return Promise.resolve();
+      },
+      onStopped: () => {
+        calls += 1;
       },
     });
 
     await runner.stop();
 
     expect(calls).toBe(0);
+    expect(runner.isStopping()).toBe(false);
   });
 
   it('ORD-20 stop(), start() e stop() em sequência: o segundo stop() para de fato o laço novo', async () => {
@@ -226,63 +267,106 @@ describe('executor de laço (createLoopRunner)', () => {
     expect(harness.runs[1]?.isRunning()).toBe(true);
   });
 
-  it('ORD-14 o onStopping roda no stop() antes da espera do laço e já com o estado em stopping', async () => {
+  it('ORD-14 o stop() muda o estado para stopping antes de esperar o laço, e só resolve quando o laço termina', async () => {
     const harness = createLoopHarness();
     const events: string[] = [];
-    let stoppingInsideHook: boolean | undefined;
-    let runningInsideHook: boolean | undefined;
-    // O gancho precisa do runner, que recebe o gancho: a referência é preenchida logo abaixo.
-    const ref: { runner?: LoopRunner } = {};
-    const runner = createLoopRunner({
-      run: harness.run,
-      onStopping: () => {
-        events.push('onStopping');
-        stoppingInsideHook = ref.runner?.isStopping();
-        runningInsideHook = harness.runs[0]?.isRunning();
-      },
-    });
-    ref.runner = runner;
+    const runner = createLoopRunner({ run: harness.run });
     await runner.start();
 
     const stopping = runner.stop().then(() => events.push('stop resolveu'));
-    expect(events, 'o onStopping roda de forma síncrona no stop()').toEqual([
-      'onStopping',
-    ]);
-    expect(stoppingInsideHook).toBe(true);
     expect(
-      runningInsideHook,
-      'o laço já vê isRunning() falso quando o gancho acorda a espera',
-    ).toBe(false);
+      runner.isStopping(),
+      'o estado já é stopping na volta síncrona do stop()',
+    ).toBe(true);
+    expect(harness.runs[0]?.isRunning(), 'o laço já vê isRunning() falso').toBe(
+      false,
+    );
     await settle();
-    expect(events, 'o stop() ainda espera o laço').toEqual(['onStopping']);
+    expect(events, 'o stop() ainda espera o laço').toEqual([]);
 
     harness.runs[0]?.finish();
     await stopping;
-    expect(events).toEqual(['onStopping', 'stop resolveu']);
-  });
-
-  it('ORD-14 o onStopping acorda um laço que dorme, e o stop() resolve sem outro empurrão', async () => {
-    const wake = deferred();
-    const runner = createLoopRunner({
-      // Laço que dorme até ser acordado, como a espera da reconciliação.
-      run: async (isRunning) => {
-        while (isRunning()) await wake.promise;
-      },
-      onStopping: () => wake.resolve(),
-    });
-    await runner.start();
-
-    await runner.stop();
-
+    expect(events).toEqual(['stop resolveu']);
     expect(runner.isStopping()).toBe(false);
   });
 
-  it('ORD-22 chamado duas vezes durante o encerramento, o stop() devolve o mesmo encerramento e chama o onStopping uma vez', async () => {
+  it('ORD-14 o stop() acorda o laço que dorme em pause() sem o relógio andar, já com o estado em stopping', async () => {
+    const clock = createManualClock();
+    const { runner, state } = createSleepingLoop(60_000, clock);
+    await runner.start();
+    await settle();
+    expect(state.iterations, 'o laço fez a primeira volta e dorme').toBe(1);
+
+    const stopping = runner.stop();
+
+    expect(
+      await resolvedWithin(stopping),
+      'o stop() não espera o intervalo inteiro',
+    ).toBe(true);
+    expect(clock.now(), 'o relógio não andou').toBe(0);
+    expect(state.iterations, 'o laço não começou outra volta').toBe(1);
+    expect(
+      state.endedStopping,
+      'o laço acordou com o runner em stopping',
+    ).toEqual([true]);
+    expect(runner.isStopping()).toBe(false);
+  });
+
+  it('OBS-04 sem stop(), o sono do pause() termina quando o relógio passa o intervalo, e não antes', async () => {
+    const clock = createManualClock();
+    const { runner, state } = createSleepingLoop(1000, clock);
+    await runner.start();
+    await settle();
+    expect(state.iterations).toBe(1);
+
+    clock.advance(999);
+    await settle();
+    expect(state.iterations, 'faltando 1 ms o laço ainda dorme').toBe(1);
+
+    clock.advance(1);
+    await settle();
+    expect(state.iterations, 'no intervalo cheio o laço acorda').toBe(2);
+
+    clock.advance(1000);
+    await settle();
+    expect(state.iterations, 'e dorme de novo pelo intervalo seguinte').toBe(3);
+
+    const stopping = runner.stop();
+    await stopping;
+    expect(state.iterations).toBe(3);
+  });
+
+  it('ORD-14 um pause() chamado depois de o stop() começar resolve na hora, sem o relógio andar', async () => {
+    const clock = createManualClock();
     const harness = createLoopHarness();
-    let hookCalls = 0;
+    const runner = createLoopRunner({ run: harness.run, clock });
+    await runner.start();
+
+    // O laço ainda não terminou: o runner fica em stopping enquanto o teste chama o pause().
+    const stopping = runner.stop();
+    expect(runner.isStopping()).toBe(true);
+
+    const late = runner.pause(60_000);
+
+    expect(
+      await resolvedWithin(late),
+      'o pause() tardio não dorme o intervalo',
+    ).toBe(true);
+    expect(clock.now()).toBe(0);
+
+    harness.runs[0]?.finish();
+    await stopping;
+  });
+
+  it('ORD-22 chamado duas vezes durante o encerramento, o stop() devolve o mesmo encerramento e roda o drain uma vez', async () => {
+    const harness = createLoopHarness();
+    let drainCalls = 0;
     const runner = createLoopRunner({
       run: harness.run,
-      onStopping: () => (hookCalls += 1),
+      drain: () => {
+        drainCalls += 1;
+        return Promise.resolve();
+      },
     });
     await runner.start();
 
@@ -292,6 +376,6 @@ describe('executor de laço (createLoopRunner)', () => {
     await Promise.all([first, second]);
 
     expect(second).toBe(first);
-    expect(hookCalls).toBe(1);
+    expect(drainCalls).toBe(1);
   });
 });
