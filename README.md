@@ -197,3 +197,5 @@ O passo a passo para preparar a máquina, rodar as checagens e abrir um PR está
 ## Licença
 
 [MIT](LICENSE).
+
+<!-- Prova ao vivo do AI-53 (PR descartável, não vai para a main). -->
