@@ -1,14 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { Kysely, PostgresDialect } from 'kysely';
-import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import type pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MIGRATION_FOLDERS } from '../../../src/db/migrate.ts';
+import { describe, expect, it } from 'vitest';
 import {
-  type MigrationContainer,
-  startMigrationContainer,
+  storeMigrator,
+  useMigrationContainer,
 } from '../../helpers/migration-database.ts';
 
 // A migração que tira da outbox as colunas da fila na tabela (design.md, "Dados"; AD-021): antes de tirá-las,
@@ -16,15 +11,7 @@ import {
 // mensagens já encerradas, mortas ou canceladas. O teste aplica as migrações até a anterior, semeia linhas em
 // cada status e aplica as que faltam.
 
-let container: MigrationContainer;
-
-beforeAll(async () => {
-  container = await startMigrationContainer();
-}, 120_000);
-
-afterAll(async () => {
-  await container?.stop();
-});
+const container = useMigrationContainer();
 
 // A última migração da loja antes da que tira as colunas da fila.
 const BEFORE_DROP = '20260103000000_add_outbox_relay_columns';
@@ -47,24 +34,6 @@ const KEPT_COLUMNS = [
   'correlation_id',
   'created_at',
 ];
-
-function storeMigrator(pool: pg.Pool): Migrator {
-  const folder = MIGRATION_FOLDERS.find(
-    (candidate) => candidate.schema === 'public',
-  );
-  if (!folder)
-    throw new Error('a pasta de migrações da loja não está na lista');
-  const db = new Kysely<object>({ dialect: new PostgresDialect({ pool }) });
-  return new Migrator({
-    db,
-    provider: new FileMigrationProvider({
-      fs,
-      path,
-      migrationFolder: folder.dir,
-    }),
-    migrationTableSchema: folder.schema,
-  });
-}
 
 async function seedRow(
   pool: pg.Pool,
@@ -90,7 +59,7 @@ async function columnsOfOutbox(pool: pg.Pool): Promise<string[]> {
 
 describe('ORD-22 a migração que tira as colunas da fila na tabela não deixa o relay publicar o que já foi encerrado', () => {
   it('ORD-22 marca published_at nas linhas com status diferente de pending, deixa as pending sem a marca e preserva o estado por pedido', async () => {
-    const { pool } = await container.createDatabase();
+    const { pool } = await container().createDatabase();
     const migrator = storeMigrator(pool);
     const before = await migrator.migrateTo(BEFORE_DROP);
     expect(before.error).toBeUndefined();
@@ -144,7 +113,7 @@ describe('ORD-22 a migração que tira as colunas da fila na tabela não deixa o
   });
 
   it('ORD-22 tira da outbox status, attempts, lease_until, claim_token, next_attempt_at e reconciled_at, e mantém as colunas do relay e da permissão de chamada', async () => {
-    const { pool } = await container.createDatabase();
+    const { pool } = await container().createDatabase();
 
     const latest = await storeMigrator(pool).migrateToLatest();
 

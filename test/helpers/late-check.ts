@@ -15,7 +15,8 @@ import { metricValue, scrapeMetrics } from './metrics.ts';
 import type { ErpWorld } from './worker.ts';
 
 // Apoio à verificação tardia (AD-031; ORD-23 a ORD-25). As colunas novas da outbox (`create_calls`,
-// `late_checked_at`, `late_finding`) são lidas e semeadas por SQL cru, fora dos tipos gerados do Kysely.
+// `late_checked_at`, `late_finding`) são lidas e semeadas por SQL cru: os prazos são relativos ao relógio do
+// banco (`now() - make_interval(...)`), e o SQL escreve isso direto, sem expressões soltas no Kysely.
 
 export const LATE_INVOICE_DETECTED = 'casecellshop.order.late_invoice.detected';
 export const LATE_CHECK_COMPLETED = 'casecellshop.order.late_check.completed';

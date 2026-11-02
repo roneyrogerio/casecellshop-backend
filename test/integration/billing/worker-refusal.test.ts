@@ -6,11 +6,13 @@ import { readInventory } from '../../helpers/checkout.ts';
 import { ERP_TIMEOUT_MS, MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
 import {
   PAST_WINDOW_SECONDS,
+  readLateColumns,
   SETTLE_WINDOW_SECONDS,
   WITHIN_WINDOW_SECONDS,
 } from '../../helpers/late-check.ts';
 import { captureLogs, type CapturedLogs } from '../../helpers/logs.ts';
 import {
+  ageLastCall,
   buildWorker,
   createWorld,
   expectInvoiced,
@@ -26,13 +28,16 @@ import {
   type QueueWorld,
   type WorkerSuite,
 } from '../../helpers/worker.ts';
+import { takeCallPermit } from '../../../src/billing/call-permit.ts';
+import { cancelOrder } from '../../../src/billing/runbook.ts';
 import type { Worker } from '../../../src/billing/worker.ts';
+import { createDb } from '../../../src/db/database.ts';
 
 // Recusa definitiva depois de um envio sem resposta (ORD-27, AD-031), com o ERP simulado sem a H1b: a criação
 // anterior pode ainda estar em processamento no ERP, então o worker grava a recusa, devolve a mensagem pela janela
-// de assentamento (15 min) e só conclui depois dela, pela consulta à referência. As colunas `refusal_reason` e
-// `refused_at` ainda não estão nos tipos gerados do Kysely: o teste as lê e semeia por SQL cru. Os prazos da janela
-// correm no relógio do banco, então o teste os semeia no passado em vez de esperar.
+// de assentamento (15 min) e só conclui depois dela, pela consulta à referência. O teste lê e semeia as colunas
+// `refusal_reason` e `refused_at` por SQL cru: os prazos da janela correm no relógio do banco, então ele os semeia
+// no passado (`now() - make_interval(...)`) em vez de esperar, e o SQL diz isso direto.
 
 const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
@@ -369,20 +374,79 @@ describe('ORD-27 a recusa depois de um envio sem resposta espera a janela de ass
   });
 });
 
+// Uma rodada do worker sobre a primeira criação de fato: a recusa conclui o pedido na hora, sem gravar a recusa.
+async function pollAndExpectImmediateFailure(
+  world: QueueWorld,
+  order: AcceptedOrder,
+  reason: Reason,
+): Promise<void> {
+  expect(await buildWorker(world).pollOnce()).toBe(1);
+
+  await expectFailedAndClosed(world, order, reason);
+  expect(await readRefusal(suite.pool, order.orderId)).toEqual({
+    reason: null,
+    refusedAt: null,
+  });
+}
+
+// Tomadas de permissão que preenchem `first_sent_at` e `last_call_at` sem mandar criação nenhuma: o `first_sent_at`
+// deixa de ser menor que o `last_call_at` na tentativa seguinte do worker, mas nada foi criado no ERP.
+const PERMITS_WITHOUT_CREATION = [
+  {
+    name: 'o cancelamento seguro recusado porque a consulta ao ERP falhou',
+    take: async (world: QueueWorld, order: AcceptedOrder) => {
+      world.sim.script.enqueue(
+        { mode: 'unavailable' },
+        { op: 'findOrder', reference: order.orderId },
+      );
+      const result = await cancelOrder(
+        { pool: suite.pool, erp: world.erp },
+        order.orderId,
+      );
+      expect(result).toEqual({ kind: 'erp_unavailable' });
+    },
+  },
+  {
+    name: 'a tomada da reconciliação (sem zerar o dead_at)',
+    take: async (_world: QueueWorld, order: AcceptedOrder) => {
+      const permit = await takeCallPermit(createDb(suite.pool), order.orderId, {
+        minDelayMs: MIN_RETRY_DELAY_MS,
+        clearDead: false,
+      });
+      expect(permit.granted).toBe(true);
+    },
+  },
+];
+
+describe('ORD-08 controle: a recusa na primeira criação continua concluindo na hora, mesmo depois de tomadas que não criam', () => {
+  for (const permit of PERMITS_WITHOUT_CREATION) {
+    it.each(REASONS)(
+      `ORD-27 depois de ${permit.name}, a recusa %s da primeira criação de fato deixa o pedido failed na hora, sem gravar a recusa na outbox`,
+      async (reason) => {
+        const { world, order } = await prepareOrder(reason);
+        await permit.take(world, order);
+        expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
+        expect(
+          (await readLateColumns(suite.pool, order.orderId)).createCalls,
+        ).toBe(0);
+        // O atraso mínimo já passou; o `first_sent_at` ficou preenchido e menor que a próxima tomada.
+        await ageLastCall(suite.pool, order.orderId);
+
+        await pollAndExpectImmediateFailure(world, order, reason);
+        expect(world.transport.sendsOf('createOrder')).toHaveLength(1);
+      },
+    );
+  }
+});
+
 describe('ORD-08 controle: a recusa no primeiro envio continua concluindo na hora', () => {
   it.each(REASONS)(
     'ORD-08 sem envio anterior, a recusa %s deixa o pedido failed na hora, sem gravar a recusa na outbox',
     async (reason) => {
       const { world, order } = await prepareOrder(reason);
 
-      expect(await buildWorker(world).pollOnce()).toBe(1);
-
+      await pollAndExpectImmediateFailure(world, order, reason);
       expect(world.transport.sendsOf('createOrder')).toHaveLength(1);
-      await expectFailedAndClosed(world, order, reason);
-      expect(await readRefusal(suite.pool, order.orderId)).toEqual({
-        reason: null,
-        refusedAt: null,
-      });
     },
   );
 });
