@@ -186,10 +186,19 @@ async function countMessages(
   const response = await client.send(
     new GetQueueAttributesCommand({
       QueueUrl: queueUrl,
-      AttributeNames: ['ApproximateNumberOfMessages'],
+      AttributeNames: [
+        'ApproximateNumberOfMessages',
+        'ApproximateNumberOfMessagesNotVisible',
+      ],
     }),
   );
-  return Number(response.Attributes?.['ApproximateNumberOfMessages'] ?? 0);
+  // Só as visíveis subcontariam: a reconciliação deixa a mensagem da DLQ invisível por 5 min a cada 5 min, e a
+  // mensagem em backoff também fica invisível. Atributo ausente conta 0.
+  const attributes = response.Attributes;
+  return (
+    Number(attributes?.['ApproximateNumberOfMessages'] ?? 0) +
+    Number(attributes?.['ApproximateNumberOfMessagesNotVisible'] ?? 0)
+  );
 }
 
 export function createQueue(client: SQSClient, queueUrl: string): Queue {
