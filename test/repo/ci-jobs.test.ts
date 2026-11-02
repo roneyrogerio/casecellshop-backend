@@ -459,9 +459,49 @@ function ciOkSkipViolations(workflow: CiWorkflow): string[] {
   ]);
 }
 
+// AI-53 (caso de borda): um RESULTS que não é JSON reprova o ci-ok, com docs_only true e com false.
+const INVALID_RESULTS: ReadonlyArray<readonly [label: string, raw: string]> = [
+  ['RESULTS lixo', 'lixo'],
+  ['RESULTS com JSON cortado', '{"checks": {"result": "success"'],
+  ['RESULTS vazio', ''],
+];
+
+function ciOkInvalidResultsViolations(workflow: CiWorkflow): string[] {
+  const step = ciOkStep(workflow);
+  if (step === undefined) return ['não tem um único passo run'];
+  const name = Object.entries(step.env ?? {}).find(([, value]) =>
+    NEEDS_AS_JSON.test(String(value)),
+  )?.[0];
+  if (name === undefined)
+    return ['o passo não recebe o contexto needs pelo env'];
+  const allSuccess = Object.fromEntries(
+    otherJobIds(workflow).map((id) => [id, 'success']),
+  );
+  const violations: string[] = [];
+  for (const docsOnly of ['true', 'false']) {
+    const valid = envOfCiOk(step, allSuccess, docsOnly);
+    if (valid === null) return ['o passo não recebe o contexto needs pelo env'];
+    // Sem este controle um jq que falta na máquina (saída 127) passaria por "reprovou".
+    if (runStep(step, valid) !== 0 && docsOnly === 'false')
+      violations.push('tudo success não saiu com 0');
+    for (const [label, raw] of INVALID_RESULTS) {
+      const status = runStep(step, { ...valid, [name]: raw });
+      if (status === 0)
+        violations.push(
+          `${label} com docs_only ${docsOnly}: saiu com 0, esperado diferente de 0`,
+        );
+    }
+  }
+  return violations;
+}
+
 // --- linhas de base em memória ----------------------------------------------------------------------------------
 
 const CI_OK_SKIP_LINE = `if echo "$RESULTS" | jq -e --arg docs "$DOCS_ONLY" 'any(to_entries[]; .value.result == "skipped" and ($docs != "true" or (.key != "test" and .key != "api-fuzz")))' > /dev/null; then`;
+
+// O `jq -e` dentro de um `if` sai com 5 diante de um texto que não é JSON, e o `if` lê isso como "nenhum job falhou":
+// sem esta conferência antes, um RESULTS quebrado aprovaria o ci-ok.
+const CI_OK_JSON_GUARD = `echo "$RESULTS" | jq -e 'type == "object"' > /dev/null || { echo "O RESULTS não é o JSON do needs."; exit 1; }`;
 
 const ciOkJob = (needs: string): string => `  ci-ok:
     name: ci-ok
@@ -472,6 +512,7 @@ const ciOkJob = (needs: string): string => `  ci-ok:
           RESULTS: \${{ toJSON(needs) }}
           DOCS_ONLY: \${{ needs.changes.outputs.docs_only }}
         run: |
+          ${CI_OK_JSON_GUARD}
           if echo "$RESULTS" | jq -e 'any(.[]; .result | test("^(failure|cancelled)$"))' > /dev/null; then
             echo "Um job falhou ou foi cancelado."
             exit 1
@@ -674,7 +715,10 @@ const DOCS_PATHS_TEXT = `${DOCS_PATHS.join('\n')}\n`;
 
 // O passo `decide` de referência: a implementação correta do critério, para provar que a tabela de casos aceita o que
 // pede e para os controles de comportamento mutarem. O ci.yml real tem a sua própria; a tabela roda nas duas.
-const MATCH_LINE = String.raw`    printf '%s\n' "$DOCS_ONLY_PATHS" | grep -qxF -- "$file" || docs_only=false`;
+// O `grep -F` trata um padrão com quebra de linha como vários padrões (um por linha), então o arquivo `README.md⏎x`
+// casaria com a linha `README.md` da lista. Por isso o nome com quebra de linha é recusado antes do `grep`.
+const GREP_MATCH_LINE = String.raw`    printf '%s\n' "$DOCS_ONLY_PATHS" | grep -qxF -- "$file" || docs_only=false`;
+const MATCH_LINE = String.raw`    case "$file" in *$'\n'*) docs_only=false ;; *) printf '%s\n' "$DOCS_ONLY_PATHS" | grep -qxF -- "$file" || docs_only=false ;; esac`;
 const DECIDE_RUN = String.raw`list=$(mktemp)
 git diff --name-only --no-renames -z HEAD^1 HEAD > "$list"
 docs_only=false
@@ -1108,6 +1152,57 @@ const DECIDE_CASES: DecideCase[] = [
     pr: touchAll('README.md'),
   },
 ];
+
+// AI-53, casos de borda: apagar um arquivo da lista conta como mudar só a lista; um nome com espaço ou com quebra de
+// linha é lido inteiro pelo -z e fica fora da lista.
+const REMOVE_README_LABEL = 'a remoção do README.md';
+const REMOVE_STATE_LABEL = 'a remoção do STATE.md';
+const SPACE_NAME_LABEL = 'um arquivo novo chamado "README.md x" (com espaço)';
+const NEWLINE_NAME_LABEL =
+  'um arquivo novo chamado "README.md", quebra de linha e "x"';
+const NEWLINE_NAME = 'README.md\nx';
+
+const DECIDE_EDGE_CASES: DecideCase[] = [
+  {
+    label: REMOVE_README_LABEL,
+    expected: 'true',
+    pr: (repo) => {
+      rmSync(join(repo, 'README.md'));
+    },
+  },
+  {
+    label: REMOVE_STATE_LABEL,
+    expected: 'true',
+    pr: (repo) => {
+      rmSync(join(repo, '.specs/project/STATE.md'));
+    },
+  },
+  {
+    label: SPACE_NAME_LABEL,
+    expected: 'false',
+    pr: touchAll('README.md x'),
+  },
+];
+
+const NEWLINE_NAME_CASE: DecideCase = {
+  label: NEWLINE_NAME_LABEL,
+  expected: 'false',
+  pr: touchAll(NEWLINE_NAME),
+};
+
+// O caso do nome com quebra de linha só roda onde o sistema de arquivos aceita o nome (o Linux aceita; o Windows e
+// alguns volumes montados não). É uma limitação do ambiente, e nunca uma forma de esconder uma falha do passo.
+function filesystemAcceptsNewlineNames(): boolean {
+  const dir = makeTempDir('newline-name-');
+  try {
+    writeFileIn(dir, NEWLINE_NAME, 'x\n');
+    return existsSync(join(dir, NEWLINE_NAME));
+  } catch {
+    return false;
+  }
+}
+
+const NEWLINE_NAMES_SUPPORTED = filesystemAcceptsNewlineNames();
 
 function makeDecideRepo(): string {
   const repo = makeTempDir('decide-repo-');
@@ -2106,6 +2201,138 @@ describe('AI-53 as conferências do passo decide enxergam o que procuram (contro
   });
 });
 
+describe('AI-53 os casos de borda do passo decide enxergam o que procuram (controle negativo)', () => {
+  it('AI-53 o passo de referência dá true na remoção do README.md e do STATE.md e false no nome com espaço (controle positivo)', () => {
+    expect(
+      decideBehaviorViolations(refStep(DECIDE_RUN), DECIDE_EDGE_CASES),
+    ).toEqual([]);
+  });
+
+  it('AI-53 o decide que ignora os arquivos apagados (--diff-filter=d) dá false na remoção e reprova nos dois casos', () => {
+    const violations = decideBehaviorViolations(
+      refStep(
+        mutated(DECIDE_RUN, ' --no-renames', ' --no-renames --diff-filter=d'),
+      ),
+      DECIDE_EDGE_CASES,
+    );
+
+    expect(violations).toHaveLength(2);
+    expect(violations[0]).toContain(REMOVE_README_LABEL);
+    expect(violations[1]).toContain(REMOVE_STATE_LABEL);
+  });
+
+  it('AI-53 o decide com casamento por prefixo dá true no nome com espaço "README.md x", e o caso enxerga', () => {
+    const violations = decideBehaviorViolations(
+      refStep(
+        mutated(
+          DECIDE_RUN,
+          MATCH_LINE,
+          '    case "$file" in README.md*|.specs/*) ;; *) docs_only=false ;; esac',
+        ),
+      ),
+      DECIDE_EDGE_CASES,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain(SPACE_NAME_LABEL);
+  });
+
+  it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
+    'AI-53 o passo de referência dá false no nome "README.md", quebra de linha, "x" (controle positivo)',
+    () => {
+      expect(
+        decideBehaviorViolations(refStep(DECIDE_RUN), [NEWLINE_NAME_CASE]),
+      ).toEqual([]);
+    },
+  );
+
+  it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
+    'AI-53 o decide que compara o nome inteiro com o grep -F, sem recusar a quebra de linha, dá true (o grep lê dois padrões), e o caso enxerga',
+    () => {
+      const violations = decideBehaviorViolations(
+        refStep(mutated(DECIDE_RUN, MATCH_LINE, GREP_MATCH_LINE)),
+        [...DECIDE_EDGE_CASES, NEWLINE_NAME_CASE],
+      );
+
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain(NEWLINE_NAME_LABEL);
+      expect(violations[0]).toContain('docs_only=true');
+    },
+  );
+
+  it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
+    'AI-53 o decide que lê o diff por linha, sem -z, também dá false no nome com quebra de linha (o git o escreve entre aspas), então esse caso não distingue o -z',
+    () => {
+      // Sem o -z o git cita o nome (`"README.md\nx"`) e a linha não casa com a lista. O que separa o passo certo do
+      // errado nesse caso é a recusa da quebra de linha antes do `grep -F` (o teste acima), e não o -z.
+      const perLine = String.raw`list=$(mktemp)
+git diff --name-only --no-renames HEAD^1 HEAD > "$list"
+docs_only=false
+if [ "$EVENT_NAME" = "pull_request" ] && git rev-parse --verify --quiet "HEAD^2" > /dev/null && [ -s "$list" ]; then
+  docs_only=true
+  while IFS= read -r file; do
+${GREP_MATCH_LINE}
+  done < "$list"
+fi
+echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+`;
+
+      expect(
+        decideBehaviorViolations(refStep(perLine), [NEWLINE_NAME_CASE]),
+      ).toEqual([]);
+    },
+  );
+});
+
+describe('AI-53 as conferências do ci-ok contra um RESULTS que não é JSON enxergam o que procuram (controle negativo)', () => {
+  it('AI-53 o ci-ok de referência reprova lixo, JSON cortado e vazio, com docs_only true e false (controle positivo)', () => {
+    expect(ciOkInvalidResultsViolations(parseWorkflow(GOOD_CI_OK))).toEqual([]);
+  }, 60_000);
+
+  const ALL_INVALID = [
+    'RESULTS lixo com docs_only true: saiu com 0, esperado diferente de 0',
+    'RESULTS com JSON cortado com docs_only true: saiu com 0, esperado diferente de 0',
+    'RESULTS vazio com docs_only true: saiu com 0, esperado diferente de 0',
+    'RESULTS lixo com docs_only false: saiu com 0, esperado diferente de 0',
+    'RESULTS com JSON cortado com docs_only false: saiu com 0, esperado diferente de 0',
+    'RESULTS vazio com docs_only false: saiu com 0, esperado diferente de 0',
+  ];
+  const failedOrTrue = `failed=$(echo "$RESULTS" | jq -r 'any(.[]; .result | test("^(failure|cancelled)$"))' || true); if [ "$failed" = "true" ]; then`;
+
+  it.each([
+    [
+      'trata o erro do jq como "nenhum job falhou" (if jq -e sem validar o JSON antes)',
+      (text: string) => text.replace(CI_OK_JSON_GUARD, () => ''),
+    ],
+    [
+      'ignora o erro do jq da validação com || true',
+      (text: string) =>
+        text.replace(
+          CI_OK_JSON_GUARD,
+          () =>
+            `echo "$RESULTS" | jq -e 'type == "object"' > /dev/null || true`,
+        ),
+    ],
+    [
+      'lê a falha por jq ... || true dentro de uma substituição',
+      (text: string) =>
+        text
+          .replace(CI_OK_JSON_GUARD, () => '')
+          .replace(CI_OK_FAILURE_LINE, () => failedOrTrue),
+    ],
+  ])(
+    'AI-53 um ci-ok que %s aprova o RESULTS inválido e reprova no comportamento, sem reprovar o failure nem o skipped',
+    (_label, edit) => {
+      const workflow = variant(edit);
+
+      expect(ciOkInvalidResultsViolations(workflow)).toEqual(ALL_INVALID);
+      expect(ciOkBehaviorViolations(workflow)).toEqual([]);
+      expect(ciOkSkipViolations(workflow)).toEqual([]);
+    },
+    60_000,
+  );
+});
+
 describe('AI-53 as conferências do passo de limpeza enxergam o que procuram (controle negativo)', () => {
   it('AI-53 o passo de limpeza de referência apaga os oito arquivos, deixa os outros e aceita caminho que não existe (controle positivo)', () => {
     expect(
@@ -2447,5 +2674,25 @@ describe('AI-53 o ci.yml pula o test e o api-fuzz em PR só de documentação', 
 
   it('AI-53 o passo de shell do ci-ok real aceita o test e o api-fuzz pulados só com docs_only true, e reprova o pulado de qualquer outro job, a falha e o cancelamento', () => {
     expect(ciOkSkipViolations(ci)).toEqual([]);
+  }, 60_000);
+
+  it('AI-53 o passo decide real dá true na remoção do README.md e do STATE.md, e false no nome "README.md x" com espaço', () => {
+    expect(
+      decideBehaviorViolations(decideStepWithList(ci), DECIDE_EDGE_CASES),
+    ).toEqual([]);
+  }, 60_000);
+
+  it.skipIf(!NEWLINE_NAMES_SUPPORTED)(
+    'AI-53 o passo decide real dá false no nome "README.md", quebra de linha, "x": o nome é lido inteiro e fica fora da lista',
+    () => {
+      expect(
+        decideBehaviorViolations(decideStepWithList(ci), [NEWLINE_NAME_CASE]),
+      ).toEqual([]);
+    },
+    60_000,
+  );
+
+  it('AI-53 o passo de shell do ci-ok real reprova um RESULTS que não é JSON (lixo, cortado, vazio), com docs_only true e false', () => {
+    expect(ciOkInvalidResultsViolations(ci)).toEqual([]);
   }, 60_000);
 });
