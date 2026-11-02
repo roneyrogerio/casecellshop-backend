@@ -269,13 +269,27 @@ export function roundsFinished(logs: CapturedLogs): number {
   );
 }
 
-// Uma falha do banco foi registrada, uma vez: evento de falha em warn com o `err` e sem a `cause` do ERP.
-export function expectOneDatabaseFailureLogged(logs: CapturedLogs): void {
-  const failures = logs.eventsOf(ROUND_FAILED);
+export const STATE_LOAD_FAILED = 'casecellshop.catalog.sync.state.load_failed';
+
+// O evento de falha saiu uma vez, em warn, com o `err` e sem a `cause` do ERP.
+function expectOneWarnWithErr(logs: CapturedLogs, event: string): void {
+  const failures = logs.eventsOf(event);
   expect(failures.length).toBe(1);
   expect(failures[0]?.['level']).toBe('warn');
   expect(failures[0]?.['err']).toBeDefined();
   expect(failures[0]?.['cause']).toBeUndefined();
+}
+
+// Uma falha do banco numa rodada foi registrada, uma vez, no evento de falha de rodada.
+export function expectOneDatabaseFailureLogged(logs: CapturedLogs): void {
+  expectOneWarnWithErr(logs, ROUND_FAILED);
+}
+
+// A falha ao ler o last_completed_at na subida (CAT-15): o evento próprio da leitura do estado; a falha de rodada
+// (`round.failed`) é de outra coisa e não pode carregá-la.
+export function expectOneStateLoadFailureLogged(logs: CapturedLogs): void {
+  expectOneWarnWithErr(logs, STATE_LOAD_FAILED);
+  expect(logs.eventsOf(ROUND_FAILED).length).toBe(0);
 }
 
 export interface SyncDatabase {
