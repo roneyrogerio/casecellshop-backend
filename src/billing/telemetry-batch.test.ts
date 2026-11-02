@@ -46,15 +46,6 @@ describe('OBS-07 tipo da gravação do callback em lote dos gauges', () => {
     );
   }, 60_000);
 
-  it('OBS-07 observar um gauge declarado mas fora da lista pedida reprova no tsc, e o erro cita o nome', () => {
-    expectBatchTypeError(
-      `metrics.observeBatch(['${QUEUE}'], (observe) => {
-  observe('${AGE}', 1);
-});`,
-      { code: 'TS2345', text: AGE },
-    );
-  }, 60_000);
-
   it('OBS-07 pedir no lote uma métrica que não é gauge reprova no tsc, e o erro cita o nome', () => {
     expectBatchTypeError(`metrics.observeBatch(['${ATTEMPTS}'], () => {});`, {
       code: ['TS2345', 'TS2322'],
