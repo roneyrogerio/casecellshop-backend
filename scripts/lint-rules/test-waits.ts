@@ -252,13 +252,31 @@ const isFixedPort = (node: Node | undefined): boolean =>
   typeof node['value'] === 'number' &&
   node['value'] > 0;
 
-// O port de um listen({ port, host }).
+// O nome de uma chave de objeto escrita no código (`port`, `'port'` ou `0`); a
+// chave calculada (`[k]`) só se conhece ao rodar. A chave numérica vira texto,
+// como no próprio objeto (`{ 0: x }` tem a chave '0').
+function keyName(property: Node): string | undefined {
+  if (property['computed'] === true) return undefined;
+  const key = child(property, 'key');
+  if (key?.type !== 'Literal') return nameOf(key);
+  const value = key['value'];
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : undefined;
+}
+
+// O port de um listen({ port, host }). Um spread, uma chave calculada ou outro
+// `port` podem trocar a porta depois dele (A1 do #32), então o objeto só tem
+// porta conhecida com um único `port` e todas as chaves escritas no código.
 function portOf(options: Node | undefined): Node | undefined {
   if (options?.type !== 'ObjectExpression') return undefined;
-  for (const property of (options['properties'] ?? []) as Node[])
-    if (nameOf(child(property, 'key')) === 'port')
-      return child(property, 'value');
-  return undefined;
+  const properties = (options['properties'] ?? []) as Node[];
+  if (properties.some((property) => property.type !== 'Property'))
+    return undefined;
+  const names = properties.map(keyName);
+  if (names.includes(undefined)) return undefined;
+  const ports = properties.filter((_, index) => names[index] === 'port');
+  return ports.length === 1 ? child(ports[0], 'value') : undefined;
 }
 
 // Num arquivo que sobe o compose, a porta do host vem do Docker (porta 0) e é lida
