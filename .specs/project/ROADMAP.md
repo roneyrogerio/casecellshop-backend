@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M6 — Documentação e entrega, no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2.
+**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. A seguir, os Adicionais, a começar pelo Stryker.
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -134,7 +134,9 @@ Entrou pelos PRs #39 (as métricas de fila, de outbox, de pedidos sem desfecho e
 
 **Pronto quando:** `OBS-*` passam e o README traz a operação completa.
 
-## M6 — Documentação e entrega
+## M6 — Documentação e entrega · CONCLUÍDO
+
+Entrou pelo PR #41: o `ARCHITECTURE.md` e o `RESPOSTAS.md` finais, conferidos contra o código; o README com o resumo da entrega e as checagens da IA; os dois `SPEC_DEVIATION` decididos (`OBS-01`, `FND-17`); e a verificação num clone limpo pela URL pública.
 
 **Meta:** quem chega ao repositório entende, executa e confere tudo sem precisar perguntar.
 
