@@ -55,16 +55,17 @@ export async function dlqTotal(world: QueueWorld): Promise<number> {
   return counts.visible + counts.notVisible;
 }
 
-// Devolve à DLQ, na hora, a mensagem do pedido que a reconciliação recebeu e deixou escondida (5 min):
-// o equivalente de a visibilidade vencer, sem esperar.
-export async function releaseFromDlq(
+// A DLQ nos atributos crus do SQS: `count` mensagens visíveis e nenhuma em voo. É o estado em que a
+// reconciliação deve deixar a DLQ no fim da rodada (ORD-14): o `redrive` só move o que está visível, e o
+// total das duas contagens sozinho não distingue uma mensagem visível de uma escondida.
+export async function expectDlqVisible(
   world: QueueWorld,
-  dlq: ObservedQueue,
-  orderId: string,
+  count: number,
 ): Promise<void> {
   expect(
-    await world.queues.dlq.changeVisibility(dlq.latestHandle(orderId), 0),
-  ).toBe('ok');
+    await countsOf(world.emq, world.queues.dlqUrl),
+    `DLQ no SQS: ${count} visíveis e nenhuma em voo`,
+  ).toEqual({ visible: count, notVisible: 0 });
 }
 
 export interface CountingSemaphore extends Semaphore {
