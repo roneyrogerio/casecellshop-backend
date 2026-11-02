@@ -2,7 +2,12 @@ import type { SQSClient } from '@aws-sdk/client-sqs';
 import { sql } from 'kysely';
 import type { Pool } from 'pg';
 import { createDb, runInTransaction } from '../db/database.ts';
-import { outbox, SETTLE_WINDOW_MS, takeCallPermit } from './call-permit.ts';
+import {
+  MIN_CALL_DELAY_MS,
+  outbox,
+  SETTLE_WINDOW_MS,
+  takeCallPermit,
+} from './call-permit.ts';
 import { applyConclusion } from './conclude.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
 import { createQueue, startRedrive } from '../queue/sqs.ts';
@@ -58,7 +63,7 @@ export type CancelOrderResult =
   | { kind: 'cancelled' }
   // O pedido já tinha desfecho.
   | { kind: 'unchanged' }
-  // A última chamada ao ERP é mais nova que a janela de assentamento.
+  // A última criação ou chamada ao ERP é mais nova que a janela de assentamento ou o atraso mínimo.
   | { kind: 'too_recent'; retryInMs: number }
   | { kind: 'erp_has_order' }
   | { kind: 'erp_unavailable' }
@@ -80,11 +85,13 @@ export async function cancelOrder(
     .executeTakeFirst();
   if (current && current.status !== 'pending') return { kind: 'unchanged' };
 
-  // A janela no lugar do atraso mínimo: o mesmo UPDATE confere que a última chamada é antiga e impede
-  // outra tentativa de chamar o ERP enquanto o cancelamento consulta. Sem somar create_calls nem zerar dead_at.
+  // A permissão leva o atraso mínimo (a consulta conta como chamada) e, no mesmo UPDATE, confere que a
+  // última criação enviada é mais antiga que a janela: a janela conta da criação, e não da chamada, porque
+  // consulta e reconciliação regravam last_call_at sem criar fatura. Sem somar create_calls nem zerar dead_at.
   const permit = await takeCallPermit(db, orderId, {
-    minDelayMs: settleWindowMs,
+    minDelayMs: MIN_CALL_DELAY_MS,
     clearDead: false,
+    createWindowMs: settleWindowMs,
   });
   if (!permit.granted)
     return { kind: 'too_recent', retryInMs: permit.retryInMs };
@@ -129,10 +136,9 @@ function minutesUp(ms: number): number {
 export function describeCancel(
   orderId: string,
   result: CancelOrderResult,
-  settleWindowMs: number = SETTLE_WINDOW_MS,
 ): { message: string; failed: boolean } {
-  // Derivado da janela usada, para o texto não divergir do valor real.
-  const settleMinutes = minutesUp(settleWindowMs);
+  // Derivado do atraso mínimo real, para o texto não divergir do valor.
+  const minDelaySeconds = Math.ceil(MIN_CALL_DELAY_MS / 1000);
   switch (result.kind) {
     case 'cancelled':
       return {
@@ -156,12 +162,12 @@ export function describeCancel(
       };
     case 'erp_unavailable':
       return {
-        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (${settleMinutes} min).`,
+        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s.`,
         failed: true,
       };
     case 'permit_lost':
       return {
-        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (${settleMinutes} min).`,
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s.`,
         failed: true,
       };
   }

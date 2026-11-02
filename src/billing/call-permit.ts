@@ -40,6 +40,9 @@ export interface TakeCallPermitOptions {
   minDelayMs: number;
   // Só o worker zera o dead_at; a reconciliação não.
   clearDead: boolean;
+  // Só o cancel: a tomada exige também que a última criação enviada seja mais antiga que a janela, no
+  // mesmo UPDATE, para outra tentativa não criar a fatura entre a conferência e a permissão.
+  createWindowMs?: number;
 }
 
 export function intervalOf(ms: number) {
@@ -51,6 +54,14 @@ export function intervalOf(ms: number) {
 function workerOnlyColumns() {
   return {
     dead_at: null,
+    // A janela do cancel conta da criação, e não da chamada: consulta e reconciliação regravam last_call_at
+    // sem criar fatura. Grava antes da chamada: se o worker morrer durante a criação, a janela já existe.
+    last_create_at: outbox
+      .case()
+      .when(outbox('first_sent_at', 'is', null))
+      .then(sql<Date>`now()`)
+      .else(outbox.ref('last_create_at'))
+      .end(),
     create_calls: outbox
       .case()
       .when(outbox('first_sent_at', 'is', null))
@@ -105,7 +116,7 @@ function granted(
 export async function takeCallPermit(
   db: Kysely<StoreDb>,
   orderId: string,
-  { minDelayMs, clearDead }: TakeCallPermitOptions,
+  { minDelayMs, clearDead, createWindowMs }: TakeCallPermitOptions,
 ): Promise<CallPermit> {
   const token = randomUUID();
   const taken = await db
@@ -127,21 +138,52 @@ export async function takeCallPermit(
         ),
       ]),
     )
+    .$if(createWindowMs !== undefined, (qb) =>
+      qb.where((eb) =>
+        eb.or([
+          eb('last_create_at', 'is', null),
+          eb(
+            eb('last_create_at', '+', intervalOf(createWindowMs ?? 0)),
+            '<=',
+            sql<Date>`now()`,
+          ),
+        ]),
+      ),
+    )
     .returning(grantedColumns)
     .executeTakeFirst();
   if (taken) return granted(token, taken);
+  return {
+    granted: false,
+    retryInMs: await timeLeftMs(db, orderId, minDelayMs, createWindowMs),
+  };
+}
 
+// O que falta é o maior entre o atraso mínimo e a janela; sem criação, só o atraso.
+async function timeLeftMs(
+  db: Kysely<StoreDb>,
+  orderId: string,
+  minDelayMs: number,
+  createWindowMs: number | undefined,
+): Promise<number> {
   const row = await db
     .selectFrom('outbox')
-    .select((eb) =>
-      sql<number>`(extract(epoch from (${eb.ref('last_call_at')} + ${intervalOf(minDelayMs)} - now())) * 1000)::float8`.as(
+    .select((eb) => [
+      sql<
+        number | null
+      >`(extract(epoch from (${eb.ref('last_call_at')} + ${intervalOf(minDelayMs)} - now())) * 1000)::float8`.as(
         'retry_in_ms',
       ),
-    )
+      sql<
+        number | null
+      >`(extract(epoch from (${eb.ref('last_create_at')} + ${intervalOf(createWindowMs ?? 0)} - now())) * 1000)::float8`.as(
+        'window_left_ms',
+      ),
+    ])
     .where('order_id', '=', orderId)
     .executeTakeFirst();
   if (!row) throw new Error('a linha da outbox não existe');
-  return { granted: false, retryInMs: Math.max(0, row.retry_in_ms) };
+  return Math.max(0, row.retry_in_ms ?? 0, row.window_left_ms ?? 0);
 }
 
 // Regrava o início da chamada para a criação que vem depois da consulta; false
@@ -157,6 +199,7 @@ export async function renewCallPermit(
     // A renovação antecede uma criação depois da consulta: soma no mesmo UPDATE (AD-031).
     .set({
       last_call_at: sql<Date>`now()`,
+      last_create_at: sql<Date>`now()`,
       create_calls: outbox('create_calls', '+', 1),
     })
     .where('order_id', '=', orderId)
