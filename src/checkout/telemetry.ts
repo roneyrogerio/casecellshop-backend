@@ -25,6 +25,19 @@ export const CHECKOUT_METRICS = {
       },
     },
   },
+  'casecellshop.inventory.reserved': {
+    instrument: 'gauge',
+    unit: '{unit}',
+    description: 'Unidades reservadas por pedidos pendentes, somadas em todos os SKUs.',
+    attributes: {},
+  },
+  'casecellshop.inventory.oversold_skus': {
+    instrument: 'gauge',
+    unit: '{sku}',
+    description:
+      'SKUs com `reserved > on_hand`: reservas que o estoque já não cobre (furo de estoque).',
+    attributes: {},
+  },
 } as const satisfies Record<string, MetricSpec>;
 
 // Os instrumentos do checkout, criados uma vez por `Telemetry` a partir da declaração acima.

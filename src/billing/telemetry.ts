@@ -48,6 +48,33 @@ export const BILLING_METRICS = {
     buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1800],
     attributes: {},
   },
+  'casecellshop.order.stuck': {
+    instrument: 'counter',
+    unit: '{order}',
+    description:
+      'Pedidos sem desfecho em 60 s do aceite, contados uma vez pela marca no banco, mesmo com várias réplicas da API.',
+    attributes: {},
+  },
+  'casecellshop.queue.messages': {
+    instrument: 'gauge',
+    unit: '{message}',
+    description:
+      'Mensagens visíveis na fila, pelo `ApproximateNumberOfMessages` do SQS.',
+    attributes: {
+      'casecellshop.queue.name': {
+        description: 'Fila do faturamento ou a DLQ dela.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['billing', 'dlq'] },
+      },
+    },
+  },
+  'casecellshop.outbox.oldest_pending.age': {
+    instrument: 'gauge',
+    unit: 's',
+    description:
+      'Idade da linha mais antiga da outbox com o pedido pendente e fora da DLQ; 0 sem nenhuma.',
+    attributes: {},
+  },
 } as const satisfies Record<string, MetricSpec>;
 
 // Os instrumentos do faturamento, criados uma vez por `Telemetry` a partir da declaração acima.
@@ -167,6 +194,12 @@ export const BILLING_LOG_EVENTS = {
     levels: ['warn'],
     description: 'O pedido terminou sem faturamento; `reason` diz por quê.',
     fields: ['reason'],
+  },
+  'casecellshop.order.stuck_check.failed': {
+    levels: ['error'],
+    description:
+      'A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo.',
+    fields: ['err'],
   },
   'casecellshop.erp.config.rejected': {
     levels: ['warn'],

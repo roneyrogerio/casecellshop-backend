@@ -12,10 +12,15 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.erp.client.active_operations` | `casecellshop_erp_client_active_operations` | UpDownCounter | `{operation}` | Chamadas ao ERP em andamento. |
 | `casecellshop.erp.client.operation.duration` | `casecellshop_erp_client_operation_duration` | histograma | `s` | Duração das chamadas ao ERP, por operação e desfecho; o `_count` conta as chamadas. |
 | `casecellshop.erp.out_of_stock.rejections` | `casecellshop_erp_out_of_stock_rejections_total` | contador | `{order}` | Pedidos que o ERP recusou por falta de estoque. |
+| `casecellshop.inventory.oversold_skus` | `casecellshop_inventory_oversold_skus` | gauge | `{sku}` | SKUs com `reserved > on_hand`: reservas que o estoque já não cobre (furo de estoque). |
+| `casecellshop.inventory.reserved` | `casecellshop_inventory_reserved` | gauge | `{unit}` | Unidades reservadas por pedidos pendentes, somadas em todos os SKUs. |
 | `casecellshop.order.accept_to_invoice.duration` | `casecellshop_order_accept_to_invoice_duration` | histograma | `s` | Tempo do aceite do pedido até o faturamento no ERP. |
+| `casecellshop.order.stuck` | `casecellshop_order_stuck_total` | contador | `{order}` | Pedidos sem desfecho em 60 s do aceite, contados uma vez pela marca no banco, mesmo com várias réplicas da API. |
 | `casecellshop.outbox.attempts` | `casecellshop_outbox_attempts_total` | contador | `{attempt}` | Tentativas da outbox por desfecho; o `dead` é contado pela reconciliação. |
+| `casecellshop.outbox.oldest_pending.age` | `casecellshop_outbox_oldest_pending_age` | gauge | `s` | Idade da linha mais antiga da outbox com o pedido pendente e fora da DLQ; 0 sem nenhuma. |
 | `casecellshop.outbox.orphan_conclusions` | `casecellshop_outbox_orphan_conclusions_total` | contador | `{conclusion}` | Conclusões que não afetaram linha porque o token já não valia. |
 | `casecellshop.outbox.published.messages` | `casecellshop_outbox_published_messages_total` | contador | `{message}` | Linhas da outbox publicadas no SQS pelo relay. |
+| `casecellshop.queue.messages` | `casecellshop_queue_messages` | gauge | `{message}` | Mensagens visíveis na fila, pelo `ApproximateNumberOfMessages` do SQS. |
 | `http.server.request.duration` | `http_server_request_duration` | histograma | `s` | Duração das requisições HTTP, base dos SLOs de latência. |
 
 ### `casecellshop.checkout.requests`
@@ -41,9 +46,21 @@ Fronteiras: 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30
 
 Sem atributos.
 
+### `casecellshop.inventory.oversold_skus`
+
+Sem atributos.
+
+### `casecellshop.inventory.reserved`
+
+Sem atributos.
+
 ### `casecellshop.order.accept_to_invoice.duration`
 
 Fronteiras: 1, 5, 15, 30, 60, 120, 300, 600, 1800
+
+Sem atributos.
+
+### `casecellshop.order.stuck`
 
 Sem atributos.
 
@@ -53,6 +70,10 @@ Sem atributos.
 | --- | --- | --- | --- |
 | `casecellshop.outbox.attempt.outcome` | obrigatório | `invoiced`, `failed`, `retry`, `deferred`, `closed`, `lease_short`, `dead` | Desfecho da tentativa. |
 
+### `casecellshop.outbox.oldest_pending.age`
+
+Sem atributos.
+
 ### `casecellshop.outbox.orphan_conclusions`
 
 Sem atributos.
@@ -60,6 +81,12 @@ Sem atributos.
 ### `casecellshop.outbox.published.messages`
 
 Sem atributos.
+
+### `casecellshop.queue.messages`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.queue.name` | obrigatório | `billing`, `dlq` | Fila do faturamento ou a DLQ dela. |
 
 ### `http.server.request.duration`
 
@@ -91,6 +118,7 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.migration.completed` | `info` | — | As migrações dos dois schemas terminaram. |
 | `casecellshop.order.failed` | `warn` | `reason` | O pedido terminou sem faturamento; `reason` diz por quê. |
 | `casecellshop.order.invoiced` | `info` | — | O ERP faturou o pedido. |
+| `casecellshop.order.stuck_check.failed` | `error` | `err` | A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo. |
 | `casecellshop.orders.db.unavailable` | `warn` | `err` | O banco não respondeu na leitura do status do pedido. |
 | `casecellshop.outbox.attempt.failed` | `error` | `err` | A tentativa falhou com um erro inesperado. |
 | `casecellshop.outbox.call.deferred` | `info` | — | Outro worker tem a permissão da chamada ao ERP; a mensagem volta para a fila. |

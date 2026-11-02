@@ -6,6 +6,7 @@ import type {
   Counter,
   Histogram,
   Meter,
+  ObservableGauge,
   UpDownCounter,
 } from '@opentelemetry/api';
 import type { MetricSpec } from './telemetry-catalog.ts';
@@ -54,6 +55,12 @@ type AttributesArgument<M extends MetricSpec> =
     ? [attributes?: undefined]
     : [attributes: AttributesOf<M>];
 
+// Grava o valor de um gauge dentro do callback do scrape, com os atributos da declaração.
+export type GaugeObservation<M extends MetricSpec> = (
+  value: number,
+  ...attributes: AttributesArgument<M>
+) => void;
+
 export interface TypedMetrics<S extends Specs> {
   add<N extends NamesOf<S, 'counter' | 'up_down_counter'>>(
     name: N,
@@ -65,9 +72,15 @@ export interface TypedMetrics<S extends Specs> {
     value: number,
     ...attributes: AttributesArgument<S[N]>
   ): void;
+  // Registra o callback que o scrape chama para ler o gauge; devolve a função que o remove. Uma falha do callback
+  // só deixa a série sem valor naquele scrape.
+  observe<N extends NamesOf<S, 'gauge'>>(
+    name: N,
+    callback: (observe: GaugeObservation<S[N]>) => void | Promise<void>,
+  ): () => void;
 }
 
-type Instrument = Counter | UpDownCounter | Histogram;
+type Instrument = Counter | UpDownCounter | Histogram | ObservableGauge;
 
 function createInstrument(
   meter: Meter,
@@ -80,6 +93,8 @@ function createInstrument(
       return meter.createCounter(name, options);
     case 'up_down_counter':
       return meter.createUpDownCounter(name, options);
+    case 'gauge':
+      return meter.createObservableGauge(name, options);
     case 'histogram':
       // As fronteiras ligadas aos SLOs entram pelo `advice`: sem elas o percentil seria aproximado.
       return meter.createHistogram(name, {
@@ -114,6 +129,9 @@ export function createInstruments<S extends Specs>(
     record(name: string, value: number, attributes?: Attributes): void {
       const instrument = pick(name);
       if ('record' in instrument) instrument.record(value, attributes);
+    },
+    observe(): () => void {
+      throw new Error('não implementado');
     },
   };
   // A assinatura genérica de TypedMetrics só existe no tipo; o corpo é o mesmo para qualquer declaração.
