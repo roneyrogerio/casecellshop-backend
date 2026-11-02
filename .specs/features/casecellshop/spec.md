@@ -79,7 +79,7 @@ Problema, metas e escopo: [`PROJECT.md`](../../project/PROJECT.md). Como constru
   - **Controle negativo:** para cada propriedade, uma versão da função com a invariante quebrada (no próprio teste) é reprovada pela mesma propriedade.
 
 - **FND-16** A API passa por fuzzing guiado pelo contrato com o Schemathesis, que gera requisições válidas e inválidas a partir do `openapi.yaml` (PR C do F2):
-  - o serviço `schemathesis` do `compose.yaml`, no perfil `fuzz` (fora do `docker compose up`), usa a imagem oficial `ghcr.io/schemathesis/schemathesis` fixada por versão e digest, lê o `openapi.yaml` montado só para leitura e chama a API pela rede do compose (`http://api:3000`), depois de ela ficar saudável;
+  - o serviço `schemathesis` do `compose.yaml`, no perfil `fuzz` (fora do `docker compose up`), usa a imagem oficial `ghcr.io/schemathesis/schemathesis` fixada por versão e digest, lê o `openapi.yaml` montado só para leitura e chama a API pela rede do compose (`http://api:3000`), depois de ela ficar saudável e de o serviço `catalog-ready`, no mesmo perfil, terminar com sucesso no primeiro `200` do `GET /products` (a primeira rodada da sincronização do worker encheu o catálogo, `AD-009`), para o fuzzing alcançar o `202` e o `409` do checkout;
   - as checagens são: nenhum `5xx` (`not_a_server_error`); status, `Content-Type`, cabeçalhos e corpo de resposta declarados no contrato (`status_code_conformance`, `content_type_conformance`, `response_headers_conformance`, `response_schema_conformance`), o que inclui todo erro em `application/problem+json`; e entrada fora do contrato recusada com `4xx` (`negative_data_rejection`);
   - a semente e o número de exemplos vêm do ambiente (`FUZZ_SEED`, `FUZZ_MAX_EXAMPLES`), com padrão fixo; o relatório JUnit fica em `schemathesis-report/`;
   - o job `api-fuzz` do agendado (`nightly.yml`) sobe o compose, roda o serviço com a semente da execução, guarda o relatório como artefato e entra no aviso do resultado; o CI do PR roda a mesma versão leve, num job `api-fuzz` em paralelo, com a semente e o número de exemplos fixos do compose, e o `ci-ok` espera por ele (decidido pela medição, registrada no `STATE.md`);
@@ -254,6 +254,8 @@ Com relógio controlado:
 - **CAT-11** Um SKU removido do ERP aparece como esgotado depois de uma rodada completa e volta se reaparecer; uma rodada que falha no meio não zera nada.
 - **CAT-12** O trace de `GET /products` liga requisição, cache e repositório.
 - **CAT-13** `GET /products` devolve os produtos sincronizados, cada um com SKU, nome, preço em centavos e a faixa de disponibilidade do design, em `{ items, hasNext }` com 50 itens por página, validados pelo schema do contrato; uma página além do fim volta vazia, com `hasNext: false`, e um `?page` inválido recebe `400`.
+- **CAT-14** Uma rodada só grava o que mudou: um SKU com preço e nome iguais aos guardados em `t0` não recebe comando em `products`, e um com o estoque igual não recebe em `inventory`; os SKUs alterados, os novos e os ausentes de uma rodada completa recebem, e a rodada completa sem nenhuma escrita ainda grava o `last_completed_at`.
+- **CAT-15** A idade da sincronização sai do `/metrics` da API, lida do banco a cada coleta (`now() - last_completed_at`, AD-008): sem valor antes da primeira rodada completa, ela segue crescendo com o worker parado; uma leitura que falha conta no counter de falhas de leitura dos gauges do catálogo e sai no log de erro. Com o banco fora na subida do worker, a sincronização não derruba o processo.
 
 ## Observabilidade
 

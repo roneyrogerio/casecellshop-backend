@@ -1,6 +1,7 @@
 import { createApp } from '../app.ts';
 import { createStuckOrderMonitor } from '../billing/stuck-orders.ts';
 import { registerOutboxAgeGauge } from '../billing/outbox-age.ts';
+import { registerSyncAgeGauge } from '../catalog/sync-age.ts';
 import { registerInventoryGauges } from '../checkout/inventory-gauges.ts';
 import { createPool } from '../db/pool.ts';
 import { systemClock } from '../shared/clock.ts';
@@ -28,6 +29,7 @@ const server = app.listen(port, () => {
 // garante que o counter de pedidos sem desfecho conte cada pedido uma vez.
 const removeGauges = [
   registerOutboxAgeGauge({ pool, telemetry, logger }),
+  registerSyncAgeGauge({ pool, telemetry, logger }),
   registerInventoryGauges({ pool, telemetry, logger }),
 ];
 const stuckOrders = createStuckOrderMonitor({

@@ -11,7 +11,7 @@ import {
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
-import type { Semaphore } from '../shared/semaphore.ts';
+import { withPermit, type Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
@@ -71,20 +71,6 @@ interface Context {
   clock: Clock;
   settings: ReconcilerConfig;
   isStopping: () => boolean;
-}
-
-// Uma consulta ao ERP por vez, sob uma permissão do semáforo: o limite vale para todo o processo.
-async function withSemaphore<T>(
-  semaphore: Semaphore,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const permits = await semaphore.acquireFree();
-  semaphore.release(permits - 1);
-  try {
-    return await fn();
-  } finally {
-    semaphore.release(1);
-  }
 }
 
 // O dead_at marca a chegada à DLQ uma vez; a permissão de chamada do worker o zera.
@@ -178,7 +164,7 @@ async function settleMessage(
     return 'closed';
   }
 
-  return withSemaphore(semaphore, () =>
+  return withPermit(semaphore, () =>
     invoiceIfFound(ctx, received, message, log),
   );
 }

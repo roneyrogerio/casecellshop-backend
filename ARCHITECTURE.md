@@ -452,10 +452,10 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 | Alerta | Série | Por quê |
 | --- | --- | --- |
 | Consumo do orçamento do SLO, em duas janelas | `http.server.request.duration`, `casecellshop.order.stuck` | Avisa cedo de uma queda rápida e de uma degradação lenta, sem disparar por um pico isolado (*multiwindow, multi-burn-rate*) |
-| Mensagem na DLQ; fila envelhecendo | `casecellshop.queue.messages` (`dlq`), `casecellshop.outbox.oldest_pending.age` | Pedido parado com a reserva feita |
-| Furo de estoque | `casecellshop.inventory.oversold_skus`, `casecellshop.erp.out_of_stock.rejections` | A loja prometeu mais do que o ERP tem (`OBS-06`) |
+| Mensagem na DLQ; fila envelhecendo | `casecellshop.queue.messages` (`dlq`), `casecellshop.outbox.oldest_pending.age`, `casecellshop.billing.gauge.read_failures` | Pedido parado com a reserva feita |
+| Furo de estoque | `casecellshop.inventory.oversold_skus`, `casecellshop.erp.out_of_stock.rejections`, `casecellshop.checkout.gauge.read_failures` | A loja prometeu mais do que o ERP tem (`OBS-06`) |
 | Erro de configuração no ERP | `casecellshop.erp.client.operation.duration` com o desfecho `config_error` | Uma credencial vencida faz todos os pedidos voltarem à fila |
-| Sincronização parada | `casecellshop.catalog.sync.age`, também com a série ausente | A vitrine está ficando velha |
+| Sincronização parada | `casecellshop.catalog.sync.age`, também com a série ausente, `casecellshop.catalog.gauge.read_failures` | A vitrine está ficando velha |
 
 **Dashboard,** na ordem da jornada do cliente: vitrine (requisições, p99, `5xx`, taxa de acerto, idade da entrada servida e da sincronização), checkout (desfechos, p99, taxa de `price_changed`), fila e ERP (publicadas, tentativas por desfecho, DLQ, idade do mais antigo, aceite ao faturamento, chamadas em andamento contra o limite de 30, erros de configuração) e estoque (unidades reservadas, SKUs com furo).
 

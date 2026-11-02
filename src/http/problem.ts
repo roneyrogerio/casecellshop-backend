@@ -32,7 +32,7 @@ export class ProblemError extends Error {
 }
 
 // Segundos até o cliente tentar de novo depois de o banco não responder.
-const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
+export const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
 
 // O 503 de toda rota que depende do banco: o mesmo título e o mesmo Retry-After.
 export function databaseUnavailableProblem(): ProblemError {

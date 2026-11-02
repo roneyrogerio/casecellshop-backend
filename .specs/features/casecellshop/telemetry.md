@@ -9,6 +9,14 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | Nome | No Prometheus | Instrumento | Unidade | Descrição |
 | --- | --- | --- | --- | --- |
 | `casecellshop.billing.gauge.read_failures` | `casecellshop_billing_gauge_read_failures_total` | contador | `{read}` | Leituras de gauge do faturamento que falharam no scrape; o gauge segue com o último valor lido. |
+| `casecellshop.catalog.cache.lookups` | `casecellshop_catalog_cache_lookups_total` | contador | `{lookup}` | Leituras do cache da vitrine por resultado; o hit ratio sai daqui. |
+| `casecellshop.catalog.gauge.read_failures` | `casecellshop_catalog_gauge_read_failures_total` | contador | `{read}` | Leituras do gauge da idade da sincronização que falharam no /metrics da API; nesse caso o gauge mantém o último valor. |
+| `casecellshop.catalog.origin.active_loads` | `casecellshop_catalog_origin_active_loads` | UpDownCounter | `{load}` | Cargas do cache em andamento; o single-flight a mantém em no máximo 1 por instância. |
+| `casecellshop.catalog.origin.loads` | `casecellshop_catalog_origin_loads_total` | contador | `{load}` | Cargas do cache a partir do banco, por desfecho: o custo do cache em consultas à origem. |
+| `casecellshop.catalog.served_entry.age` | `casecellshop_catalog_served_entry_age` | histograma | `s` | Idade da entrada do cache servida, desde a carga que a gerou. |
+| `casecellshop.catalog.sync.age` | `casecellshop_catalog_sync_age` | gauge | `s` | Idade da última rodada completa da sincronização com o ERP; base do alerta de sincronização parada. |
+| `casecellshop.catalog.sync.corrections` | `casecellshop_catalog_sync_corrections_total` | contador | `{correction}` | Campos que a sincronização corrigiu porque o ERP divergia do valor guardado no início da rodada. |
+| `casecellshop.catalog.sync.missing_skus` | `casecellshop_catalog_sync_missing_skus_total` | contador | `{sku}` | SKUs da loja ausentes do ERP numa rodada completa, zerados por ela. |
 | `casecellshop.checkout.gauge.read_failures` | `casecellshop_checkout_gauge_read_failures_total` | contador | `{read}` | Leituras dos gauges do estoque que falharam no scrape; os gauges seguem com o último valor lido. |
 | `casecellshop.checkout.requests` | `casecellshop_checkout_requests_total` | contador | `{request}` | Checkouts por desfecho. |
 | `casecellshop.erp.client.active_operations` | `casecellshop_erp_client_active_operations` | UpDownCounter | `{operation}` | Chamadas ao ERP em andamento. |
@@ -30,6 +38,48 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | Atributo | Exigência | Valores | Descrição |
 | --- | --- | --- | --- |
 | `casecellshop.gauge.name` | obrigatório | `queue_messages`, `outbox_oldest_pending_age` | Gauge cuja leitura falhou. |
+
+### `casecellshop.catalog.cache.lookups`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.cache.result` | obrigatório | `hit`, `miss`, `stale` | `hit` dentro do TTL, `miss` quando esperou uma carga, `stale` quando serviu a entrada expirada por erro ou pausa da origem. |
+
+### `casecellshop.catalog.gauge.read_failures`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.gauge.name` | obrigatório | `catalog_sync_age` | Gauge cuja leitura falhou. |
+
+### `casecellshop.catalog.origin.active_loads`
+
+Sem atributos.
+
+### `casecellshop.catalog.origin.loads`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.origin.outcome` | obrigatório | `ok`, `error` | Desfecho da carga. |
+
+### `casecellshop.catalog.served_entry.age`
+
+Fronteiras: 1, 2.5, 4.5, 5.5, 10, 20, 30, 45, 60
+
+Sem atributos.
+
+### `casecellshop.catalog.sync.age`
+
+Sem atributos.
+
+### `casecellshop.catalog.sync.corrections`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.sync.field` | obrigatório | `price`, `on_hand`, `name` | Campo corrigido. |
+
+### `casecellshop.catalog.sync.missing_skus`
+
+Sem atributos.
 
 ### `casecellshop.checkout.gauge.read_failures`
 
@@ -120,6 +170,10 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | --- | --- | --- | --- |
 | `casecellshop.api.started` | `info` | `port` | A API começou a escutar. |
 | `casecellshop.billing.gauge.read_failed` | `error` | `gauge`, `err` | A leitura de um gauge do faturamento falhou no scrape; o gauge segue com o último valor lido. |
+| `casecellshop.catalog.gauge.read_failed` | `error` | `gauge`, `err` | A leitura de um gauge da sincronização falhou no scrape; o gauge segue com o último valor lido. |
+| `casecellshop.catalog.origin.load_failed` | `warn` | `err` | A carga do cache a partir do banco falhou; a vitrine serve a entrada antiga até o teto ou responde 503. |
+| `casecellshop.catalog.sync.round.completed` | `info` | `skuCount`, `missingCount`, `duration_ms` | Fim de uma rodada completa da sincronização, com os SKUs lidos, os ausentes zerados e a duração. |
+| `casecellshop.catalog.sync.round.failed` | `warn` | `cause`, `page`, `err` | Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado. |
 | `casecellshop.checkout.accepted` | `info` | `orderId` | Checkout aceito, com o pedido criado. |
 | `casecellshop.checkout.db.unavailable` | `warn` | `err`, `step` | O banco não respondeu no checkout; a resposta é 503. |
 | `casecellshop.checkout.gauge.read_failed` | `error` | `gauge`, `err` | A leitura dos gauges do estoque falhou no scrape; os gauges seguem com o último valor lido. |
@@ -129,7 +183,7 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | `casecellshop.db.transaction.aborted` | `error` | `err` | A transação foi abortada antes do COMMIT. |
 | `casecellshop.erp.config.rejected` | `warn` | `status` | O ERP respondeu com erro de configuração (credencial ou rota); a mensagem volta para a fila. |
 | `casecellshop.health.db.unavailable` | `warn` | `err` | O banco não respondeu ao /health. |
-| `casecellshop.http.request.completed` | `info`, `error` | `route`, `method`, `status`, `duration_ms`, `orderId` | Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta. |
+| `casecellshop.http.request.completed` | `info`, `error` | `route`, `method`, `status`, `duration_ms`, `orderId`, `cache` | Fim de uma requisição HTTP; sai em `error` quando a resposta é 5xx, e sem `status` quando o cliente desconecta antes da resposta. O `cache` (`hit`, `miss` ou `stale`) vem só no 200 do GET /products. |
 | `casecellshop.http.request.failed` | `error` | `err` | Erro sem tratamento numa rota; a resposta é o 500 genérico. |
 | `casecellshop.migration.completed` | `info` | — | As migrações dos dois schemas terminaram. |
 | `casecellshop.order.failed` | `warn` | `reason` | O pedido terminou sem faturamento; `reason` diz por quê. |

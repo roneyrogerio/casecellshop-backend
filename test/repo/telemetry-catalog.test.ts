@@ -85,6 +85,7 @@ function repeatedNames(lists: readonly (readonly string[])[]): string[] {
 // A forma que o teste lê, sem depender de como o agregado tipa o índice.
 interface MetricLike {
   readonly instrument: string;
+  readonly unit: string;
   readonly buckets?: readonly number[];
   readonly attributes: Readonly<Record<string, { readonly values: unknown }>>;
 }
@@ -116,6 +117,22 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
     ).toEqual([]);
   });
 
+  it('OBS-01 o evento do fim da requisição declara o campo cache, ao lado dos campos que já tinha', () => {
+    const completed = Object.entries<{ readonly fields: readonly string[] }>(
+      LOG_EVENTS,
+    ).find(([name]) => name === 'casecellshop.http.request.completed')?.[1];
+    expect(completed?.fields).toEqual(
+      expect.arrayContaining([
+        'route',
+        'method',
+        'status',
+        'duration_ms',
+        'orderId',
+        'cache',
+      ]),
+    );
+  });
+
   it('OBS-07 a duração HTTP leva os atributos da convenção e só eles, com os métodos da convenção', () => {
     const http = metricNamed(METRIC_HTTP_SERVER_REQUEST_DURATION);
     expect(Object.keys(http?.attributes ?? {}).sort()).toEqual(
@@ -144,7 +161,7 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
     ]);
   });
 
-  it('OBS-07 o catálogo usa os quatro instrumentos, e as regras de fronteira e unidade não passam por não ter o que conferir', () => {
+  it('OBS-07 o catálogo usa os quatro instrumentos (counter, gauge, histogram e up_down_counter), e nenhum com o nome antigo observable_gauge', () => {
     const instruments = new Set(
       Object.values<MetricLike>(METRICS).map((spec) => spec.instrument),
     );
@@ -154,6 +171,35 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
       'histogram',
       'up_down_counter',
     ]);
+  });
+
+  it('OBS-07 a idade da última rodada da sincronização é um gauge, sem fronteiras nem atributos', () => {
+    const age = metricNamed('casecellshop.catalog.sync.age');
+    expect(age?.instrument).toBe('gauge');
+    expect(age?.unit).toBe('s');
+    expect(age?.buckets).toBeUndefined();
+    expect(Object.keys(age?.attributes ?? {})).toEqual([]);
+  });
+
+  it('CAT-15 as falhas de leitura dos gauges do catálogo são um counter com o atributo gauge.name, e o evento gauge.read_failed é de erro', () => {
+    const failures = metricNamed('casecellshop.catalog.gauge.read_failures');
+    const gaugeName = Object.entries(failures?.attributes ?? {}).filter(
+      ([key]) => key === 'casecellshop.gauge.name',
+    );
+    expect([failures?.instrument, gaugeName.length]).toEqual(['counter', 1]);
+    expect(gaugeName[0]?.[1].values).toMatchObject({
+      values: ['catalog_sync_age'],
+    });
+    const failed = Object.entries<{ readonly levels: readonly string[] }>(
+      LOG_EVENTS,
+    ).find(([name]) => name === 'casecellshop.catalog.gauge.read_failed')?.[1];
+    expect(failed?.levels).toEqual(['error']);
+  });
+
+  it('CAT-15 o evento state.load_failed não está no catálogo: o worker não lê o banco na subida', () => {
+    expect(Object.keys(LOG_EVENTS)).not.toContain(
+      'casecellshop.catalog.sync.state.load_failed',
+    );
   });
 });
 

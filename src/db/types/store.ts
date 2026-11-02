@@ -61,6 +61,11 @@ export interface Products {
   synced_at: Generated<Timestamp>;
 }
 
+export interface SyncState {
+  id: Generated<boolean>;
+  last_completed_at: Timestamp | null;
+}
+
 export interface DB {
   idempotency_keys: IdempotencyKeys;
   inventory: Inventory;
@@ -68,4 +73,5 @@ export interface DB {
   orders: Orders;
   outbox: Outbox;
   products: Products;
+  sync_state: SyncState;
 }

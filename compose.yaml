@@ -108,6 +108,25 @@ services:
       - '${JAEGER_UI_PORT:-16686}:16686'
     restart: unless-stopped
 
+  # FND-16: o fuzzing só começa depois de a primeira rodada da sincronização (AD-009) encher o catálogo, para o
+  # GET /products responder 200 e o POST /checkout alcançar o 202 e o 409. Termina com 0 no primeiro 200 e com 1 se
+  # o catálogo não aparecer em 120 s; no perfil fuzz, como o schemathesis, que depende dele.
+  catalog-ready:
+    build: .
+    profiles: ['fuzz']
+    command:
+      [
+        'node',
+        '-e',
+        "const end = Date.now() + 120000; (async () => { for (;;) { const r = await fetch('http://api:3000/products').catch(() => undefined); if (r?.status === 200) process.exit(0); if (Date.now() > end) { console.error('catálogo sem sincronizar', r?.status); process.exit(1); } await new Promise((s) => setTimeout(s, 1000)); } })()",
+      ]
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    restart: 'no'
+
   # FND-16: fuzzing guiado pelo openapi.yaml, só no perfil fuzz (fora do docker compose up).
   # Fala com a API pela rede do compose; a versão e o digest da imagem moram só aqui, e o
   # Dependabot sobe os dois juntos. A semente e o número de exemplos vêm do ambiente.
@@ -135,6 +154,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      catalog-ready:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
