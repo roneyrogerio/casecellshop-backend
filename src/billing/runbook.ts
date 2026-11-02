@@ -2,10 +2,16 @@ import type { SQSClient } from '@aws-sdk/client-sqs';
 import { sql } from 'kysely';
 import type { Pool } from 'pg';
 import { createDb, runInTransaction } from '../db/database.ts';
+import {
+  MIN_CALL_DELAY_MS,
+  outbox,
+  SETTLE_WINDOW_MS,
+  takeCallPermit,
+} from './call-permit.ts';
+import { applyConclusion } from './conclude.ts';
+import type { ErpClient } from '../erp/erp-client.ts';
 import { createQueue, startRedrive } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
-import { outbox } from './call-permit.ts';
-import { applyConclusion } from './conclude.ts';
 
 // Runbook da DLQ (design.md, "Worker: reconciliação e runbook").
 
@@ -45,16 +51,67 @@ export async function redriveDlq({
   return { before, remaining };
 }
 
-// Cancela o pedido ainda pendente, depois de o operador confirmar no ERP que ele
-// não existe; devolve se o pedido mudou.
+export interface CancelOrderDependencies {
+  pool: Pool;
+  erp: ErpClient;
+  // Padrão: SETTLE_WINDOW_MS; o teste pode encurtar.
+  settleWindowMs?: number;
+}
+
+// Resultado do cancelamento seguro (AD-031): só `cancelled` muda o pedido.
+export type CancelOrderResult =
+  | { kind: 'cancelled' }
+  // O pedido já tinha desfecho.
+  | { kind: 'unchanged' }
+  // A última criação ou chamada ao ERP é mais nova que a janela de assentamento ou o atraso mínimo.
+  | { kind: 'too_recent'; retryInMs: number }
+  | { kind: 'erp_has_order' }
+  | { kind: 'erp_unavailable' }
+  // Outra tentativa tomou a permissão de chamada entre a consulta e o cancelamento.
+  | { kind: 'permit_lost' };
+
+// Cancela o pedido ainda pendente que o ERP não tem, só fora da janela de assentamento (AD-031).
 export async function cancelOrder(
-  pool: Pool,
+  { pool, erp, settleWindowMs = SETTLE_WINDOW_MS }: CancelOrderDependencies,
   orderId: string,
-): Promise<{ changed: boolean }> {
+): Promise<CancelOrderResult> {
   const db = createDb(pool);
-  return runInTransaction(db, async (trx) => {
-    // Ordem de lock: a linha da outbox, o pedido e o estoque. Marcar a linha como publicada faz o
-    // relay parar de tentar uma linha que não passa no schema da mensagem (A12).
+  // Pedido que já não está pendente não toma a permissão: regravar last_call_at/call_token reiniciaria
+  // a janela da verificação tardia. A corrida posterior a esta leitura fica no compare-and-set final.
+  const current = await db
+    .selectFrom('orders')
+    .select('status')
+    .where('id', '=', orderId)
+    .executeTakeFirst();
+  if (current && current.status !== 'pending') return { kind: 'unchanged' };
+
+  // A permissão leva o atraso mínimo (a consulta conta como chamada) e, no mesmo UPDATE, confere que a
+  // última criação enviada é mais antiga que a janela: a janela conta da criação, e não da chamada, porque
+  // consulta e reconciliação regravam last_call_at sem criar fatura. Sem somar create_calls nem zerar dead_at.
+  const permit = await takeCallPermit(db, orderId, {
+    minDelayMs: MIN_CALL_DELAY_MS,
+    clearDead: false,
+    createWindowMs: settleWindowMs,
+  });
+  if (!permit.granted)
+    return { kind: 'too_recent', retryInMs: permit.retryInMs };
+
+  // Fora de transação: o ERP nunca é chamado com a transação aberta.
+  const found = await erp.findOrderByReference(orderId);
+  if (found.kind === 'found') return { kind: 'erp_has_order' };
+  if (found.kind !== 'not_found') return { kind: 'erp_unavailable' };
+
+  return runInTransaction(db, async (trx): Promise<CancelOrderResult> => {
+    // Ordem de lock: a linha da outbox primeiro. O token confere que ninguém tomou a permissão depois da consulta.
+    const row = await trx
+      .selectFrom('outbox')
+      .select('order_id')
+      .where('order_id', '=', orderId)
+      .where('call_token', '=', permit.token)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) return { kind: 'permit_lost' };
+    // Publicada, o relay para de tentar uma linha que já não passa no schema da mensagem.
     await trx
       .updateTable('outbox')
       .set({
@@ -62,10 +119,56 @@ export async function cancelOrder(
       })
       .where('order_id', '=', orderId)
       .execute();
-    const result = await applyConclusion(trx, orderId, {
+    const conclusion = await applyConclusion(trx, orderId, {
       kind: 'failed',
       reason: 'cancelled',
     });
-    return { changed: result.orderChanged };
+    return { kind: conclusion.orderChanged ? 'cancelled' : 'unchanged' };
   });
+}
+
+// Arredonda para cima e nunca mostra menos de 1 min: "0 min" levaria o operador a repetir de imediato.
+function minutesUp(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 60_000));
+}
+
+// A mensagem ao operador de cada resultado, e se o comando sai com erro (as recusas).
+export function describeCancel(
+  orderId: string,
+  result: CancelOrderResult,
+): { message: string; failed: boolean } {
+  // Derivado do atraso mínimo real, para o texto não divergir do valor.
+  const minDelaySeconds = Math.ceil(MIN_CALL_DELAY_MS / 1000);
+  switch (result.kind) {
+    case 'cancelled':
+      return {
+        message: `Pedido ${orderId} cancelado: o ERP não o tem e a reserva de estoque foi liberada.`,
+        failed: false,
+      };
+    case 'unchanged':
+      return {
+        message: `Pedido ${orderId} já tinha desfecho: nada mudou.`,
+        failed: false,
+      };
+    case 'too_recent':
+      return {
+        message: `Pedido ${orderId} não cancelado: a última chamada ao ERP é recente; tente de novo em cerca de ${minutesUp(result.retryInMs)} min.`,
+        failed: true,
+      };
+    case 'erp_has_order':
+      return {
+        message: `Pedido ${orderId} não cancelado: o ERP já tem o pedido; use o redrive ou espere a reconciliação.`,
+        failed: true,
+      };
+    case 'erp_unavailable':
+      return {
+        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s.`,
+        failed: true,
+      };
+    case 'permit_lost':
+      return {
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa passa depois do atraso mínimo de ${minDelaySeconds} s, ou depois da janela de assentamento se a outra tentativa enviou uma criação ao ERP.`,
+        failed: true,
+      };
+  }
 }

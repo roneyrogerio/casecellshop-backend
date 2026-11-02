@@ -15,8 +15,11 @@ import {
   NO_MIGRATIONS,
 } from 'kysely/migration';
 import pg from 'pg';
-import { expect, vi } from 'vitest';
-import type { MigrationFolder } from '../../src/db/migrate.ts';
+import { afterAll, beforeAll, expect, vi } from 'vitest';
+import {
+  MIGRATION_FOLDERS,
+  type MigrationFolder,
+} from '../../src/db/migrate.ts';
 import { WAIT_GUARD_MS } from './async.ts';
 import { composeImage } from './compose-image.ts';
 import { createTestPool } from './pool.ts';
@@ -109,6 +112,42 @@ export async function startMigrationContainer(): Promise<MigrationContainer> {
       }
     },
   };
+}
+
+// O contêiner de migração do arquivo de teste: sobe antes dos testes e para depois deles. Devolve o acesso a ele,
+// porque só existe depois do `beforeAll`.
+export function useMigrationContainer(): () => MigrationContainer {
+  let container: MigrationContainer | undefined;
+  beforeAll(async () => {
+    container = await startMigrationContainer();
+  }, 120_000);
+  afterAll(async () => {
+    await container?.stop();
+  });
+  return () => {
+    if (!container) throw new Error('o contêiner de migração não subiu');
+    return container;
+  };
+}
+
+// O Migrator da pasta de migrações da loja (schema `public`), para os testes que aplicam parte delas e semeiam
+// linhas antes da seguinte.
+export function storeMigrator(pool: pg.Pool): Migrator {
+  const folder = MIGRATION_FOLDERS.find(
+    (candidate) => candidate.schema === 'public',
+  );
+  if (!folder)
+    throw new Error('a pasta de migrações da loja não está na lista');
+  const db = new Kysely<object>({ dialect: new PostgresDialect({ pool }) });
+  return new Migrator({
+    db,
+    provider: new FileMigrationProvider({
+      fs,
+      path,
+      migrationFolder: folder.dir,
+    }),
+    migrationTableSchema: folder.schema,
+  });
 }
 
 // Adaptador cujo lock não faz nada: o controle negativo do advisory lock.

@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
 import { settle, track } from '../../test/helpers/async.ts';
+import {
+  countingInvoices,
+  deferredInvoices,
+  hangingInvoices,
+  rejectingInvoices,
+} from '../../test/helpers/invoice-reader.ts';
 import { createErpClient } from './acl.ts';
 import type { ErpClient, ErpOrderRequest } from './erp-client.ts';
 import {
   ErpNetworkError,
+  type ErpInvoiceReader,
   type ErpNetworkCode,
   type ErpRequest,
   type ErpResponse,
@@ -57,9 +64,17 @@ function hanging(): FakeTransport {
   );
 }
 
-function clientOver(transport: ErpTransport) {
+function clientOver(
+  transport: ErpTransport,
+  invoiceReader: ErpInvoiceReader = countingInvoices(),
+) {
   const clock = createManualClock();
-  const client = createErpClient({ transport, clock, timeoutMs: TIMEOUT_MS });
+  const client = createErpClient({
+    transport,
+    invoiceReader,
+    clock,
+    timeoutMs: TIMEOUT_MS,
+  });
   return { client, clock };
 }
 
@@ -605,4 +620,119 @@ describe('ORD-21 rejeição do transporte que não é de rede nem o aborto do ti
       );
     },
   );
+});
+
+describe('ORD-21 countInvoicesByReference: a contagem de faturas pela leitura do banco do ERP (AD-031)', () => {
+  const reference = orderRequest.reference;
+
+  it.each([0, 1, 2, 5])(
+    'ORD-21 a leitura que devolve %i faturas vira ok com a contagem',
+    async (count) => {
+      const reader = countingInvoices(count);
+      const { client } = clientOver(responding(500), reader);
+
+      expect(await client.countInvoicesByReference(reference)).toEqual({
+        kind: 'ok',
+        count,
+      });
+    },
+  );
+
+  it('ORD-21 a contagem lê pela referência, uma vez só, e não usa o transporte da API', async () => {
+    const reader = countingInvoices(2);
+    const transport = responding(200, erpOrder);
+    const { client } = clientOver(transport, reader);
+
+    await client.countInvoicesByReference(reference);
+
+    expect(reader.calls.map((call) => call.reference)).toEqual([reference]);
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('ORD-21 a leitura que rejeita vira transient, sem lançar e sem repetir a leitura', async () => {
+    const reader = rejectingInvoices(new Error('mysql: connection refused'));
+    const { client } = clientOver(responding(200, erpOrder), reader);
+
+    const result = await client.countInvoicesByReference(reference);
+    await settle();
+
+    expect(result.kind).toBe('transient');
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  it.each([
+    { label: 'negativa', value: -1 },
+    { label: 'fracionária', value: 1.5 },
+    { label: 'NaN', value: Number.NaN },
+    { label: 'infinita', value: Number.POSITIVE_INFINITY },
+    { label: 'texto', value: '2' },
+    { label: 'nula', value: null },
+    { label: 'ausente', value: undefined },
+  ])(
+    'ORD-21 uma contagem $label não é inteiro não negativo e vira transient, nunca ok',
+    async ({ value }) => {
+      const reader = countingInvoices();
+      const invalid = {
+        ...reader,
+        countInvoices: () => Promise.resolve(value as number),
+      };
+      const { client } = clientOver(responding(200, erpOrder), invalid);
+
+      const result = await client.countInvoicesByReference(reference);
+
+      expect(result.kind).toBe('transient');
+    },
+  );
+
+  it('ORD-21 a leitura sem resposta é transient quando o relógio avança o timeout, e não antes, e o sinal aborta', async () => {
+    const reader = hangingInvoices();
+    const { client, clock } = clientOver(responding(200, erpOrder), reader);
+
+    const call = track(client.countInvoicesByReference(reference));
+    await settle();
+    clock.advance(TIMEOUT_MS - 1);
+    await settle();
+
+    expect(call.settled).toBe(false);
+    expect(reader.calls[0]?.signal.aborted).toBe(false);
+
+    clock.advance(1);
+    await settle();
+
+    expect(call.settled).toBe(true);
+    expect((await call.result).kind).toBe('transient');
+    expect(reader.calls[0]?.signal.aborted).toBe(true);
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  it('ORD-21 o timeout limita a contagem mesmo quando a leitura ignora o sinal, e a resposta tardia é descartada', async () => {
+    const reader = deferredInvoices();
+    const { client, clock } = clientOver(responding(200, erpOrder), reader);
+
+    const call = track(client.countInvoicesByReference(reference));
+    await settle();
+    clock.advance(TIMEOUT_MS);
+    await settle();
+
+    expect(call.settled).toBe(true);
+    const first = await call.result;
+    expect(first.kind).toBe('transient');
+
+    reader.respond(2);
+    await settle();
+    expect(await call.result).toEqual(first);
+  });
+
+  it('ORD-21 uma leitura que responde antes do prazo não é tratada como timeout', async () => {
+    const { client, clock } = clientOver(
+      responding(200, erpOrder),
+      countingInvoices(2),
+    );
+
+    const result = await client.countInvoicesByReference(reference);
+    clock.advance(TIMEOUT_MS * 3);
+    await settle();
+
+    expect(result).toEqual({ kind: 'ok', count: 2 });
+  });
 });

@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. O PR #43 (`fix/alertas`), que faz disparar os alertas da seção "Operação" do README que não disparavam (`OBS-08`, `OBS-09`, `OBS-03`), entrou em 02/11/2026. A seguir, os Adicionais, a começar pelo Stryker.
+**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. O PR #43 (`fix/alertas`), que faz disparar os alertas da seção "Operação" do README que não disparavam (`OBS-08`, `OBS-09`, `OBS-03`), entrou em 02/11/2026. A detecção da fatura tardia do R6 (AD-031) segue no PR #44. A seguir, os Adicionais, a começar pelo Stryker.
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 

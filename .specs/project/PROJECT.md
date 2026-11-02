@@ -55,7 +55,7 @@ Versões conferidas em 28 e 29/10/2026. As escolhas e as alternativas estão em 
 | CDN e cache HTTP | Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas; a vitrine responde `no-store` (AD-005) |
 | Redrive automático e várias réplicas do worker | O *redrive* manual pelo runbook basta para uma DLQ restrita a quedas longas; o SQS já entrega a várias réplicas (*visibility timeout*), mas a coordenação entre elas (o limite de chamadas ao ERP e a sincronização) fica na arquitetura alvo (AD-021, AD-009) |
 | ERP real | Substituído por um simulador atrás da porta `ErpClient` (AD-004) |
-| Leitura direta do MySQL do ERP | As tabelas internas do ERP não são contrato; a loja usa a API. Exceção: o plano B da H1a (R6). CDC fica na arquitetura alvo (AD-009) |
+| Leitura direta do MySQL do ERP | As tabelas internas do ERP não são contrato; a loja usa a API. Exceções: o plano B da H1a e a contagem de faturas da verificação tardia (R6, AD-031). CDC fica na arquitetura alvo (AD-009) |
 | Redis, EventBridge e o SQS gerenciado da AWS | Arquitetura alvo. Aqui o SQS roda localmente no ElasticMQ, alimentado pela outbox do PostgreSQL (AD-021), e o cache em memória basta para uma instância (AD-005) |
 
 ## Restrições

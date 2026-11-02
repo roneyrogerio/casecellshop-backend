@@ -5,6 +5,14 @@ import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { renewCallPermit, takeCallPermit } from './call-permit.ts';
 import type { OrderConclusion } from './conclude.ts';
+import {
+  FULL_SETTLE_SECONDS,
+  recordRefusal,
+  refusalReasonOf,
+  settledFailure,
+  settleWaitSeconds,
+  type StoredRefusal,
+} from './refusal.ts';
 import { BILLING_LOG_EVENTS } from './telemetry.ts';
 
 // A chamada ao ERP de uma tentativa do worker (design.md, "Worker: envio"): a permissão de
@@ -32,7 +40,11 @@ export interface CallContext {
 
 // Por que a mensagem volta à fila: o resultado do ERP (ou o erro inesperado) que a causou.
 export type RetryCause =
-  'transient' | 'ambiguous' | 'config_error' | 'unexpected';
+  | 'transient'
+  | 'ambiguous'
+  | 'config_error'
+  | 'unexpected'
+  | 'refusal_unconfirmed';
 
 export type Outcome =
   | OrderConclusion
@@ -140,11 +152,32 @@ async function lookupExisting(
   return 'not_found';
 }
 
+// Recusa já gravada: nunca cria de novo; só a consulta decide, e a conclusão espera a janela.
+async function settleRefusal(
+  ctx: CallContext,
+  message: Attempt,
+  log: AppLogger,
+  { refusal, items }: { refusal: StoredRefusal; items: ErpOrderItem[] },
+): Promise<Outcome> {
+  const existing = await lookupExisting(ctx, message, log);
+  if (existing !== 'not_found') return existing;
+  if (refusal.leftMs <= 0)
+    return settledFailure(
+      refusal,
+      items.map((item) => item.sku),
+    );
+  return {
+    kind: 'retry',
+    cause: 'refusal_unconfirmed',
+    seconds: settleWaitSeconds(refusal.leftMs),
+  };
+}
+
 async function createInErp(
   ctx: CallContext,
   message: Attempt,
   log: AppLogger,
-  items: ErpOrderItem[],
+  { items, createCalls }: { items: ErpOrderItem[]; createCalls: number },
 ): Promise<Outcome> {
   const created = await ctx.erp.createOrder({
     reference: message.orderId,
@@ -153,10 +186,20 @@ async function createInErp(
   if (created.kind === 'ok') return { kind: 'invoiced' };
   if (created.kind === 'permanent') {
     const skus = items.map((item) => item.sku);
+    const reason = refusalReasonOf(created.reason);
+    // Se esta não é a primeira criação, a anterior pode ainda estar em processamento no ERP: grava a recusa e
+    // espera a janela de assentamento em vez de concluir (AD-031).
+    if (createCalls > 1) {
+      await recordRefusal(ctx.db, message.orderId, reason);
+      return {
+        kind: 'retry',
+        cause: 'refusal_unconfirmed',
+        seconds: FULL_SETTLE_SECONDS,
+      };
+    }
     return {
       kind: 'failed',
-      reason:
-        created.reason === 'rejected' ? 'erp_rejected' : 'erp_out_of_stock',
+      reason,
       skus,
       // O ERP é externo: o SKU que ele aponta só vale se for um dos do pedido.
       ...(created.sku !== undefined && skus.includes(created.sku)
@@ -194,6 +237,14 @@ export async function callErp(
 
   // Conferência imediata antes de cada chamada ao ERP, a primeira e a que vem depois da renovação.
   if (tooLate(ctx, message, permitReadAt)) return giveUp(log);
+  if (permit.refusal) {
+    return settleRefusal(ctx, message, log, {
+      refusal: permit.refusal,
+      items,
+    });
+  }
+  // Contador já com a soma da tomada; a renovação soma mais uma, sem reler o banco.
+  let createCalls = permit.createCalls;
   if (permit.sentBefore) {
     const existing = await lookupExisting(ctx, message, log);
     if (existing !== 'not_found') return existing;
@@ -203,8 +254,9 @@ export async function callErp(
     permitReadAt = clock.now();
     if (!(await renewCallPermit(db, message.orderId, permit.token)))
       return giveUp(log);
+    createCalls += 1;
   }
 
   if (tooLate(ctx, message, permitReadAt)) return giveUp(log);
-  return createInErp(ctx, message, log, items);
+  return createInErp(ctx, message, log, { items, createCalls });
 }

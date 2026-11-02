@@ -1,14 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { ErpClient } from '../../../src/erp/erp-client.ts';
 import type { WorkerConfig } from '../../../src/billing/worker.ts';
 import { resolveServiceIdentity } from '../../../src/shared/service-identity.ts';
@@ -26,10 +18,10 @@ import {
   makeClaimable,
   untilInvoiced,
   markSentBefore,
-  startWorkerSuite,
   stealMessage,
   stopAdvancing,
   submitOrder,
+  useWorkerSuite,
   type AcceptedOrder,
   type QueueWorld,
   type WorkerSuite,
@@ -38,23 +30,13 @@ import {
 // Trace e logs do worker (ORD-18, OBS-01 do M3): a tentativa continua o trace do checkout, que vem no
 // atributo `traceparent` da mensagem do SQS, e cada log dela leva os campos do design.
 
+const suiteOf = useWorkerSuite();
 let suite: WorkerSuite;
 
-beforeAll(async () => {
-  suite = await startWorkerSuite();
-}, 180_000);
-
-afterAll(async () => {
-  await suite?.stop();
-});
-
 beforeEach(async () => {
+  suite = suiteOf();
   await suite.checkout.telemetry.forceFlush();
   suite.checkout.exporter.reset();
-});
-
-afterEach(() => {
-  suite.releaseWorlds();
 });
 
 interface Recorded {

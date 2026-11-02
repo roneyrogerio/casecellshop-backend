@@ -48,6 +48,7 @@ type GitSetupPlan = 'configure' | 'unconfigure' | 'skip' | 'explain';
 let diagnose: (facts: Facts) => Diagnosis[];
 let planGitSetup: (facts: GitSetupFacts) => GitSetupPlan;
 let report: (results: Diagnosis[]) => string;
+let collectFacts: (root: string) => Promise<Facts>;
 
 // Import dinâmico: assim o teste falha com "módulo inexistente" enquanto o módulo não existe, sem quebrar o typecheck.
 beforeAll(async () => {
@@ -57,10 +58,12 @@ beforeAll(async () => {
     diagnose: typeof diagnose;
     planGitSetup: typeof planGitSetup;
     report: typeof report;
+    collectFacts: typeof collectFacts;
   };
   diagnose = mod.diagnose;
   planGitSetup = mod.planGitSetup;
   report = mod.report;
+  collectFacts = mod.collectFacts;
 });
 
 const BOT_IDENTITY: Identity = {
@@ -90,7 +93,8 @@ const REMOTE_OK: Facts = {
   remote: true,
   credentialHelperIsBot: false,
   mcpRegistered: false,
-  commitHookInstalled: false,
+  // Na nuvem o core.hooksPath também é conferido (A20): o controle negativo tem o hook instalado.
+  commitHookInstalled: true,
 };
 
 function failures(facts: Facts): Diagnosis[] {
@@ -203,13 +207,71 @@ describe('AI-09 diagnóstico do ambiente, na nuvem', () => {
     expect(found).toEqual([]);
   });
 
-  it('AI-09 na nuvem o hook commit-msg não instalado não entra no diagnóstico', () => {
-    expect(failures({ ...REMOTE_OK, commitHookInstalled: false })).toEqual([]);
-    expect(
-      diagnose({ ...REMOTE_OK, commitHookInstalled: false }).some((entry) =>
-        /commit-msg|commitlint/i.test(entry.item),
-      ),
-    ).toBe(false);
+  // Substitui o teste anterior, que exigia o contrário: o critério AI-09 passou a conferir o core.hooksPath também na nuvem (A20, L-009).
+  const hookItems = (facts: Facts): Diagnosis[] =>
+    diagnose(facts).filter((entry) =>
+      /commit-msg|commitlint/i.test(entry.item),
+    );
+
+  it('AI-09 na nuvem o hook commit-msg não instalado falha, com correção que aponta o core.hooksPath e sem npm run setup:local', () => {
+    const found = hookItems({ ...REMOTE_OK, commitHookInstalled: false });
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.ok).toBe(false);
+    expect(found[0]?.fix ?? '').toContain(
+      'git config --local core.hooksPath .githooks',
+    );
+    expect(found[0]?.fix ?? '').not.toContain('setup:local');
+    expect(failures({ ...REMOTE_OK, commitHookInstalled: false })).toEqual([
+      found[0],
+    ]);
+  });
+
+  it('AI-09 na nuvem o hook commit-msg instalado é um item ok, sem correção', () => {
+    const found = hookItems({ ...REMOTE_OK, commitHookInstalled: true });
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.ok).toBe(true);
+    expect(failures({ ...REMOTE_OK, commitHookInstalled: true })).toEqual([]);
+  });
+
+  it('AI-09 na nuvem sem o hook o relatório é incompleto e traz a correção; com o hook, pronto', () => {
+    const broken = report(
+      diagnose({ ...REMOTE_OK, commitHookInstalled: false }),
+    );
+    const fine = report(diagnose({ ...REMOTE_OK, commitHookInstalled: true }));
+
+    expect(broken.startsWith('Ambiente incompleto')).toBe(true);
+    expect(broken).toContain('git config --local core.hooksPath .githooks');
+    expect(fine.startsWith('Ambiente pronto')).toBe(true);
+  });
+
+  it('AI-09 na nuvem nenhum cenário com o hook ausente cita npm run setup:local', () => {
+    const scenarios: Facts[] = [
+      { ...REMOTE_OK, commitHookInstalled: false },
+      { ...REMOTE_OK, commitHookInstalled: false, githubLogin: null },
+      {
+        ...REMOTE_OK,
+        commitHookInstalled: false,
+        identity: undefined,
+        depsInstalled: false,
+      },
+    ];
+
+    for (const facts of scenarios) {
+      expect(JSON.stringify(diagnose(facts))).not.toContain('setup:local');
+    }
+  });
+
+  it('AI-09 controle: na máquina o item do hook segue citando npm run setup:local, e o do core.hooksPath da nuvem não vaza para lá', () => {
+    const found = hookItems({ ...LOCAL_OK, commitHookInstalled: false });
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.ok).toBe(false);
+    expect(found[0]?.fix ?? '').toContain('npm run setup:local');
+    expect(hookItems({ ...LOCAL_OK, commitHookInstalled: true })[0]?.ok).toBe(
+      true,
+    );
   });
 
   it('AI-09 na nuvem a falha do login do token cita /web-setup', () => {
@@ -833,5 +895,73 @@ describe('AI-09 o hook commit-msg versionado em .githooks/', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }, 60_000);
+});
+
+describe('AI-09 na nuvem, a coleta dos fatos aponta o core.hooksPath para .githooks/', () => {
+  const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX'];
+
+  const git = (root: string, ...args: string[]): string =>
+    spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' }).stdout.trim();
+
+  // Repositório temporário por teste: a coleta muda o git config. Sob um hook do git (pre-push) as variáveis GIT_* apontariam para o repositório real, então saem do ambiente durante o teste.
+  async function collectInTempRepo(
+    remote: boolean,
+    prepare: (root: string) => void,
+  ): Promise<{ before: string; after: string; facts: Facts }> {
+    const root = mkdtempSync(join(tmpdir(), 'check-env-hook-'));
+    const saved = new Map(
+      [...GIT_ENV, 'CLAUDE_CODE_REMOTE'].map((name) => [
+        name,
+        process.env[name],
+      ]),
+    );
+    try {
+      for (const name of GIT_ENV) delete process.env[name];
+      process.env.CLAUDE_CODE_REMOTE = remote ? 'true' : 'false';
+      spawnSync('git', ['init', '--quiet', root]);
+      prepare(root);
+      const before = git(root, 'config', '--local', '--get', 'core.hooksPath');
+      const facts = await collectFacts(root);
+      const after = git(root, 'config', '--local', '--get', 'core.hooksPath');
+      return { before, after, facts };
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('AI-09 na nuvem, sem core.hooksPath, a coleta o deixa em .githooks e reporta o hook instalado', async () => {
+    const { before, after, facts } = await collectInTempRepo(true, () => {
+      // sem core.hooksPath
+    });
+
+    expect(facts.remote).toBe(true);
+    expect(before).toBe('');
+    expect(after).toBe('.githooks');
+    expect(facts.commitHookInstalled).toBe(true);
+  }, 60_000);
+
+  it('AI-09 na nuvem, com o core.hooksPath em outro caminho, a coleta o corrige para .githooks', async () => {
+    const { before, after, facts } = await collectInTempRepo(true, (root) => {
+      git(root, 'config', '--local', 'core.hooksPath', '.git/hooks');
+    });
+
+    expect(before).toBe('.git/hooks');
+    expect(after).toBe('.githooks');
+    expect(facts.commitHookInstalled).toBe(true);
+  }, 60_000);
+
+  it('AI-09 na nuvem, com o core.hooksPath já em .githooks, a coleta o mantém e reporta o hook instalado', async () => {
+    const { before, after, facts } = await collectInTempRepo(true, (root) => {
+      git(root, 'config', '--local', 'core.hooksPath', '.githooks');
+    });
+
+    expect(before).toBe('.githooks');
+    expect(after).toBe('.githooks');
+    expect(facts.commitHookInstalled).toBe(true);
   }, 60_000);
 });
