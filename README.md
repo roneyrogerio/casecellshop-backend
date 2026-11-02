@@ -55,7 +55,7 @@ Um pedido de ponta a ponta:
 
 ```sh
 curl http://localhost:3000/products
-# {"items":[{"sku":"CAPA-MOTO-G84",…}],"hasNext":false}
+# {"items":[{"sku":"CABO-USBC-1M",…},…],"hasNext":false}: os 10 SKUs do ERP simulado, em ordem de SKU
 
 curl -i -X POST http://localhost:3000/checkout \
   -H 'content-type: application/json' -H 'idempotency-key: pedido-1' \
@@ -66,7 +66,7 @@ curl http://localhost:3000/orders/<orderId>/status
 # {"orderId":"…","status":"invoiced"} depois de o worker faturar
 ```
 
-O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições de exemplo. O contrato declara o servidor `http://localhost:3000`, então o `openapi.yaml` importado no Insomnia ou no Postman já aponta para a API do compose.
+O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições do `/health` e do `/metrics`; as da vitrine, do checkout e do status do pedido estão no exemplo acima. O contrato declara o servidor `http://localhost:3000`, então o `openapi.yaml` importado no Insomnia ou no Postman já aponta para a API do compose.
 
 ## Testar
 
@@ -344,7 +344,7 @@ As regras estão no formato de arquivo de regras do Prometheus ([regras de alert
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
 
-Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os eventos registrados antes da primeira coleta de cada série depois da subida do processo (por exemplo, a primeira rejeição por falta de estoque ou os primeiros `config_error`) podem não disparar o alerta; o próximo evento depois dessa coleta, dentro da janela, dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como o design pede (`CAT-15`).
+Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os eventos registrados antes da primeira coleta de cada série depois da subida do processo (por exemplo, a primeira rejeição por falta de estoque ou os primeiros `config_error`) podem não disparar o alerta; o próximo evento depois dessa coleta, dentro da janela, dispara. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
@@ -517,7 +517,7 @@ groups:
         labels:
           severity: ticket
         annotations:
-          summary: A pendência mais antiga da outbox passa do dobro do SLO de 60 s
+          summary: A pendência mais antiga da outbox passa do dobro do SLO de 60 s, ou a leitura dela falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#pendência-antiga-e-burn-rate-do-faturamento
       - alert: CasecellshopMetricasDaFilaAusentes
         expr: |
@@ -550,7 +550,7 @@ groups:
         labels:
           severity: page
         annotations:
-          summary: SKU com reserved > on_hand, ou o ERP recusou um pedido por falta de estoque
+          summary: SKU com reserved > on_hand, o ERP recusou um pedido por falta de estoque, ou a leitura do estoque falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#furo-de-estoque
       - alert: CasecellshopErpErroDeConfiguracao
         expr: |
@@ -584,7 +584,7 @@ groups:
         labels:
           severity: page
         annotations:
-          summary: A última rodada completa da sincronização tem mais de 3 min
+          summary: A última rodada completa da sincronização tem mais de 3 min, ou a leitura dela falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#sincronização-parada
       - alert: CasecellshopVitrineServidaVelha
         expr: |
@@ -622,7 +622,7 @@ Se o alerta veio do counter de falhas de leitura, o gauge da pendência está co
 
 Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`).
 
-Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelado no último valor: o log `casecellshop.billing.gauge.read_failed` traz o erro do `GetQueueAttributes`, e o SQS está fora do alcance do worker (`docker compose ps elasticmq`). Até a leitura voltar, a DLQ não é vista pelo gauge, e a reconciliação ainda registra cada chegada em `casecellshop.outbox.dead`.
+Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelado no último valor, e o log `casecellshop.billing.gauge.read_failed` traz o erro do `GetQueueAttributes`. Com o SQS fora do alcance do worker (`docker compose ps elasticmq`), a reconciliação também falha (`casecellshop.outbox.reconciliation.failed`), e as chegadas à DLQ só aparecem em `casecellshop.outbox.dead` na primeira rodada depois da volta. Se só o `GetQueueAttributes` falha (uma permissão faltando, por exemplo), a reconciliação segue registrando cada chegada.
 
 1. Ache os pedidos: o log `casecellshop.outbox.dead` traz o `orderId` de cada chegada à DLQ. Uma mensagem com o corpo fora do schema não gera esse log: ela aparece em `casecellshop.outbox.message.rejected`, com o `orderId` quando o corpo o tem (`ORD-12`).
 2. Espere uma rodada da reconciliação (5 min): ela fatura e tira da DLQ os pedidos que o ERP já tem (`ORD-14`). O resumo sai em `casecellshop.outbox.reconciliation.completed`.
