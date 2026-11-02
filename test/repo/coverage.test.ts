@@ -23,6 +23,136 @@ interface CoverageConfig {
 const coverage = (config as { test?: { coverage?: CoverageConfig } }).test
   ?.coverage;
 
+// O escopo da medida é fixo: um escopo menor sobe a medida sem tocar no piso. Só estas quatro chaves; qualquer outra
+// (ignoreClassMethods, excludeAfterRemap, allowExternal...) pode mudar o que entra na conta.
+const SCOPE_KEYS = ['provider', 'include', 'exclude', 'thresholds'];
+const SCOPE_INCLUDE = ['src/**/*.ts'];
+const SCOPE_EXCLUDE = ['src/**/*.test.ts', 'src/db/types/**', 'src/main/**'];
+
+// A ordem não importa; a repetição conta como diferença (compara as listas ordenadas, como multiconjuntos).
+function listDiffs(
+  name: string,
+  actual: unknown,
+  expected: string[],
+): string[] {
+  if (!Array.isArray(actual)) return [`${name} não é uma lista`];
+  const rest = Array.from(actual as unknown[]);
+  const diffs: string[] = [];
+  for (const pattern of expected) {
+    const at = rest.indexOf(pattern);
+    if (at === -1) diffs.push(`${name} sem ${pattern}`);
+    else rest.splice(at, 1);
+  }
+  for (const extra of rest) diffs.push(`${name} a mais: ${String(extra)}`);
+  return diffs;
+}
+
+// Devolve o que difere do escopo esperado; lista vazia é o escopo certo.
+function coverageScopeDiffs(actual: unknown): string[] {
+  if (typeof actual !== 'object' || actual === null) {
+    return ['coverage ausente'];
+  }
+  const keys = Object.keys(actual);
+  return [
+    ...SCOPE_KEYS.filter((key) => !keys.includes(key)).map(
+      (key) => `chave faltando: ${key}`,
+    ),
+    ...keys
+      .filter((key) => !SCOPE_KEYS.includes(key))
+      .map((key) => `chave a mais: ${key}`),
+    ...listDiffs(
+      'include',
+      (actual as { include?: unknown }).include,
+      SCOPE_INCLUDE,
+    ),
+    ...listDiffs(
+      'exclude',
+      (actual as { exclude?: unknown }).exclude,
+      SCOPE_EXCLUDE,
+    ),
+  ];
+}
+
+describe('AI-37 o escopo da cobertura é fixo', () => {
+  const loaded = coverage as Record<string, unknown>;
+  const exclude = loaded['exclude'] as string[];
+
+  it('AI-37 o coverage do config carregado tem só provider, include, exclude e thresholds, com o include e o exclude esperados', () => {
+    expect(coverageScopeDiffs(coverage)).toEqual([]);
+  });
+
+  it('AI-37 a ordem do include e do exclude não importa', () => {
+    expect(
+      coverageScopeDiffs({ ...loaded, exclude: [...exclude].reverse() }),
+    ).toEqual([]);
+  });
+
+  // Controles negativos: a conferência acha cada desvio, e o diz.
+  it.each([
+    {
+      change: 'um exclude a mais (src/erp/**)',
+      copy: { ...loaded, exclude: [...exclude, 'src/erp/**'] },
+      diff: 'exclude a mais: src/erp/**',
+    },
+    {
+      change: 'um exclude a menos (sem src/main/**)',
+      copy: { ...loaded, exclude: exclude.filter((p) => p !== 'src/main/**') },
+      diff: 'exclude sem src/main/**',
+    },
+    {
+      change: 'um exclude repetido',
+      copy: { ...loaded, exclude: [...exclude, 'src/db/types/**'] },
+      diff: 'exclude a mais: src/db/types/**',
+    },
+    {
+      change: 'o include mais estreito (src/http/**/*.ts)',
+      copy: { ...loaded, include: ['src/http/**/*.ts'] },
+      diff: 'include a mais: src/http/**/*.ts',
+    },
+    {
+      change: 'um include a mais (src/**/*.ts repetido)',
+      copy: { ...loaded, include: ['src/**/*.ts', 'src/**/*.ts'] },
+      diff: 'include a mais: src/**/*.ts',
+    },
+    {
+      change: 'o include como texto, e não como lista',
+      copy: { ...loaded, include: 'src/**/*.ts' },
+      diff: 'include não é uma lista',
+    },
+    {
+      change: 'a chave ignoreClassMethods',
+      copy: { ...loaded, ignoreClassMethods: ['x'] },
+      diff: 'chave a mais: ignoreClassMethods',
+    },
+    {
+      change: 'a chave excludeAfterRemap',
+      copy: { ...loaded, excludeAfterRemap: true },
+      diff: 'chave a mais: excludeAfterRemap',
+    },
+    {
+      change: 'a chave allowExternal',
+      copy: { ...loaded, allowExternal: true },
+      diff: 'chave a mais: allowExternal',
+    },
+    {
+      change: 'sem a chave thresholds',
+      copy: Object.fromEntries(
+        Object.entries(loaded).filter(([key]) => key !== 'thresholds'),
+      ),
+      diff: 'chave faltando: thresholds',
+    },
+  ])(
+    'AI-37 controle negativo: a conferência do escopo reprova $change',
+    ({ copy, diff }) => {
+      expect(coverageScopeDiffs(copy)).toContain(diff);
+    },
+  );
+
+  it('AI-37 controle negativo: a conferência reprova um coverage ausente', () => {
+    expect(coverageScopeDiffs(undefined)).not.toEqual([]);
+  });
+});
+
 describe('AI-37 o vitest.config.ts declara a cobertura', () => {
   it('AI-37 o provider da cobertura é o v8', () => {
     expect(coverage?.provider).toBe('v8');
