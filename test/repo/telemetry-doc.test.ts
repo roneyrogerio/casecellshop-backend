@@ -12,7 +12,7 @@ import { repoRoot } from '../helpers/repo-root.ts';
 import { runTelemetryDoc } from '../helpers/telemetry-doc-cli.ts';
 
 // OBS-07 (AD-029), item "Documentação" e controle negativo: o telemetry.md commitado é o que o gerador escreve hoje
-// a partir do agregado de scripts/telemetry-catalog.ts, e o design.md aponta para ele.
+// a partir do agregado de scripts/telemetry-catalog.ts. O design.md não é lido aqui: está na DOCS_ONLY_PATHS (AI-53).
 
 const FEATURE = join(repoRoot, '.specs', 'features', 'casecellshop');
 
@@ -30,13 +30,6 @@ function readText(file: string): string {
   } catch {
     return '';
   }
-}
-
-function section(markdown: string, heading: string): string {
-  const start = markdown.indexOf(`\n## ${heading}`);
-  if (start === -1) return '';
-  const next = markdown.indexOf('\n## ', start + 1);
-  return markdown.slice(start, next === -1 ? undefined : next);
 }
 
 describe('OBS-07 a documentação gerada do catálogo de telemetria', () => {
@@ -59,14 +52,6 @@ describe('OBS-07 a documentação gerada do catálogo de telemetria', () => {
     const result = runTelemetryDoc('--check');
 
     expect(result.status, result.stderr).toBe(0);
-  });
-
-  it('OBS-07 o design.md aponta para o telemetry.md na seção Observabilidade', () => {
-    const design = readText(join(FEATURE, 'design.md'));
-    const observability = section(design, 'Observabilidade');
-
-    expect(observability).not.toBe('');
-    expect(observability).toMatch(/\]\((?:\.\/)?telemetry\.md(?:#[^)]*)?\)/);
   });
 
   it('OBS-07 o script telemetry-doc do package.json roda o gerador', () => {

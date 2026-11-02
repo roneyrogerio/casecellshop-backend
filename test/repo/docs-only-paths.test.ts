@@ -297,6 +297,22 @@ const EXCEPTIONS: Exception[] = [
     reason: 'lê só o spec.md, que não está na lista',
   },
   {
+    file: 'scripts/generate-telemetry-doc.test.ts',
+    citations: ['../../project/STATE.md', 'STATE.md'],
+    reason:
+      'o texto de um link no cabeçalho esperado do Markdown gerado; nenhum STATE.md é lido',
+  },
+  {
+    file: 'scripts/generate-telemetry-doc.ts',
+    citations: [
+      '../../project/STATE.md',
+      '../.specs/features/casecellshop/telemetry.md',
+      'STATE.md',
+    ],
+    reason:
+      'escreve e compara só o telemetry.md, que não está na lista; STATE.md e seu caminho são o texto de um link no cabeçalho do Markdown gerado, e nada é lido',
+  },
+  {
     file: 'test/repo/ci-jobs.test.ts',
     citations: [
       '*README.md',
@@ -338,6 +354,11 @@ const EXCEPTIONS: Exception[] = [
     file: 'test/repo/suppressions.test.ts',
     citations: ['migrations/README.md'],
     reason: 'outro arquivo (migrations/README.md), que não está na lista',
+  },
+  {
+    file: 'test/repo/telemetry-doc.test.ts',
+    citations: ['.specs'],
+    reason: 'lê só o telemetry.md sob .specs, que não está na lista',
   },
 ];
 
