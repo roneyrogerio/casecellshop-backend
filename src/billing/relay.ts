@@ -1,3 +1,12 @@
+import {
+  ROOT_CONTEXT,
+  SpanKind,
+  SpanStatusCode,
+  defaultTextMapGetter,
+  isSpanContextValid,
+  trace,
+  type Link,
+} from '@opentelemetry/api';
 import type { Pool } from 'pg';
 import { sql, type Kysely, type Transaction } from 'kysely';
 import { BillingMessage } from '../contract/billing-message.ts';
@@ -6,7 +15,16 @@ import type { OutgoingMessage, Queue } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
 import { eventLogger, type AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
-import type { Telemetry } from '../shared/telemetry.ts';
+import { propagator, type Telemetry } from '../shared/telemetry.ts';
+import {
+  ATTR_MESSAGING_BATCH_MESSAGE_COUNT,
+  ATTR_MESSAGING_DESTINATION_NAME,
+  ATTR_MESSAGING_OPERATION_NAME,
+  ATTR_MESSAGING_OPERATION_TYPE,
+  ATTR_MESSAGING_SYSTEM,
+  MESSAGING_OPERATION_TYPE_VALUE_SEND,
+  MESSAGING_SYSTEM_VALUE_AWS_SQS,
+} from './messaging-attributes.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Message Relay (Polling Publisher): publica no SQS as linhas da outbox ainda não
@@ -77,11 +95,56 @@ function toOutgoing(logger: AppLogger, rows: OutboxRow[]): OutgoingMessage[] {
   });
 }
 
+// Um link por mensagem para o contexto do checkout que gravou o traceparent: o span de envio
+// não é filho dele (o envio é do relay), e a convenção de mensageria manda ligar os dois.
+function creationLinks(messages: OutgoingMessage[]): Link[] {
+  return messages.flatMap(({ traceparent }) => {
+    if (!traceparent) return [];
+    const context = trace.getSpanContext(
+      propagator.extract(ROOT_CONTEXT, { traceparent }, defaultTextMapGetter),
+    );
+    return context && isSpanContextValid(context) ? [{ context }] : [];
+  });
+}
+
+// Um span `send billing` por SendMessageBatch (convenção de mensageria do OpenTelemetry).
+function sendTraced(
+  { queue, telemetry }: Context,
+  outgoing: OutgoingMessage[],
+): Promise<{ failedIds: string[] }> {
+  return telemetry.tracer.startActiveSpan(
+    'send billing',
+    {
+      kind: SpanKind.CLIENT,
+      links: creationLinks(outgoing),
+      attributes: {
+        [ATTR_MESSAGING_SYSTEM]: MESSAGING_SYSTEM_VALUE_AWS_SQS,
+        [ATTR_MESSAGING_OPERATION_NAME]: 'send',
+        [ATTR_MESSAGING_OPERATION_TYPE]: MESSAGING_OPERATION_TYPE_VALUE_SEND,
+        [ATTR_MESSAGING_DESTINATION_NAME]: 'billing',
+        [ATTR_MESSAGING_BATCH_MESSAGE_COUNT]: outgoing.length,
+      },
+    },
+    async (span) => {
+      try {
+        return await queue.send(outgoing);
+      } catch (error) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        if (error instanceof Error) span.recordException(error);
+        throw error;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
 // Devolve as linhas lidas e as publicadas: a diferença decide se o lote veio cheio.
 async function publishBatch(
-  { queue, logger, telemetry, settings }: Context,
+  ctx: Context,
   trx: Transaction<StoreDb>,
 ): Promise<{ read: number; published: number }> {
+  const { logger, telemetry, settings } = ctx;
   // SKIP LOCKED: dois relés levam lotes diferentes, sem um esperar o outro.
   const rows = await trx
     .selectFrom('outbox')
@@ -96,7 +159,7 @@ async function publishBatch(
 
   const outgoing = toOutgoing(logger, rows);
   if (outgoing.length === 0) return { read: rows.length, published: 0 };
-  const { failedIds } = await queue.send(outgoing);
+  const { failedIds } = await sendTraced(ctx, outgoing);
   const failed = new Set(failedIds);
   const accepted = outgoing
     .map((message) => message.id)

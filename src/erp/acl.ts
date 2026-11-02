@@ -1,3 +1,5 @@
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
 import type { Clock } from '../shared/clock.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
@@ -115,9 +117,53 @@ async function call(
   }
 }
 
+// Desfechos de falha técnica: marcam o span com erro. As recusas de negócio (`permanent`) e
+// o `not_found` são respostas esperadas do ERP, e a instrumentação as deixa com status Unset.
+const TECHNICAL_FAILURES: readonly ErpOutcome[] = [
+  'transient',
+  'ambiguous',
+  'config_error',
+];
+
+// Um span CLIENT por chamada, filho do span ativo (a tentativa do worker). Cobre a chamada
+// inteira, inclusive a espera até o timeout, e fecha também quando a classificação lança.
+function traceCall<T extends { kind: ErpOutcome }>(
+  telemetry: Telemetry,
+  operation: ErpOperation,
+  run: () => Promise<T>,
+): Promise<T> {
+  return telemetry.tracer.startActiveSpan(
+    `erp.${operation}`,
+    {
+      kind: SpanKind.CLIENT,
+      attributes: { 'casecellshop.erp.operation': operation },
+    },
+    async (span) => {
+      try {
+        const result = await run();
+        span.setAttribute('casecellshop.erp.outcome', result.kind);
+        if (TECHNICAL_FAILURES.includes(result.kind)) {
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          span.setAttribute(ATTR_ERROR_TYPE, result.kind);
+        }
+        return result;
+      } catch (error) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        if (error instanceof Error) {
+          span.setAttribute(ATTR_ERROR_TYPE, error.name);
+          span.recordException(error);
+        }
+        throw error;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
 // Mede cada operação sem mudar o resultado: duração e contagem por desfecho, a gauge de
-// chamadas em voo. O desfecho (inclusive `config_error`) é atributo do histograma, cujo `_count` conta as
-// chamadas. Sem `telemetry`, só repassa.
+// chamadas em voo e o span da chamada. O desfecho (inclusive `config_error`) é atributo do
+// histograma, cujo `_count` conta as chamadas. Sem `telemetry`, só repassa.
 async function observe<T extends { kind: ErpOutcome }>(
   { clock, telemetry }: ErpClientOptions,
   operation: ErpOperation,
@@ -129,7 +175,7 @@ async function observe<T extends { kind: ErpOutcome }>(
   metrics.add('casecellshop.erp.client.active_operations', 1);
   let result: T | undefined;
   try {
-    result = await run();
+    result = await traceCall(telemetry, operation, run);
     return result;
   } finally {
     metrics.add('casecellshop.erp.client.active_operations', -1);
