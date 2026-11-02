@@ -25,7 +25,7 @@ Vitrine:
 | Custo | Baixo | Médio: um banco e um worker | Alto: conector, broker e acesso de replicação |
 | Complexidade | Baixa | Média | Alta |
 | Latência | Boa no acerto; a falta chama o ERP | Boa sempre: a origem é um banco local | Boa sempre |
-| Consistência | Expira e volta ao ERP; um stampede na expiração derruba o ERP | Defasagem limitada: até 65,5 s mais uma rodada, com o ERP respondendo | Segundos |
+| Consistência | Expira e volta ao ERP; um stampede na expiração derruba o ERP | Defasagem limitada: até 65,5 s mais a duração de uma rodada, com o ERP respondendo | Segundos |
 | Esforço operacional | Baixo | Médio: a rodada de sincronização e o alerta de idade | Alto: binlog, replicação e um broker para operar |
 
 A leitura direta do MySQL do ERP, que o enunciado permite, foi descartada: as tabelas internas não são contrato, e a carga continuaria no banco que fatura; fica só como plano B da consulta por referência.
