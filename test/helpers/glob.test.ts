@@ -621,7 +621,7 @@ describe('FND-13 globMatch', () => {
   );
 
   it.each(CLASS_MEMBERS)(
-    'FND-13 o ] logo depois do [ (ou do [!) é membro da classe, e ] ^ \\ membros são escapados: $glob',
+    'FND-13 o ] logo depois do [ (ou do [!) é membro da classe, e ] e ^ membros casam como qualquer outro: $glob',
     (testCase) => {
       expectCase(testCase);
     },
@@ -635,7 +635,7 @@ describe('FND-13 globMatch', () => {
   );
 
   it.each(EMPTY_RANGES)(
-    'FND-13 o intervalo invertido é vazio, e não um erro de expressão regular: $glob',
+    'FND-13 o intervalo invertido é vazio, e não um erro: $glob',
     (testCase) => {
       expectCase(testCase);
     },
