@@ -1,6 +1,7 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
+import { countingInvoices } from '../../test/helpers/invoice-reader.ts';
 import {
   histogramCount,
   metricValue,
@@ -63,6 +64,8 @@ function clientOver(respond: () => Promise<ErpResponse>) {
     clock: createManualClock(),
     timeoutMs: 10_000,
     telemetry,
+    // Estes testes não exercitam a contagem de faturas (AD-031): o leitor só satisfaz a opção obrigatória.
+    invoiceReader: countingInvoices(),
   });
   return { client, telemetry, sends: () => sends };
 }
