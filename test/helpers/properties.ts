@@ -18,8 +18,11 @@ export function expectFalsified<T>(property: fc.IPropertyWithHooks<T>): void {
   expect(fc.check(property).failed).toBe(true);
 }
 
+// `parameters` fixa a semente e o número de casos do próprio controle, para que ele não dependa do que o ambiente
+// (agendado) configurou globalmente.
 export async function expectFalsifiedAsync<T>(
   property: fc.IAsyncPropertyWithHooks<T>,
+  parameters?: fc.Parameters<T>,
 ): Promise<void> {
-  expect((await fc.check(property)).failed).toBe(true);
+  expect((await fc.check(property, parameters)).failed).toBe(true);
 }

@@ -9,6 +9,7 @@ import {
   vi,
 } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { settle, WAIT_GUARD_MS } from '../../helpers/async.ts';
 import {
   ERP_TIMEOUT_MS,
@@ -369,7 +370,7 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
     const relay = createRelay({
       pool: world.pool,
       queue: world.queues.queue,
-      logger: pino({ level: 'silent' }),
+      logger: fromPino(pino({ level: 'silent' })),
       telemetry: world.telemetry,
       clock: world.clock,
     });
@@ -397,7 +398,7 @@ describe('ORD-22 a mensagem repetida não gera segunda fatura', () => {
 
     // A tentativa que ganhar a permissão fica presa na chamada ao ERP (depois de a fatura nascer, antes de a
     // resposta voltar) até a outra ser adiada. Sem isso, sob carga a primeira conclui antes de a segunda ler o
-    // status do pedido, e a segunda apagaria a mensagem como `outbox.closed` sem nunca disputar a permissão.
+    // status do pedido, e a segunda apagaria a mensagem como `casecellshop.outbox.closed` sem nunca disputar a permissão.
     let held = false;
     world.transport.afterErp(
       { op: 'createOrder', reference: order.orderId },

@@ -13,6 +13,7 @@ interface ComposeService {
   profiles?: unknown;
   command?: unknown;
   ports?: unknown;
+  restart?: unknown;
 }
 
 interface ComposeFile {
@@ -286,13 +287,15 @@ function fuzzServiceViolations(compose: ComposeFile): string[] {
     violations.push(
       `image ${String(service.image)} não é a oficial fixada por versão X.Y.Z e digest sha256`,
     );
-  const depends = service.depends_on;
-  const api =
-    depends !== undefined && !Array.isArray(depends)
-      ? (depends['api'] as { condition?: unknown } | undefined)
-      : undefined;
-  if (api?.condition !== 'service_healthy')
+  if (dependencyCondition(service, 'api') !== 'service_healthy')
     violations.push('não espera a api com condition: service_healthy');
+  if (
+    dependencyCondition(service, 'catalog-ready') !==
+    'service_completed_successfully'
+  )
+    violations.push(
+      'não espera o catalog-ready com condition: service_completed_successfully',
+    );
   const volumes = service.volumes ?? [];
   if (!volumes.includes(SCHEMA_MOUNT))
     violations.push(`falta o volume ${SCHEMA_MOUNT} (só leitura)`);
@@ -303,23 +306,85 @@ function fuzzServiceViolations(compose: ComposeFile): string[] {
   return [...violations, ...fuzzCommandViolations(service.command)];
 }
 
-// Fora do perfil `fuzz` o `docker compose up` deve subir tudo menos o schemathesis: nenhum outro serviço tem perfil.
+function dependencyCondition(service: ComposeService, name: string): unknown {
+  const depends = service.depends_on;
+  if (depends === undefined || Array.isArray(depends)) return undefined;
+  return (depends[name] as { condition?: unknown } | undefined)?.condition;
+}
+
+// O catalog-ready segura o fuzzing até a primeira rodada da sincronização encher o catálogo.
+function catalogReadyViolations(compose: ComposeFile): string[] {
+  const service = compose.services?.['catalog-ready'];
+  if (service === undefined) return ['falta o serviço catalog-ready'];
+  const violations: string[] = [];
+  if (JSON.stringify(service.profiles) !== '["fuzz"]')
+    violations.push('profiles não é só [fuzz]');
+  if (dependencyCondition(service, 'api') !== 'service_healthy')
+    violations.push('não espera a api com condition: service_healthy');
+  if (dependencyCondition(service, 'worker') !== 'service_started')
+    violations.push('não espera o worker com condition: service_started');
+  if (service.restart !== 'no') violations.push('restart não é "no"');
+  if (service.ports !== undefined)
+    violations.push('publica portas: deve falar pela rede do compose');
+  const command = service.command;
+  if (
+    !Array.isArray(command) ||
+    command.length !== 3 ||
+    command[0] !== 'node' ||
+    command[1] !== '-e' ||
+    typeof command[2] !== 'string'
+  )
+    return [...violations, 'o command não é node -e <script>'];
+  const script = command[2];
+  if (!script.includes('http://api:3000/products'))
+    violations.push('o script não consulta http://api:3000/products');
+  if (!/\b200\b/.test(script))
+    violations.push('o script não espera o status 200');
+  if (!/process\.exit\(0\)/.test(script))
+    violations.push('o script não termina com 0 no sucesso');
+  if (!/process\.exit\(1\)/.test(script))
+    violations.push('o script não termina com 1 no prazo estourado');
+  if (!/120000|120_000|120\s*\*\s*1000/.test(script))
+    violations.push('o script não limita a espera a 120 s');
+  return violations;
+}
+
+// Fora do perfil `fuzz` o `docker compose up` deve subir tudo menos o fuzzing: só o schemathesis e o catalog-ready têm perfil.
 function profiledOthers(compose: ComposeFile): string[] {
   return Object.entries(compose.services ?? {})
     .filter(
-      ([name, svc]) => name !== 'schemathesis' && svc.profiles !== undefined,
+      ([name, svc]) =>
+        name !== 'schemathesis' &&
+        name !== 'catalog-ready' &&
+        svc.profiles !== undefined,
     )
     .map(([name]) => name);
 }
+
+const CATALOG_READY_SCRIPT =
+  "const end = Date.now() + 120000; (async () => { for (;;) { const r = await fetch('http://api:3000/products').catch(() => undefined); if (r?.status === 200) process.exit(0); if (Date.now() > end) process.exit(1); await new Promise((s) => setTimeout(s, 1000)); } })()";
 
 function goodFuzzCompose(): ComposeFile {
   return {
     services: {
       api: { image: 'api:1' },
+      worker: { image: 'worker:1' },
+      'catalog-ready': {
+        profiles: ['fuzz'],
+        command: ['node', '-e', CATALOG_READY_SCRIPT],
+        depends_on: {
+          api: { condition: 'service_healthy' },
+          worker: { condition: 'service_started' },
+        },
+        restart: 'no',
+      },
       schemathesis: {
         profiles: ['fuzz'],
         image: `ghcr.io/schemathesis/schemathesis:4.2.0@sha256:${'a'.repeat(64)}`,
-        depends_on: { api: { condition: 'service_healthy' } },
+        depends_on: {
+          api: { condition: 'service_healthy' },
+          'catalog-ready': { condition: 'service_completed_successfully' },
+        },
         volumes: [SCHEMA_MOUNT, REPORT_MOUNT],
         command: [
           'run',
@@ -357,11 +422,34 @@ function swapArg(service: ComposeService, from: string, to: string): void {
   command[at] = to;
 }
 
+// Os dois serviços do fuzzing têm de estar só no perfil fuzz.
+const PROFILE_CASES: [string, (service: ComposeService) => void][] = [
+  [
+    'sem o perfil fuzz',
+    (s) => {
+      delete s.profiles;
+    },
+  ],
+  [
+    'em outro perfil',
+    (s) => {
+      s.profiles = ['dev'];
+    },
+  ],
+  [
+    'em dois perfis',
+    (s) => {
+      s.profiles = ['fuzz', 'dev'];
+    },
+  ],
+];
+
 describe('FND-16 as conferências do serviço schemathesis enxergam o que procuram (controle negativo)', () => {
   it('FND-16 o serviço correto passa (controle positivo)', () => {
     const compose = goodFuzzCompose();
 
     expect(fuzzServiceViolations(compose)).toEqual([]);
+    expect(catalogReadyViolations(compose)).toEqual([]);
     expect(profiledOthers(compose)).toEqual([]);
   });
 
@@ -371,25 +459,17 @@ describe('FND-16 as conferências do serviço schemathesis enxergam o que procur
     ]);
   });
 
+  it('FND-16 sem o serviço catalog-ready, reprova', () => {
+    const compose = goodFuzzCompose();
+    delete compose.services?.['catalog-ready'];
+
+    expect(catalogReadyViolations(compose)).toEqual([
+      'falta o serviço catalog-ready',
+    ]);
+  });
+
   it.each<[string, (service: ComposeService) => void]>([
-    [
-      'sem o perfil fuzz',
-      (s) => {
-        delete s.profiles;
-      },
-    ],
-    [
-      'em outro perfil',
-      (s) => {
-        s.profiles = ['dev'];
-      },
-    ],
-    [
-      'em dois perfis',
-      (s) => {
-        s.profiles = ['fuzz', 'dev'];
-      },
-    ],
+    ...PROFILE_CASES,
     [
       'com a imagem só por tag',
       (s) => {
@@ -448,6 +528,38 @@ describe('FND-16 as conferências do serviço schemathesis enxergam o que procur
       'esperando outro serviço',
       (s) => {
         s.depends_on = { migrate: { condition: 'service_healthy' } };
+      },
+    ],
+    [
+      'sem esperar o catalog-ready',
+      (s) => {
+        s.depends_on = { api: { condition: 'service_healthy' } };
+      },
+    ],
+    [
+      'esperando o catalog-ready só iniciar',
+      (s) => {
+        s.depends_on = {
+          api: { condition: 'service_healthy' },
+          'catalog-ready': { condition: 'service_started' },
+        };
+      },
+    ],
+    [
+      'esperando o catalog-ready ficar saudável (ele não tem healthcheck)',
+      (s) => {
+        s.depends_on = {
+          api: { condition: 'service_healthy' },
+          'catalog-ready': { condition: 'service_healthy' },
+        };
+      },
+    ],
+    [
+      'esperando só o catalog-ready, sem a api saudável',
+      (s) => {
+        s.depends_on = {
+          'catalog-ready': { condition: 'service_completed_successfully' },
+        };
       },
     ],
     [
@@ -585,6 +697,107 @@ describe('FND-16 as conferências do serviço schemathesis enxergam o que procur
 
     expect(profiledOthers(compose)).toEqual(['api']);
   });
+
+  it.each<[string, (service: ComposeService) => void]>([
+    ...PROFILE_CASES,
+    [
+      'sem depends_on',
+      (s) => {
+        delete s.depends_on;
+      },
+    ],
+    [
+      'sem esperar o worker',
+      (s) => {
+        s.depends_on = { api: { condition: 'service_healthy' } };
+      },
+    ],
+    [
+      'esperando o worker ficar saudável (ele não tem healthcheck)',
+      (s) => {
+        s.depends_on = {
+          api: { condition: 'service_healthy' },
+          worker: { condition: 'service_healthy' },
+        };
+      },
+    ],
+    [
+      'esperando a api só iniciar',
+      (s) => {
+        s.depends_on = {
+          api: { condition: 'service_started' },
+          worker: { condition: 'service_started' },
+        };
+      },
+    ],
+    [
+      'sem esperar a api',
+      (s) => {
+        s.depends_on = { worker: { condition: 'service_started' } };
+      },
+    ],
+    [
+      'reiniciando sozinho',
+      (s) => {
+        s.restart = 'unless-stopped';
+      },
+    ],
+    [
+      'publicando uma porta no host',
+      (s) => {
+        s.ports = ['3000:3000'];
+      },
+    ],
+    [
+      'consultando a API pelo endereço do host',
+      (s) => {
+        s.command = [
+          'node',
+          '-e',
+          CATALOG_READY_SCRIPT.replace(
+            'http://api:3000/products',
+            'http://localhost:3000/products',
+          ),
+        ];
+      },
+    ],
+    [
+      'consultando outra rota que não o /products',
+      (s) => {
+        s.command = [
+          'node',
+          '-e',
+          CATALOG_READY_SCRIPT.replace(
+            'http://api:3000/products',
+            'http://api:3000/health',
+          ),
+        ];
+      },
+    ],
+    [
+      'sem terminar com 1 depois do prazo',
+      (s) => {
+        s.command = [
+          'node',
+          '-e',
+          CATALOG_READY_SCRIPT.replace('process.exit(1)', 'process.exit(0)'),
+        ];
+      },
+    ],
+    [
+      'com o command em texto',
+      (s) => {
+        s.command = `node -e "${CATALOG_READY_SCRIPT}"`;
+      },
+    ],
+  ])('FND-16 o catalog-ready %s reprova', (_label, change) => {
+    const compose = goodFuzzCompose();
+    const service = compose.services?.['catalog-ready'];
+    if (service === undefined) throw new Error('linha de base sem o serviço');
+    change(service);
+
+    expect(catalogReadyViolations(compose)).not.toEqual([]);
+  });
 });
 
 describe('FND-16 o serviço schemathesis do compose.yaml', () => {
@@ -592,12 +805,90 @@ describe('FND-16 o serviço schemathesis do compose.yaml', () => {
     readFileSync(join(root, 'compose.yaml'), 'utf8'),
   ) as ComposeFile;
 
-  it('FND-16 usa o perfil fuzz, a imagem oficial por versão e digest, a API saudável, o contrato só para leitura e a rede do compose', () => {
+  it('FND-16 usa o perfil fuzz, a imagem oficial por versão e digest, a API saudável, o catalog-ready concluído, o contrato só para leitura e a rede do compose', () => {
     expect(fuzzServiceViolations(compose)).toEqual([]);
   });
 
-  it('FND-16 só o schemathesis tem perfil: o docker compose up sem perfil sobe os demais serviços e deixa o fuzzing de fora', () => {
+  it('FND-16 o catalog-ready espera a api saudável e o worker iniciado, consulta http://api:3000/products e não reinicia', () => {
+    expect(catalogReadyViolations(compose)).toEqual([]);
+  });
+
+  it('FND-16 só o schemathesis e o catalog-ready têm perfil, e só o fuzz: o docker compose up sem perfil sobe os demais serviços', () => {
     expect(compose.services?.['schemathesis']?.profiles).toEqual(['fuzz']);
+    expect(compose.services?.['catalog-ready']?.profiles).toEqual(['fuzz']);
     expect(profiledOthers(compose)).toEqual([]);
+  });
+});
+
+// --- AI-45: o Jaeger vem do Docker Hub, que o Dependabot lê sem credencial --------------------------------------------
+
+// Forma sem prefixo de registro, como as outras imagens do Docker Hub do arquivo. Versão e digest ficam
+// livres: o Dependabot os sobe, e a versão mora só no compose.yaml.
+const JAEGER_IMAGE =
+  /^jaegertracing\/jaeger:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
+
+// O cr.jaegertracing.io serve a mesma imagem, mas o Dependabot o trata como registro privado sem
+// credencial (private_source_authentication_failure) e a falha derruba a atualização do grupo inteiro.
+// Só por tag, nada impede que a tag passe a apontar outra imagem; só por digest, o Dependabot não acha a versão.
+function jaegerViolations(compose: ComposeFile): string[] {
+  const service = compose.services?.['jaeger'];
+  if (service === undefined) return ['falta o serviço jaeger'];
+  if (JAEGER_IMAGE.test(service.image ?? '')) return [];
+  return [
+    `image ${String(service.image)} não é jaegertracing/jaeger do Docker Hub fixada por versão X.Y.Z e digest sha256 juntos`,
+  ];
+}
+
+function jaegerWith(image: string): ComposeFile {
+  return { services: { jaeger: { image } } };
+}
+
+const JAEGER_DIGEST = `sha256:${'a'.repeat(64)}`;
+
+describe('AI-45 a conferência do Jaeger do compose enxerga o que procura (controle negativo)', () => {
+  it('AI-45 o Jaeger do Docker Hub com versão e digest passa (controle positivo)', () => {
+    expect(
+      jaegerViolations(
+        jaegerWith(`jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`),
+      ),
+    ).toEqual([]);
+  });
+
+  it('AI-45 sem o serviço jaeger, reprova', () => {
+    expect(jaegerViolations({ services: {} })).toEqual([
+      'falta o serviço jaeger',
+    ]);
+  });
+
+  it.each<[string, string]>([
+    [
+      'pelo cr.jaegertracing.io só por tag',
+      'cr.jaegertracing.io/jaegertracing/jaeger:2.22.0',
+    ],
+    [
+      'pelo cr.jaegertracing.io com versão e digest',
+      `cr.jaegertracing.io/jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`,
+    ],
+    ['só por tag no Docker Hub', 'jaegertracing/jaeger:2.22.0'],
+    ['só por digest, sem tag', `jaegertracing/jaeger@${JAEGER_DIGEST}`],
+    ['com a tag latest', 'jaegertracing/jaeger:latest'],
+    ['com latest e digest', `jaegertracing/jaeger:latest@${JAEGER_DIGEST}`],
+    [
+      'com o digest curto',
+      `jaegertracing/jaeger:2.22.0@sha256:${'a'.repeat(63)}`,
+    ],
+    ['pelo Quay', `quay.io/jaegertracing/jaeger:2.22.0@${JAEGER_DIGEST}`],
+  ])('AI-45 o Jaeger %s reprova', (_name, image) => {
+    expect(jaegerViolations(jaegerWith(image))).not.toEqual([]);
+  });
+});
+
+describe('AI-45 o Jaeger do compose.yaml', () => {
+  const compose = parse(
+    readFileSync(join(root, 'compose.yaml'), 'utf8'),
+  ) as ComposeFile;
+
+  it('AI-45 vem do Docker Hub (jaegertracing/jaeger), fixado por versão e digest juntos, para o Dependabot ler sem credencial', () => {
+    expect(jaegerViolations(compose)).toEqual([]);
   });
 });

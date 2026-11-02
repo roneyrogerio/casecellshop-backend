@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#test-helpers/*": "./test/helpers/*"
+  },
   "engines": {
     "node": ">=24.12.0"
   },
@@ -19,6 +22,7 @@
     "lint": "oxlint --ignore-path .gitignore",
     "typecheck": "tsc --noEmit",
     "openapi": "node scripts/generate-openapi.ts",
+    "telemetry-doc": "node scripts/generate-telemetry-doc.ts",
     "lint:openapi": "redocly lint openapi.yaml",
     "lint:commits": "commitlint --from origin/main --to HEAD",
     "test:changed": "vitest run --changed",
@@ -47,6 +51,7 @@
     "@opentelemetry/resources": "3.0.0",
     "@opentelemetry/sdk-metrics": "3.0.0",
     "@opentelemetry/sdk-trace": "3.0.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
     "express": "5.3.0",
     "kysely": "0.29.7",
     "pg": "8.23.1",
@@ -59,6 +64,9 @@
     "@commitlint/config-conventional": "21.2.4",
     "@inquirer/input": "5.1.9",
     "@inquirer/select": "5.2.8",
+    "@lezer/highlight": "1.2.5",
+    "@lezer/lr": "1.4.11",
+    "@prometheus-io/lezer-promql": "0.315.1",
     "@redocly/cli": "2.72.1",
     "@testcontainers/postgresql": "12.2.1",
     "@types/express": "5.0.6",
@@ -67,9 +75,11 @@
     "@types/supertest": "7.2.1",
     "@vitest/coverage-v8": "5.0.5",
     "fast-check": "4.10.2",
+    "github-slugger": "2.0.0",
     "jscpd": "5.4.2",
     "knip": "6.43.0",
     "kysely-codegen": "0.20.0",
+    "mdast-util-from-markdown": "2.1.0",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
     "prettier": "3.9.10",

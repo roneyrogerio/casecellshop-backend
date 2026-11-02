@@ -170,7 +170,8 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
 
     const result = await client.createOrder(orderFor(reference, sku, 2));
 
-    expect(result).toEqual({ kind: 'permanent', reason: 'out_of_stock' });
+    // O simulador aponta o SKU no corpo do 422, e a porta o leva para o log (OBS-01).
+    expect(result).toEqual({ kind: 'permanent', reason: 'out_of_stock', sku });
     expect(await countInvoices(database.pool, reference)).toBe(0);
     expect(await erpOnHand(database.pool, sku)).toBe(1);
   });
@@ -184,6 +185,7 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
     expect(await client.createOrder(orderFor(reference, sku, 1))).toEqual({
       kind: 'permanent',
       reason: 'out_of_stock',
+      sku,
     });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
@@ -191,12 +193,15 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
   it('ORD-21 SKU desconhecido do ERP é permanent rejected, sem fatura', async () => {
     const { client } = createErpHarness(database.erpPool);
     const reference = uniqueName('pedido-sku-desconhecido');
+    const unknown = uniqueName('SKU-QUE-NAO-EXISTE');
 
-    const result = await client.createOrder(
-      orderFor(reference, uniqueName('SKU-QUE-NAO-EXISTE')),
-    );
+    const result = await client.createOrder(orderFor(reference, unknown));
 
-    expect(result).toEqual({ kind: 'permanent', reason: 'rejected' });
+    expect(result).toEqual({
+      kind: 'permanent',
+      reason: 'rejected',
+      sku: unknown,
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
   });
 
@@ -216,7 +221,12 @@ describe('H2: o ERP recusa faturar sem estoque', () => {
       ],
     });
 
-    expect(result).toEqual({ kind: 'permanent', reason: 'out_of_stock' });
+    // O SKU do corpo do 422 é o que parou a baixa: o item sem estoque.
+    expect(result).toEqual({
+      kind: 'permanent',
+      reason: 'out_of_stock',
+      sku: withoutStock,
+    });
     expect(await countInvoices(database.pool, reference)).toBe(0);
     expect(await erpOnHand(database.pool, withStock)).toBe(10);
   });

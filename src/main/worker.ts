@@ -2,6 +2,11 @@ import { createServer } from 'node:http';
 import { createReconciler } from '../billing/reconciliation.ts';
 import { createRelay } from '../billing/relay.ts';
 import { createWorker, DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
+import { billingMetrics } from '../billing/telemetry.ts';
+import { DEFAULT_CATALOG_SYNC_CONFIG } from '../catalog/config.ts';
+import { catalogMetrics } from '../catalog/telemetry.ts';
+import { erpMetrics } from '../erp/telemetry.ts';
+import { createCatalogSync } from '../catalog/sync.ts';
 import { createQueue } from '../queue/sqs.ts';
 import { createSqsClientFromEnv } from './sqs-client.ts';
 import { createPool } from '../db/pool.ts';
@@ -10,12 +15,18 @@ import { createSimulatedErp } from '../erp/sim/index.ts';
 import { systemClock } from '../shared/clock.ts';
 import { envChoice, envPort, requireEnv } from '../shared/config.ts';
 import { installGracefulShutdown } from '../shared/lifecycle.ts';
-import { createLogger } from '../shared/logging.ts';
+import { createLogger, eventLogger } from '../shared/logging.ts';
 import { createSemaphore } from '../shared/semaphore.ts';
 import { createTelemetry } from '../shared/telemetry.ts';
+import { MAIN_LOG_EVENTS } from './telemetry.ts';
 
 const logger = createLogger({ serviceName: 'casecellshop-worker' });
 const telemetry = createTelemetry({ serviceName: 'casecellshop-worker' });
+// OBS-08: cria já na subida os instrumentos que esta entrada grava, para as séries nascerem em 0 sem depender da
+// ordem em que os módulos os pedem (o `increase()` não conta o primeiro evento de uma série que nasce com ele).
+billingMetrics(telemetry);
+catalogMetrics(telemetry);
+erpMetrics(telemetry);
 const databaseUrl = requireEnv('DATABASE_URL');
 // Pools separados (10 cada): a chamada ao ERP simulado não disputa conexão com a loja.
 const pool = createPool(databaseUrl, logger);
@@ -72,6 +83,17 @@ const reconciler = createReconciler({
   clock: systemClock,
 });
 
+// A sincronização do catálogo usa o pool da loja e o mesmo semáforo: o limite de chamadas ao ERP vale para o processo.
+const catalogSync = createCatalogSync({
+  pool,
+  erp,
+  semaphore,
+  clock: systemClock,
+  logger,
+  telemetry,
+  config: DEFAULT_CATALOG_SYNC_CONFIG,
+});
+
 // O worker não tem API; expõe só o /metrics.
 const metricsServer = createServer((req, res) => {
   if (req.url === '/metrics') {
@@ -86,18 +108,26 @@ const metricsPort = envPort('WORKER_METRICS_PORT', 9464);
 await worker.start();
 await relay.start();
 await reconciler.start();
+await catalogSync.start();
 metricsServer.listen(metricsPort, () => {
-  logger.info(
-    { event: 'worker_metrics_started', port: metricsPort },
+  eventLogger(logger, MAIN_LOG_EVENTS).info(
+    'casecellshop.worker.metrics_server.started',
+    { port: metricsPort },
     'métricas do worker ouvindo',
   );
 });
 
 installGracefulShutdown({
   logger,
+  clock: systemClock,
   stop: async () => {
     // Em conjunto: parar em sequência somaria as esperas e estouraria o prazo de encerramento.
-    await Promise.all([relay.stop(), reconciler.stop(), worker.stop()]);
+    await Promise.all([
+      relay.stop(),
+      reconciler.stop(),
+      worker.stop(),
+      catalogSync.stop(),
+    ]);
     sqsClient.destroy();
     await new Promise<void>((resolve, reject) => {
       metricsServer.close((error) => {

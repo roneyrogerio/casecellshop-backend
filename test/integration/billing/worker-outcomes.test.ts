@@ -55,6 +55,16 @@ function invoices(orderId: string): Promise<number> {
   return countInvoices(suite.database.pool, orderId);
 }
 
+// O worker só consultou o ERP: a criação não saiu e nenhuma fatura nasceu.
+async function expectLookedUpButNotCreated(
+  world: QueueWorld,
+  order: AcceptedOrder,
+): Promise<void> {
+  expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+  expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
+  expect(await invoices(order.orderId)).toBe(0);
+}
+
 async function getStatus(orderId: string): Promise<unknown> {
   const res = await request(suite.checkout.app).get(
     `/orders/${orderId}/status`,
@@ -304,9 +314,7 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
     world.clock.advance(9_000);
     expect(await poll.result).toBe(1);
 
-    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
-    expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
-    expect(await invoices(order.orderId)).toBe(0);
+    await expectLookedUpButNotCreated(world, order);
     expect(world.queue.deletes).toEqual([]);
     expect(world.queue.visibilityChanges).toEqual([]);
     await expectOneInFlight(world);
@@ -467,10 +475,10 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
     }).pollOnce();
 
     expect(renewals, 'o UPDATE da renovação passou pelo pool injetado').toBe(1);
-    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
-    expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
-    expect(await invoices(order.orderId)).toBe(0);
-    expect(logs.eventsOf('outbox.lease_short', order.orderId)).toHaveLength(1);
+    await expectLookedUpButNotCreated(world, order);
+    expect(
+      logs.eventsOf('casecellshop.outbox.lease.too_short', order.orderId),
+    ).toHaveLength(1);
     expect(world.queue.deletes).toEqual([]);
     expect(world.queue.visibilityChanges).toEqual([]);
     await expectOneInFlight(world);
@@ -563,9 +571,9 @@ describe('ORD-11 visibilidade da mensagem prestes a vencer', () => {
     expect(change?.seconds ?? 0).toBeLessThanOrEqual(
       MIN_RETRY_DELAY_MS / 1000 - 10 + 3,
     );
-    expect(logs.eventsOf('outbox.call_deferred', order.orderId)).toHaveLength(
-      1,
-    );
+    expect(
+      logs.eventsOf('casecellshop.outbox.call.deferred', order.orderId),
+    ).toHaveLength(1);
   });
 });
 

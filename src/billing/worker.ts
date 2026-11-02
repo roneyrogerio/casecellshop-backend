@@ -1,5 +1,4 @@
 import type { Pool } from 'pg';
-import type { Logger } from 'pino';
 import { createDb } from '../db/database.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
 import {
@@ -8,6 +7,8 @@ import {
   type ReceivedMessage,
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
+import type { AppLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import { createSemaphore, type Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
@@ -15,6 +16,8 @@ import { type AttemptContext, runAttempt } from './attempt.ts';
 import { MIN_CALL_DELAY_MS } from './call-permit.ts';
 import type { Attempt, CallSettings } from './erp-call.ts';
 import { parseBillingMessage } from './message.ts';
+import { queueGaugeLifecycle } from './queue-gauge.ts';
+import { BILLING_LOG_EVENTS } from './telemetry.ts';
 
 // Parâmetros da tabela do design.md; os testes sobrepõem só o que precisam.
 export interface WorkerConfig extends CallSettings {
@@ -42,7 +45,7 @@ export interface WorkerDependencies {
   semaphore?: Semaphore;
   // Porta do ERP (camada anticorrupção).
   erp: ErpClient;
-  logger: Logger;
+  logger: AppLogger;
   telemetry: Telemetry;
   clock: Clock;
   // Sorteio do jitter; o teste o fixa.
@@ -70,13 +73,13 @@ interface WorkerContext extends AttemptContext {
 // Corpo fora do schema: a fila é uma entrada como outra qualquer. Não responde ao SQS, para a
 // mensagem voltar e chegar à DLQ pelo limite de recebimentos.
 function rejectInvalid(
-  logger: Logger,
+  logger: AppLogger,
   received: ReceivedMessage,
   orderId: string | undefined,
 ): void {
-  logger.error(
+  eventLogger(logger, BILLING_LOG_EVENTS).error(
+    'casecellshop.outbox.message.rejected',
     {
-      event: 'outbox.invalid_message',
       attempt: received.receiveCount,
       ...(orderId === undefined ? {} : { orderId }),
     },
@@ -160,13 +163,25 @@ async function pollLoop(
       inFlight.add(round.done);
       void round.done.finally(() => inFlight.delete(round.done));
     } catch (error) {
-      ctx.logger.error(
-        { event: 'worker.poll_error', err: error },
+      eventLogger(ctx.logger, BILLING_LOG_EVENTS).error(
+        'casecellshop.worker.poll.failed',
+        { err: error },
         'falha na rodada do worker',
       );
       if (isRunning()) await ctx.clock.sleep(POLL_ERROR_BACKOFF_MS);
     }
   }
+}
+
+function announce(
+  logger: AppLogger,
+  name: 'casecellshop.worker.started' | 'casecellshop.worker.stopped',
+): void {
+  const message =
+    name === 'casecellshop.worker.started'
+      ? 'worker iniciado'
+      : 'worker encerrado';
+  eventLogger(logger, BILLING_LOG_EVENTS).info(name, {}, message);
 }
 
 export function createWorker({
@@ -195,13 +210,18 @@ export function createWorker({
   };
   const inFlight = new Set<Promise<void>>();
 
+  const gauge = queueGaugeLifecycle(telemetry, queue, 'billing', logger);
   const runner = createLoopRunner({
     run: (isRunning) => pollLoop(ctx, inFlight, isRunning),
     drain: () => Promise.all(inFlight),
-    onStarted: () =>
-      logger.info({ event: 'worker_started' }, 'worker iniciado'),
-    onStopped: () =>
-      logger.info({ event: 'worker_stopped' }, 'worker encerrado'),
+    onStarted: () => {
+      gauge.onStarted();
+      announce(logger, 'casecellshop.worker.started');
+    },
+    onStopped: () => {
+      gauge.onStopped();
+      announce(logger, 'casecellshop.worker.stopped');
+    },
   });
 
   return {

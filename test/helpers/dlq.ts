@@ -1,5 +1,5 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
-import { pino, type Logger } from 'pino';
+import { pino } from 'pino';
 import { expect, vi } from 'vitest';
 import type { ErpClient } from '../../src/erp/erp-client.ts';
 import {
@@ -8,6 +8,7 @@ import {
   type ReconcilerConfig,
 } from '../../src/billing/reconciliation.ts';
 import type { ReceivedMessage } from '../../src/queue/sqs.ts';
+import { fromPino, type AppLogger } from '../../src/shared/logging.ts';
 import { createSemaphore, type Semaphore } from '../../src/shared/semaphore.ts';
 import type { Telemetry } from '../../src/shared/telemetry.ts';
 import { waitAdvancing, WAIT_GUARD_MS } from './async.ts';
@@ -54,16 +55,17 @@ export async function dlqTotal(world: QueueWorld): Promise<number> {
   return counts.visible + counts.notVisible;
 }
 
-// Devolve à DLQ, na hora, a mensagem do pedido que a reconciliação recebeu e deixou escondida (5 min):
-// o equivalente de a visibilidade vencer, sem esperar.
-export async function releaseFromDlq(
+// A DLQ nos atributos crus do SQS: `count` mensagens visíveis e nenhuma em voo. É o estado em que a
+// reconciliação deve deixar a DLQ no fim da rodada (ORD-14): o `redrive` só move o que está visível, e o
+// total das duas contagens sozinho não distingue uma mensagem visível de uma escondida.
+export async function expectDlqVisible(
   world: QueueWorld,
-  dlq: ObservedQueue,
-  orderId: string,
+  count: number,
 ): Promise<void> {
   expect(
-    await world.queues.dlq.changeVisibility(dlq.latestHandle(orderId), 0),
-  ).toBe('ok');
+    await countsOf(world.emq, world.queues.dlqUrl),
+    `DLQ no SQS: ${count} visíveis e nenhuma em voo`,
+  ).toEqual({ visible: count, notVisible: 0 });
 }
 
 export interface CountingSemaphore extends Semaphore {
@@ -91,7 +93,7 @@ export function countingSemaphore(size: number): CountingSemaphore {
 }
 
 export interface ReconcilerOptions {
-  logger?: Logger;
+  logger?: AppLogger;
   config?: Partial<ReconcilerConfig>;
   semaphore?: Semaphore;
   erp?: ErpClient;
@@ -122,7 +124,7 @@ export function buildReconciler(
       dlq,
       erp: options.erp ?? world.erp,
       semaphore: options.semaphore ?? createSemaphore(30),
-      logger: options.logger ?? pino({ level: 'silent' }),
+      logger: options.logger ?? fromPino(pino({ level: 'silent' })),
       telemetry: options.telemetry ?? world.telemetry,
       clock,
       ...(options.config ? { config: options.config } : {}),

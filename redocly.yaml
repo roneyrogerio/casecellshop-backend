@@ -1,2 +1,6 @@
 extends:
   - recommended-strict
+rules:
+  # O servidor é o compose local de propósito: o arquivo é importado no Insomnia contra http://localhost:3000
+  # (ROADMAP, M4), e um servidor relativo não resolve num arquivo importado.
+  no-server-example.com: off

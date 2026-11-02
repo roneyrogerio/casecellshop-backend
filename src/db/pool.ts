@@ -1,5 +1,6 @@
 import pg from 'pg';
-import type { Logger } from 'pino';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
+import { DB_LOG_EVENTS } from './telemetry.ts';
 
 // design.md, "Parâmetros": 5 s / 2 s / 1 s; ninguém espera indefinidamente.
 export const STATEMENT_TIMEOUT_MS = 5_000;
@@ -7,19 +8,23 @@ export const LOCK_TIMEOUT_MS = 2_000;
 export const CONNECTION_TIMEOUT_MS = 1_000;
 export const POOL_SIZE = 10;
 
-function buildPool(config: pg.PoolConfig, logger: Logger): pg.Pool {
+function buildPool(config: pg.PoolConfig, logger: AppLogger): pg.Pool {
   const pool = new pg.Pool(config);
   // Sem este ouvinte, o erro de uma conexão ociosa derrubaria o processo.
   pool.on('error', (error) => {
-    logger.error(
-      { event: 'db_pool_error', err: error },
+    eventLogger(logger, DB_LOG_EVENTS).error(
+      'casecellshop.db.pool.failed',
+      { err: error },
       'erro numa conexão ociosa do banco',
     );
   });
   return pool;
 }
 
-export function createPool(connectionString: string, logger: Logger): pg.Pool {
+export function createPool(
+  connectionString: string,
+  logger: AppLogger,
+): pg.Pool {
   return buildPool(
     {
       connectionString,
@@ -40,7 +45,7 @@ export function createPool(connectionString: string, logger: Logger): pg.Pool {
 // duas conexões bastam.
 export function createMigrationPool(
   connectionString: string,
-  logger: Logger,
+  logger: AppLogger,
 ): pg.Pool {
   return buildPool(
     {

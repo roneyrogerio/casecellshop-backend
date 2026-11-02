@@ -65,6 +65,15 @@ function boundsHold(candidate: RetrySeconds) {
   );
 }
 
+// Com o sorteio 0 não sobra parte aleatória: o prazo é só o atraso mínimo arredondado para cima.
+function zeroDrawIsMinimumDelay(candidate: RetrySeconds) {
+  return fc.property(settingsArb, attemptArb, (settings, attempt) => {
+    expect(candidate(contextOf(settings, 0), attempt)).toBe(
+      Math.ceil(settings.minDelayMs / 1000),
+    );
+  });
+}
+
 // Versões quebradas de retrySeconds, escritas aqui: cada opção desliga uma parte da fórmula do módulo.
 function brokenRetrySeconds(
   options: {
@@ -93,14 +102,30 @@ describe('FND-15 retrySeconds', () => {
   });
 
   it('FND-15 o sorteio 0 dá exatamente o atraso mínimo em segundos para cima', () => {
-    expectProperty(
-      fc.property(settingsArb, attemptArb, (settings, attempt) => {
-        expect(retrySeconds(contextOf(settings, 0), attempt)).toBe(
-          Math.ceil(settings.minDelayMs / 1000),
-        );
-      }),
-    );
+    expectProperty(zeroDrawIsMinimumDelay(retrySeconds));
   });
+
+  it.each([
+    {
+      defect: 'que soma 1 s ao prazo quando o sorteio é 0',
+      broken: ((ctx, attempt) =>
+        retrySeconds(ctx, attempt) +
+        (ctx.random() === 0 ? 1 : 0)) as RetrySeconds,
+    },
+    {
+      defect: 'que arredonda o atraso mínimo para baixo',
+      broken: brokenRetrySeconds({ round: (ms) => Math.floor(ms / 1000) }),
+    },
+    {
+      defect: 'que ignora o atraso mínimo',
+      broken: brokenRetrySeconds({ withMinDelay: false }),
+    },
+  ])(
+    'FND-15 controle negativo: a propriedade do sorteio 0 reprova a função $defect',
+    ({ broken }) => {
+      expectFalsified(zeroDrawIsMinimumDelay(broken));
+    },
+  );
 
   it.each([
     {

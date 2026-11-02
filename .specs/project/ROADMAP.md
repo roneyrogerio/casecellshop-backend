@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** F2 — Fábrica v3, qualidade e confiabilidade do código gerado (plano aprovado em 31/10/2026): #17, #18 e #19 entraram; #20 (B1, formatador) entrou; #21 (B2, checagens de código) entrou; #22 (B3, workflows do CI e cadeia de suprimentos) e #25 (teste do compose independente da ordem) entraram; #26 (B4a, guardas do repositório e das dependências) e #28 (preparo da sessão na nuvem) entraram; #27 (B4b, workflows, lint do Kysely e guardas) e #30 (processo, os `baixa` do #27) entraram; o PR C (#29, testes) está pronto para a aprovação; a seguir, os PRs D e E, depois o M4. O M3 terminou nos PRs #13 e #15
+**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. O PR #43 (`fix/alertas`), que faz disparar os alertas da seção "Operação" do README que não disparavam (`OBS-08`, `OBS-09`, `OBS-03`), entrou em 02/11/2026. A seguir, os Adicionais, a começar pelo Stryker.
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -102,12 +102,12 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - PR #30, processo: os achados `baixa` do #27 e a skill `/marco` dividida em arquivos de apoio. Concluído; foi o primeiro merge feito pelo GitHub App. Os `baixa` que ficaram estão no #30, em "Para o próximo plano".
 - PR B, barreiras no CI, em quatro partes: B1, o formatador (`AI-34`); B2, as checagens de código; B3, os workflows do CI e a cadeia de suprimentos (`AI-42` a `AI-46`); B4, o endurecimento das guardas, em duas partes: B4a, as guardas do repositório e das dependências (`AI-47` a `AI-50`); B4b, o lint do Kysely e os workflows. Conteúdo: Prettier, knip, jscpd sobre a base, a conferência do Kysely como regra de lint (no lugar do verificador por expressão regular), actionlint, zizmor, CodeQL, Dependabot, `npm audit`, cobertura, CI em jobs e busca agendada de teste instável.
 - PR C, testes, num PR só, em fatias (decidido pelo mantenedor em 01/11/2026): a estabilidade (o relógio que só avança com o sistema parado, os prazos de teste, o 57P01, o `unit` antes do `integration`), um PostgreSQL e um ElasticMQ por rodada, com banco clonado por arquivo, helpers sem cópias, os controles negativos que faltam, propriedades com o fast-check e fuzzing da API com o Schemathesis. O Stryker fica no PR próprio dos Adicionais.
-- PR D, catálogo de eventos de log e de métricas, no padrão de nomes do OpenTelemetry, conferido com o `design.md`.
+- PR D (#33), catálogo de eventos de log e de métricas, no padrão de nomes do OpenTelemetry (AD-029): declarado por pasta, escrito só pelos instrumentos tipados e pelo logger tipado, com o `telemetry.md` gerado e conferido. Em fechamento.
 - PR E, documentação e specs: uma decisão por arquivo (MADR), spec da fábrica separada, critérios com uma exigência por ID, glossário, seção "Escrita", markdownlint, lychee e verificador de caminhos citados.
 
 **Pronto quando:** os critérios de cada PR estão verdes, cada guarda com controle negativo, e a spec da fábrica diz, para cada classe de erro, se a checagem a garante ou só a reduz.
 
-## M4 — Vitrine e frescor
+## M4 — Vitrine e frescor · CONCLUÍDO
 
 **Meta:** `GET /products` rápido e independente do ERP; com o ERP respondendo, defasagem de até 65,5 s mais a duração de uma rodada.
 
@@ -115,9 +115,11 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 - Catálogo com cache e sincronização, conforme o design.
 - Uso pelo Insomnia sem passo manual (pedido do mantenedor, 31/10/2026): o `servers` do contrato aponta para `http://localhost:3000` (hoje é `/`, que não resolve num arquivo importado), e, se couber, a API serve o `/openapi.json`.
 
+Entrou pelos PRs #37 (as respostas de cache e de observabilidade) e #40 (a vitrine com cache e a sincronização), que trouxe também o fuzzing com o catálogo cheio. O `/openapi.json` ("se couber") não entrou: o `servers` do contrato já aponta para `http://localhost:3000`, e o `openapi.yaml` importado aponta para a API do compose.
+
 **Pronto quando:** `CAT-*` passam, com relógio controlado, junto com a cláusula do `FND-07` para o `GET /products` (schemas de sucesso e de erro), e, com um `docker compose up --build`, o `openapi.yaml` importado no Insomnia faz `GET /products`, `POST /checkout` e `GET /orders/{orderId}/status` contra `http://localhost:3000`, sem passo manual.
 
-## M5 — Observabilidade e operação
+## M5 — Observabilidade e operação · CONCLUÍDO
 
 **Meta:** detectar degradação e furo de estoque antes da reclamação do cliente.
 
@@ -128,9 +130,13 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
   - um runbook por alerta: DLQ (reprocessar em lote, ou cancelar depois de consultar o ERP), ERP fora ou com erro de configuração, furo de estoque e sincronização parada;
   - tabela de modos de falha (falha → detecção → mitigação → teste), cobrindo pelo menos: ERP lento, fora e fora além da janela de retry; fatura sem resposta e depois do timeout; worker que morre e mensagem que derruba o processo; banco indisponível e SKU disputado; origem do cache em erro; sincronização parada; venda em outro canal; preço alterado entre a vitrine e o checkout.
 
+Entrou pelos PRs #39 (as métricas de fila, de outbox, de pedidos sem desfecho e de estoque, com os spans do `ErpClient` e do relay) e #38 (a operação e o README de entrada). Nos alertas do README, os gauges que precisam existir têm um `absent` próprio. Os counters de lista fechada passaram a nascer em 0 na subida no PR #43 (`OBS-08`), e o `increase` conta o primeiro evento.
+
 **Pronto quando:** `OBS-*` passam e o README traz a operação completa.
 
-## M6 — Documentação e entrega
+## M6 — Documentação e entrega · CONCLUÍDO
+
+Entrou pelo PR #41: o `ARCHITECTURE.md` e o `RESPOSTAS.md` finais, conferidos contra o código; o README com o resumo da entrega e as checagens da IA; os dois `SPEC_DEVIATION` decididos (`OBS-01`, `FND-17`); e a verificação num clone limpo pela URL pública.
 
 **Meta:** quem chega ao repositório entende, executa e confere tudo sem precisar perguntar.
 
@@ -151,33 +157,18 @@ Visão, escopo, ordem de execução, decisões, critérios e design registrados 
 Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um diz onde entra. As pendências de um PR para o seguinte ficam na descrição dele: as do PR 2 do M3 estão no #13, em "Para o próximo plano".
 
 - **Testes unitários do `src/` anterior ao M3** (pedido do mantenedor, PR próprio). Lacunas por prioridade:
-  - **alta:** o `503` do `/health` (status, `Retry-After`, problem+json, log `health_failed`, span ERROR), por integração com o contêiner parado; o `traceparent` de entrada continuar o trace (`request-context.ts`); os campos obrigatórios do log fora de requisição;
-  - **média:** `validate.ts` (caminho, mensagem, um erro por chave, origens, `messageFor`); `request-context.ts` (labels, log `http_request`, span ERROR no `5xx`, `close` sem `finish`); `lifecycle.ts` (um sinal só, `exit` 0 e 1, prazo de 25 s); `pool.ts` (`statement_timeout`, `lock_timeout` e o ouvinte `db_pool_error`); a mesma identidade de serviço no log e no trace;
+  - **alta:** o `503` do `/health` (status, `Retry-After`, problem+json, log `casecellshop.health.db.unavailable`, span ERROR), por integração com o contêiner parado; o `traceparent` de entrada continuar o trace (`request-context.ts`);
+  - **média:** `validate.ts` (caminho, mensagem, um erro por chave, origens, `messageFor`); `request-context.ts` (atributos, log `casecellshop.http.request.completed`, span ERROR no `5xx`, `close` sem `finish`); `pool.ts` (`statement_timeout`, `lock_timeout` e o ouvinte `casecellshop.db.pool.failed`); a mesma identidade de serviço no log e no trace;
   - **baixa:** o exportador escolhido por `OTEL_TRACES_EXPORTER`; o `404` e o `x-powered-by`; `envPort` e `requireEnv`.
-  - **Decisões do mantenedor antes do PR:** o ID dos testes sem critério no `spec.md`; dois `SPEC_DEVIATION` (fora de requisição o log não traz `correlationId`, `trace_id` nem `span_id`; o `lifecycle.ts` usa `setTimeout` direto, contra a regra do relógio injetável); o provedor de cobertura, que seria dependência nova; e o `OTEL_TRACES_EXPORTER`, que ignora em silêncio um valor desconhecido.
+  - **Decisões do mantenedor antes do PR:** o ID dos testes sem critério no `spec.md`; o provedor de cobertura, que seria dependência nova; e o `OTEL_TRACES_EXPORTER`, que ignora em silêncio um valor desconhecido. Os dois `SPEC_DEVIATION` foram decididos em 02/11/2026, no PR #41: o `correlationId` sai só na requisição e na tentativa do worker, o `trace_id` e o `span_id` em todo span, e o log do processo fora deles sai sem os três, o que a spec passou a dizer, com teste (`OBS-01`); o prazo do encerramento passou ao relógio injetável, com teste (`FND-17`).
 - **Limite de paralelismo da integração (FND-13):** com os contêineres da rodada (FND-14, PR C), a medição do `maxWorkers` com a máquina carregada variou demais (de 52 s a 139 s na integração, sem relação com o número de arquivos em paralelo); o limite segue em 4 até repetir 4 e 8 numa máquina ociosa.
-- **Fuzzing com catálogo (M4):** o fuzzing do FND-16 roda com o catálogo da loja vazio no compose, e todo `POST /checkout` com dados válidos pelo contrato recebe `422 /problems/unknown-sku` (medido em 01/11/2026: 241 casos, nenhuma checagem reprovada, 6 de 17 respostas do contrato alcançadas). Quando a sincronização do M4 encher o catálogo, o fuzzing passa a alcançar o `202`, o `409` e o preço mudado.
-- **Achados `baixa` das Revisões 4, 5 e 8 do PR C (#29), para o próximo plano:**
-  - A16: o `no-port-before-up` não vê o `listen` com função, com objeto sem `port`, com `undefined` ou com uma variável igual a 0;
-  - A17: o import dinâmico de `node:child_process` e dos contêineres escapa do `no-restricted-imports` (o padrão e o de namespace já reprovam, conferido com o oxlint numa árvore temporária); falta um teste de ligação pelo `lint-tree` que rode o oxlint nas pastas;
-  - A18: o `globToRegExp` de `test/helpers/glob.ts` traduz errado a vírgula fora de chaves e a classe `[!…]`;
-  - A22 (Revisão 5): o `restricted-imports.test.ts` não exige o `default` nos `importNames`, então tirá-lo da configuração não reprova nada;
-  - A24 (Revisão 5): três propriedades extras do FND-15 ("sorteio 0 dá o atraso mínimo", "mensagem bem formada é aceita", "preço e estoque só como inteiro seguro") não têm versão quebrada como controle;
-  - A19: os testes de processo de `.claude/hooks/subagent-stop.test.ts` chamam o `spawnSync` sem prazo (um deles estourou os 5 s com a suíte inteira e passa sozinho); passar para o `runHook` e estender o `no-restricted-imports` a `.claude/**/*.test.ts`;
-  - A28 (Revisão 8): nenhum controle negativo do `apiFuzzJobViolations` põe o passo que cria o `schemathesis-report` antes do checkout.
 - **Achados `baixa` do #27 (B4b) que seguem abertos** (numeração do #27; os outros saíram no #30):
   - o merge do #30 pelo App, em 01/11/2026, confirmou o `env.HEAD` no `--jq` do `gh`: a aprovação no commit atual foi achada e o auto-merge ligado. Seguem a confirmar o `--author app/github-actions` no `gh issue list` do agendado e o segundo `gh pr merge --auto` num PR que já tem o auto-merge ligado. A busca do PR por `gh pr list --head`, do #30, roda pela primeira vez no próximo merge.
-- **Piso de cobertura por dado e pela cobertura medida (próximo PR de processo; decidido em 01/11/2026):** a conferência do AI-49 lê o `vitest.config.ts` como texto, e cada revisão acha um jeito novo de esconder um piso menor (A4 do #26, A15 e A7 do #27); a regra do `]:` também reprova código válido. Ler o arquivo pela árvore de sintaxe não fecha o caso: o TypeScript 7.0.2 não expõe mais a API estável (`createSourceFile`), e nenhuma leitura do arquivo vê uma opção de linha de comando (`--coverage.thresholds.lines=0`), que o Vitest aplica por cima da configuração. A troca:
-  - o piso sai para um arquivo de dados (`coverage-floor.json`), que o `vitest.config.ts` importa e passa ao `thresholds`;
-  - o `check-baselines.ts` compara o arquivo da base com o do PR por um esquema fechado do zod, sem expressão regular;
-  - na perna com `--coverage`, o relatório `json-summary` do Vitest é conferido contra o piso da base, o que torna inofensivos um `vitest.config.ts` que deixe de usar o arquivo, uma opção de linha de comando ou uma variável de ambiente;
-  - saem o `floorOf`, o `coverageBlock`, as expressões regulares e a regra do `// prettier-ignore`; o AI-49 troca a "forma fixa" por estas três conferências; sem dependência nova.
 - **Ambiente da sessão remota do Claude Code (PR de ambiente):** feito no PR do `AI-51` (AD-028); falta o mantenedor colar a chamada do `scripts/cloud-setup.ts` no script de preparo do ambiente em claude.ai/code (CONTRIBUTING.md, "Sessão do Claude Code na nuvem"; opcional, só acelera o início) e confirmar numa sessão nova que o relatório do início sai "Ambiente pronto". O GitHub MCP do `.mcp.json` segue fora da nuvem (AD-013); lá, o GitHub vem pelas ferramentas da própria sessão.
-- **Spans do `ErpClient` e da outbox (A16 do #13, M5):** o design pede spans manuais nos dois; no M3 só a tentativa tem span.
-- **Gauges de fila (M5):** pendentes e DLQ pelo `GetQueueAttributes` do SQS; a idade da mensagem mais antiga não existe na API do SQS (só no CloudWatch), então sai da outbox ou do `SentTimestamp` da mensagem.
+- **Confirmações na AWS (do PR #43):** o ElasticMQ não reproduz o SQS nestes dois pontos, e a documentação da AWS não os responde. Entram quando houver uma fila SQS real para o teste:
+  - o erro que o `ChangeMessageVisibility` devolve com um *receipt handle* cuja visibilidade já venceu. O código trata o `MessageNotInflight` como o `stale` (`ORD-14`), e uma resposta `ok` ou `ReceiptHandleIsInvalid` também já é tratada;
+  - o que o `StartMessageMoveTask` faz com uma mensagem em voo na DLQ (risco R12 do `STATE.md`). Se ela não for movida nem perdida, o runbook da DLQ pode deixar de pedir o `redrive` fora de uma rodada.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
-- **Pular o job `test` em PR que só muda `.specs/**` ou o `README.md`** (depois do B3): calculado no próprio YAML, com uma lista estreita de caminhos que nenhum teste lê, e nunca por `paths-ignore`, que deixaria o `ci-ok` pendente.
-- **Contadores ainda sem registro (M5):** um counter só aparece no `/metrics` depois do primeiro registro (por exemplo, `erp_config_error_total`), e um alerta sobre série ausente precisa tratar isso.
 - **Ações nas contas do mantenedor:**
   - feitas em 01/11/2026:
     - o ruleset exige só o `ci-ok`, a branch atualizada, o resultado do CodeQL (High or higher, Errors) e a aprovação do último push;

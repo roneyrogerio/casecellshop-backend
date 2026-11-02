@@ -53,6 +53,8 @@ const PROTECTED_NAMES = [
   // base decidem o que cada checagem enxerga.
   /^\.?knip(\.config)?\.(jsonc?|[cm]?[jt]s)$/,
   /^\.jscpd.*\.json$/,
+  // O piso de cobertura que o vitest.config.ts importa (AI-37, AI-49).
+  /^coverage-floor\.json$/,
   /^\.editorconfig$/,
   // O pnpm aceita o manifesto em YAML; outro manifesto ao lado mudaria os scripts.
   /^package\.yaml$/,

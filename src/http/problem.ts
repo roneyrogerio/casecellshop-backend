@@ -1,8 +1,10 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
-import type { Logger } from 'pino';
 import type { z } from 'zod';
 import { PROBLEM_MEDIA_TYPE, type Problem } from '../contract/index.ts';
 import { TransactionAbortedError } from '../db/database.ts';
+import { DB_LOG_EVENTS } from '../db/telemetry.ts';
+import { eventLogger, type AppLogger } from '../shared/logging.ts';
+import { HTTP_LOG_EVENTS } from './telemetry.ts';
 
 type ProblemBody = z.input<typeof Problem>;
 
@@ -15,6 +17,9 @@ export interface ProblemInit {
   errors?: { path: string; message: string }[];
   // Só no price-changed (AD-018): o preço atual de cada item que mudou.
   currentPrices?: { sku: string; unitPrice: number }[];
+  // Só para o log (OBS-01): o SKU em que a reserva parou. O problemHandler monta o corpo
+  // campo a campo e não o expõe.
+  logSku?: string;
   headers?: Record<string, string>;
 }
 
@@ -30,7 +35,7 @@ export class ProblemError extends Error {
 }
 
 // Segundos até o cliente tentar de novo depois de o banco não responder.
-const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
+export const UNAVAILABLE_RETRY_AFTER_SECONDS = '5';
 
 // O 503 de toda rota que depende do banco: o mesmo título e o mesmo Retry-After.
 export function databaseUnavailableProblem(): ProblemError {
@@ -52,7 +57,7 @@ export const notFoundHandler: RequestHandler = (_req, _res, next) => {
   );
 };
 
-export function createErrorHandler(logger: Logger): ErrorRequestHandler {
+export function createErrorHandler(logger: AppLogger): ErrorRequestHandler {
   // O Express identifica o middleware de erro pela aridade 4: os quatro parâmetros ficam.
   return (error: unknown, _req, res, _next) => {
     const correlationId = res.locals['correlationId'] as string;
@@ -63,14 +68,16 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
 
     if (error instanceof TransactionAbortedError) {
       // Defeito do código (erro capturado dentro da transação), não falha do cliente.
-      logger.error(
-        { event: 'db.transaction_aborted', err: error, correlationId },
+      eventLogger(logger, DB_LOG_EVENTS).error(
+        'casecellshop.db.transaction.aborted',
+        { err: error, correlationId },
         'transação abortada antes do COMMIT',
       );
     } else if (!(error instanceof ProblemError)) {
       // O detalhe vai só para o log; a resposta nunca leva stack trace nem SQL.
-      logger.error(
-        { event: 'unhandled_error', err: error, correlationId },
+      eventLogger(logger, HTTP_LOG_EVENTS).error(
+        'casecellshop.http.request.failed',
+        { err: error, correlationId },
         'erro inesperado na requisição',
       );
     }

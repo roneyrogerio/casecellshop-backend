@@ -8,10 +8,13 @@ info:
     name: MIT
     identifier: MIT
 servers:
-  - url: /
+  - url: http://localhost:3000
+    description: A API no docker compose local.
 tags:
   - name: system
     description: Operação do serviço.
+  - name: catalog
+    description: Vitrine servida do cache, sem chamar o ERP.
   - name: checkout
     description: Compra assíncrona, sem esperar o ERP.
   - name: orders
@@ -88,6 +91,49 @@ components:
         errors:
           - path: query.verbose
             message: Parâmetro desconhecido
+    ProductPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+          maxItems: 50
+        hasNext:
+          type: boolean
+          description: Se há outra página depois desta.
+      required:
+        - items
+        - hasNext
+      additionalProperties: false
+      description: Uma página da vitrine; todas as páginas de um TTL vêm do mesmo instantâneo.
+    Product:
+      type: object
+      properties:
+        sku:
+          type: string
+          example: CAPA-MOTO-G84
+        name:
+          type: string
+        unitPrice:
+          type: integer
+          minimum: 0
+          description: Preço unitário, em centavos.
+          example: 4990
+        availability:
+          type: string
+          enum:
+            - available
+            - low_stock
+            - out_of_stock
+          description: "Faixa pelas unidades livres: available acima de 5, low_stock de 1 a 5, out_of_stock sem nenhuma."
+      required:
+        - sku
+        - name
+        - unitPrice
+        - availability
+      additionalProperties: false
+      description: Um produto da vitrine.
     CheckoutAccepted:
       type: object
       properties:
@@ -270,6 +316,119 @@ paths:
                 description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
               required: true
               description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /products:
+    get:
+      operationId: listProducts
+      summary: Lista os produtos da vitrine
+      description: Lê o catálogo do cache em memória, sem chamar o ERP. Preço e estoque vêm da última sincronização com o ERP.
+      tags:
+        - catalog
+      security: []
+      parameters:
+        - schema:
+            type: string
+            pattern: ^[1-9]\d{0,5}$
+            description: Página a partir de 1, até 999999; sem o parâmetro, 1.
+            example: "1"
+          required: false
+          description: Página a partir de 1, até 999999; sem o parâmetro, 1.
+          name: page
+          in: query
+        - schema:
+            type: string
+            description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          required: false
+          description: Aceito com 1 a 128 caracteres ASCII visíveis; fora disso, a API gera um UUID.
+          name: x-request-id
+          in: header
+      responses:
+        "200":
+          description: Uma página de produtos.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            cache-control:
+              schema:
+                type: string
+                enum:
+                  - no-store
+              required: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductPage"
+        "400":
+          description: Página fora do formato ou parâmetro desconhecido.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            cache-control:
+              schema:
+                type: string
+                enum:
+                  - no-store
+              required: true
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Catálogo ainda não sincronizado, ou sem entrada no cache e com o banco fora.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            cache-control:
+              schema:
+                type: string
+                enum:
+                  - no-store
+              required: true
+            retry-after:
+              schema:
+                type: string
+                pattern: ^\d+$
+                description: Segundos até tentar de novo.
+              required: true
+              description: Segundos até tentar de novo.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        default:
+          description: Erro inesperado (500), sem detalhe interno.
+          headers:
+            x-request-id:
+              schema:
+                type: string
+                pattern: ^[\x21-\x7E]{1,128}$
+                description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+              required: true
+              description: Identificador da requisição, o mesmo do cabeçalho X-Request-Id e dos logs.
+            cache-control:
+              schema:
+                type: string
+                enum:
+                  - no-store
+              required: true
           content:
             application/problem+json:
               schema:

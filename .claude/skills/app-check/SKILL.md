@@ -21,15 +21,11 @@ Write the evidence in Brazilian Portuguese. Keep each output trimmed to the line
    dc exec -T api node -e "const end = Date.now() + 90000; (async () => { for (;;) { try { const r = await fetch('http://127.0.0.1:3000/health'); if (r.ok) { console.log('health', r.status); return; } } catch {} if (Date.now() > end) process.exit(1); await new Promise((s) => setTimeout(s, 2000)); } })()"
    ```
 
-2. **Store catalog (until the M4 sync exists):** the seed fills only `erp_sim.products`. Copy it into the store tables:
+2. **Catalog:** the worker's first sync round fills the store from the simulated ERP (AD-009); until then `GET /products` answers `503`. Poll it (up to 60 s) until `200`, then print the status, the `Cache-Control` header and the first item; expect `no-store` and an item with `sku`, `name`, `unitPrice` and `availability`:
 
    ```sh
-   dc exec -T postgres psql -U casecellshop -d casecellshop -v ON_ERROR_STOP=1 -c "
-     insert into products (sku, name, price_cents) select sku, name, price_cents from erp_sim.products on conflict (sku) do nothing;
-     insert into inventory (sku, on_hand) select sku, on_hand from erp_sim.products on conflict (sku) do nothing;"
+   dc exec -T api node -e "const end = Date.now() + 60000; (async () => { for (;;) { const r = await fetch('http://127.0.0.1:3000/products').catch(() => undefined); if (r?.status === 200) { const body = await r.json(); console.log(r.status, r.headers.get('cache-control'), JSON.stringify(body.items[0]), 'hasNext', body.hasNext); return; } if (Date.now() > end) { console.log('sem catálogo', r?.status); process.exit(1); } await new Promise((s) => setTimeout(s, 2000)); } })()"
    ```
-
-   Remove this step when the sync fills the catalog; then wait for its first round instead.
 3. **Checkout, twice with the same key:** expect `202` with `orderId`, `Location` and `Retry-After`, and the same `orderId` on the repeat.
 
    ```sh
@@ -37,13 +33,13 @@ Write the evidence in Brazilian Portuguese. Keep each output trimmed to the line
    ```
 
 4. **Status:** poll the `Location` from inside the container until `invoiced` (up to 30 s), printing each response.
-5. **Worker metrics:** the port is not published, so read it inside the container:
+5. **Worker metrics:** the port is not published, so read it inside the container. The names are the Prometheus names from `.specs/features/casecellshop/telemetry.md` (OBS-07); the filter drops the histogram buckets:
 
    ```sh
-   dc exec -T worker node -e "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => console.log(t.split('\n').filter((l) => /^(outbox_|erp_|order_)/.test(l)).join('\n')))"
+   dc exec -T worker node -e "fetch('http://127.0.0.1:9464/metrics').then((r) => r.text()).then((t) => console.log(t.split('\n').filter((l) => /^casecellshop_/.test(l) && !/_bucket\{/.test(l)).join('\n')))"
    ```
 
-6. **Logs:** `dc logs --no-color api worker | grep <X-Request-Id>`. Check that the worker lines carry `correlationId`, `orderId`, `attempt`, `trace_id` and `span_id`.
+6. **Logs:** `dc logs --no-color api worker | grep <X-Request-Id>`. Check that the worker lines carry `correlationId`, `orderId`, `attempt`, `trace_id` and `span_id`, and that every `event` is a name from `telemetry.md` (`casecellshop.<domain>.<event>`).
 7. **Down:** `dc down -v`, also when a step fails.
 
 ## Report
