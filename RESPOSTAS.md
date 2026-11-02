@@ -1,8 +1,8 @@
 # Respostas às cinco perguntas
 
-Texto de entrega da Parte 1.A do desafio. Cada resposta segue os tópicos da pergunta na ordem do enunciado, aponta para a seção do [`ARCHITECTURE.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md), onde estão as comparações completas, e cita os critérios do [`spec.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/spec.md) que a provam. Os critérios `DOC-*` conferem o texto; os outros (`CHK-*`, `ORD-*`, `CAT-*`, `OBS-*`) são testes automatizados com o mesmo ID no nome.
+Texto de entrega da Parte 1.A do desafio. Cada resposta segue os tópicos da pergunta na ordem do enunciado, aponta para a seção do [`ARCHITECTURE.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md), onde estão as comparações completas, e cita os critérios do [`spec.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/spec.md) que a provam. Os critérios `DOC-*` conferem o texto; os outros (`FND-*`, `CHK-*`, `ORD-*`, `CAT-*`, `OBS-*`) são provados por testes automatizados com o mesmo ID no nome, já escritos ou a escrever no marco indicado.
 
-Esta é a cópia versionada (`DOC-ENT-01`). Enquanto o projeto não chega ao M6, o que ainda não está implementado leva a marca do marco que o entrega (**[M4]**, **[M5]**), como no `ARCHITECTURE.md`; **[alvo]** é arquitetura alvo, fora do escopo do desafio.
+Esta é a cópia versionada (`DOC-ENT-01`). Enquanto o projeto não chega ao M6, o que ainda não está implementado leva, item a item, a marca do marco que o entrega (**[M4]**, **[M5]**), como no `ARCHITECTURE.md`; o que não tem marca já existe e tem teste; **[alvo]** é arquitetura alvo, fora do escopo do desafio.
 
 ## 1. Diagnóstico, trade-offs e arquitetura alvo
 
@@ -18,11 +18,11 @@ Seção: [Diagnóstico e arquitetura alvo](https://github.com/roneyrogerio/casec
 
 **Caminhos comparados** (`DOC-DIA-03`), em custo, complexidade, latência, consistência e esforço operacional:
 
-- **vitrine:** cache na frente da API do ERP, banco da loja com sincronização e cache em memória (escolhido), ou CDC do MySQL do ERP. A leitura direta do MySQL do ERP, que o enunciado permite, foi descartada: as tabelas internas não são contrato, e a carga continuaria no banco que fatura; fica só como plano B da consulta por referência;
+- **vitrine:** cache na frente da API do ERP, banco da loja com sincronização e cache em memória (escolhido), ou captura de mudanças (CDC) do MySQL do ERP. A leitura direta do MySQL do ERP, que o enunciado permite, foi descartada: as tabelas internas não são contrato, e a carga continuaria no banco que fatura; fica só como plano B da consulta por referência;
 - **overselling:** `UPDATE` condicional atômico no banco da loja (escolhido), `SELECT … FOR UPDATE`, ou lock distribuído no Redis;
 - **checkout:** síncrono com timeout maior e retry, `202` com outbox no banco da loja e worker (escolhido), ou `202` com publicação direta num broker.
 
-**Arquitetura de 30 a 90 dias** (`DOC-DIA-04`). Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio e de sincronização, cache em processo na vitrine e observabilidade básica. Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook, SLOs, alertas e dashboard, um cache L2 compartilhado com várias instâncias da API, e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
+**Arquitetura de 30 a 90 dias** (`DOC-DIA-04`). Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine **[M4]**, e observabilidade básica. Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard **[M5]**; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
 
 **Nuvem** (`DOC-DIA-05`). É hipótese de evolução do datacenter atual, não premissa: cada componente tem um serviço gerenciado (RDS ou Aurora, ECS no Fargate, SQS, ElastiCache, Datadog ou CloudWatch, Secrets Manager), justificado pelo esforço operacional que tira. O ERP fica no datacenter, e a conexão híbrida (VPN ou link dedicado) passa a ser uma fonte de latência e de falha; para a loja, a queda do link é uma queda do ERP, que o desenho já absorve.
 
@@ -30,11 +30,11 @@ Seção: [Diagnóstico e arquitetura alvo](https://github.com/roneyrogerio/casec
 
 ## 2. Cache, invalidação e vitrine
 
-Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#cache-e-performance-da-vitrine). Critérios: `DOC-CAC-01` a `DOC-CAC-04`; testes `CAT-01` a `CAT-13` e `CHK-06` **[M4]**.
+Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#cache-e-performance-da-vitrine). Critérios: `DOC-CAC-01` a `DOC-CAC-04`; testes `CAT-01` a `CAT-13` **[M4]** e `CHK-06`. O cache e a sincronização entram no M4: cada item desta resposta que cita um `CAT-*` é desse marco.
 
 **Camadas e o papel de cada uma** (`DOC-CAC-01`):
 
-- **CDN e cache HTTP:** fora do escopo para o catálogo, que responde `Cache-Control: no-store` (`CAT-10`). Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas, e sem o cabeçalho um cache intermediário pode aplicar frescor heurístico (RFC 9111). Com uma CDN, ela serve os estáticos, e o catálogo passa a levar `max-age` igual ao TTL restante **[alvo]**;
+- **rede de distribuição de conteúdo (CDN) e cache HTTP:** fora do escopo para o catálogo, que responde `Cache-Control: no-store` (`CAT-10`). Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas, e sem o cabeçalho um cache intermediário pode aplicar frescor heurístico (RFC 9111). Com uma CDN, ela serve os estáticos, e o catálogo passa a levar `max-age` igual ao tempo de vida (TTL) restante **[alvo]**;
 - **em processo (L1):** o catálogo inteiro numa entrada, de onde as páginas são fatiadas, com TTL de 5 s ± 10%. Absorve as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego;
 - **L2 compartilhado (Redis):** entre as instâncias da API, quando houver várias com taxa de acerto baixa **[alvo]**. Com uma instância, seria um contêiner e um modo de falha a mais sem ganho;
 - **banco da loja:** a cópia de catálogo, preço e estoque, atualizada pela sincronização a cada 60 s. É a origem do cache e a fonte de verdade do checkout, e é a camada que tira o ERP do caminho da vitrine.
@@ -44,34 +44,34 @@ As defasagens somam: com o ERP respondendo, uma mudança chega à vitrine em at�
 **TTL, invalidação, cache-aside × refresh-ahead, fallback e stampede** (`DOC-CAC-02`):
 
 - **TTL de 5 s ± 10%:** a maior parte da defasagem vem da sincronização; um TTL menor multiplicaria as consultas para ganhar segundos num limite de 65,5 s, e o jitter espalha as expirações entre instâncias (`CAT-02`);
-- **invalidação só por expiração:** um aviso entre processos a cada correção tiraria no máximo 5,5 s do limite e acrescentaria um caminho de falha que, quando falha, deixa o TTL como limite de qualquer jeito. O cache nunca decide: o preço que o cliente viu é conferido no banco (`409` com o preço atual, `CHK-06`), e a reserva é o `UPDATE` condicional (`CHK-01`);
+- **invalidação só por expiração:** um aviso entre processos a cada correção tiraria no máximo 5,5 s do limite e acrescentaria um caminho de falha que, quando falha, deixa o TTL como limite de qualquer jeito. O cache nunca decide: o preço que o cliente viu é conferido no banco (`409` com o preço atual, `CHK-06`), e a reserva é o `UPDATE` condicional (`CHK-01`). A disponibilidade em faixas ("disponível", "últimas unidades", "esgotado") muda menos que o número exato, então a defasagem aparece menos (`CAT-13`);
 - ***cache-aside*, e não *refresh-ahead*:** o *refresh-ahead* e o *stale-while-revalidate* escondem a latência de uma origem lenta. Aqui a origem é um banco local, e o que eles escondem é uma consulta a cada 5 s; a origem lenta era o ERP, que a arquitetura tirou do caminho;
 - **fallback:** com a origem em erro, a entrada vencida é servida até 60 s (*stale-if-error*), e por 5 s depois da falha sem tentar a origem; sem entrada, `503` com `Retry-After` (`CAT-04`); antes da primeira sincronização, `503` (`CAT-05`). O ERP fora não afeta a vitrine: a sincronização para, e o banco segue com o último estado conhecido;
-- **stampede:** *single-flight*, em que N leituras com a entrada vencida geram uma consulta à origem (`CAT-01`), uma chave só, a promessa rejeitada descartada, o jitter e a pausa depois da falha. A disponibilidade em faixas ("disponível", "últimas unidades", "esgotado") faz a defasagem aparecer menos (`CAT-13`).
+- **stampede:** *single-flight*, em que N leituras com a entrada vencida geram uma consulta à origem (`CAT-01`), uma chave só, a promessa rejeitada descartada, o jitter e a pausa depois da falha.
 
 **Métricas de ganho de latência e de custo** (`DOC-CAC-03`):
 
-- **latência:** `http.server.request.duration` na rota `/products`, com fronteira em 0,2 s para o SLO de 99% em até 200 ms;
-- **taxa de acerto:** `casecellshop.catalog.cache.lookups` (`hit`, `miss`, `stale`), esperada perto de 1 − 1/(R × TTL) por instância;
-- **carga na origem:** `casecellshop.catalog.origin.loads` (`ok`, `error`) por requisição, no máximo ~0,2 por segundo por instância; `casecellshop.catalog.origin.active_loads` no máximo 1 por instância mostra o *single-flight* funcionando;
-- **chamadas ao ERP evitadas:** as requisições da vitrine menos as chamadas `list_catalog` do `casecellshop.erp.client.operation.duration`. Antes, uma chamada ao ERP por acesso; agora, uma leitura do catálogo por minuto, constante com o tráfego;
+- **latência:** `http.server.request.duration` na rota `/products`, com fronteira em 0,2 s para o SLO de 99% em até 200 ms (a métrica existe; a rota, **[M4]**);
+- **taxa de acerto:** `casecellshop.catalog.cache.lookups` (`hit`, `miss`, `stale`), esperada perto de 1 − 1/(R × TTL) por instância, com R requisições por segundo **[M4]**;
+- **carga na origem:** `casecellshop.catalog.origin.loads` (`ok`, `error`), lida de duas formas: cargas por requisição, a medida de custo, e cargas por segundo, no máximo ~0,2 por instância qualquer que seja o tráfego; `casecellshop.catalog.origin.active_loads` no máximo 1 por instância mostra o *single-flight* funcionando **[M4]**;
+- **chamadas ao ERP evitadas:** as requisições da vitrine menos as chamadas `list_catalog` do `casecellshop.erp.client.operation.duration`. Antes, uma chamada ao ERP por acesso; agora, uma leitura do catálogo por minuto, constante com o tráfego (a métrica existe; a sincronização, **[M4]**);
 - **custo:** nenhum servidor a mais, e a capacidade do ERP (~30 chamadas simultâneas, ~21 usadas pelo faturamento no pico) deixa de ser disputada pela vitrine.
 
 **Métricas de que o ganho não veio de dado velho ou incorreto** (`DOC-CAC-04`):
 
-- **idade da entrada servida** (`casecellshop.catalog.served_entry.age`): até 5,5 s, e até 60 s só em *stale-if-error*;
-- **idade da sincronização** (`casecellshop.catalog.sync.age`), lida do banco e exposta pela API, para alertar mesmo com o worker caído. Somadas, as duas idades limitam a idade do que o cliente vê;
+- **idade da entrada servida** (`casecellshop.catalog.served_entry.age`): até 5,5 s, e até 60 s só em *stale-if-error* **[M4]**;
+- **idade da sincronização** (`casecellshop.catalog.sync.age`), lida do banco e exposta pela API, para alertar mesmo com o worker caído. Somadas, as duas idades limitam a idade do que o cliente vê **[M4]**;
 - **preço alterado no checkout** (`price_changed` em `casecellshop.checkout.requests`): a vitrine mostrou um preço que já não valia, e o cliente recebeu `409`, sem ser cobrado por outro valor;
-- **SKUs com promessa acima do estoque** (`casecellshop.inventory.oversold_skus`) e **rejeições por falta de estoque no ERP** (`casecellshop.erp.out_of_stock.rejections`, `OBS-06`);
-- **correções por rodada** (`casecellshop.catalog.sync.corrections`) e **SKUs ausentes** (`casecellshop.catalog.sync.missing_skus`), que mostram quanto a defasagem custa.
+- **SKUs com promessa acima do estoque** (`casecellshop.inventory.oversold_skus`, **[M5]**) e **rejeições por falta de estoque no ERP** (`casecellshop.erp.out_of_stock.rejections`), juntos no alerta de furo de estoque (`OBS-06`, **[M5]**);
+- **correções por rodada** (`casecellshop.catalog.sync.corrections`) e **SKUs ausentes** (`casecellshop.catalog.sync.missing_skus`), que mostram quanto a defasagem custa **[M4]**.
 
 ## 3. Observabilidade
 
-Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01` a `OBS-07`, `FND-05`, `CHK-12`, `ORD-18` e `CAT-12`. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
+Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01`, `OBS-02`, `OBS-05`, `OBS-07`, `FND-05`, `CHK-12` e `ORD-18`; `OBS-03`, `OBS-04` e `OBS-06` **[M5]**; `CAT-12` **[M4]**. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
 
 Logs pelo pino, métricas e traces pelo OpenTelemetry, todos com a mesma correlação. Toda métrica e todo evento de log são declarados num catálogo tipado por pasta, e o `tsc` recusa o que estiver fora dele (`OBS-07`).
 
-**Logs estruturados e campos obrigatórios** (`DOC-OBS-01`). JSON numa linha. Obrigatórios: `time`, `level`, `service`, `env`, `version`, `event` (o nome do evento no catálogo, como `casecellshop.checkout.accepted`), `msg`, `correlationId` (o `X-Request-Id` do cliente ou um UUID novo, que viaja na mensagem da outbox até o worker), `trace_id` e `span_id`. Quando existem: `route`, `method`, `status`, `duration_ms`, `orderId`, `sku`, `attempt`, `cause`, `reason` e `err`. `info` para o esperado, `warn` para o que o sistema absorveu, `error` para o que precisa de alguém. `orderId` e `sku` ficam nos logs e nunca nas métricas, onde criariam uma série por pedido.
+**Logs estruturados e campos obrigatórios** (`DOC-OBS-01`). JSON numa linha. Obrigatórios em toda linha: `time`, `level`, `service`, `env`, `version`, `event` (o nome do evento no catálogo, como `casecellshop.checkout.accepted`) e `msg`. Obrigatórios em toda linha de uma requisição ou de uma tentativa do worker: `correlationId` (o `X-Request-Id` do cliente ou um UUID novo, que viaja na mensagem da outbox até o worker), `trace_id` e `span_id`; os logs do próprio processo, como a subida e o encerramento, saem sem eles, uma divergência do design registrada como `SPEC_DEVIATION` pendente. Quando existem: `route`, `method`, `status`, `duration_ms`, `cache` (**[M4]**), `orderId`, `sku`, `attempt`, `cause`, `reason` e `err`. `info` para o esperado, `warn` para o que o sistema absorveu, `error` para o que precisa de alguém. `orderId` e `sku` ficam nos logs e nunca nas métricas, onde criariam uma série por pedido.
 
 **Counters, gauges e histograms** (`DOC-OBS-02`). Counter para eventos, gauge para estado, histogram para durações e idades, com uma fronteira em cada limiar de SLO:
 
@@ -85,14 +85,14 @@ No Prometheus, o ponto vira sublinhado e o counter ganha `_total` (`casecellshop
 **Traces** (`DOC-OBS-03`):
 
 - **`GET /products`:** requisição → cache → repositório, este só numa falta; o trace mostra quanto a origem custou (`CAT-12`) **[M4]**;
-- **`POST /checkout` assíncrono:** a requisição responde `202`, e a transação grava o `traceparent` na linha da outbox (`CHK-12`); o relay o leva como atributo da mensagem no SQS, e cada tentativa do worker é um span filho do span do checkout, com `orderId` e `attempt` (`ORD-18`), seguido das chamadas ao ERP **[M5]**. Um trace por pedido, mesmo com retries de dezenas de minutos, para a cadeia requisição → worker → ERP aparecer numa visão só. Um `orderId` leva aos logs, e o `trace_id` deles, ao trace (`OBS-05`).
+- **`POST /checkout` assíncrono:** a requisição responde `202`, e a transação grava o `traceparent` na linha da outbox (`CHK-12`); o relay o leva como atributo da mensagem no SQS, e cada tentativa do worker é um span filho da transação do checkout, com `orderId` e `attempt` (`ORD-18`); os spans das chamadas ao ERP, dentro de cada tentativa, entram no **[M5]**. Um trace por pedido, mesmo com retries de dezenas de minutos, para a cadeia requisição → worker → ERP aparecer numa visão só. Um `orderId` leva aos logs, e o `trace_id` deles, ao trace (`OBS-05`).
 
-**SLI e SLO, alertas, dashboard e runbook** (`DOC-OBS-04`), em 30 dias:
+**Indicadores e objetivos de nível de serviço (SLI e SLO), alertas, dashboard e runbook** (`DOC-OBS-04`), em 30 dias:
 
-- **SLOs:** vitrine com 99,9% sem `5xx` e 99% em até 200 ms; checkout com 99,9% sem `5xx` (o `4xx` não consome o orçamento) e 99% em até 500 ms; 99% dos pedidos com desfecho em até 60 s do aceite, com cada atrasado contado uma vez (`OBS-04`);
-- **alertas:** consumo do orçamento do SLO em duas janelas; mensagem na DLQ e fila envelhecendo; furo de estoque; erro de configuração no ERP; sincronização parada;
-- **dashboard:** na ordem da jornada (vitrine, checkout, fila e ERP, estoque);
-- **runbook:** um por alerta; o da DLQ (*redrive* ou cancelamento depois de consultar o ERP) já existe (`ORD-14`, `ORD-15`).
+- **SLOs:** vitrine com 99,9% sem `5xx` e 99% em até 200 ms; checkout com 99,9% sem `5xx` (o `4xx` não consome o orçamento) e 99% em até 500 ms; 99% dos pedidos com desfecho em até 60 s do aceite, com cada atrasado contado uma vez (`OBS-04`, **[M5]**);
+- **alertas:** consumo do orçamento do SLO em duas janelas; mensagem na DLQ e fila envelhecendo; furo de estoque; erro de configuração no ERP; sincronização parada **[M5]**;
+- **dashboard:** na ordem da jornada (vitrine, checkout, fila e ERP, estoque) **[M5]**;
+- **runbook:** um por alerta; o da DLQ (*redrive* ou cancelamento depois de consultar o ERP) já existe (`ORD-14`, `ORD-15`), e os outros entram no **[M5]**.
 
 As consultas PromQL, os limites e os runbooks completos ficam na seção "Operação" do [`README.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#operação), conferidos contra o `/metrics` real (`OBS-03`) **[M5]**.
 
@@ -118,7 +118,7 @@ Seção: [Mensageria e resiliência](https://github.com/roneyrogerio/casecellsho
 
 **Retry, DLQ, OpenAPI e testes** (`DOC-MSG-03`). Cada resposta do ERP é classificada antes do retry: permanente, transitória, ambígua ou erro de configuração (`ORD-09`, `ORD-10`). O retry espera pelo menos 45 s, com *full jitter* sobre um exponencial, até 12 recebimentos, e depois vai para a DLQ do SQS, com o pedido ainda `pending` e a reserva feita (`ORD-12`, `ORD-13`). A reconciliação lê a DLQ a cada 5 min, e o runbook faz o *redrive* ou cancela (`ORD-14`, `ORD-15`). O cliente acompanha o pedido em `GET /orders/{orderId}/status`, com o OpenAPI gerado do mesmo contrato em zod que valida as respostas nos testes (`CHK-11`, `ORD-19`). Os testes contam faturas no ERP simulado, e não chamadas, contra o PostgreSQL e o ElasticMQ reais.
 
-**Prompts de IA** (`DOC-MSG-04`). O projeto não guarda um diário de prompts: os prompts que decidem cada passo são as instruções versionadas dos agentes, listadas no [`PROMPTS.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/PROMPTS.md) e citadas literalmente no `ARCHITECTURE.md`. A mesma seção traz as respostas da IA recusadas ou corrigidas, cada uma com o link para o relatório de revisão que a pegou.
+**Prompts de IA** (`DOC-MSG-04`). O projeto não guarda um diário de prompts: os prompts que decidem cada passo são as instruções versionadas dos agentes, listadas no [`PROMPTS.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/PROMPTS.md) e citadas literalmente no `ARCHITECTURE.md`. A mesma seção traz as respostas da IA recusadas ou corrigidas, cada uma com o link para o relatório de revisão que a pegou ou conferiu a correção.
 
 ## Repositório
 

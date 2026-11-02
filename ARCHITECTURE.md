@@ -40,7 +40,7 @@ Os três problemas têm a mesma origem: a loja trata um ERP legado, que não pod
 
 **Caminhos** (`DOC-DIA-03`):
 
-| | A. Cache na frente da API do ERP | **B. Banco da loja, sincronização e cache em memória** (escolhido) | C. CDC do MySQL do ERP para o banco da loja |
+| | A. Cache na frente da API do ERP | **B. Banco da loja, sincronização e cache em memória** (escolhido) | C. Captura de mudanças (CDC) do MySQL do ERP para o banco da loja |
 | --- | --- | --- | --- |
 | Custo | Baixo | Médio: um banco e um worker | Alto: conector, broker e acesso de replicação |
 | Complexidade | Baixa | Média | Alta |
@@ -56,7 +56,7 @@ O que B entrega:
 
 - produtos, preço e estoque no PostgreSQL da loja **[M2, M4]**;
 - uma rodada de sincronização na subida e uma a cada 60 s, no worker **[M4]** (AD-009);
-- o catálogo inteiro numa entrada de cache em processo, com TTL de 5 s ± 10%, *single-flight* contra stampede e *stale-if-error* com teto de 60 s **[M4]** (AD-005);
+- o catálogo inteiro numa entrada de cache em processo, com tempo de vida (TTL) de 5 s ± 10%, *single-flight* contra stampede e *stale-if-error* com teto de 60 s **[M4]** (AD-005);
 - com o ERP fora, a vitrine segue com o último estoque conhecido, e a idade da sincronização dispara alerta **[M4, M5]**.
 
 ### Problema 2: overselling
@@ -134,7 +134,7 @@ O que B entrega:
 **Dias 30 a 60: operar com segurança.**
 
 - **Reconciliação com o ERP:** a DLQ conferida periodicamente pela referência, e o runbook de reprocessamento e cancelamento **[implementado]**.
-- **Observabilidade completa:** SLOs (vitrine e checkout com 99,9% sem `5xx`, e 99% dos pedidos com desfecho em até 60 s), alertas, dashboard e runbook no Datadog ou equivalente **[M5]**.
+- **Observabilidade completa:** objetivos de nível de serviço (SLOs: vitrine e checkout com 99,9% sem `5xx`, e 99% dos pedidos com desfecho em até 60 s), alertas, dashboard e runbook no Datadog ou equivalente **[M5]**.
 - **Mais de uma instância da API**, com um cache L2 compartilhado (Redis) atrás do cache em processo, para as instâncias servirem o mesmo dado **[alvo]**.
 - **Autenticação na borda** (OAuth2/OIDC) e limite de taxa por cliente; a chave de idempotência passa a valer por cliente **[alvo]**.
 
@@ -198,11 +198,11 @@ A vitrine era lenta porque cada acesso virava uma chamada ao ERP (Problema 1). A
 
 ### Camadas de cache e o papel de cada uma
 
-`DOC-CAC-01`. Cada camada resolve um problema diferente, e só as duas do meio são caches no sentido estrito:
+`DOC-CAC-01`. Cada camada resolve um problema diferente. A CDN, o cache em processo e o L2 são caches; o banco da loja é uma cópia sincronizada, e o ERP é a origem:
 
 | Camada | Onde fica | Papel | Defasagem que soma | Aqui |
 | --- | --- | --- | --- | --- |
-| CDN e cache HTTP | Borda, fora do serviço | Servir imagens e arquivos estáticos perto do cliente | Nenhuma no catálogo, que sai com `no-store` | Fora do escopo; `Cache-Control: no-store` em toda resposta da vitrine **[M4, `CAT-10`]**; a CDN para estáticos **[alvo]** |
+| Rede de distribuição de conteúdo (CDN) e cache HTTP | Borda, fora do serviço | Servir imagens e arquivos estáticos perto do cliente | Nenhuma no catálogo, que sai com `no-store` | Fora do escopo; `Cache-Control: no-store` em toda resposta da vitrine **[M4, `CAT-10`]**; a CDN para estáticos **[alvo]** |
 | Em processo (L1) | Memória de cada instância da API | Absorver as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego | Até 5,5 s; até 60 s com a origem em erro | **[M4, `CAT-01` a `CAT-05`]** |
 | L2 compartilhado (Redis) | Entre as instâncias da API | Dar o mesmo instantâneo a todas as instâncias e uma consulta à origem por TTL no total, e não uma por instância | Até o TTL dele | **[alvo]** |
 | Banco da loja | PostgreSQL | A cópia de catálogo, preço e estoque que a loja controla: origem do cache e fonte de verdade do checkout | Até 60 s mais a duração de uma rodada | **[M4, `CAT-06`, `CAT-07`]** |
@@ -242,7 +242,7 @@ O pior efeito de uma entrada defasada é a vitrine mostrar algo que o checkout r
 | Defasagem | Até o TTL | Até o TTL | Até 2 TTL |
 | Complexidade | Baixa | Média: um timer, o cancelamento dele no encerramento e um erro que acontece fora de qualquer requisição | Média: a carga em segundo plano e o erro dela fora da requisição |
 
-**Por que *cache-aside*.** O *refresh-ahead* e o *stale-while-revalidate* escondem a latência de uma origem lenta ou cara. Aqui a origem é um banco local, e o que eles escondem é uma consulta a cada 5 s. A origem lenta e cara era o ERP, e é ele que a arquitetura tirou do caminho. Rever se a latência da vitrine na falta passar do SLO de 200 ms (AD-005).
+**Por que *cache-aside*.** O *refresh-ahead* e o *stale-while-revalidate* escondem a latência de uma origem lenta ou cara. Aqui a origem é um banco local, e o que eles escondem é uma consulta a cada 5 s. A origem lenta e cara era o ERP, e é ele que a arquitetura tirou do caminho. Proposta: rever a escolha se a latência da vitrine numa falta passar do SLO de 200 ms.
 
 **Fallback, em ordem:**
 
@@ -326,19 +326,21 @@ As métricas saem em `/metrics`, e não por OTLP, porque OTLP exigiria um coleto
 
 `DOC-OBS-01`. Cada log é uma linha JSON, escrita pelo pino. O contexto da requisição (o `correlationId` e o span atual) viaja pelo `AsyncLocalStorage`, então nenhuma função precisa receber o contexto como parâmetro **[implementado: `src/shared/logging.ts`, `src/http/request-context.ts`, `OBS-01`]**.
 
-**Campos obrigatórios,** em toda linha:
+**Campos obrigatórios.** Os de identificação saem em toda linha; os de correlação, em toda linha escrita dentro de uma requisição ou de uma tentativa do worker:
 
-| Campo | O que é | De onde vem |
-| --- | --- | --- |
-| `time` | Instante, em ISO 8601 | O processo |
-| `level` | `info`, `warn` ou `error`, como texto | O nível em que o evento sai |
-| `service`, `env`, `version` | Processo, ambiente e versão | Os mesmos atributos de recurso dos traces, porque o Datadog só liga log e trace com a marcação unificada de serviço |
-| `event` | Nome do evento do catálogo, como `casecellshop.checkout.accepted` | O `eventLogger`, que vale sobre qualquer campo com o mesmo nome |
-| `msg` | Mensagem em português, para quem lê | O evento |
-| `correlationId` | Identificador da requisição | O `X-Request-Id` válido do cliente, ou um UUID novo; volta no cabeçalho e no corpo do erro (`FND-03`), e viaja na mensagem da outbox até o worker |
-| `trace_id`, `span_id` | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
+| Campo | Quando | O que é | De onde vem |
+| --- | --- | --- | --- |
+| `time` | Toda linha | Instante, em ISO 8601 | O processo |
+| `level` | Toda linha | `info`, `warn` ou `error`, como texto | O nível em que o evento sai |
+| `service`, `env`, `version` | Toda linha | Processo, ambiente e versão | Os mesmos atributos de recurso dos traces, porque o Datadog só liga log e trace com a marcação unificada de serviço |
+| `event` | Toda linha | Nome do evento do catálogo, como `casecellshop.checkout.accepted` | O `eventLogger`, que vale sobre qualquer campo com o mesmo nome |
+| `msg` | Toda linha | Mensagem em português, para quem lê | O evento |
+| `correlationId` | Requisição ou tentativa | Identificador da requisição | O `X-Request-Id` válido do cliente, ou um UUID novo; volta no cabeçalho e no corpo do erro (`FND-03`), e viaja na mensagem da outbox até o worker |
+| `trace_id`, `span_id` | Requisição ou tentativa | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
 
-**Campos quando existem:** `route`, `method`, `status` e `duration_ms` no fim da requisição; `orderId` e `sku`; `attempt` (o número de recebimentos da mensagem no SQS) e `cause` (por que a tentativa voltou à fila) no worker; `reason` (sempre em snake_case, como `out_of_stock` ou `erp_rejected`); e `err`, com o código do erro.
+Os logs do próprio processo, fora de uma requisição ou de uma tentativa (a subida, o encerramento, o início do relay), saem sem os campos de correlação. O `design.md` e o `OBS-01` pedem os três em todo log; a divergência está registrada como `SPEC_DEVIATION` pendente de decisão no `ROADMAP.md`, e este texto descreve o código.
+
+**Campos quando existem:** `route`, `method`, `status` e `duration_ms` no fim da requisição; `cache` (`hit`, `miss` ou `stale`) na vitrine **[M4]**; `orderId` e `sku`; `attempt` (o número de recebimentos da mensagem no SQS) e `cause` (por que a tentativa voltou à fila) no worker; `reason` (sempre em snake_case, como `out_of_stock` ou `erp_rejected`); e `err`, com o código do erro.
 
 Um exemplo, do checkout aceito:
 
@@ -380,7 +382,7 @@ Um exemplo, do checkout aceito:
 | Fila | `casecellshop.outbox.orphan_conclusions` | counter | Conclusões sem efeito, com o *receipt handle* vencido | **[implementado]** |
 | Fila | `casecellshop.queue.messages` | gauge: `billing`, `dlq` | Mensagens na fila e na DLQ | **[M5]** |
 | Fila | `casecellshop.outbox.oldest_pending.age` | gauge | Idade do pedido mais antigo sem desfecho; o SQS não a expõe pela API, então sai da outbox | **[M5]** |
-| Fila | `casecellshop.order.accept_to_invoice.duration` | histogram, com fronteira em 60 s | Tempo do aceite ao desfecho | **[implementado]** |
+| Fila | `casecellshop.order.accept_to_invoice.duration` | histogram, com fronteira em 60 s | Tempo do aceite ao faturamento | **[implementado]** |
 | Fila | `casecellshop.order.stuck` | counter | Pedidos sem desfecho em 60 s, cada um contado uma vez | **[M5, `OBS-04`]** |
 | ERP | `casecellshop.erp.client.operation.duration` | histogram, por operação e desfecho | Latência do ERP; o `_count` conta as chamadas, inclusive as de erro de configuração | **[implementado: `src/erp/telemetry.ts`]** |
 | ERP | `casecellshop.erp.client.active_operations` | UpDownCounter | Chamadas em andamento; perto de 30, o semáforo está cheio | **[implementado]** |
@@ -408,18 +410,17 @@ Num acerto, o trace tem só a requisição e o cache. Numa falta, o span do repo
 **`POST /checkout`,** um trace que atravessa a fila:
 
 ```text
-POST /checkout                         span SERVER, na API; responde 202
-└── transação do checkout              chave, pedido, reserva e a linha da outbox com o traceparent
-      ⋮ commit; a resposta já saiu
-      relay                            publica no SQS, com o traceparent como atributo da mensagem
-outbox.attempt (orderId, attempt=1)    no worker, filho do span do checkout
-├── ErpClient: consulta pela referência   a partir do segundo envio
-└── ErpClient: criação do pedido
-outbox.attempt (orderId, attempt=2)    um retry, 45 s ou mais depois, no mesmo trace
-outbox.settle                          encerramento sem chamar o ERP
+POST /checkout                             span SERVER, na API; responde 202
+└── checkout.create                        a transação: chave, pedido, reserva e a linha da outbox com o traceparent
+    │   (depois do commit e da resposta, o relay publica no SQS, com o traceparent como atributo da mensagem)
+    ├── outbox.attempt (orderId, attempt=1)    no worker, segundos depois
+    │   ├── ErpClient: consulta pela referência   a partir do segundo envio
+    │   └── ErpClient: criação do pedido
+    ├── outbox.attempt (orderId, attempt=2)    um retry, 45 s ou mais depois, no mesmo trace
+    └── outbox.settle                          encerramento sem chamar o ERP
 ```
 
-O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checkout/repository.ts`, `CHK-12`]**, e cada tentativa do worker é um span filho do span do checkout **[implementado: `src/billing/worker.ts`, `ORD-18`]**. Os spans do `ErpClient`, do relay e da outbox entram no M5 **[M5]**.
+O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checkout/repository.ts`, `CHK-12`]**, e cada tentativa do worker é um span filho do span da transação do checkout (`checkout.create`), onde o `traceparent` é gravado **[implementado: `src/billing/worker.ts`, `ORD-18`]**. Os spans do `ErpClient`, do relay e da outbox entram no M5 **[M5]**.
 
 **Um trace por pedido, e não um por tentativa.** Com retries, o trace de um pedido pode durar dezenas de minutos. A alternativa, um trace por tentativa ligado ao checkout por *span link*, evita o trace longo, mas a cadeia requisição → worker → ERP deixa de aparecer numa visão só. Para quem investiga um pedido, essa visão é o que importa (AD-008).
 
@@ -429,7 +430,7 @@ O checkout grava o `traceparent` na linha da outbox **[implementado: `src/checko
 
 `DOC-OBS-04`. O resumo fica aqui; as consultas PromQL completas, os limites de cada alerta, o dashboard e o runbook de cada alerta ficam na seção "Operação" do [`README.md`](README.md), e um teste confere cada série que eles usam contra o `/metrics` real **[M5, `OBS-03`]**.
 
-**SLIs e SLOs,** em janelas de 30 dias, com os valores do [`design.md`](.specs/features/casecellshop/design.md) ("Parâmetros"):
+**Indicadores e objetivos de nível de serviço (SLIs e SLOs),** em janelas de 30 dias, com os valores do [`design.md`](.specs/features/casecellshop/design.md) ("Parâmetros"):
 
 | Jornada | SLI | SLO | De onde sai o limiar |
 | --- | --- | --- | --- |
@@ -463,7 +464,7 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 - **DLQ:** o pedido segue `pending` com a reserva. Devolver as mensagens à fila (*redrive*), ou cancelar o pedido depois de confirmar no ERP que ele não existe; a reconciliação fatura sozinha o que o ERP já tem **[implementado: `src/main/runbook.ts`, `ORD-14`, `ORD-15`]**;
 - **ERP fora ou com erro de configuração:** os pedidos esperam na fila com a reserva feita, e a vitrine segue com o último estoque conhecido. Conferir o link com o datacenter e a credencial; depois da volta, os retries e a reconciliação esvaziam a fila **[M5]**;
 - **furo de estoque:** o gauge não leva o SKU, então os SKUs saem de uma consulta ao banco (`reserved > on_hand`); a decisão de repor ou cancelar é do negócio **[M5]**;
-- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP; enquanto isso, o checkout segue protegido pelo `409` de preço alterado **[M5]**.
+- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP. Enquanto isso, a vitrine e o checkout usam o último preço e o último estoque conhecidos: o `409` de preço alterado não pega uma mudança feita no ERP, porque o banco da loja não a recebeu, e o cliente é cobrado pelo preço que viu, que o ERP fatura (H3). O risco que cresce é o furo de estoque por venda em outro canal, que o `casecellshop.inventory.oversold_skus` e o `casecellshop.erp.out_of_stock.rejections` mostram depois; pausar as vendas é decisão do negócio **[M5]**.
 
 ## Concorrência e idempotência
 
@@ -610,4 +611,4 @@ Respostas da IA recusadas ou corrigidas, e onde foram pegas:
 
 - **Um timeout que não abortava nada:** o `implementer` configurou o timeout de 5 s da porta do SQS, mas sem a opção que faz o SDK abortar a requisição, que só registrava um aviso; com o SQS travado, o relay ficaria com a transação e os locks presos sem prazo. O `reviewer` reproduziu com um servidor que nunca responde (A1, `média`), e a correção veio com um teste que falhava antes ([PR #15, Revisão 1](https://github.com/roneyrogerio/casecellshop-backend/pull/15#issuecomment-6544176297)).
 - **Um encerramento que estourava o prazo:** a reconciliação terminava a rodada inteira antes de o worker parar, e uma DLQ cheia segurava o `SIGTERM` além dos 25 s com o worker ainda recebendo. O `reviewer` reproduziu com uma sonda (A16, `média`), e a rodada passou a parar entre mensagens ([PR #15, Revisão 4](https://github.com/roneyrogerio/casecellshop-backend/pull/15#issuecomment-6549069984)).
-- **Testes com premissa de tempo errada:** dois testes do worker, escritos pelo `test-writer`, falhavam às vezes com a CPU ocupada; o `implementer` mostrou com logs temporários que o código se comportava como o design pede, e os testes passaram a controlar a corrida em vez de depender dela (PR #15, commits `0ff357c` e `40d8204`).
+- **Testes com premissa de tempo errada:** dois testes do worker, escritos pelo `test-writer`, falhavam às vezes com a CPU ocupada; o `implementer` mostrou com logs temporários que o código se comportava como o design pede, e os testes passaram a controlar a corrida em vez de depender dela (commits `0ff357c` e `40d8204`, conferidos na [PR #15, Revisão 6](https://github.com/roneyrogerio/casecellshop-backend/pull/15#issuecomment-6549343919)).
