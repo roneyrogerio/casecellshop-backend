@@ -6,16 +6,20 @@ Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser 
 
 ## Em resumo
 
-| Problema do desafio | Causa raiz | Solução | Prova |
+| Problema do desafio | Causa raiz | Solução | O que os testes provam |
 | --- | --- | --- | --- |
-| Vitrine lenta | o ERP está no caminho de cada leitura | banco próprio da loja, sincronizado com o ERP, e cache em processo com TTL, *single-flight* e *stale-if-error* | `CAT-01` a `CAT-15` |
-| Venda além do estoque | o estoque é conferido num momento e baixado em outro | reserva atômica com `UPDATE` condicional e idempotência pela `Idempotency-Key` | `CHK-01` a `CHK-05` |
-| Checkout que depende do ERP | o faturamento é síncrono | `202` na hora; outbox, fila SQS e worker com retry, DLQ e reconciliação | `ORD-01` a `ORD-22` |
+| Vitrine lenta | o ERP está no caminho de cada leitura | banco próprio da loja, sincronizado com o ERP, e cache em processo com TTL, *single-flight* (uma consulta para N leituras simultâneas) e *stale-if-error* (serve a última página se o banco falhar) | N leituras com o cache expirado fazem 1 consulta ao banco; com o banco em erro, a vitrine segue servindo: [`products-cache.test.ts`](test/integration/catalog/products-cache.test.ts) (`CAT-01` a `CAT-15`) |
+| Venda além do estoque | o estoque é conferido num momento e baixado em outro | reserva atômica com `UPDATE` condicional e idempotência pela `Idempotency-Key` | 50 checkouts simultâneos com estoque 5 aceitam exatamente 5, e a mesma chave em paralelo cria um pedido só: [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) (`CHK-01` a `CHK-05`) |
+| Checkout que depende do ERP | o faturamento é síncrono | `202` na hora; outbox, fila SQS e worker com retry, DLQ e reconciliação | mensagem duplicada, worker morto no meio da chamada ou ERP lento: uma fatura por pedido: [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) (`ORD-01` a `ORD-22`) |
+
+Os IDs (`CAT-01`, `CHK-01`, `ORD-01`…) são os critérios de aceite do [`spec.md`](.specs/features/casecellshop/spec.md), e cada teste começa pelo ID do critério que prova: `grep -rn "CHK-01" test src` acha a prova. O prefixo diz a área: `CAT` vitrine, `CHK` checkout, `ORD` faturamento, `OBS` observabilidade, `FND` fundação do projeto, `DOC` documentação e `AI` o fluxo de trabalho com IA.
 
 - **Rodar:** `docker compose up --build`, e o [exemplo de ponta a ponta](#rodar).
 - **Respostas às cinco perguntas:** [`RESPOSTAS.md`](RESPOSTAS.md); os detalhes de cada uma estão no [`ARCHITECTURE.md`](ARCHITECTURE.md).
-- **Operação:** SLOs, dashboard, alertas e runbooks na seção [Operação](#operação).
+- **Testes que importam:** os arquivos de domínio estão em [Testar](#testar).
+- **Limitações:** [Hipóteses, premissas e limitações](#hipóteses-premissas-e-limitações).
 - **Uso de IA:** [Como a IA foi usada](#como-a-ia-foi-usada) e [`PROMPTS.md`](PROMPTS.md).
+- **Operação:** SLOs, dashboard, alertas e runbooks na seção [Operação](#operação).
 
 ## Índice
 
@@ -28,10 +32,10 @@ Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser 
 - [As cinco perguntas](#as-cinco-perguntas)
 - [Decisões e trade-offs](#decisões-e-trade-offs)
 - [Garantias e modos de falha](#garantias-e-modos-de-falha)
-- [Operação](#operação)
 - [Riscos residuais](#riscos-residuais)
 - [Hipóteses, premissas e limitações](#hipóteses-premissas-e-limitações)
 - [Como a IA foi usada](#como-a-ia-foi-usada)
+- [Operação](#operação)
 - [Documentação](#documentação)
 - [Contribuir](#contribuir)
 - [Licença](#licença)
@@ -72,10 +76,21 @@ curl http://localhost:3000/products
 curl -i -X POST http://localhost:3000/checkout \
   -H 'content-type: application/json' -H 'idempotency-key: pedido-1' \
   -d '{"items":[{"sku":"CAPA-MOTO-G84","quantity":1,"expectedUnitPrice":4990}]}'
-# 202 Accepted, com Location: /orders/<orderId>/status
+# HTTP/1.1 202 Accepted
+# Location: /orders/<orderId>/status
+# Retry-After: 4
+# {"orderId":"<orderId>","status":"pending","total":4990}
 
 curl http://localhost:3000/orders/<orderId>/status
-# {"orderId":"…","status":"invoiced"} depois de o worker faturar
+# {"orderId":"<orderId>","status":"invoiced"}
+```
+
+O checkout responde na hora, com o pedido `pending` e o total em centavos. O worker fatura no ERP simulado em segundo plano, e o status vira `invoiced` em poucos segundos: o `Retry-After: 4` diz quando consultar. Repetir o `POST` com a mesma `idempotency-key` devolve o mesmo pedido.
+
+Para parar e apagar os dados:
+
+```sh
+docker compose down -v
 ```
 
 O contrato completo está no [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), e o [`requests.http`](requests.http) tem as requisições do `/health` e do `/metrics`; as da vitrine, do checkout e do status do pedido estão no exemplo acima. O contrato declara o servidor `http://localhost:3000`, então o `openapi.yaml` importado no Insomnia ou no Postman já aponta para a API do compose.
@@ -90,6 +105,17 @@ npm run test:unit   # só os unitários, sem Docker
 
 Os testes de integração rodam contra PostgreSQL e ElasticMQ reais, pelo Testcontainers, porque as garantias dependem do comportamento do banco e da fila (lock, transação, índice único, visibilidade de mensagem), que um mock não reproduz. Cada teste começa pelo ID do critério que prova (`CHK-01 …`), e o CI publica a tabela critério × teste a cada execução.
 
+A maior parte da suíte confere o próprio repositório (CI, hooks, contrato, telemetria). As regras de negócio estão nestes arquivos:
+
+| Arquivo | O que prova |
+| --- | --- |
+| [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) | 50 checkouts simultâneos com estoque 5 aceitam exatamente 5, e uma versão ingênua do repositório, com uma janela entre ler e gravar, vende além (controle negativo); a mesma chave em paralelo cria um pedido só; SKUs em ordem trocada não dão deadlock |
+| [`checkout.test.ts`](test/integration/checkout/checkout.test.ts) | o corpo do `202`; a chave repetida devolve o pedido original; o preço mudado recebe `409` sem reservar nada |
+| [`products-cache.test.ts`](test/integration/catalog/products-cache.test.ts) e [`cache.test.ts`](src/cache/cache.test.ts) | N leituras com a entrada expirada fazem 1 consulta ao banco; a entrada expira no TTL; com o banco em erro, a vitrine serve a última página até 60 s |
+| [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) | uma fatura por pedido com mensagem duplicada, worker morto no meio da chamada ou ERP que fatura sem responder |
+| [`call-permit.test.ts`](test/integration/billing/call-permit.test.ts) | no máximo uma chamada ao ERP por pedido a cada 45 s: tomadas simultâneas do mesmo pedido concedem uma só, e uma versão ingênua concede duas (controle negativo) |
+| [`reconciliation.test.ts`](test/integration/billing/reconciliation.test.ts) | com o ERP fora além da janela de retry, os pedidos esperam na DLQ com a reserva; quando ele volta, a reconciliação fatura os que ele já tem |
+
 ## Conferir
 
 As checagens que o CI roda:
@@ -103,21 +129,23 @@ O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/fea
 
 ## O que o desafio pede e onde está
 
-| O desafio pede | Onde | Teste | Estado |
-| --- | --- | --- | --- |
-| `GET /products` com cache e TTL | [`src/catalog/`](src/catalog/), cache em memória (AD-005) | `CAT-01` a `CAT-15` | pronto |
-| `POST /checkout` responde `202` com `orderId` e status | [`src/checkout/`](src/checkout/) | `CHK-09` | pronto |
-| `GET /orders/{orderId}/status` | [`src/orders/`](src/orders/) | `CHK-11`, `ORD-19` | pronto |
-| Contrato com schemas de sucesso e erro | [`openapi.yaml`](openapi.yaml), gerado de [`src/contract/`](src/contract/); erros em `application/problem+json` (RFC 9457) | `FND-03`, `FND-07` | pronto |
-| Logs estruturados com `correlationId` (o `X-Request-Id`) e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts), eventos no [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) | `OBS-01`, `OBS-07` | pronto |
-| Métricas de cache, checkout e fila | `/metrics` da API e do worker, nomes no catálogo de telemetria | `OBS-02`, `OBS-04`, `OBS-06`, `OBS-07` | pronto |
-| Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | `FND-05`, `CHK-12`, `ORD-18`, `CAT-12`, `OBS-05` | pronto |
-| Exemplo de dashboard, alerta ou runbook | [Operação](#operação): SLOs, dashboard, alertas em regras do Prometheus e um runbook por alerta | `OBS-03`; runbook da DLQ: `ORD-15` | pronto |
-| Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | `CHK-01`, `CHK-02` (controle negativo) | pronto |
-| Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | `CHK-03` a `CHK-05` | pronto |
-| Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | `ORD-01` a `ORD-22` | pronto |
-| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código; a tabela critério × teste sai em cada execução do CI | regra de negócio: `CHK-03` a `CHK-12`, `ORD-01` a `ORD-22`; cache: `CAT-01` a `CAT-05`; concorrência: `CHK-01`, `CHK-02`, `CHK-07` | pronto |
-| Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | conferidos na revisão (`DOC-OPS-01`, `DOC-IDX-01`) | pronto |
+Tudo o que o desafio pede está pronto. A última coluna diz o que o teste prova e aponta um arquivo representativo.
+
+| O desafio pede | Onde | O que o teste prova |
+| --- | --- | --- |
+| `GET /products` com cache e TTL | [`src/catalog/`](src/catalog/), cache em memória (AD-005) | N leituras com o cache expirado fazem 1 consulta ao banco, e a entrada expira no TTL: [`products-cache.test.ts`](test/integration/catalog/products-cache.test.ts) (`CAT-01` a `CAT-15`) |
+| `POST /checkout` responde `202` com `orderId` e status | [`src/checkout/`](src/checkout/) | o corpo do `202` traz `orderId`, `status` e total, validados pelo schema do contrato: [`checkout.test.ts`](test/integration/checkout/checkout.test.ts) (`CHK-09`) |
+| `GET /orders/{orderId}/status` | [`src/orders/`](src/orders/) | `pending`, `invoiced` ou `failed` com o motivo, e `404` para pedido inexistente: [`order-status.test.ts`](test/integration/checkout/order-status.test.ts) (`CHK-11`, `ORD-19`) |
+| Contrato com schemas de sucesso e erro | [`openapi.yaml`](openapi.yaml), gerado de [`src/contract/`](src/contract/); erros em `application/problem+json` (RFC 9457) | requisição fora do contrato recebe `400` em `application/problem+json`: [`contract-validation.test.ts`](test/integration/foundation/contract-validation.test.ts) (`FND-03`); o CI falha se o `openapi.yaml` divergir do contrato: [`generate-openapi.test.ts`](scripts/generate-openapi.test.ts) (`FND-07`) |
+| Logs estruturados com `correlationId` (o `X-Request-Id`) e `orderId` | [`src/shared/logging.ts`](src/shared/logging.ts), eventos no [catálogo de telemetria](.specs/features/casecellshop/telemetry.md) | dentro de uma requisição, o log leva o `correlationId`; dentro de um span, o `trace_id` e o `span_id`: [`logging.test.ts`](src/shared/logging.test.ts) (`OBS-01`, `OBS-07`) |
+| Métricas de cache, checkout e fila | `/metrics` da API e do worker, nomes no catálogo de telemetria | o `/metrics` da API e o do worker expõem toda métrica do catálogo, e nenhuma fora dele: [`metrics-names.test.ts`](test/integration/observability/metrics-names.test.ts) (`OBS-02`, `OBS-04`, `OBS-06`, `OBS-07`) |
+| Trace ligando requisição, cache, repositório e worker | [`src/shared/telemetry.ts`](src/shared/telemetry.ts), Jaeger | a chamada ao ERP fica no trace do checkout, e o log da tentativa traz o mesmo `trace_id`: [`worker-erp-spans.test.ts`](test/integration/billing/worker-erp-spans.test.ts) (`FND-05`, `CHK-12`, `ORD-18`, `CAT-12`, `OBS-05`) |
+| Exemplo de dashboard, alerta ou runbook | [Operação](#operação): SLOs, dashboard, alertas em regras do Prometheus e um runbook por alerta | cada consulta e cada regra da seção é PromQL válido e só usa métricas, rótulos e valores do catálogo: [`readme-promql.test.ts`](test/repo/readme-promql.test.ts) (`OBS-03`); o cancelamento do runbook da DLQ: [`runbook.test.ts`](test/integration/billing/runbook.test.ts) (`ORD-15`) |
+| Checkout sem venda além do estoque | reserva atômica no PostgreSQL (AD-002) | 50 checkouts simultâneos com estoque 5 aceitam 5, e uma versão ingênua vende além, no mesmo arquivo: [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) (`CHK-01`, `CHK-02`) |
+| Idempotência para retry e duplo clique | `Idempotency-Key` gravada na transação do pedido (AD-006) | a mesma chave repetida depois de o estoque acabar, ou com os campos em outra ordem, devolve o mesmo pedido: [`checkout.test.ts`](test/integration/checkout/checkout.test.ts) (`CHK-04`, `CHK-05`); em paralelo, cria um pedido só: [`checkout-concurrency.test.ts`](test/integration/checkout/checkout-concurrency.test.ts) (`CHK-03`) |
+| Worker simulando o envio ao ERP | [`src/billing/`](src/billing/), ERP simulado em [`src/erp/sim/`](src/erp/sim/) | uma fatura por pedido com mensagem duplicada, worker morto ou ERP lento: [`worker-duplicates.test.ts`](test/integration/billing/worker-duplicates.test.ts) (`ORD-01` a `ORD-22`) |
+| Testes de regra de negócio, cache e concorrência | [`test/`](test/) e unitários ao lado do código | os arquivos de domínio estão em [Testar](#testar) (regra de negócio: `CHK-03` a `CHK-12`, `ORD-01` a `ORD-22`; cache: `CAT-01` a `CAT-05`; concorrência: `CHK-01`, `CHK-02`, `CHK-07`); a tabela critério × teste sai em cada execução do CI |
+| Decisões, trade-offs, limitações, instruções para rodar e prompts de IA | este README, [`PROMPTS.md`](PROMPTS.md) | conferidos na revisão: as garantias e os modos de falha, cada um com o teste que o prova (`DOC-OPS-01`), e o índice das cinco perguntas (`DOC-IDX-01`) |
 
 ## As cinco perguntas
 
@@ -150,7 +178,7 @@ Uma linha por decisão; o contexto, as alternativas e as consequências estão n
 | O preço que o cliente viu é obrigatório no checkout | o cliente nunca paga um preço que não viu | um checkout com o preço mudado recebe `409` e precisa confirmar | [AD-018](.specs/project/STATE.md) |
 | Uma chamada ao ERP por pedido a cada atraso mínimo | sem fatura duplicada nas hipóteses do ERP | um pedido não chama o ERP mais de uma vez a cada 45 s | [AD-024](.specs/project/STATE.md) |
 | Métricas e eventos de log num catálogo tipado, com os nomes do OpenTelemetry | o `tsc` recusa nome, atributo ou valor fora do catálogo, e o `telemetry.md` sai dele | declarar cada métrica e cada evento antes de usar | [AD-029](.specs/project/STATE.md) |
-| Fluxo de IA com papéis separados e o oráculo fora do alcance de quem implementa | o código é conferido por testes escritos antes e por uma revisão independente | a revisão por fatia pode somar mais rodadas que uma revisão por marco | [AD-012](.specs/project/STATE.md) |
+| Fluxo de IA com papéis separados, e os testes fora do alcance de quem implementa | o código é conferido por testes escritos antes e por uma revisão independente | revisar cada parte de um marco (uma etapa do [`ROADMAP.md`](.specs/project/ROADMAP.md)), e não só o marco inteiro, soma mais rodadas de revisão | [AD-012](.specs/project/STATE.md) |
 
 ## Garantias e modos de falha
 
@@ -170,7 +198,7 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | O preço cobrado é o que o cliente viu | H3 | `CHK-06` |
 | Todo pedido aceito tem a mensagem do faturamento, e nenhuma mensagem existe sem pedido | o banco da loja (outbox na transação) | `CHK-12`, `ORD-22` |
 | Uma fatura por pedido com mensagem duplicada, worker morto no meio, ERP lento ou que fatura sem responder | H1a e H4; a H1b é uma segunda proteção | `ORD-01` a `ORD-05`, `ORD-07` |
-| No máximo uma chamada ao ERP por pedido a cada atraso mínimo | o banco da loja (permissão de chamada) | `ORD-02`, `ORD-11` |
+| No máximo uma chamada ao ERP por pedido a cada atraso mínimo | o banco da loja (a hora da última chamada fica na outbox e só avança por *compare-and-set*) | `ORD-02`, `ORD-11` |
 | Estoque baixado uma vez só, mesmo com conclusões simultâneas | o banco da loja | `ORD-17` |
 | Reserva liberada quando o ERP recusa o pedido | H2 | `ORD-08` |
 | Todo pedido aceito termina faturado, falho ou na DLQ, de onde sai pela reconciliação ou pelo runbook | H1a | `ORD-13`, `ORD-14`, `ORD-15` |
@@ -196,6 +224,72 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | Venda em outro canal | SKUs com `reserved > on_hand` e rejeições por falta de estoque; alerta [Furo de estoque](#furo-de-estoque) | a sincronização desconta as vendas da loja depois da leitura; o ERP recusa sem estoque (H2) e a reserva é liberada | `CAT-07`, `OBS-06`, `ORD-08` |
 | Preço alterado entre a vitrine e o checkout | `409` com o preço atual; log `casecellshop.checkout.price_changed` | nada é reservado; o cliente confirma o preço novo | `CHK-06` |
 
+## Riscos residuais
+
+O que as garantias não cobrem e como aparece na operação. A lista completa, com a mitigação de cada risco, está em "Riscos em aberto", no [`STATE.md`](.specs/project/STATE.md).
+
+| Risco | Como é detectado | O que resta |
+| --- | --- | --- |
+| Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | não é detectável pela loja; demonstrado no `ORD-06` | conferir as faturas no ERP real antes de confiar na H4 |
+| O ERP fatura sem estoque e fica negativo, contra a H2 (R9) | a sincronização grava zero e registra o caso em log | a loja para de vender o SKU até o estoque voltar |
+| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
+| Cache por instância: com N réplicas da API, uma expiração gera até N consultas à origem | cargas da origem no dashboard | aceito enquanto a origem é o banco da loja (AD-005) |
+| O ElasticMQ não é o SQS (R12) | o worker trata o *receipt handle* recusado e o sucesso aparente do mesmo jeito | na AWS, muda só o endereço; o `ListMessageMoveTasks` não é chamado |
+| O exportador Prometheus passa a acrescentar o sufixo de unidade (R13) | o teste dos nomes do `/metrics` (`OBS-07`) reprova no PR da atualização; o das consultas desta página (`OBS-03`) segue o `prometheusName` do gerador do catálogo, que precisa mudar junto | ajustar os alertas e o dashboard junto, numa decisão |
+
+## Hipóteses, premissas e limitações
+
+- **Hipóteses sobre o ERP:** H1a a H4, em [Garantias e modos de falha](#garantias-e-modos-de-falha). O ERP simulado as segue; um ERP real precisa confirmá-las.
+- **Premissas de carga:** o pico de pedidos, a latência e o limite de chamadas do ERP e o tamanho do catálogo, de onde saem os parâmetros do design, estão no [`PROJECT.md`](.specs/project/PROJECT.md), seção "Hipóteses", e serão revistos com medição.
+- **ERP simulado:** roda no processo do worker, atrás da porta `ErpClient`; trocar pelo real muda o adaptador, e não a regra.
+- **Sem autenticação nem pagamento:** fora do escopo do desafio.
+- **Sem front-end:** a loja virtual não faz parte da entrega; o contrato ([`openapi.yaml`](openapi.yaml)) e o exemplo com `curl` em [Rodar](#rodar) fazem o papel dela.
+- **Sem deploy:** não há ambiente publicado nem pipeline de entrega; tudo sobe com `docker compose up`, e o CI só verifica.
+- **Uma instância de cada serviço no compose:** o desenho admite várias (fila, outbox e locks no banco), mas o compose sobe uma de cada.
+- **Alertas e dashboard são exemplos:** as regras estão neste README, sem um Prometheus nem um Alertmanager no compose; o `/metrics` é o mesmo que um Prometheus ou o Agent do Datadog coletaria.
+- **Nuvem como hipótese:** tudo roda localmente; o equivalente gerenciado de cada peça está no `ARCHITECTURE.md`, seção "A nuvem como hipótese de evolução".
+
+## Como a IA foi usada
+
+O código foi escrito por agentes do Claude Code num fluxo em que a verificação é automática e independente de quem escreve, e o mantenedor decide no plano e no merge (AD-012):
+
+1. **Plano:** a sessão principal propõe critérios de aceite com ID e o mantenedor aprova.
+2. **Testes antes do código:** o agente `test-writer` escreve os testes a partir dos critérios, sem ler a implementação.
+3. **Código:** o agente `implementer` escreve até os testes passarem, sem poder alterar testes, CI nem configuração de verificação.
+4. **Revisão:** o agente `reviewer`, só leitura, revisa cada parte do marco (uma etapa do [`ROADMAP.md`](.specs/project/ROADMAP.md)); o relatório vai ao PR sem edição, e a revisão só termina sem achado alto ou médio aberto (AD-015).
+5. **Merge:** só com CI verde e a aprovação do mantenedor, que responde pelo resultado.
+
+Os commits feitos com IA levam o trailer `Assisted-by: <papel>:<modelo>`, na convenção do kernel Linux ([`CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md)); o mantenedor é o autor e responde por eles. As regras abaixo são impostas pelo código, não só por instruções:
+
+| Regra | Onde é imposta | Teste |
+| --- | --- | --- |
+| Cada agente edita só os arquivos do seu papel | [`.claude/hooks/path-guard.mjs`](.claude/hooks/path-guard.mjs) | `FND-08` |
+| O `implementer` não termina com lint, tipos ou testes falhando, nem o `test-writer` com lint ou tipos; depois da terceira devolução, a parada passa como exceção registrada | [`.claude/hooks/subagent-stop.mjs`](.claude/hooks/subagent-stop.mjs) | `AI-03` |
+| Tamanho, complexidade e sentido das dependências do código | [`.oxlintrc.json`](.oxlintrc.json) (AD-026) | lint no CI |
+| A `main` só muda por PR aprovado e com CI verde | ruleset do GitHub (AD-013) | — |
+
+**Qualidade do código gerado.** Uma instrução sozinha não impede a IA de errar em silêncio. Cada tipo de erro que as revisões dos primeiros PRs acharam passou a ter uma checagem de máquina ou uma regra do processo; a checagem roda no primeiro momento em que já pega o erro: na edição, na parada do agente, no `pre-push` (`npm run verify`), no CI ou na execução agendada.
+
+| Risco no código gerado | Ferramenta ou prática | Critério |
+| --- | --- | --- |
+| Teste que não prova o que diz | testes escritos antes do código, a partir do critério; o ID do critério no nome de cada teste, conferido pelo lint; controle negativo nos testes de concorrência; a tabela critério × teste publicada pelo CI | `AI-38`, `AI-18`, `CHK-02` |
+| Teste apagado, pulado ou afrouxado para passar | o lint reprova `.only` e `.skip`, e o `implementer` não edita testes | `AI-02`, `FND-08` |
+| Garantia que só vale com mock | integração contra PostgreSQL e ElasticMQ reais, pelo Testcontainers; a regra dos testes proíbe mock de banco e de fila ([`.claude/rules/tests.md`](.claude/rules/tests.md)) | `FND-14` |
+| Casos que ninguém pensou | testes de propriedade (fast-check) nas funções que decidem prazos, classificam respostas e validam entradas; fuzzing da API pelo contrato (Schemathesis) | `FND-15`, `FND-16` |
+| SQL montado com entrada ou transação fora do lugar | Kysely com os tipos gerados do banco e regras de lint próprias | `AI-19`, `FND-09` |
+| Formato, tipos e estilo divergentes | Prettier, TypeScript com opções estritas e as regras a mais do oxlint; os limites de tamanho e de complexidade estão na tabela acima (AD-026) | `AI-34`, `AI-20` |
+| Código sem uso ou repetido | knip e jscpd, contra uma linha de base que só melhora | `AI-35`, `AI-36`, `AI-49` |
+| Cobertura caindo | cobertura medida no CI, com piso que só sobe | `AI-37`, `AI-49` |
+| Comentário que desliga uma checagem | teste que reprova os comentários de supressão do lint, do jscpd e da cobertura | `AI-47` |
+| Dependência vulnerável, adulterada ou recém-publicada | `npm audit`, `npm audit signatures`, a origem do lockfile conferida, espera mínima para versões novas e Dependabot | `AI-05`, `AI-39`, `AI-42`, `AI-45`, `AI-50` |
+| Falha de segurança no código ou no CI | CodeQL em todo PR, actionlint e zizmor nos workflows, e o `/security-review` antes de o PR sair do rascunho | `AI-44`, `AI-43`, `AI-16` |
+| Teste instável | a suíte embaralhada em várias sementes na execução agendada, que abre uma issue quando falha | `AI-46` |
+| O sistema montado, que nenhum teste vê inteiro | o `app-check`: sobe o compose e percorre o fluxo antes de o PR sair do rascunho | `AI-22` |
+
+O teste de mutação (Stryker), que mediria quantos erros plantados os testes pegam, não entrou: está nos "Adicionais" do [`ROADMAP.md`](.specs/project/ROADMAP.md).
+
+Os prompts que governam os agentes, as orientações do mantenedor que mudaram o rumo de cada marco e os erros da IA pegos antes do merge, com o relatório de revisão de cada um, estão no [`PROMPTS.md`](PROMPTS.md); os trechos que governam a fila e as respostas da IA recusadas ou corrigidas, no `ARCHITECTURE.md`, seção "Prompts de IA relevantes".
+
 ## Operação
 
 Tudo abaixo usa os nomes do `/metrics`, que estão na coluna "No Prometheus" do [catálogo de telemetria](.specs/features/casecellshop/telemetry.md); um teste confere cada nome, rótulo e valor das consultas desta seção contra ele (`OBS-03`).
@@ -215,6 +309,9 @@ Os objetivos são os do [`design.md`](.specs/features/casecellshop/design.md), s
 | Disponibilidade do checkout (`POST /checkout`) | 99,9% sem `5xx`; `4xx` não consome o orçamento | 0,1% |
 | Latência do checkout | 99% em até 500 ms | 1% |
 | Aceite ao faturamento | 99% dos pedidos aceitos com desfecho em até 60 s | 1% |
+
+<details>
+<summary>As consultas dos SLIs (PromQL)</summary>
 
 ```promql
 # SLI de disponibilidade da vitrine e do checkout: fração sem 5xx, por rota.
@@ -248,9 +345,14 @@ sum(rate(http_server_request_duration_count{http_route="/checkout", http_request
 )
 ```
 
+</details>
+
 ### Dashboard de exemplo
 
-Uma linha por área; cada consulta é um painel, com o título no comentário. A janela de 5 min é a dos painéis.
+Painéis da vitrine, do checkout, da fila, do ERP, do estoque e da sincronização. Uma linha por área; cada consulta é um painel, com o título no comentário. A janela de 5 min é a dos painéis.
+
+<details>
+<summary>As consultas dos painéis (PromQL)</summary>
 
 ```promql
 # Vitrine: requisições por segundo, por código de status
@@ -353,25 +455,11 @@ sum(increase(casecellshop_catalog_sync_corrections_total[1h]))
 sum(increase(casecellshop_catalog_sync_missing_skus_total[1h]))
 ```
 
+</details>
+
 ### Alertas
 
-As regras estão no formato de arquivo de regras do Prometheus ([regras de alerta](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)). O `promtool check rules` não roda aqui (a troca está no [`STATE.md`](.specs/project/STATE.md), em "Escolhas de ferramenta"): o teste do `OBS-03` lê cada `expr` pelo analisador oficial do PromQL (`@prometheus-io/lezer-promql`) e confere a sintaxe, o nome e os rótulos de cada série contra o catálogo, os valores das listas fechadas, o `for`, a severidade, o resumo e a âncora do runbook. Ele não avalia as regras contra dados. Cada uma traz a severidade (`page` acorda alguém; `ticket` vai para a fila do time) e o link do runbook.
-
-Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
-
-O alerta de API fora do ar lê o `up`, a série que o próprio Prometheus grava a cada coleta: 1 quando o alvo respondeu, 0 quando não ([séries geradas pela coleta](https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series), consultado em 02/11/2026). Com a API fora, nenhuma série de requisição chega, e nenhum *burn rate* dispara. O `job` das regras é o desta configuração de coleta, com os nomes dos serviços do compose:
-
-```yaml
-scrape_configs:
-  - job_name: casecellshop-api
-    static_configs:
-      - targets: ['api:3000']
-  - job_name: casecellshop-worker
-    static_configs:
-      - targets: ['worker:9464']
-```
-
-Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo, uma série por combinação dos valores dos atributos (`OBS-08`), como pede a documentação do Prometheus ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026): sem isso, a série nasceria com o primeiro evento, e o `increase` não contaria esse evento, porque não haveria amostra anterior. Um histograma não nasce em 0 (a API do OpenTelemetry não o permite), e por isso o alerta de erro de configuração do ERP lê o counter próprio dele, e não o `_count` do histograma de duração. Os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
+Cada regra traz a severidade (`page` acorda alguém; `ticket` vai para a fila do time) e o link do runbook. Os alertas de SLO seguem o *burn rate* em várias janelas: disparam quando o orçamento de erro de 30 dias está sendo gasto rápido demais.
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
@@ -388,6 +476,27 @@ Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo,
 | `CasecellshopSincronizacaoParada` | a última rodada completa tem mais de 3 min, a série some, ou a leitura dela falha, por 5 min | `page` | [Sincronização parada](#sincronização-parada) |
 | `CasecellshopVitrineServidaVelha` | a idade p99 da entrada servida passa de 30 s, por 5 min | `ticket` | [Vitrine servida velha](#vitrine-servida-velha) |
 | `CasecellshopVitrineComDadoErrado` | `price_changed` e `out_of_stock` passam de 10% dos checkouts decididos em 30 min, com ao menos 20 na janela, por 15 min | `ticket` | [Vitrine com dado errado](#vitrine-com-dado-errado) |
+
+<details>
+<summary>As regras do Prometheus (YAML), a configuração de coleta e como as regras foram montadas</summary>
+
+As regras estão no formato de arquivo de regras do Prometheus ([regras de alerta](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)). O `promtool check rules` não roda aqui (a troca está no [`STATE.md`](.specs/project/STATE.md), em "Escolhas de ferramenta"): o teste do `OBS-03` lê cada `expr` pelo analisador oficial do PromQL (`@prometheus-io/lezer-promql`) e confere a sintaxe, o nome e os rótulos de cada série contra o catálogo, os valores das listas fechadas, o `for`, a severidade, o resumo e a âncora do runbook. Ele não avalia as regras contra dados.
+
+Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
+
+O alerta de API fora do ar lê o `up`, a série que o próprio Prometheus grava a cada coleta: 1 quando o alvo respondeu, 0 quando não ([séries geradas pela coleta](https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series), consultado em 02/11/2026). Com a API fora, nenhuma série de requisição chega, e nenhum *burn rate* dispara. O `job` das regras é o desta configuração de coleta, com os nomes dos serviços do compose:
+
+```yaml
+scrape_configs:
+  - job_name: casecellshop-api
+    static_configs:
+      - targets: ['api:3000']
+  - job_name: casecellshop-worker
+    static_configs:
+      - targets: ['worker:9464']
+```
+
+Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo, uma série por combinação dos valores dos atributos (`OBS-08`), como pede a documentação do Prometheus ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026): sem isso, a série nasceria com o primeiro evento, e o `increase` não contaria esse evento, porque não haveria amostra anterior. Um histograma não nasce em 0 (a API do OpenTelemetry não o permite), e por isso o alerta de erro de configuração do ERP lê o counter próprio dele, e não o `_count` do histograma de duração. Os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
 
 ```yaml
 groups:
@@ -651,7 +760,21 @@ groups:
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#vitrine-com-dado-errado
 ```
 
+</details>
+
 ### Runbooks
+
+Um runbook por grupo de alertas:
+
+- [API fora do ar](#api-fora-do-ar)
+- [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout)
+- [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento)
+- [DLQ](#dlq)
+- [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração)
+- [Furo de estoque](#furo-de-estoque)
+- [Sincronização parada](#sincronização-parada)
+- [Vitrine com dado errado](#vitrine-com-dado-errado)
+- [Vitrine servida velha](#vitrine-servida-velha)
 
 Os comandos rodam com o compose no ar. Para ler o banco: `docker compose exec postgres psql -U casecellshop -d casecellshop`.
 
@@ -698,7 +821,7 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    docker compose exec worker node src/main/runbook.ts redrive
    ```
 
-   É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`). Rode-o fora de uma rodada da reconciliação, depois do log `casecellshop.outbox.reconciliation.completed`: no fim da rodada, as mensagens voltam a ficar visíveis (`ORD-14`). A saída diz quantas mensagens saíram da DLQ e quantas restam.
+   É seguro mesmo para pedidos que o ERP já tem: cada mensagem respeita o atraso mínimo entre duas chamadas ao ERP do mesmo pedido e consulta o ERP antes de criar (`ORD-07`). Rode-o fora de uma rodada da reconciliação, depois do log `casecellshop.outbox.reconciliation.completed`: no fim da rodada, as mensagens voltam a ficar visíveis (`ORD-14`). A saída diz quantas mensagens saíram da DLQ e quantas restam.
 
    A documentação da AWS não diz o que o `StartMessageMoveTask` faz com a mensagem em voo durante uma rodada; no compose, o ElasticMQ a tira da DLQ sem entregá-la à fila (risco R12 do [`STATE.md`](.specs/project/STATE.md)). Se o `redrive` cruzou uma rodada, confira os pedidos que chegaram à DLQ e seguem pendentes; um deles que não apareça nos logs do worker (`docker compose logs worker`, pelo `orderId`) ficou fora da fila, e nenhum comando do runbook o publica de novo: confirme no ERP (passo 3); se o ERP não o tem, cancele-o (passo 5) e avise o atendimento.
 
@@ -759,7 +882,12 @@ O cliente viu na vitrine um preço ou uma disponibilidade que o checkout recusou
 
 ### Datadog
 
-O mesmo `/metrics`, sem mudar o código. O Agent do Datadog coleta o endpoint pela integração OpenMetrics, configurada pelo `openmetrics_endpoint`, pelo `namespace` e pela lista `metrics`, de expressões regulares ([integração OpenMetrics](https://docs.datadoghq.com/integrations/openmetrics/), consultado em 02/11/2026). Um exemplo de `conf.d/openmetrics.d/conf.yaml`, com os nomes dos serviços do compose:
+O mesmo `/metrics`, sem mudar o código. O Agent do Datadog coleta o endpoint pela integração OpenMetrics, configurada pelo `openmetrics_endpoint`, pelo `namespace` e pela lista `metrics`, de expressões regulares ([integração OpenMetrics](https://docs.datadoghq.com/integrations/openmetrics/), consultado em 02/11/2026).
+
+<details>
+<summary>A configuração do Agent e o que muda nos nomes, nos traces e nos logs</summary>
+
+Um exemplo de `conf.d/openmetrics.d/conf.yaml`, com os nomes dos serviços do compose:
 
 ```yaml
 instances:
@@ -778,69 +906,7 @@ instances:
 - **Traces:** o Agent recebe OTLP por HTTP na porta 4318, com `DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT` ligado no Agent; no serviço, `OTEL_TRACES_EXPORTER=otlp` e `OTEL_EXPORTER_OTLP_ENDPOINT` apontando para ele ([OTLP no Agent](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest_in_the_agent/), consultado em 02/11/2026).
 - **Log e trace ligados:** o log já traz `trace_id` (32 caracteres hexadecimais) e `span_id` (16) no topo do JSON, e os traces e os logs levam `service`, `env` e `version`, os três da marcação unificada de serviço, que o Datadog exige para ligar os dois ([logs e traces do OpenTelemetry](https://docs.datadoghq.com/tracing/other_telemetry/connect_logs_and_traces/opentelemetry/) e [mapeamento da semântica](https://docs.datadoghq.com/opentelemetry/mapping/semantic_mapping/), consultados em 02/11/2026).
 
-## Riscos residuais
-
-O que as garantias não cobrem e como aparece na operação. A lista completa, com a mitigação de cada risco, está em "Riscos em aberto", no [`STATE.md`](.specs/project/STATE.md).
-
-| Risco | Como é detectado | O que resta |
-| --- | --- | --- |
-| Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | não é detectável pela loja; demonstrado no `ORD-06` | conferir as faturas no ERP real antes de confiar na H4 |
-| O ERP fatura sem estoque e fica negativo, contra a H2 (R9) | a sincronização grava zero e registra o caso em log | a loja para de vender o SKU até o estoque voltar |
-| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
-| Cache por instância: com N réplicas da API, uma expiração gera até N consultas à origem | cargas da origem no dashboard | aceito enquanto a origem é o banco da loja (AD-005) |
-| O ElasticMQ não é o SQS (R12) | o worker trata o *receipt handle* recusado e o sucesso aparente do mesmo jeito | na AWS, muda só o endereço; o `ListMessageMoveTasks` não é chamado |
-| O exportador Prometheus passa a acrescentar o sufixo de unidade (R13) | o teste dos nomes do `/metrics` (`OBS-07`) reprova no PR da atualização; o das consultas desta página (`OBS-03`) segue o `prometheusName` do gerador do catálogo, que precisa mudar junto | ajustar os alertas e o dashboard junto, numa decisão |
-
-## Hipóteses, premissas e limitações
-
-- **Hipóteses sobre o ERP:** H1a a H4, em [Garantias e modos de falha](#garantias-e-modos-de-falha). O ERP simulado as segue; um ERP real precisa confirmá-las.
-- **Premissas de carga:** o pico de pedidos, a latência e o limite de chamadas do ERP e o tamanho do catálogo, de onde saem os parâmetros do design, estão no [`PROJECT.md`](.specs/project/PROJECT.md), seção "Hipóteses", e serão revistos com medição.
-- **ERP simulado:** roda no processo do worker, atrás da porta `ErpClient`; trocar pelo real muda o adaptador, e não a regra.
-- **Sem autenticação nem pagamento:** fora do escopo do desafio.
-- **Uma instância de cada serviço no compose:** o desenho admite várias (fila, outbox e locks no banco), mas o compose sobe uma de cada.
-- **Alertas e dashboard são exemplos:** as regras estão neste README, sem um Prometheus nem um Alertmanager no compose; o `/metrics` é o mesmo que um Prometheus ou o Agent do Datadog coletaria.
-- **Nuvem como hipótese:** tudo roda localmente; o equivalente gerenciado de cada peça está no `ARCHITECTURE.md`, seção "A nuvem como hipótese de evolução".
-
-## Como a IA foi usada
-
-O código foi escrito por agentes do Claude Code num fluxo em que a verificação é automática e independente de quem escreve, e o mantenedor decide no plano e no merge (AD-012):
-
-1. **Plano:** a sessão principal propõe critérios de aceite com ID e o mantenedor aprova.
-2. **Testes antes do código:** o agente `test-writer` escreve os testes a partir dos critérios, sem ler a implementação.
-3. **Código:** o agente `implementer` escreve até os testes passarem, sem poder alterar testes, CI nem configuração de verificação.
-4. **Revisão:** o agente `reviewer`, só leitura, revisa cada fatia; o relatório vai ao PR sem edição, e a revisão só termina sem achado alto ou médio aberto (AD-015).
-5. **Merge:** só com CI verde e a aprovação do mantenedor, que responde pelo resultado.
-
-Os commits feitos com IA levam o trailer `Assisted-by: <papel>:<modelo>`, na convenção do kernel Linux ([`CONVENTIONS.md`](.specs/codebase/CONVENTIONS.md)); o mantenedor é o autor e responde por eles. As regras abaixo são impostas pelo código, não só por instruções:
-
-| Regra | Onde é imposta | Teste |
-| --- | --- | --- |
-| Cada agente edita só os arquivos do seu papel | [`.claude/hooks/path-guard.mjs`](.claude/hooks/path-guard.mjs) | `FND-08` |
-| O `implementer` não termina com lint, tipos ou testes falhando, nem o `test-writer` com lint ou tipos; depois da terceira devolução, a parada passa como exceção registrada | [`.claude/hooks/subagent-stop.mjs`](.claude/hooks/subagent-stop.mjs) | `AI-03` |
-| Tamanho, complexidade e sentido das dependências do código | [`.oxlintrc.json`](.oxlintrc.json) (AD-026) | lint no CI |
-| A `main` só muda por PR aprovado e com CI verde | ruleset do GitHub (AD-013) | — |
-
-**Qualidade do código gerado.** Uma instrução sozinha não impede a IA de errar em silêncio. Cada tipo de erro que as revisões dos primeiros PRs acharam passou a ter uma checagem de máquina ou uma regra do processo; a checagem roda no primeiro momento em que já pega o erro: na edição, na parada do agente, no `pre-push` (`npm run verify`), no CI ou na execução agendada.
-
-| Risco no código gerado | Ferramenta ou prática | Critério |
-| --- | --- | --- |
-| Teste que não prova o que diz | testes escritos antes do código, a partir do critério; o ID do critério no nome de cada teste, conferido pelo lint; controle negativo nos testes de concorrência; a tabela critério × teste publicada pelo CI | `AI-38`, `AI-18`, `CHK-02` |
-| Teste apagado, pulado ou afrouxado para passar | o lint reprova `.only` e `.skip`, e o `implementer` não edita testes | `AI-02`, `FND-08` |
-| Garantia que só vale com mock | integração contra PostgreSQL e ElasticMQ reais, pelo Testcontainers; a regra dos testes proíbe mock de banco e de fila ([`.claude/rules/tests.md`](.claude/rules/tests.md)) | `FND-14` |
-| Casos que ninguém pensou | testes de propriedade (fast-check) nas funções que decidem prazos, classificam respostas e validam entradas; fuzzing da API pelo contrato (Schemathesis) | `FND-15`, `FND-16` |
-| SQL montado com entrada ou transação fora do lugar | Kysely com os tipos gerados do banco e regras de lint próprias | `AI-19`, `FND-09` |
-| Formato, tipos e estilo divergentes | Prettier, TypeScript com opções estritas e as regras a mais do oxlint; os limites de tamanho e de complexidade estão na tabela acima (AD-026) | `AI-34`, `AI-20` |
-| Código sem uso ou repetido | knip e jscpd, contra uma linha de base que só melhora | `AI-35`, `AI-36`, `AI-49` |
-| Cobertura caindo | cobertura medida no CI, com piso que só sobe | `AI-37`, `AI-49` |
-| Comentário que desliga uma checagem | teste que reprova os comentários de supressão do lint, do jscpd e da cobertura | `AI-47` |
-| Dependência vulnerável, adulterada ou recém-publicada | `npm audit`, `npm audit signatures`, a origem do lockfile conferida, espera mínima para versões novas e Dependabot | `AI-05`, `AI-39`, `AI-42`, `AI-45`, `AI-50` |
-| Falha de segurança no código ou no CI | CodeQL em todo PR, actionlint e zizmor nos workflows, e o `/security-review` antes de o PR sair do rascunho | `AI-44`, `AI-43`, `AI-16` |
-| Teste instável | a suíte embaralhada em várias sementes na execução agendada, que abre uma issue quando falha | `AI-46` |
-| O sistema montado, que nenhum teste vê inteiro | o `app-check`: sobe o compose e percorre o fluxo antes de o PR sair do rascunho | `AI-22` |
-
-O teste de mutação (Stryker), que mediria quantos erros plantados os testes pegam, não entrou: está nos "Adicionais" do [`ROADMAP.md`](.specs/project/ROADMAP.md).
-
-Os prompts que governam os agentes, as orientações do mantenedor que mudaram o rumo de cada marco e os erros da IA pegos antes do merge, com o relatório de revisão de cada um, estão no [`PROMPTS.md`](PROMPTS.md); os trechos que governam a fila e as respostas da IA recusadas ou corrigidas, no `ARCHITECTURE.md`, seção "Prompts de IA relevantes".
+</details>
 
 ## Documentação
 
