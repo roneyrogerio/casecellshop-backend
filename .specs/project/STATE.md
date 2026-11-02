@@ -816,7 +816,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-029 · Métricas e eventos de log com nomes do OpenTelemetry, num catálogo tipado
 
-**Status:** proposta (01/11/2026)
+**Status:** aceita (02/11/2026, PR #33)
 
 **Contexto.** As métricas usavam nomes próprios no estilo do Prometheus, com a unidade no nome (`_seconds`) e no `unit` ao mesmo tempo, `_total` escrito à mão e labels HTTP próprios, enquanto os spans já usavam os atributos da convenção do OpenTelemetry. Dois contadores do ERP repetiam o histograma de duração. Os eventos de log tinham dois estilos (`checkout.accepted` e `health_failed`), três nomes para o mesmo fato e dezesseis eventos fora do `design.md`. Nenhum lugar listava os nomes e os valores dos labels, e um teste só pegava um nome errado se o citasse.
 
@@ -861,7 +861,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 ### AD-030 · A sincronização lê o catálogo inteiro, mas grava só o que mudou
 
-**Status:** proposta (02/11/2026). Altera, na AD-009, "um `UPDATE` por SKU" e "Toda rodada atualiza todos os SKUs".
+**Status:** aceita (02/11/2026, PR #40). Altera, na AD-009, "um `UPDATE` por SKU" e "Toda rodada atualiza todos os SKUs".
 
 **Contexto.** A AD-009 manda um comando por SKU em toda rodada. Com alguns milhares de SKUs e uma rodada por minuto, são dois comandos por SKU por minuto (produto e estoque), mesmo quando nada mudou no ERP: com 5 mil SKUs, 10 mil comandos curtos por minuto que reescrevem o mesmo valor. A leitura do ERP continua completa: para o catálogo, a API do ERP expõe só a consulta de produtos, preços e estoque (`PROJECT.md`, "Restrições"), então não se pode contar com um filtro "alterados desde", e só a leitura completa mostra os SKUs removidos (`CAT-11`).
 
