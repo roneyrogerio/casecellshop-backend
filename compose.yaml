@@ -131,6 +131,8 @@ services:
       - /reports
     volumes:
       - ./openapi.yaml:/schema/openapi.yaml:ro
+      # Em /app, o diretório de trabalho da imagem, onde o Schemathesis procura a configuração.
+      - ./schemathesis.toml:/app/schemathesis.toml:ro
       - ./schemathesis-report:/reports
     depends_on:
       api:
