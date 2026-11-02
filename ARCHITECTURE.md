@@ -78,6 +78,8 @@ O que B entrega:
 
 **Por que A.** A reserva é uma instrução só, `UPDATE inventory SET reserved = reserved + :q WHERE sku = :sku AND on_hand - reserved >= :q`, no último passo da transação do checkout. O PostgreSQL trava a linha, e um segundo comprador concorrente espera e reavalia a condição. Zero linhas afetadas significa sem estoque, e a resposta é `409`. B é correto, mas faz duas idas ao banco e põe a regra na aplicação. C tira a reserva da transação do pedido, que é justamente o que precisa ser atômico.
 
+**Risco residual de A.** O `on_hand` espelha o ERP com a defasagem da sincronização, e uma venda em outro canal abre um furo: a loja promete mais do que o ERP tem. O furo aparece em `casecellshop.inventory.oversold_skus`, e o ERP recusa faturar sem estoque (H2), então o pedido recusado termina `failed`, com a reserva liberada **[implementado: `src/checkout/inventory-gauges.ts`, `OBS-06`; a recusa, `ORD-08`]**.
+
 O que A entrega:
 
 - a loja controla a **promessa** de estoque: `on_hand` espelha o ERP, `reserved` é da loja e `sold_total` só cresce **[implementado: `migrations/store/20260102000000_create_store.ts`, `src/checkout/repository.ts`, `CHK-01`; a baixa no faturamento: `src/billing/conclude.ts`, `ORD-17`]** (AD-002);
@@ -86,7 +88,7 @@ O que A entrega:
 
 ### Problema 3: checkout frágil
 
-**Causa raiz** (`DOC-DIA-01`). O faturamento é síncrono: a resposta ao cliente espera o ERP, cuja mediana é de cerca de 3 s, com p99,9 de 8 s. Quando o ERP demora, o cliente ou o próximo salto dá timeout e tenta de novo, e sem idempotência cada tentativa pode virar um pedido novo. Não há registro durável do pedido antes da chamada, então uma queda no meio deixa o pedido sem rastro, e sem correlação por pedido não há como saber o que aconteceu.
+**Causa raiz** (`DOC-DIA-01`). O faturamento é síncrono: a resposta ao cliente espera o ERP, cuja mediana é de cerca de 3 s, com p99,9 de 8 s, pela premissa de carga. Quando o ERP demora, o cliente ou o próximo salto dá timeout e tenta de novo, e sem idempotência cada tentativa pode virar um pedido novo. Não há registro durável do pedido antes da chamada, então uma queda no meio deixa o pedido sem rastro, e sem correlação por pedido não há como saber o que aconteceu.
 
 **Impacto** (`DOC-DIA-02`):
 
@@ -96,20 +98,20 @@ O que A entrega:
 
 **Caminhos** (`DOC-DIA-03`):
 
-| | A. Síncrono, com timeout maior e retry | **B. `202`, outbox no banco da loja e worker** (escolhido) | C. `202` com publicação num broker externo (SQS, RabbitMQ) |
+| | A. Síncrono, com timeout maior e retry | B. `202` e a outbox como fila, no banco da loja (AD-003) | **C. `202`, outbox, *Message Relay* e SQS** (escolhido, AD-021) |
 | --- | --- | --- | --- |
-| Custo | Nenhum | Baixo: o banco já existe | Médio: um broker gerenciado ou operado |
-| Complexidade | Baixa, mas o retry precisa de idempotência no ERP | Média: worker, lease, retry, DLQ e reconciliação | Alta: escrita dupla entre o banco e o broker, ou um relay a mais |
-| Latência para o cliente | A do ERP: segundos | A de uma transação curta, sem o ERP | A de uma transação mais a publicação |
-| Consistência | Duplica pedido sob retry sem idempotência | O pedido e a mensagem nascem na mesma transação: sem pedido fantasma nem mensagem fantasma | Publicar antes de gravar gera mensagem fantasma; publicar depois gera pedido fantasma |
-| Esforço operacional | Baixo, mas cada lentidão do ERP vira incidente | Médio: a DLQ e o runbook | Médio a alto: o broker e a DLQ dele |
+| Custo | Nenhum | Baixo: só o banco da loja, que já existe | Médio: uma fila SQS com DLQ (o ElasticMQ no compose) e o processo do relay |
+| Complexidade | Baixa, mas o retry precisa de idempotência no ERP | Média: worker com lease e token, retry, DLQ numa tabela e reconciliação | Alta: relay, worker, *visibility timeout*, permissão de chamada por pedido contra a mensagem repetida (AD-024), DLQ e reconciliação |
+| Latência para o cliente | A do ERP: segundos | A de uma transação curta, sem o ERP | A mesma de B: o relay publica depois do commit |
+| Consistência | Duplica pedido sob retry sem idempotência; uma queda no meio deixa o pedido sem rastro | O pedido e a mensagem nascem na mesma transação: sem pedido fantasma nem mensagem fantasma | A mesma transação de B; o relay publica pelo menos uma vez, e o worker tolera a mensagem repetida |
+| Esforço operacional | Baixo, mas cada lentidão do ERP vira incidente | Médio: polling no banco, DLQ e reprocessamento em lote por SQL | Médio: a fila e o relay para operar; a DLQ, o *redrive* e a contagem de recebimentos ficam com o SQS |
 
-**Por que B.** O checkout grava o pedido, a reserva e a mensagem de saída numa transação só e responde `202 Accepted` com `Location` e `Retry-After`. O cliente acompanha em `GET /orders/{orderId}/status`. Um *Message Relay* publica a mensagem no SQS depois do commit, e o worker consome do SQS e chama o ERP fora da transação (AD-021). A resolve a latência só no papel e piora o problema de duplicação. C publicando direto no broker, sem outbox, não é correto, porque o banco e o broker não têm uma transação comum; por isso B usa o SQS atrás da outbox, e não no lugar dela.
+**Por que C.** O checkout grava o pedido, a reserva e a mensagem de saída numa transação só e responde `202 Accepted` com `Location` e `Retry-After`. O cliente acompanha em `GET /orders/{orderId}/status`. Um *Message Relay* publica a mensagem no SQS depois do commit, e o worker consome do SQS e chama o ERP fora da transação. A resolve a latência só no papel e piora o problema de duplicação. B e C têm a mesma transação única; em C, o SQS assume o que em B a tabela fazia à mão: esconder a mensagem em processamento, contar os recebimentos, mandar para a DLQ e devolver à fila. É também a mesma fila que vai para a AWS, e o caminho para um segundo consumidor dos eventos de pedido. O custo é um contêiner, uma dependência e o relay a mais, e a entrega pelo menos uma vez, que a permissão de chamada por pedido absorve (AD-021, AD-024). Publicar direto num broker, sem outbox, ficou fora da comparação: o banco e o broker não têm transação comum, e publicar antes gera mensagem fantasma, e depois, pedido fantasma.
 
-O que B entrega:
+O que C entrega:
 
 - `Idempotency-Key` obrigatório, gravado na transação do pedido antes de qualquer reserva: duplo clique e retry do cliente devolvem o pedido original **[implementado: `src/checkout/repository.ts`, `CHK-03`, `CHK-04`]** (AD-006, AD-020);
-- retry com atraso mínimo de 45 s e *full jitter*, até 12 tentativas, e depois a DLQ **[implementado]** (AD-003);
+- retry com atraso mínimo de 45 s e *full jitter*, até 12 recebimentos, e depois a DLQ do SQS **[implementado]** (AD-021);
 - antes de criar de novo, o worker consulta o ERP pela referência do pedido, para não faturar duas vezes **[implementado]**;
 - reconciliação periódica da DLQ e um runbook para reprocessar em lote ou cancelar **[implementado]**;
 - um semáforo de 30 chamadas simultâneas ao ERP, o que ele aguenta pela premissa de carga **[implementado]**.
@@ -493,9 +495,9 @@ Dois pedidos com os mesmos SKUs em ordens diferentes (`{A, B}` e `{B, A}`) podem
 - **duplo clique:** as duas requisições chegam juntas, e a segunda espera no índice único até a primeira terminar. Se a primeira confirmar, a segunda devolve o mesmo pedido; se a espera passar do `lock_timeout`, a resposta é `409` (`idempotency-key-in-progress`), e o cliente repete;
 - **a mesma chave com outro pedido:** o hash difere, e a resposta é `422`, para um erro do cliente não virar um pedido trocado;
 - **o mesmo pedido escrito de outro jeito** (itens em outra ordem): o hash normalizado é o mesmo, e a resposta é o pedido original;
-- **reprocessamento no worker:** o faturamento usa o `orderId` como referência no ERP, que deduplica pela referência, e o worker consulta o ERP antes de criar de novo. O mesmo pedido não é faturado duas vezes **[implementado, `ORD-01` a `ORD-07`]** (AD-003, H1a e H1b).
+- **reprocessamento no worker:** o faturamento usa o `orderId` como referência no ERP, e o worker consulta o ERP por ela antes de criar de novo (H1a), 45 s depois do início da chamada anterior (H4). Com a H1b, o ERP também recusa a segunda criação com a mesma referência, e o pedido não é faturado duas vezes; sem a H1b e acima da H4, pode haver duas faturas, como o `ORD-06` demonstra (R6) **[implementado, `ORD-01` a `ORD-07`]** (AD-003, AD-024).
 
-Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode repetir com a mesma chave. A chave vale por pelo menos 24 h.
+Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode repetir com a mesma chave. A chave não expira: nenhum processo apaga `idempotency_keys`, então a mesma chave devolve o mesmo pedido a qualquer tempo. A limpeza das chaves antigas, depois de pelo menos 24 h, fica para a arquitetura alvo **[alvo]**.
 
 ### Como o teste prova que não há overselling
 
