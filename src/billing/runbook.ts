@@ -1,5 +1,9 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
+import { sql } from 'kysely';
 import type { Pool } from 'pg';
+import { createDb, runInTransaction } from '../db/database.ts';
+import { outbox, SETTLE_WINDOW_MS, takeCallPermit } from './call-permit.ts';
+import { applyConclusion } from './conclude.ts';
 import type { ErpClient } from '../erp/erp-client.ts';
 import { createQueue, startRedrive } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
@@ -62,17 +66,86 @@ export type CancelOrderResult =
   | { kind: 'permit_lost' };
 
 // Cancela o pedido ainda pendente que o ERP não tem, só fora da janela de assentamento (AD-031).
-export function cancelOrder(
-  _dependencies: CancelOrderDependencies,
-  _orderId: string,
+export async function cancelOrder(
+  { pool, erp, settleWindowMs = SETTLE_WINDOW_MS }: CancelOrderDependencies,
+  orderId: string,
 ): Promise<CancelOrderResult> {
-  return Promise.reject(new Error('não implementado'));
+  const db = createDb(pool);
+  // A janela no lugar do atraso mínimo: o mesmo UPDATE confere que a última chamada é antiga e impede
+  // outra tentativa de chamar o ERP enquanto o cancelamento consulta. Sem somar create_calls nem zerar dead_at.
+  const permit = await takeCallPermit(db, orderId, {
+    minDelayMs: settleWindowMs,
+    clearDead: false,
+  });
+  if (!permit.granted)
+    return { kind: 'too_recent', retryInMs: permit.retryInMs };
+
+  // Fora de transação: o ERP nunca é chamado com a transação aberta.
+  const found = await erp.findOrderByReference(orderId);
+  if (found.kind === 'found') return { kind: 'erp_has_order' };
+  if (found.kind !== 'not_found') return { kind: 'erp_unavailable' };
+
+  return runInTransaction(db, async (trx): Promise<CancelOrderResult> => {
+    // Ordem de lock: a linha da outbox primeiro. O token confere que ninguém tomou a permissão depois da consulta.
+    const row = await trx
+      .selectFrom('outbox')
+      .select('order_id')
+      .where('order_id', '=', orderId)
+      .where('call_token', '=', permit.token)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row) return { kind: 'permit_lost' };
+    // Publicada, o relay para de tentar uma linha que já não passa no schema da mensagem.
+    await trx
+      .updateTable('outbox')
+      .set({
+        published_at: outbox.fn.coalesce('published_at', sql<Date>`now()`),
+      })
+      .where('order_id', '=', orderId)
+      .execute();
+    const conclusion = await applyConclusion(trx, orderId, {
+      kind: 'failed',
+      reason: 'cancelled',
+    });
+    return { kind: conclusion.orderChanged ? 'cancelled' : 'unchanged' };
+  });
 }
 
 // A mensagem ao operador de cada resultado, e se o comando sai com erro (as recusas).
 export function describeCancel(
-  _orderId: string,
-  _result: CancelOrderResult,
+  orderId: string,
+  result: CancelOrderResult,
 ): { message: string; failed: boolean } {
-  throw new Error('não implementado');
+  switch (result.kind) {
+    case 'cancelled':
+      return {
+        message: `Pedido ${orderId} cancelado: o ERP não o tem e a reserva de estoque foi liberada.`,
+        failed: false,
+      };
+    case 'unchanged':
+      return {
+        message: `Pedido ${orderId} já tinha desfecho: nada mudou.`,
+        failed: false,
+      };
+    case 'too_recent':
+      return {
+        message: `Pedido ${orderId} não cancelado: a última chamada ao ERP é recente; tente de novo em cerca de ${Math.max(1, Math.ceil(result.retryInMs / 60_000))} min.`,
+        failed: true,
+      };
+    case 'erp_has_order':
+      return {
+        message: `Pedido ${orderId} não cancelado: o ERP já tem o pedido; confira a fatura antes de decidir.`,
+        failed: true,
+      };
+    case 'erp_unavailable':
+      return {
+        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou; tente de novo mais tarde.`,
+        failed: true,
+      };
+    case 'permit_lost':
+      return {
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento; tente de novo.`,
+        failed: true,
+      };
+  }
 }
