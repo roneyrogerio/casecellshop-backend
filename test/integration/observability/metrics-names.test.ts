@@ -4,10 +4,14 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
+import { DEFAULT_CATALOG_SYNC_CONFIG } from '../../../src/catalog/config.ts';
+import { createCatalogSync } from '../../../src/catalog/sync.ts';
 import { fromPino } from '../../../src/shared/logging.ts';
+import { createSemaphore } from '../../../src/shared/semaphore.ts';
 import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
+import { seedErpProduct } from '../../helpers/erp.ts';
 import {
   parseExposition,
   parseUnits,
@@ -234,6 +238,31 @@ async function exercise(running: WorkerSuite): Promise<void> {
     () => stealMessage(world, stolen.orderId),
   );
   expect(await poll()).toBe(1);
+
+  // Sincronização, no processo do worker: uma correção de preço (o ERP cobra mais que a loja guardou) e um SKU da
+  // loja ausente do ERP, para as três métricas casecellshop.catalog.sync.* terem ponto.
+  await seedCatalog(running.pool, [{ sku: 'METRICS-NAMES-GONE', onHand: 3 }]);
+  await seedErpProduct(running.database.erpPool, {
+    sku: 'METRICS-NAMES-1',
+    name: 'Capinha METRICS-NAMES-1',
+    priceCents: 5990,
+    onHand: 10,
+  });
+  const sync = createCatalogSync({
+    pool: running.pool,
+    erp: world.erp,
+    semaphore: createSemaphore(30),
+    clock: world.clock,
+    logger: fromPino(pino({ level: 'silent' })),
+    telemetry: workerTelemetry,
+    config: DEFAULT_CATALOG_SYNC_CONFIG,
+  });
+  const round = await sync.runRound();
+  expect(round.complete, 'a sincronização leu o catálogo todo').toBe(true);
+  expect(
+    round.missingCount,
+    'a sincronização zerou o SKU ausente',
+  ).toBeGreaterThanOrEqual(1);
 }
 
 beforeAll(async () => {
