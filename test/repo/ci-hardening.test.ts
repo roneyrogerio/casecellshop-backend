@@ -5,7 +5,9 @@ import { parse } from 'yaml';
 import { repoRoot as root } from '../helpers/repo-root.ts';
 
 interface Step {
+  id?: string;
   name?: string;
+  env?: Record<string, unknown>;
   if?: string;
   uses?: string;
   run?: string;
@@ -760,5 +762,100 @@ describe('AI-05 o ci.yml é endurecido', () => {
     ) as { scripts: Record<string, string> };
 
     expect(pkg.scripts['check:scripts']).toBeTruthy();
+  });
+});
+
+// AI-53 e AI-05: o job `changes` e os passos de limpeza do `test` e do `api-fuzz` rodam no PR, então entram nas regras
+// do ci.yml: action fixada por SHA, checkout sem a credencial e nenhum valor do contexto interpolado no `run:` (o
+// valor entra pelo `env`).
+function jobOnly(workflow: Workflow, id: string): Workflow {
+  const job = workflow.jobs?.[id];
+  return { jobs: job === undefined ? {} : { [id]: job } };
+}
+
+// Os `run:` que interpolam uma expressão do contexto: o PR controla parte do contexto (nomes de ramo, título).
+function interpolatedRuns(steps: Step[]): string[] {
+  return steps
+    .map((step) => step.run ?? '')
+    .filter((run) => run.includes('${{'));
+}
+
+const CHANGES_NAME = 'Mudanças do PR';
+
+const GOOD_CHANGES = parse(`
+jobs:
+  changes:
+    name: ${CHANGES_NAME}
+    steps:
+      - uses: actions/checkout@${GOOD_SHA} # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - id: decide
+        env:
+          EVENT_NAME: \${{ github.event_name }}
+        run: echo "docs_only=false" >> "$GITHUB_OUTPUT"
+`) as Workflow;
+
+const BAD_CHANGES = parse(`
+jobs:
+  changes:
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: decide
+        run: echo "\${{ github.event_name }}" >> "$GITHUB_OUTPUT"
+`) as Workflow;
+
+describe('AI-53 as regras de endurecimento enxergam o job changes (controle negativo)', () => {
+  it('AI-05 o job changes correto passa nas três regras (controle positivo)', () => {
+    expect(unpinned(GOOD_CHANGES)).toEqual([]);
+    expect(checkoutsWithCredentials(GOOD_CHANGES)).toEqual([]);
+    expect(interpolatedRuns(stepsOf(GOOD_CHANGES))).toEqual([]);
+  });
+
+  it('AI-05 o job changes com o checkout por tag, sem persist-credentials e com a expressão no run reprova nas três regras', () => {
+    expect(unpinned(BAD_CHANGES)).toEqual(['actions/checkout@v7']);
+    expect(checkoutsWithCredentials(BAD_CHANGES)).toHaveLength(1);
+    expect(interpolatedRuns(stepsOf(BAD_CHANGES))).toHaveLength(1);
+  });
+});
+
+describe('AI-53 o job changes e os passos de limpeza do ci.yml seguem as regras de endurecimento', () => {
+  const changes = jobOnly(ci, 'changes');
+  const cleanupSteps = ['test', 'api-fuzz'].flatMap((id) =>
+    stepsOf(jobOnly(ci, id)).filter((step) =>
+      (step.run ?? '').includes('DOCS_ONLY_PATHS'),
+    ),
+  );
+
+  it('AI-05 o job changes tem o checkout fixado por SHA de 40 hexadecimais e sem guardar a credencial', () => {
+    const checkouts = stepsOf(changes).filter((step) =>
+      (step.uses ?? '').startsWith('actions/checkout@'),
+    );
+
+    expect(checkouts).toHaveLength(1);
+    expect(unpinned(changes)).toEqual([]);
+    expect(checkoutsWithCredentials(changes)).toEqual([]);
+    expect(checkouts[0]?.with?.['persist-credentials']).toBe(false);
+  });
+
+  it('AI-05 o passo decide recebe o evento por env e não interpola nenhuma expressão no run', () => {
+    const decide = stepsOf(changes).find((step) => step.id === 'decide');
+
+    expect(decide).toBeDefined();
+    expect(decide?.env?.['EVENT_NAME']).toBe('${{ github.event_name }}');
+    expect(interpolatedRuns(stepsOf(changes))).toEqual([]);
+  });
+
+  it('AI-05 os passos de limpeza do test e do api-fuzz leem a lista do ambiente e não interpolam expressão no run', () => {
+    expect(cleanupSteps).toHaveLength(2);
+    expect(interpolatedRuns(cleanupSteps)).toEqual([]);
+  });
+
+  it('AI-05 nenhum run: do ci.yml interpola github.base_ref nem github.head_ref, com o job changes incluído', () => {
+    expect(stepsOf(changes).length).toBeGreaterThan(0);
+    expect(interpolatedRefs(ci)).toEqual([]);
   });
 });
