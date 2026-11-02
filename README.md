@@ -112,9 +112,9 @@ O `openapi.yaml` sai do contrato em zod e o [catálogo de telemetria](.specs/fea
 
 ## As cinco perguntas
 
-As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada uma com os critérios `DOC-*` que a conferem; o texto entregue, na ordem do enunciado, está no [`RESPOSTAS.md`](RESPOSTAS.md) (`DOC-ENT-01`).
+As respostas da Parte 1.A estão no [`ARCHITECTURE.md`](ARCHITECTURE.md), cada uma com os critérios `DOC-*` que a conferem; o texto entregue, na ordem do enunciado, está no [`RESPOSTAS.md`](RESPOSTAS.md) (`DOC-ENT-01`). A coluna "Implementação" diz se o código que a resposta descreve já está pronto ou em qual marco entra.
 
-| Pergunta | Seção do `ARCHITECTURE.md` | Critérios | Estado |
+| Pergunta | Seção do `ARCHITECTURE.md` | Critérios | Implementação |
 | --- | --- | --- | --- |
 | 1. Diagnóstico, trade-offs e arquitetura alvo | "Diagnóstico e arquitetura alvo" | `DOC-DIA-01` a `06` | pronto |
 | 2. Cache, invalidação e vitrine | "Cache e performance da vitrine" | `DOC-CAC-01` a `04` | M4 |
@@ -153,6 +153,8 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 - **H3:** o ERP fatura pelo preço enviado.
 - **H4:** o ERP conclui ou abandona uma criação em até 40 s.
 
+Um ID com o marco entre parênteses é de um critério que ainda não está pronto; a linha descreve o desenho que ele vai provar.
+
 | Garantia | Depende de | Teste |
 | --- | --- | --- |
 | Nenhuma venda além do estoque, com 50 checkouts simultâneos | o banco da loja | `CHK-01`, `CHK-02` (controle negativo) |
@@ -165,15 +167,15 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | Estoque baixado uma vez só, mesmo com conclusões simultâneas | o banco da loja | `ORD-17` |
 | Reserva liberada quando o ERP recusa o pedido | H2 | `ORD-08` |
 | Todo pedido aceito termina faturado, falho ou na DLQ, de onde sai pela reconciliação ou pelo runbook | H1a | `ORD-13`, `ORD-14`, `ORD-15` |
-| Vitrine sem preço ou disponibilidade defasados além do limite da meta 2 | a sincronização com o ERP | `CAT-06`, `CAT-07` |
-| Um pedido sem desfecho em 60 s é contado uma vez, com várias réplicas da API | o banco da loja | `OBS-04` |
+| Vitrine sem preço ou disponibilidade defasados além do limite da meta 2 | a sincronização com o ERP | `CAT-06`, `CAT-07` (M4) |
+| Um pedido sem desfecho em 60 s é contado uma vez, com várias réplicas da API | o banco da loja | `OBS-04` (M5) |
 
 | Falha | Detecção | Mitigação | Teste |
 | --- | --- | --- | --- |
 | ERP lento | timeout de 10 s na camada anticorrupção; alerta [ERP falhando](#erp-falhando-ou-com-erro-de-configuração) | a mensagem volta à fila; nova tentativa depois do atraso mínimo, consultando antes de criar | `ORD-21`, `ORD-04` |
 | ERP fora | desfecho `transient` no histograma do ERP; alertas [ERP falhando](#erp-falhando-ou-com-erro-de-configuração) e [Pendência antiga](#pendência-antiga-e-burn-rate-do-faturamento) | retry com espera crescente; o checkout continua e os pedidos esperam com a reserva | `ORD-13`, `ORD-21` |
 | ERP fora além da janela de retry | alerta [DLQ](#dlq) | a mensagem vai para a DLQ com a reserva; a reconciliação fatura os pedidos que o ERP já tem, e o runbook trata o resto | `ORD-13`, `ORD-14`, `ORD-07` |
-| ERP com credencial ou rota errada | desfecho `config_error`; alerta [ERP com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) | o pedido não falha: a mensagem volta à fila até a configuração ser corrigida | `ORD-09`, `ORD-10` |
+| ERP com credencial ou rota errada | desfecho `config_error`; alerta [ERP com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) | o pedido não falha: a mensagem volta à fila e, depois de 12 recebimentos (cerca de 23 min), vai para a DLQ com a reserva; corrigida a configuração, o `redrive` a reprocessa | `ORD-09`, `ORD-10` |
 | ERP que fatura e não responde | timeout ou `502` na chamada | a próxima tentativa consulta pela referência antes de criar | `ORD-03`, `ORD-05` |
 | ERP que fatura depois do timeout | timeout na chamada | a próxima tentativa só sai depois do atraso mínimo (H4) e consulta antes de criar | `ORD-04` |
 | ERP acima do limite da H4 e sem a H1b | não detectável pela loja | duas faturas, ou o pedido falho com uma fatura que aparece depois; demonstrado no teste e declarado como risco (R6) | `ORD-06` |
@@ -182,9 +184,9 @@ As garantias dependem de hipóteses sobre o ERP, que é legado e não pode mudar
 | Banco indisponível no checkout | `lock_timeout` ou falha de conexão; burn rate do checkout | `503` com `Retry-After`, sem reserva parcial | `CHK-08` |
 | Banco falha ao gravar o desfecho | erro na transação de conclusão | até 5 repetições; depois a mensagem volta à fila, sem ir para a DLQ | `ORD-16` |
 | SKU disputado por muitos checkouts | `409` por falta de estoque no desfecho do checkout | `UPDATE` condicional na linha do estoque, sem venda além dele | `CHK-01`, `CHK-07` |
-| Origem do cache em erro | consultas à origem com `error`; alerta [Vitrine servida velha](#vitrine-servida-velha) | serve a última entrada até o teto de 60 s, sem esperar a origem durante a pausa; sem entrada, `503` | `CAT-04` |
-| Sincronização parada | idade da sincronização; alerta [Sincronização parada](#sincronização-parada) | a loja segue com o último estoque e preço conhecidos; o checkout decide pelo banco | `CAT-09`, `CAT-11` |
-| Venda em outro canal | SKUs com `reserved > on_hand` e rejeições por falta de estoque; alerta [Furo de estoque](#furo-de-estoque) | a sincronização desconta as vendas da loja depois da leitura; o ERP recusa sem estoque (H2) e a reserva é liberada | `CAT-07`, `OBS-06`, `ORD-08` |
+| Origem do cache em erro | consultas à origem com `error`; alerta [Vitrine servida velha](#vitrine-servida-velha) | serve a última entrada até o teto de 60 s, sem esperar a origem durante a pausa; sem entrada, `503` | `CAT-04` (M4) |
+| Sincronização parada | idade da sincronização; alerta [Sincronização parada](#sincronização-parada) | a loja segue com o último estoque e preço conhecidos; o checkout decide pelo banco | `CAT-09`, `CAT-11` (M4) |
+| Venda em outro canal | SKUs com `reserved > on_hand` e rejeições por falta de estoque; alerta [Furo de estoque](#furo-de-estoque) | a sincronização desconta as vendas da loja depois da leitura; o ERP recusa sem estoque (H2) e a reserva é liberada | `CAT-07` (M4), `OBS-06` (M5), `ORD-08` |
 | Preço alterado entre a vitrine e o checkout | `409` com o preço atual; log `casecellshop.checkout.price_changed` | nada é reservado; o cliente confirma o preço novo | `CHK-06` |
 
 ## Operação
@@ -209,8 +211,13 @@ Os objetivos são os do [`design.md`](.specs/features/casecellshop/design.md), s
 
 ```promql
 # SLI de disponibilidade da vitrine e do checkout: fração sem 5xx, por rota.
+# Sem nenhum 5xx, o numerador não tem série; o "or ... * 0" o completa com zero, e o SLI sai 1.
 1 - (
-  sum by (http_route) (rate(http_server_request_duration_count{http_route=~"/products|/checkout", http_response_status_code=~"5.."}[30d]))
+  (
+    sum by (http_route) (rate(http_server_request_duration_count{http_route=~"/products|/checkout", http_response_status_code=~"5.."}[30d]))
+    or
+    sum by (http_route) (rate(http_server_request_duration_count{http_route=~"/products|/checkout"}[30d])) * 0
+  )
   /
   sum by (http_route) (rate(http_server_request_duration_count{http_route=~"/products|/checkout"}[30d]))
 )
@@ -226,8 +233,9 @@ sum(rate(http_server_request_duration_bucket{http_route="/checkout", http_reques
 sum(rate(http_server_request_duration_count{http_route="/checkout", http_request_method="POST"}[30d]))
 
 # SLI do aceite ao faturamento: os pedidos sem desfecho em 60 s, marcados uma vez pela API (OBS-04), sobre os aceitos.
+# Sem nenhum pedido sem desfecho, o counter ainda não existe; o "or vector(0)" o completa com zero.
 1 - (
-  sum(increase(casecellshop_order_stuck_total[30d]))
+  (sum(increase(casecellshop_order_stuck_total[30d])) or vector(0))
   /
   sum(increase(casecellshop_checkout_requests_total{casecellshop_checkout_outcome="accepted"}[30d]))
 )
@@ -334,7 +342,7 @@ As regras estão no formato de arquivo de regras do Prometheus ([regras de alert
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
 
-Um counter só aparece no `/metrics` depois do primeiro registro. Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio.
+Um counter só aparece no `/metrics` depois do primeiro registro, já com o valor 1, e o `increase` não conta esse primeiro registro, porque não há amostra anterior. A documentação do Prometheus pede exportar `0` de antemão para toda série que se sabe que vai existir ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026); enquanto o serviço não faz isso, os alertas que disparam num evento só (furo de estoque e erro de configuração) também disparam quando a série aparece na janela (`x unless x offset <janela>`). Nos alertas sobre counters, a série ausente quer dizer "nada aconteceu", e o alerta não dispara; os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Os alertas foram conferidos com o `promtool test rules`, inclusive na primeira rejeição por falta de estoque.
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
@@ -530,6 +538,8 @@ groups:
           max(casecellshop_inventory_oversold_skus) > 0
           or
           sum(increase(casecellshop_erp_out_of_stock_rejections_total[15m])) > 0
+          or
+          sum(casecellshop_erp_out_of_stock_rejections_total unless casecellshop_erp_out_of_stock_rejections_total offset 15m) > 0
         for: 0m
         labels:
           severity: page
@@ -539,6 +549,11 @@ groups:
       - alert: CasecellshopErpErroDeConfiguracao
         expr: |
           sum(increase(casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"}[5m])) > 0
+          or
+          sum(
+            casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"}
+            unless casecellshop_erp_client_operation_duration_count{casecellshop_erp_outcome="config_error"} offset 5m
+          ) > 0
         for: 0m
         labels:
           severity: page
@@ -602,7 +617,7 @@ Os comandos rodam com o compose no ar. Para ler o banco: `docker compose exec po
 
 Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`).
 
-1. Ache os pedidos: o log `casecellshop.outbox.dead` traz o `orderId` de cada chegada à DLQ.
+1. Ache os pedidos: o log `casecellshop.outbox.dead` traz o `orderId` de cada chegada à DLQ. Uma mensagem com o corpo fora do schema não gera esse log: ela aparece em `casecellshop.outbox.message.rejected`, com o `orderId` quando o corpo o tem (`ORD-12`).
 2. Espere uma rodada da reconciliação (5 min): ela fatura e tira da DLQ os pedidos que o ERP já tem (`ORD-14`). O resumo sai em `casecellshop.outbox.reconciliation.completed`.
 3. Para cada pedido que sobrar, consulte o ERP pela referência, que é o `orderId` (H1a). No ERP simulado: `select reference, created_at from erp_sim.invoices where reference = '<orderId>';`.
 4. Se a causa já saiu (ERP de volta, configuração corrigida), reprocesse em lote:
@@ -612,13 +627,14 @@ Um pedido na DLQ segue `pending`, com a reserva, até alguém decidir (`ORD-13`)
    ```
 
    É seguro mesmo para pedidos que o ERP já tem: cada mensagem passa pela permissão de chamada e consulta o ERP antes de criar (`ORD-07`).
-5. Cancele só o pedido que o ERP não tem e que não deve mais ser faturado (por exemplo, a mensagem rejeitada pelo schema, `casecellshop.outbox.message.rejected`, que um *redrive* não conserta):
+5. Cancele só o pedido que o ERP não tem e que não deve mais ser faturado:
 
    ```sh
    docker compose exec worker node src/main/runbook.ts cancel <orderId>
    ```
 
-   O pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending`; a mensagem que ficou na DLQ é apagada sem chamar o ERP (`ORD-15`). Se o ERP tem o pedido, não cancele: use o `redrive` ou espere a reconciliação.
+   O pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`). O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Se o ERP tem o pedido, não cancele: use o `redrive` ou espere a reconciliação.
+6. Uma mensagem com o corpo fora do schema fica na DLQ: a reconciliação a deixa para o runbook sem consultar o ERP (`ORD-14`), e um `redrive` só a devolve à DLQ, porque o worker a rejeita de novo (`ORD-12`). Se o corpo traz o `orderId`, trate o pedido pelos passos 3 a 5. O runbook ainda não tem um comando que apague uma mensagem da DLQ; até ter, silencie o alerta `CasecellshopDLQ` no Alertmanager enquanto ela for a única mensagem na DLQ.
 
 #### ERP falhando ou com erro de configuração
 
@@ -666,7 +682,7 @@ instances:
       - casecellshop_.*
 ```
 
-- **Nomes:** o `namespace` vai na frente de cada métrica, e um counter chega com o nome sem `_total` e o sufixo `.count`. As consultas, os limites e os runbooks acima valem iguais; muda só o nome nos monitores do Datadog.
+- **Nomes:** o `namespace` vai na frente de cada métrica, e um counter chega com o nome sem `_total` e o sufixo `.count`. Os monitores do Datadog usam a linguagem de consulta do próprio Datadog, e não PromQL: cada consulta acima é reescrita nela, com o nome novo, e os limites, as janelas e os runbooks valem iguais.
 - **Traces:** o Agent recebe OTLP por HTTP na porta 4318, com `DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT` ligado no Agent; no serviço, `OTEL_TRACES_EXPORTER=otlp` e `OTEL_EXPORTER_OTLP_ENDPOINT` apontando para ele ([OTLP no Agent](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest_in_the_agent/), consultado em 02/11/2026).
 - **Log e trace ligados:** o log já traz `trace_id` (32 caracteres hexadecimais) e `span_id` (16) no topo do JSON, e os traces e os logs levam `service`, `env` e `version`, os três da marcação unificada de serviço, que o Datadog exige para ligar os dois ([logs e traces do OpenTelemetry](https://docs.datadoghq.com/tracing/other_telemetry/connect_logs_and_traces/opentelemetry/) e [mapeamento da semântica](https://docs.datadoghq.com/opentelemetry/mapping/semantic_mapping/), consultados em 02/11/2026).
 
@@ -678,10 +694,10 @@ O que as garantias não cobrem e como aparece na operação. A lista completa, c
 | --- | --- | --- |
 | Sem a H1b e acima do limite da H4, o ERP fatura duas vezes, ou o pedido falha com uma fatura que aparece depois (R6) | não é detectável pela loja; demonstrado no `ORD-06` | conferir as faturas no ERP real antes de confiar na H4 |
 | O ERP fatura sem estoque e fica negativo, contra a H2 (R9) | a sincronização grava zero e registra o caso em log | a loja para de vender o SKU até o estoque voltar |
-| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
+| Venda em outro canal entre duas rodadas da sincronização | alerta [Furo de estoque](#furo-de-estoque) (`OBS-06`, M5) | o cliente recebe `202` e o pedido termina `failed` com `erp_out_of_stock` |
 | Cache por instância: com N réplicas da API, uma expiração gera até N consultas à origem | cargas da origem no dashboard | aceito enquanto a origem é o banco da loja (AD-005) |
 | O ElasticMQ não é o SQS (R12) | o worker trata o *receipt handle* recusado e o sucesso aparente do mesmo jeito | na AWS, muda só o endereço; o `ListMessageMoveTasks` não é chamado |
-| O exportador Prometheus passa a acrescentar o sufixo de unidade (R13) | o teste dos nomes do `/metrics` (`OBS-07`) e o das consultas desta página (`OBS-03`) reprovam no PR da atualização | ajustar os alertas e o dashboard junto, numa decisão |
+| O exportador Prometheus passa a acrescentar o sufixo de unidade (R13) | o teste dos nomes do `/metrics` (`OBS-07`) reprova no PR da atualização; o das consultas desta página (`OBS-03`) segue o `prometheusName` do gerador do catálogo, que precisa mudar junto | ajustar os alertas e o dashboard junto, numa decisão |
 
 ## Hipóteses, premissas e limitações
 
