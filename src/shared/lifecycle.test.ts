@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { settle } from '../../test/helpers/async.ts';
-import { createManualClock } from '../../test/helpers/clock.ts';
-import { captureLogs } from '../../test/helpers/logs.ts';
+import { settle } from '#test-helpers/async.ts';
+import { createManualClock } from '#test-helpers/clock.ts';
+import { captureLogs } from '#test-helpers/logs.ts';
 import { createShutdownHandler, SHUTDOWN_TIMEOUT_MS } from './lifecycle.ts';
 
 // FND-17: o prazo do encerramento gracioso corre no relógio injetável. Tudo em memória: o `exit` é um registro dos

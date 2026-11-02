@@ -1,7 +1,7 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import type { Meter, ObservableGauge } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { scrapeMetricsText as scrape } from '../../test/helpers/metrics.ts';
+import { scrapeMetricsText as scrape } from '#test-helpers/metrics.ts';
 import type { MetricSpec } from './telemetry-catalog.ts';
 import { createInstruments, metricsOf } from './telemetry-instruments.ts';
 import { createTelemetry, type Telemetry } from './telemetry.ts';

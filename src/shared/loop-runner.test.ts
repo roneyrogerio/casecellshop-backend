@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createManualClock } from '../../test/helpers/clock.ts';
+import { createManualClock } from '#test-helpers/clock.ts';
 import type { Clock } from './clock.ts';
 import {
   createLoopRunner,

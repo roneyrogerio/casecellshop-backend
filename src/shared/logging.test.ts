@@ -9,8 +9,8 @@ import { createTelemetry } from './telemetry.ts';
 // OBS-07 (AD-029): o logger tipado, em execução. `info`, `warn` e `error` escrevem uma linha no nível pedido, com o
 // nome do evento no campo `event`, os campos dados e a mensagem. O que o `tsc` aceita e recusa (o evento, o nível e
 // o campo fora da declaração) está em test/repo/event-logger-types.test.ts, que roda o tsc do projeto sobre uma
-// amostra e não pertence a uma pasta de `src/`. Um teste de `shared/` pode importar os helpers de `test/helpers/`;
-// só as outras pastas de `src/` seguem barradas (AD-025).
+// amostra e não pertence a uma pasta de `src/`. Um teste de `shared/` importa os helpers de `test/helpers/`
+// pelo atalho `#test-helpers/`; o lint barra qualquer `..` e barra invertida no import (AD-025).
 
 type Line = Record<string, unknown>;
 
