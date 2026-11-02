@@ -254,6 +254,33 @@
       }
     },
     {
+      "files": ["src/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
+              }
+            ]
+          }
+        ],
+        "test-imports/no-restricted-dynamic-import": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "pino",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["src/shared/**/*.ts"],
       "rules": {
         "no-restricted-imports": [
@@ -263,6 +290,10 @@
               {
                 "regex": "^\\.\\./",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -290,6 +321,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -310,6 +345,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -330,6 +369,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -350,6 +393,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -370,6 +417,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -390,6 +441,10 @@
               {
                 "regex": "(^|/)erp/sim/|^\\./sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
@@ -417,10 +472,31 @@
               {
                 "regex": "(^|/)erp/sim/",
                 "message": "Só src/main/ monta o ERP simulado; o resto do código usa a porta ErpClient (AD-004, AD-025)."
+              },
+              {
+                "regex": "^pino$",
+                "message": "Só src/shared/logging.ts importa o pino; o resto de src/ recebe o AppLogger e escreve pelo eventLogger (OBS-07, AD-029)."
               }
             ]
           }
         ]
+      }
+    },
+    {
+      "files": ["src/shared/logging.ts", "src/shared/logging.test.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\./",
+                "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
+              }
+            ]
+          }
+        ],
+        "test-imports/no-restricted-dynamic-import": "off"
       }
     },
     {
