@@ -89,7 +89,15 @@ interface Fence {
 
 type Block =
   | { kind: 'heading'; depth: number; text: string; anchor: string }
-  | { kind: 'fence'; fence: Fence };
+  | { kind: 'fence'; fence: Fence }
+  // Um nó `html` que traz a abertura de uma cerca de código: o bloco HTML (tipo 6 do CommonMark, como `<details>`)
+  // só termina numa linha em branco, e sem ela a cerca vira texto do HTML e deixa de ser conferida. `line` é a linha
+  // do README onde a cerca engolida abre.
+  | { kind: 'swallowed'; line: number };
+
+// A abertura de uma cerca de código: três ou mais crases ou ~~~, com recuo de até 3 espaços (com 4 já é bloco recuado).
+// A regra lê uma linha do valor de um nó `html`, nunca o texto do README inteiro.
+const FENCE_OPENING = /^ {0,3}(?:`{3,}|~{3,})/;
 
 function childrenOf(node: MdNode): readonly MdNode[] {
   return 'children' in node ? node.children : [];
@@ -121,6 +129,17 @@ function readBlocks(markdown: string): Block[] {
       });
       return;
     }
+    if (node.type === 'html') {
+      const offset = node.value
+        .split('\n')
+        .findIndex((line) => FENCE_OPENING.test(line));
+      if (offset >= 0)
+        blocks.push({
+          kind: 'swallowed',
+          line: (node.position?.start.line ?? 0) + offset,
+        });
+      return;
+    }
     if (node.type === 'code')
       blocks.push({
         kind: 'fence',
@@ -141,6 +160,8 @@ interface Section {
   anchors: Set<string>;
   // Os `job_name` dos blocos yaml da seção com a chave de topo `scrape_configs`: os únicos `job` aceitos no `up`.
   jobs: Set<string>;
+  // As linhas do README onde uma cerca de código foi engolida por um bloco HTML (ver o Block `swallowed`).
+  swallowed: number[];
 }
 
 // Os `job_name` dos blocos yaml com `scrape_configs` na chave de topo, lidos pelo mesmo YAML da conferência das regras.
@@ -188,6 +209,9 @@ function operationSection(readme: string): Section | undefined {
   return {
     fences,
     jobs: scrapeJobNames(fences),
+    swallowed: inside.flatMap((block) =>
+      block.kind === 'swallowed' ? [block.line] : [],
+    ),
     // A âncora de um runbook_url é comparada em NFC: o navegador copia o acento composto.
     anchors: new Set(
       inside.flatMap((block) =>
@@ -580,6 +604,12 @@ function checkOperation(readme: string, catalog: Catalog): Report {
     );
     return report;
   }
+  // Uma cerca dentro de um bloco HTML não é nó `code`: sem este aviso, as consultas e as regras dela deixariam de ser
+  // conferidas em silêncio, e o GitHub mostraria o bloco como texto quebrado.
+  for (const line of section.swallowed)
+    report.problems.push(
+      `README linha ${String(line)}: bloco de código engolido por um bloco HTML (a cerca não é lida como código nem conferida): falta uma linha em branco depois do <summary> (ou antes do </details>)`,
+    );
   for (const fence of section.fences) {
     if (fence.info === 'promql')
       for (const query of promqlQueries(fence.content)) {
@@ -1431,6 +1461,99 @@ describe('OBS-03 a leitura do Markdown e das âncoras (controles)', () => {
 
     expect(report.problems).toEqual([]);
     expect(report.queries).toBe(2);
+  });
+
+  // Um bloco recolhível do GitHub: com a linha em branco depois do `<summary>`, a cerca é um nó `code` e é lida.
+  const details = (summary: string, ...inner: string[]): string =>
+    [
+      '<details>',
+      `<summary>${summary}</summary>`,
+      '',
+      ...inner,
+      '</details>',
+      '',
+    ].join('\n');
+
+  it('OBS-03 consultas e regras dentro de <details> com a linha em branco são lidas e contadas, e uma regra quebrada lá dentro é acusada', () => {
+    const folded = (rule: string, ...queries: string[]): string =>
+      [
+        details('Consultas', fenced('promql', ...queries)),
+        details('Regras', fenced('yaml', ...rule.split('\n'))),
+        ERP_SECTION,
+      ].join('\n');
+    const good = check(readmeWith(folded(ruleFile(), ...GOOD_QUERIES)));
+    const broken = check(
+      readmeWith(
+        folded(ruleFile({ for: null }), 'app_active', '', 'app_requets_total'),
+      ),
+    );
+
+    expect(good.problems).toEqual([]);
+    expect(good.queries).toBe(2);
+    expect(good.rules).toBe(1);
+    expect(broken.queries).toBe(2);
+    expect(broken.rules).toBe(1);
+    expect(broken.problems).toHaveLength(2);
+    expect(broken.problems[0]).toContain(
+      'app_requets_total não está na coluna',
+    );
+    expect(broken.problems[1]).toContain('alerta ErroAlto');
+    expect(broken.problems[1]).toContain('falta o campo for');
+  });
+
+  // A cerca colada ao `<summary>`, sem linha em branco: o bloco HTML a engole, nas três formas de abrir uma cerca.
+  it.each([
+    ['crases', '```'],
+    ['~~~', '~~~'],
+    ['crases com recuo de 3 espaços', '   ```'],
+  ])(
+    'OBS-03 <details> sem a linha em branco depois do <summary> engole a cerca (%s): a conferência acusa o bloco e a linha do README',
+    (_label, marker) => {
+      const swallowed = [
+        '<details>',
+        '<summary>Consultas</summary>',
+        `${marker}promql`,
+        'app_requets_total',
+        marker.trim(),
+        '</details>',
+        '',
+      ].join('\n');
+      const readme = readmeWith(goodBody() + '\n' + swallowed);
+      const { problems, queries } = check(readme);
+      const line = readme.split('\n').lastIndexOf(`${marker}promql`) + 1;
+
+      expect(line).toBeGreaterThan(0);
+      // A consulta engolida não é lida (o erro de digitação dela não aparece), e o aviso diz por quê.
+      expect(queries).toBe(2);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(`README linha ${String(line)}`);
+      expect(problems[0]).toContain('engolido por um bloco HTML');
+      expect(problems[0]).toContain('linha em branco depois do <summary>');
+      expect(problems[0]).toContain('</details>');
+    },
+  );
+
+  it('OBS-03 <details> só com texto (sem cerca de código, nem com ``` no meio da linha ou recuado em 4 espaços) não gera problema', () => {
+    const textOnly = [
+      '<details>',
+      '<summary>Detalhes</summary>',
+      '',
+      'Texto do detalhe, com `promql` e ```promql no meio da linha.',
+      '',
+      '</details>',
+      '',
+      '<details>',
+      '<summary>Sem a linha em branco, mas sem código</summary>',
+      'Só texto.',
+      '    ```promql',
+      '</details>',
+      '',
+    ].join('\n');
+    const report = check(readmeWith(goodBody() + '\n' + textOnly));
+
+    expect(report.problems).toEqual([]);
+    expect(report.queries).toBe(2);
+    expect(report.rules).toBe(1);
   });
 
   it('OBS-03 a seção vai do cabeçalho Operação até o próximo de nível 2 fora de bloco de código, com os níveis 3 e 4 dentro', () => {
