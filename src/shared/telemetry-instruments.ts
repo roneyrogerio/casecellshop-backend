@@ -87,13 +87,17 @@ export interface TypedMetrics<S extends Specs> {
     callback: (observe: GaugeObservation<S[N]>) => void | Promise<void>,
     options?: ObserveOptions,
   ): () => void;
-  // Vários gauges lidos por uma consulta só: o callback recebe uma gravação por nome pedido, e o SDK só aceita
-  // observar nele os gauges associados (Meter.addBatchObservableCallback).
+  // Vários gauges lidos por uma consulta só: o callback recebe uma gravação `observe(nome, valor, atributos)`, como
+  // o `BatchObservableResult` do SDK, e só os nomes pedidos são aceitos (Meter.addBatchObservableCallback).
   observeBatch<N extends NamesOf<S, 'gauge'>>(
     names: readonly N[],
-    callback: (observe: {
-      [K in N]: GaugeObservation<S[K]>;
-    }) => void | Promise<void>,
+    callback: (
+      observe: <K extends N>(
+        name: K,
+        value: number,
+        ...attributes: AttributesArgument<S[K]>
+      ) => void,
+    ) => void | Promise<void>,
     options?: ObserveOptions,
   ): () => void;
 }
@@ -127,9 +131,12 @@ function createInstrument(
 // Por dentro a gravação é frouxa; a tipagem pela declaração está em `TypedMetrics`.
 type GaugeWriter = (value: number, attributes?: Attributes) => void;
 type ObserveCallback = (observe: GaugeWriter) => void | Promise<void>;
-// O objeto do lote tem uma chave por nome pedido, tipada em `TypedMetrics`; por dentro `never` aceita o callback
-// de qualquer declaração. PENDENTE (A5): sem cast ainda não fecha o tipo; ver o relatório.
-type ObserveBatchCallback = (observe: never) => void | Promise<void>;
+type BatchWriter = (
+  name: string,
+  value: number,
+  attributes?: Attributes,
+) => void;
+type ObserveBatchCallback = (observe: BatchWriter) => void | Promise<void>;
 
 // Avisa a falha da leitura antes de devolvê-la ao SDK. O exportador cumulativo segue exportando o último valor
 // quando o callback lança: sem este aviso a falha do banco ou da fila não deixa sinal nenhum.
@@ -167,16 +174,17 @@ function observeGauges(
   callback: ObserveBatchCallback,
   options: ObserveOptions | undefined,
 ): () => void {
-  const observable: BatchObservableCallback = (result) => {
-    const writers: Record<string, GaugeWriter> = Object.fromEntries(
-      names.map((name, index) => [
-        name,
-        (value: number, attributes?: Attributes) =>
-          result.observe(gauges[index]!, value, attributes),
-      ]),
+  const requested = new Map(names.map((name, index) => [name, gauges[index]!]));
+  const observable: BatchObservableCallback = (result) =>
+    reportingFailure(
+      () =>
+        callback((name, value, attributes) => {
+          const gauge = requested.get(name);
+          if (!gauge) throw new Error(`gauge fora do lote pedido: ${name}`);
+          result.observe(gauge, value, attributes);
+        }),
+      options,
     );
-    return reportingFailure(() => callback(writers as never), options);
-  };
   meter.addBatchObservableCallback(observable, gauges);
   return () => meter.removeBatchObservableCallback(observable, gauges);
 }

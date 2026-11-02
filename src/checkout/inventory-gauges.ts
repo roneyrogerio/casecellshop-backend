@@ -42,8 +42,8 @@ export function registerInventoryGauges({
             .as('oversold'),
         ])
         .executeTakeFirst();
-      observe['casecellshop.inventory.reserved'](row?.reserved ?? 0);
-      observe['casecellshop.inventory.oversold_skus'](row?.oversold ?? 0);
+      observe('casecellshop.inventory.reserved', row?.reserved ?? 0);
+      observe('casecellshop.inventory.oversold_skus', row?.oversold ?? 0);
     },
     {
       onError(error) {

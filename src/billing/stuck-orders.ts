@@ -12,19 +12,16 @@ import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // O limiar é o literal do predicado do índice `orders_sli_pending_idx`: o PostgreSQL só usa um índice parcial se a
 // consulta repetir a expressão dele, e uma cláusula parametrizada não serve ("Partial Indexes"). Por isso o texto
-// SQL abaixo fixa `interval '60 seconds'` e o tipo da configuração aceita só 60.
-const THRESHOLD_SECONDS = 60;
+// SQL abaixo fixa `interval '60 seconds'` e o limiar não é configurável.
 const THRESHOLD = sql`interval '60 seconds'`;
 
 export interface StuckOrderMonitorConfig {
   intervalMs: number;
-  thresholdSeconds: typeof THRESHOLD_SECONDS;
   batchSize: number;
 }
 
 export const DEFAULT_STUCK_ORDER_MONITOR_CONFIG: StuckOrderMonitorConfig = {
   intervalMs: 10_000,
-  thresholdSeconds: THRESHOLD_SECONDS,
   batchSize: 500,
 };
 
