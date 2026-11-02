@@ -345,6 +345,149 @@ describe('ORD-23 a permissão de chamada soma create_calls antes de cada criaç�
   });
 });
 
+// A janela de assentamento do cancel conta da última criação enviada (AD-031; design.md, "Worker: envio", marca de
+// envio): `last_create_at` é gravado antes da chamada, no mesmo UPDATE que toma a permissão do worker (com
+// first_sent_at nulo) ou a renova. A coluna é lida por SQL cru: é o que o teste observa. Duas leituras do mesmo
+// UPDATE guardam o now() da transação, então "gravado junto" se prova pela igualdade com last_call_at.
+describe('ORD-26 a tomada e a renovação do worker gravam last_create_at antes da criação', () => {
+  const workerOptions = { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: true };
+  const consultOptions = { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: false };
+
+  interface CreateStamp {
+    lastCreateAt: Date | null;
+    lastCallAt: Date | null;
+  }
+
+  async function stampOf(orderId: string): Promise<CreateStamp> {
+    const result = await database.pool.query<{
+      last_create_at: Date | null;
+      last_call_at: Date | null;
+    }>('select last_create_at, last_call_at from outbox where order_id = $1', [
+      orderId,
+    ]);
+    const row = result.rows[0];
+    if (!row) throw new Error(`outbox inexistente para ${orderId}`);
+    return { lastCreateAt: row.last_create_at, lastCallAt: row.last_call_at };
+  }
+
+  // Marca a última criação e a última chamada como antigas (o atraso mínimo já passou) e devolve a criação semeada.
+  async function ageBoth(orderId: string): Promise<Date | null> {
+    await database.pool.query(
+      `update outbox
+          set last_create_at = coalesce(last_create_at, now()) - interval '10 minutes',
+              last_call_at = now() - interval '10 minutes'
+        where order_id = $1`,
+      [orderId],
+    );
+    return (await stampOf(orderId)).lastCreateAt;
+  }
+
+  it('ORD-26 a primeira tomada do worker (first_sent_at nulo) grava last_create_at, no mesmo instante do last_call_at do mesmo UPDATE', async () => {
+    const orderId = await seedOutbox();
+    expect((await stampOf(orderId)).lastCreateAt).toBeNull();
+
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    const stamp = await stampOf(orderId);
+    expect(stamp.lastCreateAt).not.toBeNull();
+    expect(stamp.lastCreateAt).toEqual(stamp.lastCallAt);
+  });
+
+  it('ORD-26 a tomada do worker com first_sent_at já preenchido não grava last_create_at: o que vem depois é a consulta', async () => {
+    const orderId = await seedOutbox();
+    // A reconciliação consultou antes: first_sent_at ficou preenchido, e nenhuma criação foi mandada.
+    granted(await takeCallPermit(db(), orderId, consultOptions));
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1",
+      [orderId],
+    );
+
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    expect((await stampOf(orderId)).lastCreateAt).toBeNull();
+  });
+
+  it('ORD-26 a tomada do worker com first_sent_at preenchido por uma criação anterior preserva o last_create_at dela', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const seeded = await ageBoth(orderId);
+
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    const stamp = await stampOf(orderId);
+    expect(stamp.lastCreateAt).toEqual(seeded);
+    expect(stamp.lastCallAt?.getTime()).toBeGreaterThan(
+      stamp.lastCreateAt?.getTime() ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('ORD-26 a tomada com clearDead falso (reconciliação, cancel, verificação tardia) não grava last_create_at, nem com first_sent_at nulo nem depois', async () => {
+    const orderId = await seedOutbox();
+
+    granted(await takeCallPermit(db(), orderId, consultOptions));
+    expect((await stampOf(orderId)).lastCreateAt).toBeNull();
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1",
+      [orderId],
+    );
+    granted(await takeCallPermit(db(), orderId, consultOptions));
+
+    expect((await stampOf(orderId)).lastCreateAt).toBeNull();
+  });
+
+  it('ORD-26 a tomada com clearDead falso, depois de uma criação, deixa o last_create_at como estava', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const seeded = await ageBoth(orderId);
+
+    granted(await takeCallPermit(db(), orderId, consultOptions));
+
+    expect((await stampOf(orderId)).lastCreateAt).toEqual(seeded);
+  });
+
+  it('ORD-26 a tomada recusada pelo atraso mínimo não muda o last_create_at', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const before = await stampOf(orderId);
+
+    const refused = await takeCallPermit(db(), orderId, workerOptions);
+
+    expect(refused.granted).toBe(false);
+    expect(await stampOf(orderId)).toEqual(before);
+  });
+
+  it('ORD-26 a renovação que antecede a criação depois da consulta regrava last_create_at, no mesmo instante do last_call_at', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const seeded = await ageBoth(orderId);
+    const second = granted(await takeCallPermit(db(), orderId, workerOptions));
+    expect(
+      (await stampOf(orderId)).lastCreateAt,
+      'a consulta não grava',
+    ).toEqual(seeded);
+
+    expect(await renewCallPermit(db(), orderId, second.token)).toBe(true);
+
+    const stamp = await stampOf(orderId);
+    expect(stamp.lastCreateAt?.getTime()).toBeGreaterThan(
+      seeded?.getTime() ?? Number.POSITIVE_INFINITY,
+    );
+    expect(stamp.lastCreateAt).toEqual(stamp.lastCallAt);
+  });
+
+  it('ORD-26 a renovação com um token que já não vale não grava last_create_at', async () => {
+    const orderId = await seedOutbox();
+    const old = granted(await takeCallPermit(db(), orderId, workerOptions));
+    await ageBoth(orderId);
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const before = await stampOf(orderId);
+
+    expect(await renewCallPermit(db(), orderId, old.token)).toBe(false);
+
+    expect(await stampOf(orderId)).toEqual(before);
+  });
+});
+
 describe('ORD-04 a criação depois da consulta renova a permissão pelo token', () => {
   it('ORD-04 com o token vigente, renewCallPermit regrava last_call_at para agora e devolve true', async () => {
     const orderId = await seedOutbox();

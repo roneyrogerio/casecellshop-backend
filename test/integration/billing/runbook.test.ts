@@ -31,6 +31,7 @@ import { countInvoices, ERP_TIMEOUT_MS } from '../../helpers/erp.ts';
 import { erpHasInvoice } from '../../helpers/erp-invoice.ts';
 import {
   PAST_WINDOW_SECONDS,
+  readLastCreateAt,
   readLateColumns,
   seedOutcome,
   seedSentState,
@@ -42,6 +43,7 @@ import { countsOf, visibleCount } from '../../helpers/sqs.ts';
 import {
   acceptOrder,
   ageLastCall,
+  ageLastCreate,
   buildWorker,
   createWorld,
   expectInvoiced,
@@ -94,8 +96,9 @@ async function cancelledDeadOrder() {
   const logs = captureLogs();
   const order = await submitOrder(suite, world, { quantity: 2 });
   await deadOrders(world, [order]);
-  // A última chamada ao ERP passa da janela de assentamento (AD-031): sem isso o cancelamento é recusado.
-  await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+  // A última criação enviada ao ERP passa da janela de assentamento (AD-031): sem isso o cancelamento é recusado.
+  // A última chamada fica onde o deadOrders a deixou (5 min), já além do atraso mínimo.
+  await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
   expect(await cancel(world, order.orderId)).toEqual({ kind: 'cancelled' });
   // O cancelamento consultou o ERP uma vez, pela referência, e não criou nada: o que a reconciliação ou o
   // worker fizerem depois não pode somar chamadas.
@@ -370,7 +373,7 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     const order = await submitOrder(suite, world, { quantity: 2 });
     expect(await buildWorker(world).pollOnce()).toBe(1);
     await expectInvoiced(world, order);
-    await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
 
     await expectUnchangedWithoutTouchingErp(world, order);
 
@@ -492,28 +495,20 @@ describe('ORD-15 A12: a linha da outbox que não passa no schema da mensagem', (
 
 // ---------------------------------------------------------------- ORD-26: cancelamento seguro (AD-031)
 
-// Um pedido aceito pelo checkout cuja última chamada ao ERP começou há `lastCallAgoSeconds`, pelo relógio do banco,
-// Com `createCalls`, também semeia as criações contadas (coluna da migração da verificação tardia); sem ele o teste
-// não depende dela.
+// Um pedido aceito pelo checkout cuja última criação enviada ao ERP começou há `createdAgoSeconds`, pelo relógio do
+// banco (a janela de assentamento do cancel conta dela, AD-031). A última chamada começou no mesmo instante, a não
+// ser que `lastCallAgoSeconds` diga outro (uma consulta posterior à criação). `createCalls` são as criações contadas.
 async function sentOrder(
-  lastCallAgoSeconds: number,
-  createCalls?: number,
+  createdAgoSeconds: number,
+  createCalls = 1,
+  lastCallAgoSeconds = createdAgoSeconds,
 ): Promise<AcceptedOrder> {
   const order = await acceptOrder(suite, { quantity: 2 });
-  if (createCalls === undefined) {
-    await suite.pool.query(
-      `update outbox
-          set first_sent_at = now() - make_interval(secs => $2),
-              last_call_at = now() - make_interval(secs => $2)
-        where order_id = $1`,
-      [order.orderId, lastCallAgoSeconds],
-    );
-  } else {
-    await seedSentState(suite.pool, order.orderId, {
-      createCalls,
-      lastCallAgoSeconds,
-    });
-  }
+  await seedSentState(suite.pool, order.orderId, {
+    createCalls,
+    lastCallAgoSeconds,
+    lastCreateAgoSeconds: createdAgoSeconds,
+  });
   return order;
 }
 
@@ -609,18 +604,19 @@ function erpLosingThePermit(
 }
 
 describe('ORD-26 cancelamento seguro pelo runbook', () => {
-  it('ORD-26 com a última chamada ao ERP dentro da janela de assentamento, recusa com too_recent e o tempo que falta, e não muda o pedido, o estoque, a outbox nem chama o ERP', async () => {
+  it('ORD-26 com a última criação enviada ao ERP dentro da janela de assentamento, recusa com too_recent e o tempo que falta, e não muda o pedido, o estoque, a outbox nem chama o ERP', async () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const order = await sentOrder(300, 1);
     const before = await footprintOf(order);
     const outboxBefore = stableOutbox(
       await readOutbox(suite.pool, order.orderId),
     );
+    const createdBefore = await readLastCreateAt(suite.pool, order.orderId);
 
     const result = await cancel(world, order.orderId);
 
     expect(result.kind).toBe('too_recent');
-    // 15 min de janela menos os 5 min desde a última chamada, descontado o tempo do teste.
+    // 15 min de janela menos os 5 min desde a última criação, descontado o tempo do teste.
     expect(retryInMsOf(result)).toBeGreaterThan(580_000);
     expect(retryInMsOf(result)).toBeLessThanOrEqual(600_000);
     expect(await footprintOf(order)).toEqual(before);
@@ -628,11 +624,14 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
       outboxBefore,
     );
     expect(await createCallsOf(order)).toBe(1);
+    expect(await readLastCreateAt(suite.pool, order.orderId)).toEqual(
+      createdBefore,
+    );
     expect(world.transport.sends).toHaveLength(0);
     expect(await invoices(order.orderId)).toBe(0);
   });
 
-  it('ORD-26 a janela de assentamento vale no lugar do atraso mínimo: 50 s depois da última chamada (passou dos 45 s) ainda recusa, faltando perto de 14 min', async () => {
+  it('ORD-26 a janela de assentamento vale além do atraso mínimo: 50 s depois da última criação (passou dos 45 s) ainda recusa, faltando perto de 14 min', async () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const order = await sentOrder(50);
     const before = await footprintOf(order);
@@ -650,7 +649,7 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
     expect(world.transport.sends).toHaveLength(0);
   });
 
-  it('ORD-26 o settleWindowMs das dependências muda a janela: 5 min depois da última chamada cancela com a janela de 2 min e recusa com a de 10 min', async () => {
+  it('ORD-26 o settleWindowMs das dependências muda a janela: 5 min depois da última criação cancela com a janela de 2 min e recusa com a de 10 min', async () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const refused = await sentOrder(300);
     const allowed = await sentOrder(300);
@@ -672,10 +671,14 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
     const world = await createWorld(suite, { withoutH1b: true });
     const order = await sentOrder(PAST_WINDOW_SECONDS, 1);
     const tokenBefore = (await readOutbox(suite.pool, order.orderId)).callToken;
+    const createdBefore = await readLastCreateAt(suite.pool, order.orderId);
 
     const result = await cancel(world, order.orderId);
 
     expect(result).toEqual({ kind: 'cancelled' });
+    expect(await readLastCreateAt(suite.pool, order.orderId)).toEqual(
+      createdBefore,
+    );
     await expectCancelled(order);
     await expectReservationReleased(order);
     expect(world.transport.sends).toHaveLength(1);
@@ -852,7 +855,8 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
   }
 
   // A consulta ao ERP conta como chamada (AD-031): depois de erp_has_order ou de erp_unavailable, a permissão ficou
-  // tomada (last_call_at regravado, token novo) e a nova tentativa espera a janela, sem consultar o ERP de novo.
+  // tomada (last_call_at regravado, token novo) e a nova tentativa espera o atraso mínimo, sem consultar o ERP de
+  // novo. A consulta não cria fatura, então não reabre a janela de assentamento (last_create_at não anda).
   const QUERIED_REFUSALS: ReadonlyArray<{
     name: string;
     expected: CancelOrderResult;
@@ -876,11 +880,12 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
   ];
 
   for (const { name, expected, prepare } of QUERIED_REFUSALS) {
-    it(`ORD-26 depois de ${name}, a consulta conta como chamada ao ERP: regrava last_call_at e call_token, e um segundo cancel logo depois é recusado com too_recent perto da janela, sem consultar o ERP nem mudar o pedido e o estoque`, async () => {
+    it(`ORD-26 depois de ${name}, a consulta conta como chamada ao ERP: regrava last_call_at e call_token mas não last_create_at, e um segundo cancel logo depois é recusado com too_recent pelo atraso mínimo (cerca de 45 s, e não pela janela), sem consultar o ERP nem mudar o pedido e o estoque`, async () => {
       const world = await createWorld(suite, { withoutH1b: true });
       const order = await sentOrder(PAST_WINDOW_SECONDS);
       await prepare(world, order);
       const seeded = await readOutbox(suite.pool, order.orderId);
+      const createdSeeded = await readLastCreateAt(suite.pool, order.orderId);
       const footprint = await footprintOf(order);
 
       const first = await cancel(world, order.orderId);
@@ -895,15 +900,18 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
       expect(
         afterFirst.sinceLastCallMs ?? Number.POSITIVE_INFINITY,
       ).toBeLessThan(60_000);
+      expect(await readLastCreateAt(suite.pool, order.orderId)).toEqual(
+        createdSeeded,
+      );
       expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
       const sendsAfterFirst = world.transport.sends.length;
 
       const second = await cancel(world, order.orderId);
 
       expect(second.kind).toBe('too_recent');
-      // A janela recomeçou na consulta: falta quase ela inteira, com folga para a latência do teste.
-      expect(retryInMsOf(second)).toBeGreaterThan(SETTLE_WINDOW_MS - 60_000);
-      expect(retryInMsOf(second)).toBeLessThanOrEqual(SETTLE_WINDOW_MS);
+      // Só o atraso mínimo recomeçou na consulta: falta quase ele inteiro, e longe da janela de 15 min.
+      expect(retryInMsOf(second)).toBeGreaterThan(MIN_CALL_DELAY_MS - 20_000);
+      expect(retryInMsOf(second)).toBeLessThanOrEqual(MIN_CALL_DELAY_MS);
       expect(world.transport.sends).toHaveLength(sendsAfterFirst);
       expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
       // O segundo cancel não tomou a permissão: a linha da outbox ficou como a primeira consulta a deixou.
@@ -964,6 +972,8 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
       await sendInDoubt(world, order, doubtful);
       await landInvoice(world, doubtful);
       expect(await invoices(order.orderId)).toBe(1);
+      // A criação do worker gravou a última criação e a última chamada agora: as duas envelhecem.
+      await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
       await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
       const before = await footprintOf(order);
 
@@ -987,6 +997,145 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
     expect(retryInMsOf(refused)).toBeGreaterThan(40_000);
     expect(retryInMsOf(refused)).toBeLessThanOrEqual(60_000);
     expect(accepted).toEqual({ kind: 'cancelled' });
+  });
+});
+
+// O A12 da Revisão 6: a janela de assentamento do cancel conta da última criação enviada (last_create_at), e não da
+// última chamada, que a reconciliação regrava a cada rodada para todo pedido pending da DLQ.
+describe('ORD-26 a janela do cancel conta da última criação, e não da última chamada', () => {
+  const MIN_DELAY_SECONDS = MIN_CALL_DELAY_MS / 1000;
+
+  it('ORD-26 com a última criação fora da janela, uma consulta recente só recusa pelo atraso mínimo: 20 s depois dela faltam uns 25 s, e 46 s depois cancela', async () => {
+    const world = await createWorld(suite, { withoutH1b: true });
+    const queried = await sentOrder(PAST_WINDOW_SECONDS, 1, 20);
+    const settled = await sentOrder(
+      PAST_WINDOW_SECONDS,
+      1,
+      MIN_DELAY_SECONDS + 1,
+    );
+
+    const refused = await cancel(world, queried.orderId);
+    const accepted = await cancel(world, settled.orderId);
+
+    expect(refused.kind).toBe('too_recent');
+    expect(retryInMsOf(refused)).toBeGreaterThan(
+      (MIN_DELAY_SECONDS - 20) * 1000 - 10_000,
+    );
+    expect(retryInMsOf(refused)).toBeLessThanOrEqual(
+      (MIN_DELAY_SECONDS - 20) * 1000,
+    );
+    expect(accepted).toEqual({ kind: 'cancelled' });
+    expect((await readOrder(suite.pool, queried.orderId)).status).toBe(
+      'pending',
+    );
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+  });
+
+  it('ORD-26 criação abandonada no meio (o worker morre durante a chamada): o cancel é recusado com too_recent pelo tempo que falta dos 15 min contados dela, sem consultar o ERP nem mudar o pedido, e cancela quando ela passa da janela', async () => {
+    const world = await createWorld(suite, { withoutH1b: true });
+    const order = await submitOrder(suite, world, { quantity: 2 });
+    world.sim.script.enqueue(
+      { mode: 'hang' },
+      { op: 'createOrder', reference: order.orderId },
+    );
+    // A rodada fica pendurada na criação, como o worker morto do ORD-02: a mensagem some do worker, e a marca de
+    // envio já existe porque foi gravada antes da chamada.
+    const dying = startPoll(buildWorker(world));
+    await dying.until(world.transport.waitForSends(1, 'createOrder'));
+    expect(await readLastCreateAt(suite.pool, order.orderId)).not.toBeNull();
+    // Só a última chamada envelhece (o atraso mínimo passa); a criação abandonada segue recente.
+    await ageLastCall(suite.pool, order.orderId, MIN_DELAY_SECONDS + 15);
+    const before = await footprintOf(order);
+    const sendsBefore = world.transport.sends.length;
+
+    const refused = await cancel(world, order.orderId);
+
+    expect(refused.kind).toBe('too_recent');
+    expect(retryInMsOf(refused)).toBeGreaterThan(SETTLE_WINDOW_MS - 60_000);
+    expect(retryInMsOf(refused)).toBeLessThanOrEqual(SETTLE_WINDOW_MS);
+    expect(world.transport.sends).toHaveLength(sendsBefore);
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(0);
+    expect(await footprintOf(order)).toEqual(before);
+    expect((await readOrder(suite.pool, order.orderId)).status).toBe('pending');
+
+    // A criação abandonada passa da janela, e o ERP não tem o pedido (a chamada pendurada não criou nada).
+    await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    const accepted = await cancel(world, order.orderId);
+
+    expect(accepted).toEqual({ kind: 'cancelled' });
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+    expect(await invoices(order.orderId)).toBe(0);
+    await expectCancelled(order);
+    await expectReservationReleased(order);
+  });
+
+  it('ORD-26 com a reconciliação rodando de verdade a cada ciclo, as consultas dela não reabrem a janela: o cancel só é recusado pelo atraso mínimo logo depois de cada rodada e cancela quando ele passa', async () => {
+    const world = await createWorld(suite, {
+      withoutH1b: true,
+      maxReceiveCount: 1,
+    });
+    const order = await submitOrder(suite, world, { quantity: 2 });
+    await deadOrders(world, [order]);
+    // A última criação foi há mais de 15 min; a última chamada só é regravada pelas consultas da reconciliação.
+    await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    const createdAt = await readLastCreateAt(suite.pool, order.orderId);
+    const rig = buildReconciler(world);
+    const ROUNDS = 3;
+
+    for (let round = 1; round <= ROUNDS; round += 1) {
+      // Uma rodada real: recebe a mensagem da DLQ, toma a permissão, consulta o ERP (não tem) e a devolve.
+      expect(await rig.reconciler.reconcileOnce(), `rodada ${round}`).toEqual({
+        seen: 1,
+        invoiced: 0,
+        closed: 0,
+      });
+      expect(
+        world.transport.sendsOf('findOrder'),
+        `rodada ${round}`,
+      ).toHaveLength(round);
+      expect(
+        (await readOutbox(suite.pool, order.orderId)).sinceLastCallMs ??
+          Number.POSITIVE_INFINITY,
+        `a rodada ${round} regravou last_call_at`,
+      ).toBeLessThan(60_000);
+
+      const refused = await cancel(world, order.orderId);
+
+      expect(refused.kind, `cancel depois da rodada ${round}`).toBe(
+        'too_recent',
+      );
+      // Pelo atraso mínimo (45 s), e não pela janela de 15 min que a consulta recomeçaria se contasse.
+      expect(retryInMsOf(refused)).toBeGreaterThan(MIN_CALL_DELAY_MS - 20_000);
+      expect(retryInMsOf(refused)).toBeLessThanOrEqual(MIN_CALL_DELAY_MS);
+      expect(world.transport.sendsOf('findOrder')).toHaveLength(round);
+      expect((await readOrder(suite.pool, order.orderId)).status).toBe(
+        'pending',
+      );
+      expect(await readLastCreateAt(suite.pool, order.orderId)).toEqual(
+        createdAt,
+      );
+      // Passa o intervalo da reconciliação (5 min) até a rodada seguinte.
+      await ageLastCall(suite.pool, order.orderId, 300);
+    }
+
+    // Depois da última rodada, o atraso mínimo passa (46 s): o cancel consulta o ERP e cancela.
+    await ageLastCall(suite.pool, order.orderId, MIN_DELAY_SECONDS + 1);
+    const result = await cancel(world, order.orderId);
+
+    expect(result).toEqual({ kind: 'cancelled' });
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(ROUNDS + 1);
+    expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
+    expect(await invoices(order.orderId)).toBe(0);
+    await expectCancelled(order);
+    await expectReservationReleased(order);
+    // A mensagem que ficou na DLQ é apagada pela rodada seguinte, sem chamar o ERP (ORD-15).
+    expect(await rig.reconciler.reconcileOnce()).toEqual({
+      seen: 1,
+      invoiced: 0,
+      closed: 1,
+    });
+    expect(await dlqTotal(world)).toBe(0);
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(ROUNDS + 1);
   });
 });
 
@@ -1058,33 +1207,22 @@ describe('ORD-26 mensagem do comando para cada resultado', () => {
     expect(new Set(messages).size).toBe(CASES.length);
   });
 
-  // Os minutos saem da janela de assentamento usada, não de um texto fixo.
-  const WINDOW_RESULTS: ReadonlyArray<CancelOrderResult> = [
+  // A consulta falha ou a permissão se perde: a consulta conta como chamada, e a nova tentativa espera o atraso
+  // mínimo (45 s), e não a janela de assentamento, que a consulta não reabre.
+  const MIN_DELAY_RESULTS: ReadonlyArray<CancelOrderResult> = [
     { kind: 'erp_unavailable' },
     { kind: 'permit_lost' },
   ];
-  const WINDOW_CASES: ReadonlyArray<{
-    windowMs: number | undefined;
-    minutes: number;
-    why: string;
-  }> = [
-    {
-      windowMs: undefined,
-      minutes: SETTLE_WINDOW_MS / 60_000,
-      why: 'o padrão é SETTLE_WINDOW_MS',
-    },
-    { windowMs: 120_000, minutes: 2, why: '120000 ms são 2 minutos' },
-    { windowMs: 90_000, minutes: 2, why: '90000 ms arredondam para cima' },
-    { windowMs: 30_000, minutes: 1, why: 'menos de 1 minuto vira 1 minuto' },
-  ];
 
-  for (const result of WINDOW_RESULTS) {
-    for (const { windowMs, minutes, why } of WINDOW_CASES) {
-      it(`ORD-26 ${result.kind} cita ${minutes} min da janela de assentamento (${why})`, () => {
-        const { message } = describeCancel(ORDER_ID, result, windowMs);
+  for (const result of MIN_DELAY_RESULTS) {
+    it(`ORD-26 ${result.kind} cita o atraso mínimo de ${MIN_CALL_DELAY_MS / 1000} s para a nova tentativa, e não os minutos da janela de assentamento`, () => {
+      const { message } = describeCancel(ORDER_ID, result);
 
-        expect(message).toContain(`(${minutes} min)`);
-      });
-    }
+      expect(message).toMatch(
+        new RegExp(`\\b${MIN_CALL_DELAY_MS / 1000}\\s*(s|segundos)\\b`),
+      );
+      expect(message).not.toMatch(/\b\d+ min\b/);
+      expect(message).not.toContain(`${SETTLE_WINDOW_MS / 60_000} min`);
+    });
   }
 });

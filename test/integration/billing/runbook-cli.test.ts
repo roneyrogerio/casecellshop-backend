@@ -13,6 +13,7 @@ import { TEST_REGION } from '../../helpers/sqs.ts';
 import {
   acceptOrder,
   ageLastCall,
+  ageLastCreate,
   createWorld,
   markSentBefore,
   readOrder,
@@ -157,11 +158,12 @@ describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
     expect(await countInvoices(suite.database.pool, order.orderId)).toBe(0);
   });
 
-  it('ORD-26 cancel de um pedido enviado há mais que a janela de assentamento, que o ERP não tem, sai com 0 e cancela', async () => {
+  it('ORD-26 cancel de um pedido cuja última criação foi há mais que a janela de assentamento, que o ERP não tem, sai com 0 e cancela', async () => {
     const world = await createWorld(suite);
     const order = await acceptOrder(suite);
+    // A última chamada (5 min) já passou do atraso mínimo; a janela conta da última criação (AD-031).
     await markSentBefore(suite.pool, order.orderId);
-    await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
 
     await cancelViaCli(world, order.orderId, 0);
 
@@ -211,11 +213,12 @@ describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
     });
   }
 
-  it('ORD-26 cancel com a última chamada ao ERP dentro da janela sai com 1, diz quantos minutos faltam e não muda o pedido', async () => {
+  it('ORD-26 cancel com a última criação enviada ao ERP dentro da janela sai com 1, diz quantos minutos faltam e não muda o pedido', async () => {
     const world = await createWorld(suite);
     const order = await acceptOrder(suite);
     // Há 5 minutos: faltam cerca de 10 dos 15 da janela.
     await markSentBefore(suite.pool, order.orderId);
+    await ageLastCreate(suite.pool, order.orderId, 300);
 
     const finished = await cancelViaCli(world, order.orderId, 1);
 
@@ -229,7 +232,7 @@ describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
     const order = await acceptOrder(suite);
     await erpHasInvoice(world, order);
     await markSentBefore(suite.pool, order.orderId);
-    await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    await ageLastCreate(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
 
     const finished = await cancelViaCli(world, order.orderId, 1);
 
