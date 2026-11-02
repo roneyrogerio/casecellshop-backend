@@ -106,7 +106,7 @@ As defasagens somam: com o ERP respondendo, uma mudança chega à vitrine em at�
 
 ## 3. Observabilidade
 
-Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01` a `OBS-07`, `FND-05`, `CHK-12`, `ORD-18` e `CAT-12`. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
+Seção: [Observabilidade](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#observabilidade). Critérios: `DOC-OBS-01` a `DOC-OBS-04`; testes `OBS-01` a `OBS-09`, `FND-05`, `CHK-12`, `ORD-18` e `CAT-12`. Catálogo de métricas e eventos: [`telemetry.md`](https://github.com/roneyrogerio/casecellshop-backend/blob/main/.specs/features/casecellshop/telemetry.md).
 
 Logs pelo pino, métricas e traces pelo OpenTelemetry, todos com a mesma correlação. Toda métrica e todo evento de log são declarados num catálogo tipado por pasta, e o `tsc` recusa o que estiver fora dele.
 
@@ -117,7 +117,7 @@ Logs pelo pino, métricas e traces pelo OpenTelemetry, todos com a mesma correla
 - **cache:** `casecellshop.catalog.cache.lookups`, `casecellshop.catalog.origin.loads` (counters), `casecellshop.catalog.origin.active_loads` (UpDownCounter, as cargas em andamento), `casecellshop.catalog.served_entry.age` (histogram); e a sincronização: `casecellshop.catalog.sync.age` (gauge), `casecellshop.catalog.sync.corrections` e `casecellshop.catalog.sync.missing_skus` (counters);
 - **checkout:** `casecellshop.checkout.requests` por desfecho (counter) e `http.server.request.duration` (histogram); e o estoque: `casecellshop.inventory.reserved` e `casecellshop.inventory.oversold_skus` (gauges);
 - **fila:** `casecellshop.outbox.published.messages`, `casecellshop.outbox.attempts` por desfecho e `casecellshop.outbox.orphan_conclusions` (counters), `casecellshop.order.accept_to_invoice.duration` (histogram); `casecellshop.queue.messages` (`billing`, `dlq`) e `casecellshop.outbox.oldest_pending.age` (gauges) e `casecellshop.order.stuck` (counter);
-- **ERP:** `casecellshop.erp.client.operation.duration` por operação e desfecho (histogram, cujo `_count` conta as chamadas), `casecellshop.erp.client.active_operations` (UpDownCounter) e `casecellshop.erp.out_of_stock.rejections` (counter);
+- **ERP:** `casecellshop.erp.client.operation.duration` por operação e desfecho (histogram, cujo `_count` conta as chamadas), `casecellshop.erp.client.active_operations` (UpDownCounter), `casecellshop.erp.config_errors` e `casecellshop.erp.out_of_stock.rejections` (counters);
 - **leitura dos gauges:** um counter por pasta conta a leitura que falhou (`casecellshop.catalog.gauge.read_failures`, por exemplo), porque o gauge segue com o último valor, e os alertas disparam também por ele.
 
 No Prometheus, o ponto vira sublinhado e o counter ganha `_total` (`casecellshop_outbox_attempts_total`); um teste fixa os nomes exportados.
@@ -130,7 +130,7 @@ No Prometheus, o ponto vira sublinhado e o counter ganha `_total` (`casecellshop
 **Indicadores e objetivos de nível de serviço (SLI e SLO), alertas, dashboard e runbook**, em 30 dias:
 
 - **SLOs:** vitrine com 99,9% sem `5xx` e 99% em até 200 ms; checkout com 99,9% sem `5xx` (o `4xx` não consome o orçamento) e 99% em até 500 ms; 99% dos pedidos com desfecho em até 60 s do aceite, com cada atrasado contado uma vez, mesmo com várias réplicas da API;
-- **alertas:** consumo do orçamento do SLO em duas janelas; mensagem na DLQ e fila envelhecendo; furo de estoque; erro de configuração no ERP e ERP falhando; sincronização parada; vitrine servida velha;
+- **alertas:** consumo do orçamento do SLO em duas janelas; API fora do ar; mensagem na DLQ e fila envelhecendo; furo de estoque; erro de configuração no ERP e ERP falhando; sincronização parada; vitrine servida velha; vitrine com dado errado;
 - **dashboard:** na ordem da jornada (vitrine, checkout, fila e ERP, estoque, sincronização);
 - **runbook:** um por alerta; o da DLQ (*redrive* ou cancelamento depois de consultar o ERP) usa o comando de runbook do worker.
 
