@@ -747,8 +747,8 @@ A idade da sincronização sai da API, lida do banco a cada coleta, e segue cres
 O cliente viu na vitrine um preço ou uma disponibilidade que o checkout recusou. O cliente não é cobrado errado, porque o checkout decide pelo banco da loja (`CHK-06`), mas a recusa é a reclamação que este alerta antecipa.
 
 1. No dashboard, em checkouts por desfecho, veja qual dos dois sobe.
-2. `price_changed`: o preço da vitrine estava velho. Confira a idade da entrada servida ([Vitrine servida velha](#vitrine-servida-velha)) e a idade da sincronização ([Sincronização parada](#sincronização-parada)). Com as duas normais, o ERP está mudando preços com frequência: as correções de `price` sobem no painel da sincronização, e o log `casecellshop.checkout.price_changed` traz os itens recusados.
-3. `out_of_stock`: confira as correções de `on_hand` na sincronização e o alerta [Furo de estoque](#furo-de-estoque). Uma promoção que esgota um SKU disputado também sobe esse desfecho, sem defeito na loja; nesse caso, feche o ticket.
+2. `price_changed`: o preço da vitrine estava velho. Confira a idade da entrada servida ([Vitrine servida velha](#vitrine-servida-velha)) e a idade da sincronização ([Sincronização parada](#sincronização-parada)). Com as duas normais, o ERP está mudando preços com frequência: as correções de `price` sobem no painel da sincronização, e o log `casecellshop.checkout.price_changed` traz, em `skus`, os SKUs cujo preço mudou.
+3. `out_of_stock`: o log `casecellshop.checkout.rejected` traz o `sku` em que a reserva parou. Confira as correções de `on_hand` na sincronização e o alerta [Furo de estoque](#furo-de-estoque). Uma promoção que esgota um SKU disputado também sobe esse desfecho, sem defeito na loja; nesse caso, feche o ticket.
 4. Não altere `products` nem `inventory` à mão: os dois vêm do ERP pela sincronização.
 
 #### Vitrine servida velha
