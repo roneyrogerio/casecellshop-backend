@@ -205,11 +205,14 @@ function inSettleSpan(
 async function releaseHeld(dlq: Queue, held: Set<string>): Promise<void> {
   for (const handle of held) {
     try {
+      // O resultado 'stale' é ignorado: a mensagem já mudou de dono e o laço segue.
       await dlq.changeVisibility(handle, 0);
     } catch {
-      // Não esconde o erro original da rodada; a visibilidade de 5 min vence sozinha.
+      // Não esconde o erro original da rodada. Para no primeiro erro: com o SQS fora, cada
+      // chamada esperaria o timeout de 5 s e 100 mensagens passariam do prazo de 25 s do
+      // encerramento; a visibilidade de 5 min vence sozinha.
+      return;
     }
-    // O resultado 'stale' também é ignorado pelo mesmo motivo.
   }
 }
 
