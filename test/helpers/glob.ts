@@ -4,12 +4,16 @@
 // chaves, o salto de volta ao `**`, o `*` único que guarda só o último ponto de retorno).
 //
 // Porte de https://github.com/oxc-project/fast-glob/blob/3b6c31c39a676257fd1d95c338025b64f3f0395a/src/lib.rs
-// (tag v1.1.1, commit 3b6c31c39a676257fd1d95c338025b64f3f0395a). A estrutura e os nomes seguem o Rust (`State`,
-// `Wildcard`, a pilha de chaves com limite 10, `skip_globstars`, `skip_to_separator`, `skip_branch`, `match_brace`,
-// `match_start` da negação), para que uma nova versão do fast-glob se compare com este arquivo linha a linha.
+// (tag v1.1.1, commit 3b6c31c39a676257fd1d95c338025b64f3f0395a; a licença está em
+// https://github.com/oxc-project/fast-glob/blob/3b6c31c39a676257fd1d95c338025b64f3f0395a/LICENSE).
+// A estrutura e os nomes seguem o Rust (`State`, `Wildcard`, a pilha de chaves com limite 10, `skip_globstars`,
+// `skip_to_separator`, `skip_branch`, `match_brace`, `match_start` da negação), para que uma nova versão do fast-glob
+// se compare com este arquivo linha a linha.
 //
 // MIT License
 //
+// Copyright (c) 2025-present VoidZero Inc. & Contributors
+// Copyright (c) 2024 shulaoda
 // Copyright (c) 2023 Devon Govett
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
@@ -140,9 +144,8 @@ function copyWildcard(wildcard: Wildcard): Wildcard {
 // A pilha de chaves: para cada `{` em tentativa, o índice dela e o do ramo (alternativa) que está sendo casado.
 type BraceStack = [openBraceIndex: number, branchIndex: number][];
 
-// O resultado de ler um `\x` (o `unescape` do Rust): o byte que o `\x` produz, ou `undefined` se a `\` está no fim.
-// `\a` é `a`, `\b` é 0x08, `\n` é LF, `\r` é CR, `\t` é TAB, e qualquer outro caractere é ele mesmo (medido no oxlint:
-// `q/a\nb.js` não casa `q/anb.js`, e `q/a\ab.js` casa `q/aab.js`).
+// O que cada `\x` vira: `\a` é `a`, `\b` é 0x08, `\n` é LF, `\r` é CR, `\t` é TAB, e qualquer outro caractere fica fora
+// da tabela e é ele mesmo (medido no oxlint: `q/a\nb.js` não casa `q/anb.js`, e `q/a\ab.js` casa `q/aab.js`).
 const CONTROL_ESCAPES = new Map([
   [0x61, 0x61],
   [0x62, 0x08],
@@ -353,8 +356,8 @@ class State {
   }
 
   // O laço do casamento. A ordem dos braços do `match` do Rust importa: um braço cujo guard falha passa para o seguinte,
-  // então o `?` diante de uma `/` (ou no fim do caminho) e o `,` ou `}` fora de chaves caem no braço do literal. Já o `[`
-  // que entrou e não casou vai direto para o retorno, sem cair no literal.
+  // então o `?` diante de uma `/` e o `,` ou `}` fora de chaves caem no braço do literal; sem caminho, nenhum braço casa
+  // e o fluxo vai para o retorno. Já o `[` que entrou e não casou vai direto para o retorno, sem cair no literal.
   globMatchFrom(
     glob: Uint8Array,
     path: Uint8Array,
@@ -578,7 +581,7 @@ export function globMatch(glob: string, path: string): boolean {
   return result.matched && !result.invalidPattern;
 }
 
-// Os `files` de um override do .oxlintrc.json, como o `GlobSet` do oxlint os casa. Cada padrão perde o `./` do início;
+// O glob de um `files` do .oxlintrc.json como o `GlobSet` do oxlint o prepara antes de casar. Perde o `./` do início;
 // com `/` fica igual; `./x` sem `/` vira `x`, sem o `**/`, então só casa na raiz (o oxlint o mede como glob, não como
 // nome exato: `./*.ts` casa `x.ts`); qualquer outro padrão sem `/` ganha `**/` na frente, então `*.ts` alcança `.ts`
 // em qualquer pasta (diferente do glob cru, que só alcançaria a raiz). O `!` do início não conta como `/`: um `!*.ts`
@@ -590,6 +593,8 @@ export function normalizeOverrideGlob(pattern: string): string {
   return rooted ? stripped : `**/${stripped}`;
 }
 
+// Se o caminho casa algum dos `files` de um override do .oxlintrc.json, como o `GlobSet` do oxlint o decide. Um glob
+// inválido lança, porque o oxlint recusa a configuração inteira.
 export function overrideFilesMatch(
   files: readonly string[],
   path: string,

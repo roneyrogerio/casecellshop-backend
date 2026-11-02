@@ -7,7 +7,7 @@ import { propertyTimeoutMs, readPropertyConfig } from './property-setup.ts';
 
 // FND-13 e FND-14: a conferência do lint lida como dado (`files` dos overrides do .oxlintrc.json) decide pelo
 // `globMatch` (o porte do `glob_match` do fast-glob 1.1.1); se ele casa errado, a conferência libera ou reprova o
-// arquivo errado sem avisar. FND-15: a
+// arquivo errado sem avisar. A
 // comparação diferencial por propriedade, no fim do arquivo, usa a semente e o número de casos globais do fast-check.
 
 interface GlobCase {
@@ -89,9 +89,10 @@ const COMMA_OUTSIDE_BRACES: GlobCase[] = [
   },
 ];
 
-// A classe negada traduzida para `[^…]` vale para estes casos, em que a classe fica dentro de um trecho do caminho.
-// Fora deles o oxlint não segue a regex: no fast-glob 1.1.1 que ele traz, `[!x]` e `[^x]` casam também a `/` (a
-// paridade com o oxlint real está em "FND-13 paridade dos files dos overrides com o oxlint").
+// A classe negada (`[!x]`, `[^x]`) casa qualquer byte fora dela. Estes casos deixam a classe dentro de um trecho do
+// caminho, onde o resultado é o óbvio. Diante de uma `/` o oxlint casa mais do que se espera: no fast-glob 1.1.1 que ele
+// traz, `[!x]` e `[^x]` casam também a `/` (a paridade com o oxlint real está em "FND-13 paridade dos files dos
+// overrides com o oxlint").
 const NEGATED_CLASS: GlobCase[] = [
   {
     glob: 'a[!x]',
@@ -111,8 +112,8 @@ const NEGATED_CLASS: GlobCase[] = [
 ];
 
 // O primeiro `]` depois do `[` e do `!` ou `^` opcional é membro da classe (fast-glob 1.1.1, medido na paridade); a
-// classe fecha no `]` seguinte. Na regex gerada, `]`, `\` e `^` membros precisam de escape para a classe JavaScript
-// ter o mesmo conjunto (`[]]` em JavaScript é uma classe vazia seguida de `]`, que não casa nada).
+// classe fecha no `]` seguinte. Os membros `]` e `^` (este fora do início) contam como qualquer outro membro: `[]]` casa
+// o `]` (e não é uma classe vazia seguida de `]`, como seria em JavaScript), e `[x^]` casa o `^`.
 const CLASS_MEMBERS: GlobCase[] = [
   {
     glob: 'a[]]b',
@@ -417,7 +418,7 @@ const DASH_AFTER_EMPTY_RANGE: GlobCase[] = [
   },
 ];
 
-// Chaves vazias e `!` dentro de chaves (divergência 3 do script): `{}`, `{a,}` e `{,a}` têm uma alternativa vazia, o `!`
+// Chaves vazias e `!` dentro de chaves: `{}`, `{a,}` e `{,a}` têm uma alternativa vazia, o `!`
 // dentro de chaves é literal, e a `}` solta de um grupo só (ou de grupos aninhados) é literal.
 const EMPTY_AND_LOOSE_BRACES: GlobCase[] = [
   {
@@ -472,12 +473,12 @@ const EMPTY_AND_LOOSE_BRACES: GlobCase[] = [
 // mesma estrutura do Rust. O oráculo é o que o oxlint casa (`matches`) e o que ele não casa (`rejects`), medido na
 // paridade abaixo; o que a regex de antes diria vai no comentário de cada caso.
 const OXLINT_QUIRKS: GlobCase[] = [
-  // O `}` sobrante some depois do segundo grupo; a regex pediria o `}` no nome (`q/ab}.js`).
+  // O `}` sobrante some depois do segundo grupo; a regex de antes pediria o `}` no nome (`q/ab}.js`).
   { glob: 'q/{a}{b}}.js', matches: ['q/ab.js'], rejects: ['q/ab}.js'] },
   // A `,` solta vira separador de alternativas depois do segundo grupo: não casa nada, nem `q/ab,c.js`.
   { glob: 'q/{a}{b},c.js', matches: [], rejects: ['q/ab,c.js'] },
   // O que sobra depende do caminho: a pasta `a` faz o primeiro grupo casar e o segundo falhar, e o `}` volta a ser
-  // literal. A regex casaria `q/a/ab.js` e não `q/a/ab}.js`.
+  // literal. A regex de antes casaria `q/a/ab.js` e não `q/a/ab}.js`.
   {
     glob: '**/{a}{b}}.js',
     matches: ['ab.js', 'q/ab.js', 'q/b/ab.js', 'q/a/ab}.js'],
@@ -495,17 +496,17 @@ const OXLINT_QUIRKS: GlobCase[] = [
     rejects: [],
   },
   // O oxlint guarda só o último `*` para voltar atrás: o segundo `*`, que para na `/`, apaga o primeiro. A regex
-  // casaria `q/a/b.js` (`*` = `a`, a classe negada = `/`, `*` vazio); o oxlint casa só `q/ab.js`.
+  // de antes casaria `q/a/b.js` (`*` = `a`, a classe negada = `/`, `*` vazio); o oxlint casa só `q/ab.js`.
   { glob: 'q/*[^c]*b.js', matches: ['q/ab.js'], rejects: ['q/a/b.js'] },
-  // O gap do helper por regex: um `?` antes de `**/` e um grupo depois. O oxlint casa `b/xa.js` (o `**` que não é
-  // trecho inteiro e o salto de volta ao `**` do começo); a regex não casaria.
+  // O gap do helper de antes, por regex: um `?` antes de `**/` e um grupo depois. O oxlint casa `b/xa.js` (o `**` que
+  // não é trecho inteiro e o salto de volta ao `**` do começo); a regex de antes não casaria.
   {
     glob: '**/?**/{a}.js',
     matches: ['b/a.js', 'b/xa.js', 'ba/a.js'],
     rejects: ['a.js'],
   },
   // O `**` no começo de uma alternativa de um grupo que abre no meio de um trecho: `ax.js` casa e `a/ax.js` não (a regex
-  // casaria os dois).
+  // de antes casaria os dois).
   {
     glob: '**/a{**/x}.js',
     matches: ['ax.js', 'a/x.js'],
@@ -513,8 +514,8 @@ const OXLINT_QUIRKS: GlobCase[] = [
   },
 ];
 
-// Os vizinhos que a regex também acertava: `}` solta com um grupo só, grupos em sequência sem `}` ou `,` soltos depois,
-// e a classe que casa a `/` com um `*` só.
+// Os vizinhos que a regex de antes também acertava: `}` solta com um grupo só, grupos em sequência sem `}` ou `,` soltos
+// depois, e a classe que casa a `/` com um `*` só.
 const OXLINT_NEIGHBOURS = [
   'q/a{b}}.js',
   'q/{a}}{b}.js',
@@ -669,7 +670,7 @@ describe('FND-13 globMatch', () => {
   );
 
   it.each(EMPTY_AND_LOOSE_BRACES)(
-    'FND-13 chaves vazias, ! dentro de chaves e } solta de um grupo só seguem a regex: $glob',
+    'FND-13 chaves vazias, ! dentro de chaves e } solta de um grupo só casam como o oxlint: $glob',
     (testCase) => {
       expectCase(testCase);
     },
@@ -768,7 +769,8 @@ const FILE_SAMPLES = [
   'a}.js',
   'ab}.js',
   'a/abc.js',
-  // Os caminhos dos globs em que o oxlint foge da regex (o `}` sobrante depende do caminho que o casamento fez).
+  // Os caminhos dos globs em que o `}` sobrante depende do caminho que o casamento fez: o oxlint casa um e não casa
+  // outro, diferente do que a regex de antes decidia só pelo glob.
   'q/b/ab.js',
   'q/a/ab.js',
   'q/a/ab}.js',
@@ -1015,7 +1017,7 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
   });
 
   it.each(OXLINT_QUIRKS)(
-    'FND-13 o oxlint casa fora da regex, no oráculo fixo, e o overrideFilesMatch o acompanha: $glob',
+    'FND-13 o oxlint casa os casos difíceis do oráculo fixo, e o overrideFilesMatch o acompanha: $glob',
     ({ glob, matches, rejects }) => {
       const reported = measured.get(filesLabel([glob])) ?? [];
       expect({
@@ -1059,7 +1061,7 @@ describe('FND-13 paridade dos files dos overrides com o oxlint', () => {
   );
 });
 
-// ---------------------------------------------------------------- comparação diferencial por propriedade (FND-15)
+// ---------------------------------------------------------------- comparação diferencial por propriedade (FND-13)
 
 // Os casos fixos acima pegam a classe de divergência que alguém já viu; a propriedade pega a que ninguém viu. Ela gera
 // globs pela gramática do script de conferência da sessão principal (nomes curtos com os caracteres que o glob trata
@@ -1268,7 +1270,7 @@ function expectParityProperty(
   fc.assert(property, { numRuns });
 }
 
-describe('FND-15 comparação diferencial dos files dos overrides com o oxlint', () => {
+describe('FND-13 comparação diferencial dos files dos overrides com o oxlint', () => {
   let tree = '';
 
   beforeAll(() => {
@@ -1338,7 +1340,7 @@ describe('FND-15 comparação diferencial dos files dos overrides com o oxlint',
   }
 
   it(
-    'FND-15 o overrideFilesMatch casa as mesmas amostras que o oxlint para globs gerados',
+    'FND-13 o overrideFilesMatch casa as mesmas amostras que o oxlint para globs gerados',
     () => {
       const counters: Counters = { compared: 0, invalid: 0 };
       expectParityProperty(
@@ -1361,7 +1363,7 @@ describe('FND-15 comparação diferencial dos files dos overrides com o oxlint',
   // Controle negativo: um helper que trata o `**` como um `*` (o defeito da divergência 1) tem de ser reprovado pela
   // mesma propriedade. Sem ele, uma propriedade que nunca compara (amostras erradas, `match` ignorado) passaria sempre.
   it(
-    'FND-15 controle negativo: um helper que trata o ** como * é reprovado pela propriedade',
+    'FND-13 controle negativo: um helper que trata o ** como * é reprovado pela propriedade',
     () => {
       const counters: Counters = { compared: 0, invalid: 0 };
       const outcome = fc.check(
