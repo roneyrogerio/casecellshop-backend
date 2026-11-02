@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { prometheusName } from '../../scripts/generate-telemetry-doc.ts';
 import { METRICS } from '../../scripts/telemetry-catalog.ts';
+import { routes } from '../../src/contract/index.ts';
 import type {
   AttributeSpec,
   AttributeValues,
@@ -53,9 +54,20 @@ const RUNBOOK_BASE = `${REPO_BLOB}/${README_NAME}#`;
 const SECTION_TITLE = 'Operação';
 const HISTOGRAM_SUFFIXES = ['_bucket', '_sum', '_count'];
 const REGEX_OPS = new Set(['EqlRegex', 'NeqRegex']);
-// Os metacaracteres de uma expressão regular, menos o `|`, que separa as alternativas.
-const REGEX_METACHARS = /[.*+?()[\]{}^$\\]/;
-const PROMETHEUS_DURATION = /^(?:\d+(?:ms|s|m|h|d|w|y))+$/;
+// Os metacaracteres de uma expressão regular, menos o `|`, que separa as alternativas. A chave não está aqui: o RE2 (a
+// engine do Prometheus) lê `{orderId}` como texto, e só `{n}`, `{n,}` e `{n,m}` são repetição (REGEX_REPEAT).
+const REGEX_METACHARS = /[.*+?()[\]^$\\]/;
+const REGEX_REPEAT = /\{\d+(?:,\d*)?\}/;
+// A duração do Prometheus, na gramática da documentação (`<duration>` em "Configuration"): as unidades em ordem
+// (y, w, d, h, m, s, ms), cada uma no máximo uma vez, ou `0`. A expressão oficial aceita a string vazia (todas as
+// unidades são opcionais), e um `for` vazio não é duração: a conferência de não vazio fica à parte (`filled`).
+// https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+// https://prometheus.io/docs/prometheus/latest/querying/basics/#time-durations
+const PROMETHEUS_DURATION =
+  /^(?:(?:\d+y)?(?:\d+w)?(?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+s)?(?:\d+ms)?|0)$/;
+
+const isPrometheusDuration = (text: string): boolean =>
+  text !== '' && PROMETHEUS_DURATION.test(text);
 
 const strictParser = parser.configure({ strict: true });
 type TreeNode = ReturnType<typeof strictParser.parse>['topNode'];
@@ -161,8 +173,13 @@ interface MetricEntry {
   series: string;
   instrument: InstrumentKind;
   histogram: boolean;
-  // Rótulo do Prometheus -> valores da lista fechada, ou undefined quando a lista é aberta.
+  // Rótulo do Prometheus -> valores da lista fechada, ou undefined quando a lista é aberta. A rota (`http_route`) é
+  // lista fechada pelos `path` do contrato.
   attributes: Map<string, string[] | undefined>;
+  // Os rótulos cuja lista fechada são as rotas do contrato, para a mensagem dizer isso.
+  routeLabels: Set<string>;
+  // As fronteiras declaradas do histograma, como o exportador as escreve no `le` (`String(n)`); vazio fora de histograma.
+  bucketBounds: string[];
 }
 
 type Catalog = Map<string, MetricEntry>;
@@ -171,25 +188,45 @@ type Catalog = Map<string, MetricEntry>;
 const prometheusLabel = (attribute: string): string =>
   attribute.replaceAll('.', '_');
 
+// O `le` do último balde de todo histograma do Prometheus, além das fronteiras declaradas.
+const INFINITE_BOUND = '+Inf';
+
+// Os `path` das rotas do contrato (`routes`, de onde o OpenAPI é gerado): o oráculo dos valores de `http_route`.
+const CONTRACT_PATHS: readonly string[] = routes.map((route) => route.path);
+
 // O catálogo de uma declaração de métricas (o formato do METRICS): a série é a do prometheusName, o rótulo é o atributo
-// OTel com `.` trocado por `_`, e a lista é fechada só quando a declaração é `enum`; o código de status HTTP e a rota
-// são listas abertas.
-function buildCatalog(metrics: Readonly<Record<string, MetricSpec>>): Catalog {
+// OTel com `.` trocado por `_`, e a lista é fechada quando a declaração é `enum` (os valores) ou `http_route` (as
+// rotas do contrato); o código de status HTTP é lista aberta. O `le` de um `_bucket` vem das fronteiras do histograma.
+function buildCatalog(
+  metrics: Readonly<Record<string, MetricSpec>>,
+  routePaths: readonly string[] = CONTRACT_PATHS,
+): Catalog {
   const catalog: Catalog = new Map();
   for (const [name, spec] of Object.entries(metrics)) {
     const series = prometheusName(name, spec.instrument);
+    const attributeList = Object.entries(spec.attributes).map(
+      ([attribute, { values }]) => ({
+        label: prometheusLabel(attribute),
+        allowed:
+          values.kind === 'enum'
+            ? [...values.values]
+            : values.kind === 'http_route'
+              ? [...routePaths]
+              : undefined,
+        route: values.kind === 'http_route',
+      }),
+    );
     catalog.set(series, {
       series,
       instrument: spec.instrument,
       histogram: spec.instrument === 'histogram',
       attributes: new Map(
-        Object.entries(spec.attributes).map(
-          ([attribute, { values }]): [string, string[] | undefined] => [
-            prometheusLabel(attribute),
-            values.kind === 'enum' ? [...values.values] : undefined,
-          ],
-        ),
+        attributeList.map(({ label, allowed }) => [label, allowed]),
       ),
+      routeLabels: new Set(
+        attributeList.filter(({ route }) => route).map(({ label }) => label),
+      ),
+      bucketBounds: (spec.buckets ?? []).map(String),
     });
   }
   return catalog;
@@ -252,21 +289,32 @@ function labelProblem(
   op: string,
   value: string,
 ): string | undefined {
-  if (label === 'le')
-    return resolved.suffix === '_bucket'
-      ? undefined
-      : `o rótulo le só existe em _bucket, e a série é ${resolved.series}`;
-  const { attributes } = resolved.entry;
-  if (!attributes.has(label))
-    return `o rótulo ${label} não é atributo de ${resolved.series} (atributos: ${[...attributes.keys()].join(', ') || 'nenhum'})`;
-  const allowed = attributes.get(label);
+  const { attributes, routeLabels, bucketBounds } = resolved.entry;
+  let allowed: string[] | undefined;
+  let rejection = `não está na lista fechada de ${label}`;
+  if (label === 'le') {
+    if (resolved.suffix !== '_bucket')
+      return `o rótulo le só existe em _bucket, e a série é ${resolved.series}`;
+    allowed = [...bucketBounds, INFINITE_BOUND];
+    rejection = `não é uma fronteira declarada do histograma ${resolved.series.slice(0, -'_bucket'.length)}`;
+  } else {
+    if (!attributes.has(label))
+      return `o rótulo ${label} não é atributo de ${resolved.series} (atributos: ${[...attributes.keys()].join(', ') || 'nenhum'})`;
+    allowed = attributes.get(label);
+    if (routeLabels.has(label))
+      rejection = `de ${label} não é uma rota do contrato`;
+  }
   if (allowed === undefined) return undefined;
   const regex = REGEX_OPS.has(op);
   for (const alternative of regex ? value.split('|') : [value]) {
-    if (regex && REGEX_METACHARS.test(alternative))
+    // O `.` de um valor da lista (0.2) é regex que casa consigo mesmo; o resto dos metacaracteres não.
+    const literal = allowed.includes(alternative)
+      ? alternative.replaceAll('.', '')
+      : alternative;
+    if (regex && (REGEX_METACHARS.test(literal) || REGEX_REPEAT.test(literal)))
       return `o valor "${value}" de ${label} tem metacaractere de regex (só alternativas literais separadas por |)`;
     if (!allowed.includes(alternative))
-      return `o valor "${alternative}" não está na lista fechada de ${label} (${allowed.join(', ')})`;
+      return `o valor "${alternative}" ${rejection} (${allowed.join(', ')})`;
   }
   return undefined;
 }
@@ -396,7 +444,7 @@ function ruleProblems(
   else problems.push(...queryProblems(expr, catalog));
   const duration = field(rule, 'for');
   if (filled(duration) === undefined) problems.push('falta o campo for');
-  else if (!PROMETHEUS_DURATION.test(String(duration)))
+  else if (!isPrometheusDuration(String(duration)))
     problems.push(`o for ${String(duration)} não é uma duração do Prometheus`);
   if (filled(field(field(rule, 'labels'), 'severity')) === undefined)
     problems.push('falta labels.severity');
@@ -554,7 +602,10 @@ const TEST_METRICS: Readonly<Record<string, MetricSpec>> = {
   },
 };
 
-const CATALOG = buildCatalog(TEST_METRICS);
+// Um contrato montado no teste: a main não tem todas as rotas que o README cita (o /products chega com o catálogo).
+const TEST_ROUTES = ['/checkout', '/orders/{orderId}/status', '/products'];
+
+const CATALOG = buildCatalog(TEST_METRICS, TEST_ROUTES);
 
 type RuleField = 'alert' | 'expr' | 'for' | 'severity' | 'summary' | 'runbook';
 
@@ -701,9 +752,18 @@ describe('OBS-03 o catálogo montado da declaração tipada (controles)', () => 
     expect(duration?.instrument).toBe('histogram');
     expect(duration?.attributes.get('http_request_method')).toContain('_OTHER');
     expect(duration?.attributes.get('url_scheme')).toEqual(['http', 'https']);
-    // A rota e o código de status HTTP são listas abertas: o atributo existe, sem lista de valores.
-    expect(duration?.attributes.has('http_route')).toBe(true);
-    expect(duration?.attributes.get('http_route')).toBeUndefined();
+    // A rota é lista fechada pelos `path` do contrato; o código de status HTTP é lista aberta (atributo sem valores).
+    expect(duration?.attributes.get('http_route')).toEqual(CONTRACT_PATHS);
+    expect(duration?.attributes.get('http_route')).toContain('/checkout');
+    expect(duration?.attributes.get('http_route')).toContain(
+      '/orders/{orderId}/status',
+    );
+    expect(duration?.routeLabels).toEqual(new Set(['http_route']));
+    // As fronteiras do histograma são as declaradas, escritas como o exportador as escreve.
+    expect(duration?.bucketBounds).toEqual(
+      METRICS['http.server.request.duration']?.buckets?.map(String),
+    );
+    expect(duration?.bucketBounds).toContain('0.2');
     expect(duration?.attributes.has('http_response_status_code')).toBe(true);
     expect(
       duration?.attributes.get('http_response_status_code'),
@@ -734,12 +794,11 @@ describe('OBS-03 o catálogo montado da declaração tipada (controles)', () => 
     expect(
       CATALOG.get('app_duration')?.attributes.get('app_operation'),
     ).toEqual(['read', 'write']);
-    expect(CATALOG.get('app_duration')?.attributes.has('http_route')).toBe(
-      true,
+    expect(CATALOG.get('app_duration')?.attributes.get('http_route')).toEqual(
+      TEST_ROUTES,
     );
-    expect(
-      CATALOG.get('app_duration')?.attributes.get('http_route'),
-    ).toBeUndefined();
+    expect(CATALOG.get('app_duration')?.bucketBounds).toEqual(['1', '5']);
+    expect(CATALOG.get('app_requests_total')?.bucketBounds).toEqual([]);
     expect(
       CATALOG.get('app_duration')?.attributes.get('http_response_status_code'),
     ).toBeUndefined();
@@ -768,10 +827,25 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
     ],
     ['valor entre crases', 'app_requests_total{app_outcome=`ok`}'],
     [
-      'valor com chave entre aspas (lista aberta)',
+      'valor com chave entre aspas (rota do contrato)',
       'rate(app_duration_bucket{http_route="/orders/{orderId}/status"}[5m])',
     ],
-    ['regex em lista aberta', 'app_duration_count{http_route=~"/orders/.*"}'],
+    [
+      'regex em lista aberta',
+      'app_duration_count{http_response_status_code=~"5.."}',
+    ],
+    [
+      'rota do contrato com chave, em =~, é texto no RE2',
+      'app_duration_count{http_route=~"/checkout|/orders/{orderId}/status"}',
+    ],
+    ['rota do contrato com !=', 'app_duration_count{http_route!="/products"}'],
+    [
+      'rota do contrato com !~',
+      'app_duration_count{http_route!~"/products|/checkout"}',
+    ],
+    ['le com fronteiras declaradas, com =~', 'app_duration_bucket{le=~"1|5"}'],
+    ['le com +Inf', 'app_duration_bucket{le="+Inf"}'],
+    ['le com != e fronteira declarada', 'app_duration_bucket{le!="5"}'],
     [
       'código de status HTTP (lista aberta)',
       'app_duration_count{http_response_status_code="503"}',
@@ -947,6 +1021,71 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
       'nome de métrica entre aspas',
     ],
     [
+      'le fora das fronteiras declaradas',
+      'app_duration_bucket{le="3"}',
+      'o valor "3" não é uma fronteira declarada do histograma app_duration',
+    ],
+    [
+      'le que não é número',
+      'app_duration_bucket{le="abc"}',
+      'o valor "abc" não é uma fronteira declarada',
+    ],
+    [
+      'le escrito diferente de String(n)',
+      'app_duration_bucket{le="1.0"}',
+      'o valor "1.0" não é uma fronteira declarada',
+    ],
+    [
+      'le com +Inf em minúscula',
+      'app_duration_bucket{le="+inf"}',
+      'o valor "+inf" não é uma fronteira declarada',
+    ],
+    [
+      'le fora das fronteiras com !=',
+      'app_duration_bucket{le!="3"}',
+      'o valor "3" não é uma fronteira declarada',
+    ],
+    [
+      'le fora das fronteiras numa alternativa de =~',
+      'app_duration_bucket{le=~"1|3|+Inf"}',
+      'o valor "3" não é uma fronteira declarada',
+    ],
+    [
+      'le com +Inf num =~ (o + é metacaractere)',
+      'app_duration_bucket{le=~"1|+Inf"}',
+      'metacaractere de regex',
+    ],
+    [
+      'rota com erro de digitação',
+      'app_duration_bucket{http_route="/checkuot"}',
+      'o valor "/checkuot" de http_route não é uma rota do contrato',
+    ],
+    [
+      'rota com erro de digitação numa alternativa de =~',
+      'app_duration_count{http_route=~"/products|/checkuot"}',
+      'o valor "/checkuot" de http_route não é uma rota do contrato',
+    ],
+    [
+      'rota com barra final',
+      'app_duration_count{http_route!="/checkout/"}',
+      'o valor "/checkout/" de http_route não é uma rota do contrato',
+    ],
+    [
+      'rota com !~ fora do contrato',
+      'app_duration_count{http_route!~"/orders/{id}/status"}',
+      'o valor "/orders/{id}/status" de http_route não é uma rota do contrato',
+    ],
+    [
+      'rota com regex',
+      'app_duration_count{http_route=~"/checkout.*"}',
+      'metacaractere de regex',
+    ],
+    [
+      'chave de repetição numa alternativa de =~',
+      'app_requests_total{app_outcome=~"ok{2}"}',
+      'metacaractere de regex',
+    ],
+    [
       'rótulo de status de outra métrica',
       'app_requests_total{http_response_status_code="200"}',
       'o rótulo http_response_status_code não é atributo de app_requests_total',
@@ -1013,6 +1152,37 @@ describe('OBS-03 a conferência de uma consulta (controles)', () => {
         'sum(rate(http_server_request_duration_count{http_response_status_code="503"}[5m]))',
       ),
     ).toEqual([]);
+    expect(
+      real(
+        'http_server_request_duration_bucket{http_route="/checkout", le="0.2"}',
+      ),
+    ).toEqual([]);
+    expect(
+      real('http_server_request_duration_bucket{le=~"0.2|0.5|+Inf"}'),
+    ).toHaveLength(1);
+    expect(real('http_server_request_duration_bucket{le=~"0.2|0.5"}')).toEqual(
+      [],
+    );
+    expect(real('http_server_request_duration_bucket{le="+Inf"}')).toEqual([]);
+    expect(real('http_server_request_duration_bucket{le="0.3"}')).toHaveLength(
+      1,
+    );
+    expect(real('http_server_request_duration_bucket{le="abc"}')).toHaveLength(
+      1,
+    );
+    expect(
+      real('http_server_request_duration_count{http_route="/checkuot"}'),
+    ).toHaveLength(1);
+    expect(
+      real(
+        'http_server_request_duration_count{http_route=~"/checkout|/orders/{orderId}/status"}',
+      ),
+    ).toEqual([]);
+    expect(
+      real(
+        'http_server_request_duration_count{http_route=~"/checkout|/checkuot"}',
+      ),
+    ).toHaveLength(1);
     expect(real('rate(casecellshp_checkout_requests_total[5m])')).toHaveLength(
       1,
     );
@@ -1439,6 +1609,17 @@ describe('OBS-03 a conferência da seção Operação (controles)', () => {
     ['sem alert', { alert: null }, 'falta o campo alert'],
     ['sem expr', { expr: null }, 'falta o campo expr'],
     ['sem for', { for: null }, 'falta o campo for'],
+    ['com for vazio', { for: '' }, 'falta o campo for'],
+    [
+      'com for de unidades fora de ordem (5m1h)',
+      { for: '5m1h' },
+      'o for 5m1h não é uma duração do Prometheus',
+    ],
+    [
+      'com for de unidade repetida (1m1m)',
+      { for: '1m1m' },
+      'o for 1m1m não é uma duração do Prometheus',
+    ],
     [
       'com for que não é duração',
       { for: 'cinco minutos' },
@@ -1636,4 +1817,56 @@ describe('OBS-03 a conferência da seção Operação (controles)', () => {
     expect(problems[0]).toContain('alerta Primeiro');
     expect(problems[1]).toContain('alerta Segundo');
   });
+});
+
+describe('OBS-03 a duração do for na gramática do Prometheus (controles)', () => {
+  const VALID_DURATIONS = [
+    '0',
+    '0m',
+    '0s',
+    '5m',
+    '30s',
+    '1h30m',
+    '2d',
+    '1y2w3d4h5m6s7ms',
+    '1s1ms',
+    '100ms',
+    '90m',
+  ];
+  const INVALID_DURATIONS = [
+    '5m1h',
+    '1m1m',
+    '30s5m',
+    '1ms1s',
+    '',
+    '5',
+    'm',
+    '5 m',
+    '-5m',
+    '1.5h',
+    '5M',
+    '1h 30m',
+    '00x',
+    'cinco minutos',
+  ];
+
+  it.each(VALID_DURATIONS)('OBS-03 a duração %s passa', (duration) => {
+    expect(isPrometheusDuration(duration)).toBe(true);
+    expect(
+      check(readmeWith(goodBody(ruleFile({ for: duration })))).problems,
+    ).toEqual([]);
+  });
+
+  it.each(INVALID_DURATIONS)(
+    'OBS-03 a duração "%s" reprova: unidade fora de ordem, repetida, sem unidade ou vazia',
+    (duration) => {
+      expect(isPrometheusDuration(duration)).toBe(false);
+      const { problems } = check(
+        readmeWith(goodBody(ruleFile({ for: duration }))),
+      );
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain('alerta ErroAlto');
+    },
+  );
 });
