@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { expressionBuilder, type Kysely, sql } from 'kysely';
+import {
+  type ExpressionBuilder,
+  expressionBuilder,
+  type Kysely,
+  sql,
+  type SqlBool,
+} from 'kysely';
 import type { StoreDb } from '../db/database.ts';
+import type { RefusalReason, StoredRefusal } from './refusal.ts';
 
 // Fora do callback do set: a regra do Kysely exige o objeto, e o coalesce precisa citar a coluna.
 export const outbox = expressionBuilder<StoreDb, 'outbox'>();
@@ -17,7 +24,13 @@ export const MIN_CALL_DELAY_MS = 45_000;
 export const SETTLE_WINDOW_MS = 900_000;
 
 export type CallPermit =
-  | { granted: true; token: string; sentBefore: boolean }
+  | {
+      granted: true;
+      token: string;
+      sentBefore: boolean;
+      // Recusa definitiva já gravada (AD-031); com ela a tentativa só consulta.
+      refusal: StoredRefusal | null;
+    }
   // Outra tentativa chamou o ERP há menos que o atraso mínimo.
   | { granted: false; retryInMs: number };
 
@@ -42,6 +55,43 @@ function workerOnlyColumns() {
       .then(outbox('create_calls', '+', 1))
       .else(outbox.ref('create_calls'))
       .end(),
+  };
+}
+
+// O RETURNING da tomada devolve a linha nova, então o "enviado antes" sai da comparação: na primeira tomada
+// first_sent_at e last_call_at valem o mesmo now() da transação; nas seguintes, first_sent_at é mais antigo.
+// Traz também a recusa gravada e o que falta da janela de assentamento, pelo relógio do banco.
+function grantedColumns(eb: ExpressionBuilder<StoreDb, 'outbox'>) {
+  return [
+    eb(eb.ref('first_sent_at'), '<', eb.ref('last_call_at')).as('sent_before'),
+    eb.ref('refusal_reason').as('refusal_reason'),
+    sql<
+      number | null
+    >`(extract(epoch from (${eb.ref('refused_at')} + ${intervalOf(SETTLE_WINDOW_MS)} - now())) * 1000)::float8`.as(
+      'refusal_left_ms',
+    ),
+  ];
+}
+
+function granted(
+  token: string,
+  taken: {
+    sent_before: SqlBool;
+    refusal_reason: string | null;
+    refusal_left_ms: number | null;
+  },
+): CallPermit {
+  return {
+    granted: true,
+    token,
+    sentBefore: taken.sent_before === true,
+    refusal:
+      taken.refusal_reason !== null && taken.refusal_left_ms !== null
+        ? {
+            reason: taken.refusal_reason as RefusalReason,
+            leftMs: taken.refusal_left_ms,
+          }
+        : null,
   };
 }
 
@@ -72,16 +122,9 @@ export async function takeCallPermit(
         ),
       ]),
     )
-    // O RETURNING devolve a linha nova, então o "enviado antes" sai da comparação: na primeira tomada
-    // first_sent_at e last_call_at valem o mesmo now() da transação; nas seguintes, first_sent_at é mais antigo.
-    .returning((eb) =>
-      eb(eb.ref('first_sent_at'), '<', eb.ref('last_call_at')).as(
-        'sent_before',
-      ),
-    )
+    .returning(grantedColumns)
     .executeTakeFirst();
-  if (taken)
-    return { granted: true, token, sentBefore: taken.sent_before === true };
+  if (taken) return granted(token, taken);
 
   const row = await db
     .selectFrom('outbox')

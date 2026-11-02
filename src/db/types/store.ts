@@ -54,6 +54,8 @@ export interface Outbox {
   late_finding: string | null;
   order_id: string;
   published_at: Timestamp | null;
+  refusal_reason: string | null;
+  refused_at: Timestamp | null;
   traceparent: string | null;
 }
 
