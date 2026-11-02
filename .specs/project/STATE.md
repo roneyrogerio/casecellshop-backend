@@ -863,7 +863,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 
 **Status:** proposta (02/11/2026). Altera, na AD-009, "um `UPDATE` por SKU" e "Toda rodada atualiza todos os SKUs".
 
-**Contexto.** A AD-009 manda um comando por SKU em toda rodada. Com alguns milhares de SKUs e uma rodada por minuto, são dois comandos por SKU por minuto (produto e estoque), mesmo quando nada mudou no ERP: com 5 mil SKUs, 10 mil comandos curtos por minuto que reescrevem o mesmo valor. A leitura do ERP continua completa: a API do ERP expõe só a consulta de produtos, preços e estoque (`PROJECT.md`, "Restrições"), então não se pode contar com um filtro "alterados desde", e só a leitura completa mostra os SKUs removidos (`CAT-11`).
+**Contexto.** A AD-009 manda um comando por SKU em toda rodada. Com alguns milhares de SKUs e uma rodada por minuto, são dois comandos por SKU por minuto (produto e estoque), mesmo quando nada mudou no ERP: com 5 mil SKUs, 10 mil comandos curtos por minuto que reescrevem o mesmo valor. A leitura do ERP continua completa: para o catálogo, a API do ERP expõe só a consulta de produtos, preços e estoque (`PROJECT.md`, "Restrições"), então não se pode contar com um filtro "alterados desde", e só a leitura completa mostra os SKUs removidos (`CAT-11`).
 
 **Decisão.**
 
@@ -887,7 +887,7 @@ O princípio adotado é a verificação determinística e independente de quem i
 - [Microsoft, padrão *Materialized View*](https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view), consultado em 02/11/2026: o modelo de leitura atualizado por agenda ou por evento, por reconstrução completa ou incremental, servindo a última versão completa e com alerta pela idade.
 - [Microsoft, padrão *Cache-Aside*](https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside), consultado em 02/11/2026: o padrão não serve quando os dados cabem no cache; aí, carregar tudo na subida.
 - [Martin Fowler, *What do you mean by "Event-Driven"?*](https://martinfowler.com/articles/201701-event-driven.html), consultado em 02/11/2026: o estado replicado dá resiliência, latência menor e menos carga na origem, ao custo de cópia e de lógica em quem recebe.
-- [commercetools, *Integrate with external product and inventory data*](https://docs.commercetools.com/learning-integrate-with-composable-commerce/integration-patterns/integrate-with-external-product-and-inventory-data.md), consultado em 02/11/2026: depois da carga inicial, só o que mudou, com fluxos separados para preço e estoque.
+- [commercetools, *Plan your integration landscape*](https://docs.commercetools.com/learning-integrate-with-composable-commerce/integration-patterns/integrate-with-external-product-and-inventory-data.md), consultado em 02/11/2026: depois da carga inicial, só o que mudou, com fluxos separados para preço e estoque.
 - [Dutchie, *Incremental Sync*](https://api.pos.dutchie.com/pages/incremental-sync.html), consultado em 02/11/2026: a carga completa de base e depois "alterados desde"; os registros apagados não aparecem na carga incremental.
 
 ## Escolhas de ferramenta
