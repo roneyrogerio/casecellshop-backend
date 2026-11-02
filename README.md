@@ -667,6 +667,7 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    docker compose exec worker node src/main/runbook.ts cancel <orderId>
    ```
 
+   - o pedido já tem desfecho: nada muda, sem consultar o ERP, e o comando sai com 0;
    - última chamada ao ERP há menos de 15 min (a janela de assentamento): recusa e diz quanto falta, porque uma criação em dúvida ainda pode virar fatura; rode de novo depois;
    - o ERP tem o pedido: recusa, porque ele já foi faturado; use o `redrive` ou espere a reconciliação;
    - a consulta ao ERP falhou: recusa sem mudar o pedido; a consulta conta como chamada ao ERP, então rode de novo depois de 15 min, com o ERP respondendo;
