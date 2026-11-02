@@ -28,7 +28,8 @@ export const CHECKOUT_METRICS = {
   'casecellshop.inventory.reserved': {
     instrument: 'gauge',
     unit: '{unit}',
-    description: 'Unidades reservadas por pedidos pendentes, somadas em todos os SKUs.',
+    description:
+      'Unidades reservadas por pedidos pendentes, somadas em todos os SKUs.',
     attributes: {},
   },
   'casecellshop.inventory.oversold_skus': {

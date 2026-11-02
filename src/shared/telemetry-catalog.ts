@@ -31,10 +31,7 @@ export interface AttributeSpec {
 
 // O `gauge` é assíncrono: o valor é lido no scrape por um callback, para estado que mora fora do processo (banco, SQS).
 export type InstrumentKind =
-  | 'counter'
-  | 'gauge'
-  | 'histogram'
-  | 'up_down_counter';
+  'counter' | 'gauge' | 'histogram' | 'up_down_counter';
 
 export interface MetricSpec {
   readonly instrument: InstrumentKind;

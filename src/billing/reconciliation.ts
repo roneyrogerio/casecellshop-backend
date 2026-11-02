@@ -16,6 +16,7 @@ import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
+import { queueGaugeLifecycle } from './queue-gauge.ts';
 import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
@@ -294,6 +295,7 @@ export function createReconciler({
       }
     },
     onStopping: () => wake?.(),
+    ...queueGaugeLifecycle(telemetry, dlq, 'dlq'),
   });
 
   return {
