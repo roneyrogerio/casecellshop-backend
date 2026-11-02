@@ -388,6 +388,7 @@ Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo,
 | `CasecellshopMetricasDaFilaAusentes` | o gauge da fila some, por 10 min | `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
 | `CasecellshopDLQ` | há mensagem na DLQ, ou a leitura da fila falha, por 10 min | `ticket` | [DLQ](#dlq) |
 | `CasecellshopFuroDeEstoque` | um SKU com `reserved > on_hand`, uma rejeição do ERP por falta de estoque, ou a leitura do estoque falha | `page` | [Furo de estoque](#furo-de-estoque) |
+| `CasecellshopVerificacaoTardiaSemLeitura` | a contagem de faturas pela leitura do banco do ERP falhou na última hora, por 15 min | `ticket` | [Verificação tardia sem leitura do ERP](#verificação-tardia-sem-leitura-do-erp) |
 | `CasecellshopFaturaTardia` | a verificação tardia achou uma fatura de pedido falho ou uma fatura duplicada | `page` | [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) |
 | `CasecellshopErpErroDeConfiguracao` | uma chamada ao ERP com `config_error` | `page` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
 | `CasecellshopErpFalhando` | mais da metade das chamadas `transient` ou `ambiguous`, por 10 min | `ticket` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
@@ -598,6 +599,15 @@ groups:
         annotations:
           summary: SKU com reserved > on_hand, o ERP recusou um pedido por falta de estoque, ou a leitura do estoque falhou
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#furo-de-estoque
+      - alert: CasecellshopVerificacaoTardiaSemLeitura
+        expr: |
+          sum(increase(casecellshop_erp_client_operation_duration_count{casecellshop_erp_operation="count_invoices",casecellshop_erp_outcome="transient"}[1h])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: A verificação tardia não consegue contar as faturas no banco do ERP
+          runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#verificação-tardia-sem-leitura-do-erp
       - alert: CasecellshopFaturaTardia
         expr: |
           sum(increase(casecellshop_order_late_invoices_total[1h])) > 0
@@ -728,9 +738,9 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
    ```
 
    - o pedido já tem desfecho: nada muda, sem consultar o ERP, e o comando sai com 0;
-   - última chamada ao ERP há menos de 15 min (a janela de assentamento): recusa e diz quanto falta, porque uma criação em dúvida ainda pode virar fatura; rode de novo depois;
+   - última criação enviada ao ERP há menos de 15 min (a janela de assentamento), ou outra tentativa chamando o ERP agora: recusa e diz quanto falta, porque uma criação em dúvida ainda pode virar fatura; rode de novo depois. As consultas da reconciliação não reabrem a janela;
    - o ERP tem o pedido: recusa, porque ele já foi faturado; use o `redrive` ou espere a reconciliação;
-   - a consulta ao ERP falhou: recusa sem mudar o pedido; a consulta conta como chamada ao ERP, então rode de novo depois de 15 min, com o ERP respondendo;
+   - a consulta ao ERP falhou: recusa sem mudar o pedido; rode de novo com o ERP respondendo, depois do atraso mínimo de 45 s entre chamadas;
    - o ERP responde que não tem o pedido: o pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`, `ORD-26`).
 
    Nas recusas o comando sai com código 1. O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Um pedido cancelado depois de um envio sem resposta entra na verificação tardia: se a fatura aparecer no ERP mesmo assim, o alerta [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) dispara.
@@ -771,6 +781,15 @@ A verificação tardia do worker (AD-031) revisita, 15 min depois da última cha
      ```
 
 5. Reveja a H4: compare o `created_at` das faturas com o `last_call_at` do pedido na outbox. Se o ERP demora mais que 40 s para concluir uma criação, aumente o atraso mínimo e a visibilidade da mensagem numa decisão nova (`design.md`, "Parâmetros"), antes que o caso se repita.
+
+#### Verificação tardia sem leitura do ERP
+
+A contagem de faturas da verificação tardia lê o banco do ERP (MySQL, acesso de leitura), fora da API (AD-031). Enquanto essa leitura falha, a fatura duplicada não é detectada; os pedidos ficam sem a marca e voltam a cada rodada, então nada se perde quando a leitura volta.
+
+1. Veja o erro no log `casecellshop.order.late_check.failed` e no histograma do ERP com a operação `count_invoices` e o desfecho `transient`.
+2. Credencial vencida ou permissão retirada: renove o usuário de leitura do banco do ERP na configuração do worker e reinicie o worker (`docker compose restart worker`).
+3. Tabela de faturas mudada numa atualização do ERP: a contagem depende dela (AD-031); ajuste o adaptador da leitura antes de confiar de novo na detecção da fatura duplicada.
+4. Quando a leitura volta, a rodada seguinte da verificação tardia confere os pedidos que ficaram para trás.
 
 #### ERP falhando ou com erro de configuração
 
