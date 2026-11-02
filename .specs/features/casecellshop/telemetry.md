@@ -136,7 +136,7 @@ Sem atributos.
 
 | Atributo | Exigência | Valores | Descrição |
 | --- | --- | --- | --- |
-| `casecellshop.order.late_invoice.cause` | obrigatório | `failed_order`, `duplicate` | O que a verificação tardia achou no ERP. |
+| `casecellshop.late_invoice.cause` | obrigatório | `failed_order`, `duplicate` | O que a verificação tardia achou no ERP. |
 
 ### `casecellshop.order.stuck`
 
