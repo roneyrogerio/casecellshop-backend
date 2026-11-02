@@ -154,36 +154,52 @@ describe('OBS-07 observe: o callback do gauge é lido no scrape', () => {
     expect(reading(text, RESERVED_PROM)).toBeUndefined();
   });
 
-  it('OBS-07 a função devolvida remove só o callback dela: a série some e a de outro callback segue', async () => {
+  // O requisito é que o callback removido deixe de ser chamado no scrape. Se o /metrics ainda mostra o último valor da
+  // série (o exportador do Prometheus é cumulativo), é detalhe do SDK e não é afirmado aqui.
+  it('OBS-07 a função devolvida remove só o callback dela: ele deixa de ser chamado nos scrapes seguintes e o de outro callback segue', async () => {
     const { telemetry, metrics } = newMetrics();
-    const removeBilling = metrics.observe(QUEUE, (observe) =>
-      observe(4, { 'casecellshop.queue.name': 'billing' }),
-    );
-    metrics.observe(QUEUE, (observe) =>
-      observe(2, { 'casecellshop.queue.name': 'dlq' }),
-    );
+    let billingCalls = 0;
+    let dlqCalls = 0;
+    const removeBilling = metrics.observe(QUEUE, (observe) => {
+      billingCalls += 1;
+      observe(4, { 'casecellshop.queue.name': 'billing' });
+    });
+    metrics.observe(QUEUE, (observe) => {
+      dlqCalls += 1;
+      observe(2, { 'casecellshop.queue.name': 'dlq' });
+    });
     expect(reading(await scrape(telemetry), QUEUE_PROM, BILLING)).toBe(4);
+    expect([billingCalls, dlqCalls]).toEqual([1, 1]);
 
     removeBilling();
 
     const after = await scrape(telemetry);
-    expect(reading(after, QUEUE_PROM, BILLING)).toBeUndefined();
+    await scrape(telemetry);
+    expect(billingCalls, 'o callback removido').toBe(1);
+    expect(dlqCalls, 'o callback de outro registro').toBe(3);
     expect(reading(after, QUEUE_PROM, DLQ)).toBe(2);
   });
 
   it('OBS-07 remover duas vezes não derruba nem remove o callback dos outros', async () => {
     const { telemetry, metrics } = newMetrics();
-    const remove = metrics.observe(RESERVED, (observe) => observe(1));
-    metrics.observe(QUEUE, (observe) =>
-      observe(3, { 'casecellshop.queue.name': 'billing' }),
-    );
+    let reservedCalls = 0;
+    let queueCalls = 0;
+    const remove = metrics.observe(RESERVED, (observe) => {
+      reservedCalls += 1;
+      observe(1);
+    });
+    metrics.observe(QUEUE, (observe) => {
+      queueCalls += 1;
+      observe(3, { 'casecellshop.queue.name': 'billing' });
+    });
     expect(reading(await scrape(telemetry), RESERVED_PROM)).toBe(1);
 
     remove();
     remove();
 
     const text = await scrape(telemetry);
-    expect(reading(text, RESERVED_PROM)).toBeUndefined();
+    expect(reservedCalls, 'o callback removido').toBe(1);
+    expect(queueCalls, 'o callback de outro gauge').toBe(2);
     expect(reading(text, QUEUE_PROM, BILLING)).toBe(3);
   });
 

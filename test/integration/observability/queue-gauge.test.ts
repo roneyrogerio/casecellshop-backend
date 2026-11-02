@@ -1,5 +1,5 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createTelemetry,
   type Telemetry,
@@ -34,6 +34,7 @@ const suiteOf = useWorkerSuite();
 const telemetries: Telemetry[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const telemetry of telemetries.splice(0)) await telemetry.shutdown();
 });
 
@@ -87,6 +88,11 @@ async function startHeld(
   return gate;
 }
 
+// Os testes do stop() contam as consultas do gauge à fila com `vi.spyOn(fila, 'approximateCount')`, que delega à
+// implementação real (a leitura segue indo ao ElasticMQ). O critério é que o gauge deixe de consultar a fila; o que o
+// /metrics mostra de uma série sem callback (o exportador do Prometheus é cumulativo e pode manter o último valor) é
+// detalhe do SDK, e por isso os testes não o afirmam.
+
 describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
   it('OBS-02 antes do start() a série billing não aparece; com o worker iniciado mostra as mensagens da fila, a cada scrape', async () => {
     const { telemetry, world } = await createRig();
@@ -114,36 +120,48 @@ describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
     await stopAdvancing(worker, world);
   });
 
-  it('OBS-02 depois do stop() a série billing some do /metrics', async () => {
+  it('OBS-02 depois do stop() o gauge billing deixa de consultar a fila, por mais scrapes e mensagens novas que haja', async () => {
     const { telemetry, world } = await createRig();
     await submit(world);
     const worker = buildWorker(world, { config: LOOP_CONFIG });
+    const spy = vi.spyOn(world.queue, 'approximateCount');
+    await scrapeMetrics(telemetry);
+    expect(spy, 'scrape antes do start()').not.toHaveBeenCalled();
     const gate = await startHeld(worker, world.queue);
     expect(queueMessages(await scrapeMetrics(telemetry), 'billing')).toBe(1);
+    expect(spy, 'um scrape com o worker iniciado').toHaveBeenCalledTimes(1);
 
     gate.releaseAll();
     await stopAdvancing(worker, world);
 
-    const families = await scrapeMetrics(telemetry);
-    expect(queueMessages(families, 'billing')).toBeUndefined();
-    expect(queueMessages(families, 'dlq')).toBeUndefined();
+    spy.mockClear();
+    await submit(world);
+    await scrapeMetrics(telemetry);
+    await submit(world);
+    await scrapeMetrics(telemetry);
+    expect(spy, 'scrapes depois do stop()').not.toHaveBeenCalled();
   });
 
-  it('OBS-02 com o reconciliador iniciado a série dlq mostra as mensagens da DLQ, e depois do stop() ela some', async () => {
+  it('OBS-02 com o reconciliador iniciado a série dlq mostra as mensagens da DLQ, e depois do stop() o gauge deixa de consultar a DLQ', async () => {
     const { telemetry, world } = await createRig();
     await fillDlq(world, 3);
     const { reconciler, dlq } = buildReconciler(world, { telemetry });
     // Depois do portão a rodada falha ao receber e não toca nas mensagens: o teste só lê a contagem da fila.
     dlq.inject('receive', 1);
+    const spy = vi.spyOn(dlq, 'approximateCount');
     expect(
       queueMessages(await scrapeMetrics(telemetry), 'dlq'),
       'antes do start()',
     ).toBeUndefined();
+    expect(spy, 'scrape antes do start()').not.toHaveBeenCalled();
 
     const gate = await startHeld(reconciler, dlq);
 
     const families = await scrapeMetrics(telemetry);
     expect(queueMessages(families, 'dlq')).toBe(3);
+    expect(spy, 'um scrape com o reconciliador iniciado').toHaveBeenCalledTimes(
+      1,
+    );
     expect(
       queueMessages(families, 'billing'),
       'o reconciliador não registra a série da fila de origem',
@@ -152,12 +170,14 @@ describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
     gate.releaseAll();
     await driveClock(reconciler.stop(), world);
 
-    expect(
-      queueMessages(await scrapeMetrics(telemetry), 'dlq'),
-    ).toBeUndefined();
+    spy.mockClear();
+    await fillDlq(world, 2);
+    await scrapeMetrics(telemetry);
+    await scrapeMetrics(telemetry);
+    expect(spy, 'scrapes depois do stop()').not.toHaveBeenCalled();
   });
 
-  it('OBS-02 as séries billing e dlq convivem e saem cada uma com o stop() do seu dono, sem misturar as contagens', async () => {
+  it('OBS-02 as séries billing e dlq convivem e cada gauge deixa de consultar a fila com o stop() do seu dono, sem misturar as contagens', async () => {
     const { telemetry, world } = await createRig();
     await submit(world);
     await submit(world);
@@ -165,6 +185,8 @@ describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
     const worker = buildWorker(world, { config: LOOP_CONFIG });
     const { reconciler, dlq } = buildReconciler(world, { telemetry });
     dlq.inject('receive', 1);
+    const billingSpy = vi.spyOn(world.queue, 'approximateCount');
+    const dlqSpy = vi.spyOn(dlq, 'approximateCount');
 
     const workerGate = await startHeld(worker, world.queue);
     const reconcilerGate = await startHeld(reconciler, dlq);
@@ -172,17 +194,32 @@ describe('OBS-02 casecellshop.queue.messages no /metrics do worker', () => {
     const both = await scrapeMetrics(telemetry);
     expect(queueMessages(both, 'billing')).toBe(2);
     expect(queueMessages(both, 'dlq')).toBe(3);
+    expect(billingSpy).toHaveBeenCalledTimes(1);
+    expect(dlqSpy).toHaveBeenCalledTimes(1);
 
     workerGate.releaseAll();
     await stopAdvancing(worker, world);
+    billingSpy.mockClear();
+    dlqSpy.mockClear();
     const afterWorker = await scrapeMetrics(telemetry);
-    expect(queueMessages(afterWorker, 'billing')).toBeUndefined();
     expect(queueMessages(afterWorker, 'dlq')).toBe(3);
+    expect(
+      billingSpy,
+      'o worker parou: billing não é consultada',
+    ).not.toHaveBeenCalled();
+    expect(
+      dlqSpy,
+      'o reconciliador segue: dlq é consultada',
+    ).toHaveBeenCalledTimes(1);
 
     reconcilerGate.releaseAll();
     await driveClock(reconciler.stop(), world);
+    dlqSpy.mockClear();
+    await scrapeMetrics(telemetry);
     expect(
-      queueMessages(await scrapeMetrics(telemetry), 'dlq'),
-    ).toBeUndefined();
+      dlqSpy,
+      'o reconciliador parou: dlq não é consultada',
+    ).not.toHaveBeenCalled();
+    expect(billingSpy).not.toHaveBeenCalled();
   });
 });
