@@ -608,7 +608,7 @@ function checkOperation(readme: string, catalog: Catalog): Report {
   // conferidas em silêncio, e o GitHub mostraria o bloco como texto quebrado.
   for (const line of section.swallowed)
     report.problems.push(
-      `README linha ${String(line)}: bloco de código engolido por um bloco HTML (a cerca não é lida como código nem conferida): falta uma linha em branco depois do <summary> (ou antes do </details>)`,
+      `README linha ${String(line)}: bloco de código engolido por um bloco HTML (a cerca não é lida como código nem conferida): falta uma linha em branco depois do <summary> (ou depois do </details>)`,
     );
   for (const fence of section.fences) {
     if (fence.info === 'promql')
@@ -1528,10 +1528,83 @@ describe('OBS-03 a leitura do Markdown e das âncoras (controles)', () => {
       expect(problems).toHaveLength(1);
       expect(problems[0]).toContain(`README linha ${String(line)}`);
       expect(problems[0]).toContain('engolido por um bloco HTML');
-      expect(problems[0]).toContain('linha em branco depois do <summary>');
-      expect(problems[0]).toContain('</details>');
+      expect(problems[0]).toContain(
+        'falta uma linha em branco depois do <summary> (ou depois do </details>)',
+      );
+      // Sem a linha em branco antes do </details> a cerca já fechou e nada é engolido: a dica não pode apontar para lá.
+      expect(problems[0]).not.toContain('antes do </details>');
     },
   );
+
+  // A outra forma de engolir: a cerca colada logo depois do `</details>`, que abre um bloco HTML novo.
+  it('OBS-03 cerca colada logo depois do </details>, sem linha em branco, é engolida: a conferência acusa a linha dela com a dica "depois do </details>" e não conta a consulta', () => {
+    const glued = [
+      '<details>',
+      '<summary>Consultas</summary>',
+      '',
+      `${FENCE}promql`,
+      'app_active',
+      FENCE,
+      '</details>',
+      `${FENCE}promql`,
+      'app_requets_total',
+      FENCE,
+      '',
+    ].join('\n');
+    const readme = readmeWith(goodBody() + '\n' + glued);
+    const { problems, queries } = check(readme);
+    const line = readme.split('\n').lastIndexOf(`${FENCE}promql`) + 1;
+
+    expect(line).toBeGreaterThan(0);
+    // Só a consulta de dentro do <details> entra na conta (2 do corpo + 1); a engolida não é lida, e o erro de
+    // digitação dela não aparece.
+    expect(queries).toBe(3);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(`README linha ${String(line)}:`);
+    expect(problems[0]).toContain('engolido por um bloco HTML');
+    expect(problems[0]).toContain('depois do </details>');
+    expect(problems[0]).not.toContain('antes do </details>');
+    expect(problems[0]).not.toContain('app_requets_total');
+  });
+
+  it('OBS-03 <details> cuja cerca fecha logo antes do </details>, sem linha em branco entre eles, não gera problema e a consulta de dentro é lida', () => {
+    const closedRight = [
+      '<details>',
+      '<summary>Consultas</summary>',
+      '',
+      `${FENCE}promql`,
+      'app_requets_total',
+      FENCE,
+      '</details>',
+      '',
+    ].join('\n');
+    const { problems, queries } = check(
+      readmeWith(goodBody() + '\n' + closedRight),
+    );
+
+    // A consulta de dentro é lida (conta e é conferida): o único problema é o erro de digitação dela, não uma cerca engolida.
+    expect(queries).toBe(3);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('app_requets_total não está na coluna');
+    expect(problems[0]).not.toContain('engolido por um bloco HTML');
+  });
+
+  it('OBS-03 <details> cuja cerca fecha logo antes do </details> e com consulta válida não gera nenhum problema', () => {
+    const closedRight = [
+      '<details>',
+      '<summary>Consultas</summary>',
+      '',
+      `${FENCE}promql`,
+      'app_active',
+      FENCE,
+      '</details>',
+      '',
+    ].join('\n');
+    const report = check(readmeWith(goodBody() + '\n' + closedRight));
+
+    expect(report.problems).toEqual([]);
+    expect(report.queries).toBe(3);
+  });
 
   it('OBS-03 <details> só com texto (sem cerca de código, nem com ``` no meio da linha ou recuado em 4 espaços) não gera problema', () => {
     const textOnly = [
