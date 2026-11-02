@@ -177,7 +177,7 @@ async function createInErp(
   ctx: CallContext,
   message: Attempt,
   log: AppLogger,
-  { items, sentBefore }: { items: ErpOrderItem[]; sentBefore: boolean },
+  { items, createCalls }: { items: ErpOrderItem[]; createCalls: number },
 ): Promise<Outcome> {
   const created = await ctx.erp.createOrder({
     reference: message.orderId,
@@ -187,9 +187,9 @@ async function createInErp(
   if (created.kind === 'permanent') {
     const skus = items.map((item) => item.sku);
     const reason = refusalReasonOf(created.reason);
-    // Depois de outro envio a criação anterior pode ainda estar em processamento no ERP: grava a recusa e
+    // Se esta não é a primeira criação, a anterior pode ainda estar em processamento no ERP: grava a recusa e
     // espera a janela de assentamento em vez de concluir (AD-031).
-    if (sentBefore) {
+    if (createCalls > 1) {
       await recordRefusal(ctx.db, message.orderId, reason);
       return {
         kind: 'retry',
@@ -243,6 +243,8 @@ export async function callErp(
       items,
     });
   }
+  // Contador já com a soma da tomada; a renovação soma mais uma, sem reler o banco.
+  let createCalls = permit.createCalls;
   if (permit.sentBefore) {
     const existing = await lookupExisting(ctx, message, log);
     if (existing !== 'not_found') return existing;
@@ -252,11 +254,9 @@ export async function callErp(
     permitReadAt = clock.now();
     if (!(await renewCallPermit(db, message.orderId, permit.token)))
       return giveUp(log);
+    createCalls += 1;
   }
 
   if (tooLate(ctx, message, permitReadAt)) return giveUp(log);
-  return createInErp(ctx, message, log, {
-    items,
-    sentBefore: permit.sentBefore,
-  });
+  return createInErp(ctx, message, log, { items, createCalls });
 }

@@ -28,6 +28,8 @@ export type CallPermit =
       granted: true;
       token: string;
       sentBefore: boolean;
+      // Criações contadas, já com a desta tentativa (AD-031): maior que 1 = não é a primeira.
+      createCalls: number;
       // Recusa definitiva já gravada (AD-031); com ela a tentativa só consulta.
       refusal: StoredRefusal | null;
     }
@@ -64,6 +66,7 @@ function workerOnlyColumns() {
 function grantedColumns(eb: ExpressionBuilder<StoreDb, 'outbox'>) {
   return [
     eb(eb.ref('first_sent_at'), '<', eb.ref('last_call_at')).as('sent_before'),
+    eb.ref('create_calls').as('create_calls'),
     eb.ref('refusal_reason').as('refusal_reason'),
     sql<
       number | null
@@ -77,6 +80,7 @@ function granted(
   token: string,
   taken: {
     sent_before: SqlBool;
+    create_calls: number;
     refusal_reason: string | null;
     refusal_left_ms: number | null;
   },
@@ -85,6 +89,7 @@ function granted(
     granted: true,
     token,
     sentBefore: taken.sent_before === true,
+    createCalls: taken.create_calls,
     refusal:
       taken.refusal_reason !== null && taken.refusal_left_ms !== null
         ? {

@@ -134,17 +134,17 @@ export function describeCancel(
       };
     case 'erp_has_order':
       return {
-        message: `Pedido ${orderId} não cancelado: o ERP já tem o pedido; confira a fatura antes de decidir.`,
+        message: `Pedido ${orderId} não cancelado: o ERP já tem o pedido; use o redrive ou espere a reconciliação.`,
         failed: true,
       };
     case 'erp_unavailable':
       return {
-        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou; tente de novo mais tarde.`,
+        message: `Pedido ${orderId} não cancelado: a consulta ao ERP falhou e conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (15 min).`,
         failed: true,
       };
     case 'permit_lost':
       return {
-        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento; tente de novo.`,
+        message: `Pedido ${orderId} não cancelado: outra tentativa chamou o ERP durante o cancelamento, e a consulta conta como chamada ao ERP; a nova tentativa só passa depois da janela de assentamento (15 min).`,
         failed: true,
       };
   }

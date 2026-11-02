@@ -12,10 +12,10 @@ export async function up(db: Kysely<any>): Promise<void> {
     )
     .execute();
 
-  // Linhas anteriores à coluna: quem já tem `first_sent_at` mandou ao menos uma criação.
-  await sql`update outbox set create_calls = 1 where first_sent_at is not null`.execute(
-    db,
-  );
+  // Linhas anteriores à coluna: quem tem `first_sent_at` mandou ao menos uma criação; com
+  // `first_sent_at < last_call_at` houve outra chamada depois da primeira, então conta duas.
+  await sql`update outbox set create_calls = case when first_sent_at < last_call_at then 2 else 1 end
+    where first_sent_at is not null`.execute(db);
 
   // A verificação lê só os pedidos ainda não verificados e com algum envio; o índice parcial fica
   // pequeno depois que a maioria das linhas recebe a marca ou nunca chamou o ERP.
