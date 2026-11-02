@@ -90,7 +90,13 @@ export function eventLogger<S extends EventSpecs>(
   logger: Logger,
   specs: S,
 ): EventLogger<S> {
-  void logger;
+  // A declaração só serve ao compilador (nome, nível e campos); em execução o nome vai direto ao campo `event`.
   void specs;
-  throw new Error('não implementado');
+  // Escrever pelo `logger` dado (e não por um global) preserva os campos de um logger filho.
+  const write =
+    (level: LogLevel) =>
+    (event: string, fields: object, message: string): void => {
+      logger[level]({ event, ...fields }, message);
+    };
+  return { info: write('info'), warn: write('warn'), error: write('error') };
 }

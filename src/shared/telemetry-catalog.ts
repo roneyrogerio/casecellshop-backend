@@ -216,6 +216,9 @@ export function catalogViolations(
           `o evento ${name} não segue o padrão casecellshop.<domínio>.<evento> em snake_case`,
         ]),
     ...(spec.description ? [] : [`o evento ${name} não tem descrição`]),
+    ...(new Set(spec.levels).size === spec.levels.length
+      ? []
+      : [`o evento ${name} repete um nível em levels`]),
   ]);
   return [
     ...Object.entries(metrics).flatMap(([name, spec]) =>

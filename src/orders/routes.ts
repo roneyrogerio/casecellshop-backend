@@ -4,7 +4,9 @@ import { orderStatusRoute, type OrderStatus } from '../contract/index.ts';
 import { isUnavailable } from '../db/unavailable.ts';
 import { databaseUnavailableProblem, ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
+import { eventLogger } from '../shared/logging.ts';
 import type { OrdersRepository } from './repository.ts';
+import { ORDERS_LOG_EVENTS } from './telemetry.ts';
 
 export interface OrdersRoutes {
   // Os middlewares da rota, na ordem.
@@ -23,8 +25,9 @@ export function createOrdersRoutes(
     } catch (error) {
       // Só a falha do banco é 503; um defeito do código segue para o middleware único (500).
       if (!isUnavailable(error)) throw error;
-      logger.warn(
-        { event: 'order_status_failed', err: error },
+      eventLogger(logger, ORDERS_LOG_EVENTS).warn(
+        'casecellshop.orders.db.unavailable',
+        { err: error },
         'o banco não respondeu à consulta do pedido',
       );
       throw databaseUnavailableProblem();

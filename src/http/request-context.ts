@@ -21,8 +21,8 @@ import {
 import type { Request, RequestHandler, Response } from 'express';
 import type { Logger } from 'pino';
 import { CorrelationId } from '../contract/index.ts';
-import { HTTP_METHODS, httpMetrics } from './telemetry.ts';
-import { logContext } from '../shared/logging.ts';
+import { HTTP_LOG_EVENTS, HTTP_METHODS, httpMetrics } from './telemetry.ts';
+import { eventLogger, logContext } from '../shared/logging.ts';
 import { propagator, type Telemetry } from '../shared/telemetry.ts';
 
 // Aceita o X-Request-Id válido; qualquer outro vira um UUID novo.
@@ -122,7 +122,7 @@ function concludeRequest({
 }: ConcludedRequest): void {
   // Só o log segue com `unmatched`; o span e a métrica omitem a chave sem rota, como a convenção manda.
   const route = matchedRouteOf(res) ?? 'unmatched';
-  const status = res.statusCode;
+  const status = sentStatusOf(res);
   const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
 
   applyHttpSpan(span, req, res);
@@ -140,20 +140,31 @@ function concludeRequest({
     typeof res.locals['orderId'] === 'string'
       ? res.locals['orderId']
       : undefined;
-  logger[status >= 500 ? 'error' : 'info'](
-    {
-      ...(orderId === undefined ? {} : { orderId }),
-      event: 'http_request',
-      correlationId,
-      trace_id: spanContext.traceId,
-      span_id: spanContext.spanId,
-      route,
-      method: req.method,
-      status,
-      duration_ms: Math.round(seconds * 1000),
-    },
-    'requisição concluída',
-  );
+  const fields = {
+    ...(orderId === undefined ? {} : { orderId }),
+    ...(status === undefined ? {} : { status }),
+    correlationId,
+    trace_id: spanContext.traceId,
+    span_id: spanContext.spanId,
+    route,
+    method: req.method,
+    duration_ms: Math.round(seconds * 1000),
+  };
+  const log = eventLogger(logger, HTTP_LOG_EVENTS);
+  // `error` só quando um 5xx foi de fato enviado; sem resposta (cliente desconectou) o log sai em info.
+  if (status !== undefined && status >= 500) {
+    log.error(
+      'casecellshop.http.request.completed',
+      fields,
+      'requisição concluída',
+    );
+  } else {
+    log.info(
+      'casecellshop.http.request.completed',
+      fields,
+      'requisição concluída',
+    );
+  }
 }
 
 // Primeiro middleware: fixa o correlationId, abre o span SERVER (continuando um

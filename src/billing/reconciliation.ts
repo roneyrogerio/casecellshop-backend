@@ -10,13 +10,14 @@ import {
   type ReceivedMessage,
 } from '../queue/sqs.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { createLoopRunner } from '../shared/loop-runner.ts';
 import type { Semaphore } from '../shared/semaphore.ts';
 import { runConsumerSpan, type Telemetry } from '../shared/telemetry.ts';
 import { MIN_CALL_DELAY_MS, takeCallPermit } from './call-permit.ts';
 import { concludeOrder } from './conclude.ts';
 import { parseBillingMessage } from './message.ts';
-import { billingMetrics } from './telemetry.ts';
+import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 
 // Reconciliação periódica da DLQ do SQS (AD-003, AD-021; design.md, "Worker:
 // reconciliação e runbook").
@@ -100,8 +101,9 @@ async function markDead(
     .returning('order_id')
     .executeTakeFirst();
   if (!marked) return;
-  log.error(
-    { event: 'outbox.dead' },
+  eventLogger(log, BILLING_LOG_EVENTS).error(
+    'casecellshop.outbox.dead',
+    {},
     'a mensagem chegou à DLQ: o pedido segue pendente com a reserva',
   );
   billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
@@ -132,7 +134,11 @@ async function invoiceIfFound(
     metrics.add('casecellshop.outbox.attempts', 1, {
       'casecellshop.outbox.attempt.outcome': 'invoiced',
     });
-    log.info({ event: 'order.invoiced' }, 'pedido faturado pela reconciliação');
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.order.invoiced',
+      {},
+      'pedido faturado pela reconciliação',
+    );
     if (result.acceptToOutcomeSeconds !== undefined)
       metrics.record(
         'casecellshop.order.accept_to_invoice.duration',
@@ -164,8 +170,9 @@ async function settleMessage(
     billingMetrics(telemetry).add('casecellshop.outbox.attempts', 1, {
       'casecellshop.outbox.attempt.outcome': 'closed',
     });
-    log.info(
-      { event: 'outbox.closed' },
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.outbox.closed',
+      {},
       'pedido já tinha desfecho: mensagem apagada da DLQ',
     );
     return 'closed';
@@ -197,8 +204,9 @@ function inSettleSpan(
       return await settleMessage(ctx, received, message, log);
     } catch (error) {
       // Uma mensagem com problema não impede as outras da rodada; logada aqui, leva correlationId e trace.
-      log.warn(
-        { event: 'outbox.reconcile_error', err: error },
+      eventLogger(log, BILLING_LOG_EVENTS).warn(
+        'casecellshop.outbox.reconciliation.failed',
+        { err: error },
         'falha ao reconciliar a mensagem',
       );
       return 'kept';
@@ -233,13 +241,15 @@ async function reconcileOnce(ctx: Context): Promise<ReconcileResult> {
 async function round(ctx: Context): Promise<void> {
   try {
     const result = await reconcileOnce(ctx);
-    ctx.logger.info(
-      { event: 'outbox.reconciled', ...result },
+    eventLogger(ctx.logger, BILLING_LOG_EVENTS).info(
+      'casecellshop.outbox.reconciliation.completed',
+      result,
       'rodada de reconciliação concluída',
     );
   } catch (error) {
-    ctx.logger.warn(
-      { event: 'outbox.reconcile_error', err: error },
+    eventLogger(ctx.logger, BILLING_LOG_EVENTS).warn(
+      'casecellshop.outbox.reconciliation.failed',
+      { err: error },
       'falha na rodada de reconciliação',
     );
   }

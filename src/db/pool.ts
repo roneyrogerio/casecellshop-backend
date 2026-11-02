@@ -1,5 +1,7 @@
 import pg from 'pg';
 import type { Logger } from 'pino';
+import { eventLogger } from '../shared/logging.ts';
+import { DB_LOG_EVENTS } from './telemetry.ts';
 
 // design.md, "Parâmetros": 5 s / 2 s / 1 s; ninguém espera indefinidamente.
 export const STATEMENT_TIMEOUT_MS = 5_000;
@@ -11,8 +13,9 @@ function buildPool(config: pg.PoolConfig, logger: Logger): pg.Pool {
   const pool = new pg.Pool(config);
   // Sem este ouvinte, o erro de uma conexão ociosa derrubaria o processo.
   pool.on('error', (error) => {
-    logger.error(
-      { event: 'db_pool_error', err: error },
+    eventLogger(logger, DB_LOG_EVENTS).error(
+      'casecellshop.db.pool.failed',
+      { err: error },
       'erro numa conexão ociosa do banco',
     );
   });

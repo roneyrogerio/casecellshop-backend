@@ -1,10 +1,12 @@
 import type { Span } from '@opentelemetry/api';
 import type { Logger } from 'pino';
 import { TransactionAbortedError } from '../db/database.ts';
+import { DB_LOG_EVENTS } from '../db/telemetry.ts';
 import type { HandleResult, Queue } from '../queue/sqs.ts';
+import { eventLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { concludeOrder, type OrderConclusion } from './conclude.ts';
-import { billingMetrics } from './telemetry.ts';
+import { BILLING_LOG_EVENTS, billingMetrics } from './telemetry.ts';
 import {
   type Attempt,
   callErp,
@@ -39,15 +41,17 @@ async function respond(
         'casecellshop.outbox.orphan_conclusions',
         1,
       );
-      log.warn(
-        { event: 'outbox.conclusion_no_row' },
+      eventLogger(log, BILLING_LOG_EVENTS).warn(
+        'casecellshop.outbox.conclusion.orphaned',
+        {},
         'o SQS recusou o receipt handle: outro recebimento já tem a mensagem',
       );
     }
     return result;
   } catch (error) {
-    log.warn(
-      { event: 'outbox.queue_error', err: error },
+    eventLogger(log, BILLING_LOG_EVENTS).warn(
+      'casecellshop.outbox.queue.failed',
+      { err: error },
       'falha do SQS ao responder à mensagem',
     );
     return 'error';
@@ -70,8 +74,9 @@ async function close(
   billingMetrics(ctx.telemetry).add('casecellshop.outbox.attempts', 1, {
     'casecellshop.outbox.attempt.outcome': 'closed',
   });
-  log.info(
-    { event: 'outbox.closed' },
+  eventLogger(log, BILLING_LOG_EVENTS).info(
+    'casecellshop.outbox.closed',
+    {},
     'pedido já tinha desfecho: mensagem encerrada',
   );
 }
@@ -89,13 +94,15 @@ async function concludeInDb(
       return await concludeOrder(db, message.orderId, conclusion);
     } catch (error) {
       if (error instanceof TransactionAbortedError) {
-        log.error(
-          { event: 'db.transaction_aborted', err: error },
+        eventLogger(log, DB_LOG_EVENTS).error(
+          'casecellshop.db.transaction.aborted',
+          { err: error },
           'a transação de conclusão abortou antes do COMMIT',
         );
       } else {
-        log.warn(
-          { event: 'outbox.conclusion_failed', err: error },
+        eventLogger(log, BILLING_LOG_EVENTS).warn(
+          'casecellshop.outbox.conclusion.failed',
+          { err: error },
           'falha ao gravar o desfecho',
         );
       }
@@ -123,13 +130,15 @@ async function finishRetry(
     'casecellshop.outbox.attempt.outcome': outcome.kind,
   });
   if (outcome.kind === 'retry')
-    log.warn(
-      { event: 'outbox.retry', outcome: outcome.cause },
+    eventLogger(log, BILLING_LOG_EVENTS).warn(
+      'casecellshop.outbox.retry.scheduled',
+      { cause: outcome.cause },
       'a mensagem volta à fila',
     );
   else
-    log.info(
-      { event: 'outbox.call_deferred' },
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.outbox.call.deferred',
+      {},
       'outra tentativa chamou o ERP há pouco: a mensagem volta quando o atraso mínimo passar',
     );
 }
@@ -152,15 +161,20 @@ async function finishConclusion(
     'casecellshop.outbox.attempt.outcome': outcome.kind,
   });
   if (outcome.kind === 'invoiced') {
-    log.info({ event: 'order.invoiced' }, 'pedido faturado');
+    eventLogger(log, BILLING_LOG_EVENTS).info(
+      'casecellshop.order.invoiced',
+      {},
+      'pedido faturado',
+    );
     if (result.acceptToOutcomeSeconds !== undefined)
       metrics.record(
         'casecellshop.order.accept_to_invoice.duration',
         result.acceptToOutcomeSeconds,
       );
   } else {
-    log.warn(
-      { event: 'order.failed', reason: outcome.reason },
+    eventLogger(log, BILLING_LOG_EVENTS).warn(
+      'casecellshop.order.failed',
+      { reason: outcome.reason },
       'pedido falhou no ERP',
     );
   }
@@ -177,6 +191,14 @@ function finish(
   if (outcome.kind === 'retry' || outcome.kind === 'deferred')
     return finishRetry(ctx, message, outcome, log);
   return finishConclusion(ctx, message, outcome, log);
+}
+
+function logAttemptFailed(log: Logger, error: unknown, message: string): void {
+  eventLogger(log, BILLING_LOG_EVENTS).error(
+    'casecellshop.outbox.attempt.failed',
+    { err: error },
+    message,
+  );
 }
 
 // Nunca rejeita: o erro de uma tentativa não pode interromper as outras da rodada.
@@ -211,10 +233,7 @@ export async function runAttempt(
       return;
     }
   } catch (error) {
-    log.error(
-      { event: 'outbox.attempt_error', err: error },
-      'erro inesperado na tentativa',
-    );
+    logAttemptFailed(log, error, 'erro inesperado na tentativa');
     outcome = {
       kind: 'retry',
       cause: 'unexpected',
@@ -224,9 +243,6 @@ export async function runAttempt(
   try {
     await finish(ctx, message, outcome, log);
   } catch (error) {
-    log.error(
-      { event: 'outbox.attempt_error', err: error },
-      'erro inesperado ao concluir',
-    );
+    logAttemptFailed(log, error, 'erro inesperado ao concluir');
   }
 }

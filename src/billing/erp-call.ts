@@ -3,8 +3,10 @@ import type { Logger } from 'pino';
 import type { StoreDb } from '../db/database.ts';
 import type { ErpClient, ErpOrderItem } from '../erp/erp-client.ts';
 import type { Clock } from '../shared/clock.ts';
+import { eventLogger } from '../shared/logging.ts';
 import { renewCallPermit, takeCallPermit } from './call-permit.ts';
 import type { OrderConclusion } from './conclude.ts';
+import { BILLING_LOG_EVENTS } from './telemetry.ts';
 
 // A chamada ao ERP de uma tentativa do worker (design.md, "Worker: envio"): a permissão de
 // chamada, a consulta que antecede a recriação e a criação, com os prazos conferidos entre elas.
@@ -73,16 +75,18 @@ function configError(
   log: Logger,
   status: number,
 ): Outcome {
-  log.warn(
-    { event: 'erp.config_error', status },
+  eventLogger(log, BILLING_LOG_EVENTS).warn(
+    'casecellshop.erp.config.rejected',
+    { status },
     'erro de configuração no ERP',
   );
   return retry(ctx, message, 'config_error');
 }
 
 function giveUp(log: Logger): undefined {
-  log.warn(
-    { event: 'outbox.lease_short' },
+  eventLogger(log, BILLING_LOG_EVENTS).warn(
+    'casecellshop.outbox.lease.too_short',
+    {},
     'prazo curto demais para a chamada: a mensagem volta quando a visibilidade vencer',
   );
   return undefined;

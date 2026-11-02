@@ -11,9 +11,10 @@ import {
 } from '../contract/index.ts';
 import { ProblemError } from '../http/problem.ts';
 import { validateRequest } from '../http/validate.ts';
+import { eventLogger } from '../shared/logging.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import type { CheckoutRepository } from './repository.ts';
-import { checkoutMetrics } from './telemetry.ts';
+import { CHECKOUT_LOG_EVENTS, checkoutMetrics } from './telemetry.ts';
 
 // Segundos até o cliente consultar o status do pedido (também na repetição).
 const ACCEPTED_RETRY_AFTER_SECONDS = '4';
@@ -39,6 +40,11 @@ function outcomeOf(cause: string): Outcome {
     default:
       return 'invalid';
   }
+}
+
+// O `reason` do log é o tipo do problem em snake_case (`out_of_stock`), como os valores das métricas.
+function reasonOf(cause: string): string {
+  return cause.replaceAll('-', '_');
 }
 
 // O parser de JSON do Express (body-parser) erra com `type` e `status`; viram problem+json.
@@ -146,11 +152,11 @@ function createAccept(
     });
     res.locals['orderId'] = result.orderId;
     if (result.kind === 'accepted') {
-      logger.info(
+      eventLogger(logger, CHECKOUT_LOG_EVENTS).info(
+        'casecellshop.checkout.accepted',
         {
-          event: 'checkout.accepted',
           orderId: result.orderId,
-          correlationId: res.locals['correlationId'],
+          correlationId: res.locals['correlationId'] as string,
         },
         'checkout aceito',
       );
@@ -190,18 +196,17 @@ function createOnError(
     checkoutMetrics(telemetry).add('casecellshop.checkout.requests', 1, {
       'casecellshop.checkout.outcome': outcomeOf(cause),
     });
-    logger.warn(
-      { event: 'checkout.rejected', reason: cause, correlationId },
+    const log = eventLogger(logger, CHECKOUT_LOG_EVENTS);
+    const reason = reasonOf(cause);
+    log.warn(
+      'casecellshop.checkout.rejected',
+      { reason, correlationId },
       'checkout recusado',
     );
     if (currentPrices) {
-      logger.warn(
-        {
-          event: 'checkout.price_changed',
-          reason: cause,
-          correlationId,
-          items: currentPrices.length,
-        },
+      log.warn(
+        'casecellshop.checkout.price_changed',
+        { reason, correlationId, items: currentPrices.length },
         'preço alterado desde que o cliente o viu',
       );
     }
