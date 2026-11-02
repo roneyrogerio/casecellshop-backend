@@ -288,6 +288,10 @@
           {
             "patterns": [
               {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
                 "regex": "(^|/)\\.\\.(/|$)",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
               },
@@ -307,6 +311,10 @@
           "error",
           {
             "patterns": [
+              {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
               {
                 "regex": "//",
                 "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
@@ -534,6 +542,10 @@
           {
             "patterns": [
               {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
+              {
                 "regex": "(^|/)\\.\\.(/|$)",
                 "message": "src/shared/ não importa outras pastas de src/ (AD-025)."
               }
@@ -550,6 +562,10 @@
           "error",
           {
             "patterns": [
+              {
+                "regex": "\\\\",
+                "message": "Um import de src/shared/ não usa barra invertida, que o Node e o tsc leem como separador e deixaria um \"..\" passar (AD-025)."
+              },
               {
                 "regex": "//",
                 "message": "Um teste de src/shared/ importa de fora da pasta só o test/helpers/ (AD-025)."
