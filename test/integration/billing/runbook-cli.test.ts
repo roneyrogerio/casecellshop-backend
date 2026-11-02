@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { describeCancel } from '../../../src/billing/runbook.ts';
 import { countInvoices } from '../../helpers/erp.ts';
 import { dlqTotal, moveToDlq } from '../../helpers/dlq.ts';
 import { erpHasInvoice } from '../../helpers/erp-invoice.ts';
-import { PAST_WINDOW_SECONDS } from '../../helpers/late-check.ts';
+import {
+  PAST_WINDOW_SECONDS,
+  WITHIN_WINDOW_SECONDS,
+} from '../../helpers/late-check.ts';
 import { repoRoot as root } from '../../helpers/repo-root.ts';
 import { TEST_REGION } from '../../helpers/sqs.ts';
 import {
@@ -12,6 +16,7 @@ import {
   createWorld,
   markSentBefore,
   readOrder,
+  readOutbox,
   submitOrder,
   useWorkerSuite,
   type QueueWorld,
@@ -102,6 +107,27 @@ async function expectOrderIs(
   expect(row.failureReason).toBe(failureReason);
 }
 
+async function markInvoiced(orderId: string): Promise<void> {
+  await suite.pool.query(
+    "update orders set status = 'invoiced', outcome_at = now() where id = $1",
+    [orderId],
+  );
+}
+
+// O cancel de um pedido faturado sai com 0 e imprime a mensagem de unchanged (AD-031); o pedido segue faturado.
+async function cancelUnchangedViaCli(
+  world: QueueWorld,
+  orderId: string,
+): Promise<Finished> {
+  const finished = await cancelViaCli(world, orderId, 0);
+
+  expect(finished.stdout.trim()).toBe(
+    describeCancel(orderId, { kind: 'unchanged' }).message,
+  );
+  await expectOrderIs(orderId, 'invoiced', null);
+  return finished;
+}
+
 describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
   it('ORD-07 redrive: sai com 0, imprime quantas mensagens saíram da DLQ e a DLQ fica vazia', async () => {
     const world = await createWorld(suite, { maxReceiveCount: 1 });
@@ -142,16 +168,45 @@ describe('ORD-07 e ORD-15 linha de comando do runbook', () => {
   it('ORD-15 cancel de um pedido que não está pending também sai com 0 e diz que nada mudou', async () => {
     const world = await createWorld(suite);
     const order = await acceptOrder(suite);
-    await suite.pool.query(
-      "update orders set status = 'invoiced', outcome_at = now() where id = $1",
-      [order.orderId],
-    );
+    await markInvoiced(order.orderId);
 
-    const finished = await cancelViaCli(world, order.orderId, 0);
+    const finished = await cancelUnchangedViaCli(world, order.orderId);
 
-    expect(finished.stdout).toMatch(/nada|já/i);
-    await expectOrderIs(order.orderId, 'invoiced', null);
+    expect(finished.code).toBe(0);
   });
+
+  // O achado do app-check: o cancel de um pedido faturado saía com 1 ("tente de novo em cerca de 15 min") e
+  // regravava last_call_at e call_token, o que reiniciava a janela da verificação tardia dele.
+  for (const { name, ageSeconds, erpHasIt } of [
+    {
+      name: 'dentro da janela de assentamento',
+      ageSeconds: WITHIN_WINDOW_SECONDS,
+      erpHasIt: false,
+    },
+    {
+      name: 'fora da janela, com a fatura no ERP',
+      ageSeconds: PAST_WINDOW_SECONDS,
+      erpHasIt: true,
+    },
+  ]) {
+    it(`ORD-26 cancel de um pedido já faturado ${name} sai com 0, imprime a mensagem de unchanged e não regrava a outbox`, async () => {
+      const world = await createWorld(suite);
+      const order = await acceptOrder(suite);
+      await markSentBefore(suite.pool, order.orderId);
+      await ageLastCall(suite.pool, order.orderId, ageSeconds);
+      if (erpHasIt) await erpHasInvoice(world, order);
+      await markInvoiced(order.orderId);
+      const before = await readOutbox(suite.pool, order.orderId);
+
+      await cancelUnchangedViaCli(world, order.orderId);
+
+      const after = await readOutbox(suite.pool, order.orderId);
+      expect(after.lastCallAt).toEqual(before.lastCallAt);
+      expect(after.callToken).toEqual(before.callToken);
+      expect(after.firstSentAt).toEqual(before.firstSentAt);
+      expect(after.publishedAt).toEqual(before.publishedAt);
+    });
+  }
 
   it('ORD-26 cancel com a última chamada ao ERP dentro da janela sai com 1, diz quantos minutos faltam e não muda o pedido', async () => {
     const world = await createWorld(suite);
