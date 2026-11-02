@@ -50,7 +50,8 @@ function newMetrics() {
   return { telemetry, metrics: metricsOf(telemetry, 'test.scope', SPECS) };
 }
 
-// O texto do /metrics como o Prometheus o recebe. Um teste de `shared/` não importa os helpers de `test/` (AD-025).
+// O texto do /metrics como o Prometheus o recebe. Um teste de `shared/` pode importar de `test/helpers/` (e só dali,
+// fora da própria pasta, AD-025).
 async function scrape(telemetry: Telemetry): Promise<string> {
   const server = createServer((req, res) => telemetry.metricsHandler(req, res));
   const res = await request(server).get('/metrics');
