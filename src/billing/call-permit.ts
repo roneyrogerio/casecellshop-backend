@@ -27,8 +27,22 @@ export interface TakeCallPermitOptions {
   clearDead: boolean;
 }
 
-function intervalOf(ms: number) {
+export function intervalOf(ms: number) {
   return sql<Date>`make_interval(secs => ${ms / 1000})`;
+}
+
+// O que só a tomada do worker grava. A marca de envio (AD-031) soma quando first_sent_at era nulo, porque
+// a criação vem logo depois; soma antes da chamada: contar a mais é inofensivo, contar a menos é impossível.
+function workerOnlyColumns() {
+  return {
+    dead_at: null,
+    create_calls: outbox
+      .case()
+      .when(outbox('first_sent_at', 'is', null))
+      .then(outbox('create_calls', '+', 1))
+      .else(outbox.ref('create_calls'))
+      .end(),
+  };
 }
 
 // Um UPDATE só: a condição e a gravação juntas é que impedem duas tentativas de ganharem a mesma
@@ -45,7 +59,7 @@ export async function takeCallPermit(
       last_call_at: sql<Date>`now()`,
       call_token: token,
       first_sent_at: outbox.fn.coalesce('first_sent_at', sql<Date>`now()`),
-      ...(clearDead ? { dead_at: null } : {}),
+      ...(clearDead ? workerOnlyColumns() : {}),
     })
     .where('order_id', '=', orderId)
     .where((eb) =>
@@ -92,7 +106,11 @@ export async function renewCallPermit(
 ): Promise<boolean> {
   const renewed = await db
     .updateTable('outbox')
-    .set({ last_call_at: sql<Date>`now()` })
+    // A renovação antecede uma criação depois da consulta: soma no mesmo UPDATE (AD-031).
+    .set({
+      last_call_at: sql<Date>`now()`,
+      create_calls: outbox('create_calls', '+', 1),
+    })
     .where('order_id', '=', orderId)
     .where('call_token', '=', token)
     .executeTakeFirst();

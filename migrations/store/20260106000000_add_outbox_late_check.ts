@@ -1,0 +1,39 @@
+import { type Kysely, sql } from 'kysely';
+
+// Marca de envio e verificação tardia (AD-031): `create_calls` conta as criações mandadas ao ERP,
+// `late_checked_at` e `late_finding` guardam o resultado da verificação tardia.
+export async function up(db: Kysely<any>): Promise<void> {
+  await db.schema
+    .alterTable('outbox')
+    .addColumn('create_calls', 'integer', (col) => col.notNull().defaultTo(0))
+    .addColumn('late_checked_at', 'timestamptz')
+    .addColumn('late_finding', 'text', (col) =>
+      col.check(sql`late_finding in ('failed_order', 'duplicate')`),
+    )
+    .execute();
+
+  // Linhas anteriores à coluna: quem já tem `first_sent_at` mandou ao menos uma criação.
+  await sql`update outbox set create_calls = 1 where first_sent_at is not null`.execute(
+    db,
+  );
+
+  // A verificação lê só os pedidos ainda não verificados e com algum envio; o índice parcial fica
+  // pequeno depois que a maioria das linhas recebe a marca ou nunca chamou o ERP.
+  await db.schema
+    .createIndex('outbox_late_check_idx')
+    .on('outbox')
+    .column('last_call_at')
+    .where(sql.ref('late_checked_at'), 'is', null)
+    .where(sql.ref('create_calls'), '>=', 1)
+    .execute();
+}
+
+export async function down(db: Kysely<any>): Promise<void> {
+  await db.schema.dropIndex('outbox_late_check_idx').execute();
+  await db.schema
+    .alterTable('outbox')
+    .dropColumn('create_calls')
+    .dropColumn('late_checked_at')
+    .dropColumn('late_finding')
+    .execute();
+}

@@ -45,10 +45,13 @@ export interface Orders {
 export interface Outbox {
   call_token: string | null;
   correlation_id: string;
+  create_calls: Generated<number>;
   created_at: Generated<Timestamp>;
   dead_at: Timestamp | null;
   first_sent_at: Timestamp | null;
   last_call_at: Timestamp | null;
+  late_checked_at: Timestamp | null;
+  late_finding: string | null;
   order_id: string;
   published_at: Timestamp | null;
   traceparent: string | null;

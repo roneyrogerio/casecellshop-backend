@@ -76,6 +76,21 @@ async function findOrder(
     : { status: 404, body: { code: 'order_not_found' } };
 }
 
+// A leitura do banco do ERP (AD-031): conta todas as faturas da referência, sem a dedup_key,
+// porque a duplicata é justamente o que a verificação tardia procura.
+export async function countInvoices(
+  { db }: ErpStore,
+  reference: string,
+): Promise<number> {
+  const row = await db
+    .selectFrom('erp_sim.invoices')
+    .select((eb) => eb.fn.countAll<string>().as('total'))
+    .where('reference', '=', reference)
+    .executeTakeFirstOrThrow();
+  // O count do PostgreSQL volta como texto (bigint).
+  return Number(row.total);
+}
+
 // H2: baixa o estoque uma linha por UPDATE, em ordem de SKU para não haver deadlock.
 async function decrementStock(
   trx: Transaction<ErpSimDb>,
