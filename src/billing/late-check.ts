@@ -130,7 +130,7 @@ async function checkCandidate(
       'fatura tardia ou duplicada no ERP',
     );
     billingMetrics(ctx.telemetry).add('casecellshop.order.late_invoices', 1, {
-      'casecellshop.order.late_invoice.cause': verdict.finding,
+      'casecellshop.late_invoice.cause': verdict.finding,
     });
   }
   return { marked, finding: marked ? verdict.finding : undefined };
