@@ -254,6 +254,8 @@ Com relógio controlado:
 - **CAT-11** Um SKU removido do ERP aparece como esgotado depois de uma rodada completa e volta se reaparecer; uma rodada que falha no meio não zera nada.
 - **CAT-12** O trace de `GET /products` liga requisição, cache e repositório.
 - **CAT-13** `GET /products` devolve os produtos sincronizados, cada um com SKU, nome, preço em centavos e a faixa de disponibilidade do design, em `{ items, hasNext }` com 50 itens por página, validados pelo schema do contrato; uma página além do fim volta vazia, com `hasNext: false`, e um `?page` inválido recebe `400`.
+- **CAT-14** Uma rodada só grava o que mudou: um SKU com preço e nome iguais aos guardados em `t0` não recebe comando em `products`, e um com o estoque igual não recebe em `inventory`; os SKUs alterados, os novos e os ausentes de uma rodada completa recebem, e a rodada completa sem nenhuma escrita ainda grava o `last_completed_at`.
+- **CAT-15** Com o banco fora na subida do worker, a sincronização não derruba o processo: a falha ao ler a última rodada completa sai em `warn`, o gauge da idade fica sem valor até a primeira rodada completa, e as rodadas seguem.
 
 ## Observabilidade
 
