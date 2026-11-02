@@ -15,10 +15,18 @@ import {
   upComposeProject,
 } from '../../helpers/compose.ts';
 import {
+  closedList,
+  expectSeriesAtZero,
+  expectSeriesAtZeroForEach,
+  readProcessMetrics,
+} from '../../helpers/compose-metrics.ts';
+import {
   familyOf,
   histogramCount,
   metricValue,
   parseExposition,
+  promName,
+  valueOf,
 } from '../../helpers/metrics.ts';
 import { parseQueueCountsXml, type QueueCounts } from '../../helpers/sqs.ts';
 
@@ -180,6 +188,91 @@ async function queueCounts(queueName: string): Promise<QueueCounts> {
   expect(result.exitCode, result.output).toBe(0);
   return parseQueueCountsXml(result.stdout);
 }
+
+// OBS-08: este bloco vem antes de qualquer checkout do arquivo (os testes de um arquivo rodam na ordem em que são
+// declarados); o `beforeAll` só espera a primeira rodada da sincronização, pelo GET /products, que não grava nenhum
+// dos counters abaixo.
+describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /metrics trazem em 0 as séries dos counters', () => {
+  const GAUGE_NAME = 'casecellshop.gauge.name';
+  const OPERATION = 'casecellshop.erp.operation';
+
+  it('OBS-08 o /metrics da API traz em 0 o pedido sem desfecho, cada desfecho do checkout, as falhas de leitura dos gauges e as tentativas da outbox', async () => {
+    const families = await readProcessMetrics(environment, 'api-1', 3000);
+
+    expectSeriesAtZero(families, 'casecellshop.order.stuck');
+    expectSeriesAtZeroForEach(
+      families,
+      'casecellshop.checkout.requests',
+      'casecellshop.checkout.outcome',
+    );
+    expectSeriesAtZero(families, 'casecellshop.checkout.gauge.read_failures', {
+      [GAUGE_NAME]: 'inventory',
+    });
+    expectSeriesAtZero(families, 'casecellshop.catalog.gauge.read_failures', {
+      [GAUGE_NAME]: 'catalog_sync_age',
+    });
+    for (const gauge of ['queue_messages', 'outbox_oldest_pending_age'])
+      expectSeriesAtZero(families, 'casecellshop.billing.gauge.read_failures', {
+        [GAUGE_NAME]: gauge,
+      });
+    // Uma pasta usada pelos dois processos sai em 0 nos dois, inclusive nos counters que só o worker soma.
+    expectSeriesAtZeroForEach(
+      families,
+      'casecellshop.outbox.attempts',
+      'casecellshop.outbox.attempt.outcome',
+    );
+    // O gauge e o histograma ficam de fora: a série deles nasce da leitura e da medição, não da subida.
+    expect(
+      familyOf(families, 'casecellshop.order.accept_to_invoice.duration')
+        ?.samples ?? [],
+      'o histograma não nasce em 0',
+    ).toEqual([]);
+  }, 60_000);
+
+  it('OBS-08 o /metrics do worker traz em 0 a rejeição por falta de estoque, o erro de configuração por operação, a conclusão sem efeito e as falhas de leitura dos gauges', async () => {
+    const families = await readProcessMetrics(environment, 'worker-1', 9464);
+
+    expectSeriesAtZero(families, 'casecellshop.erp.out_of_stock.rejections');
+    expectSeriesAtZeroForEach(
+      families,
+      'casecellshop.erp.config_errors',
+      OPERATION,
+    );
+    expectSeriesAtZero(families, 'casecellshop.outbox.orphan_conclusions');
+    for (const gauge of ['queue_messages', 'outbox_oldest_pending_age'])
+      expectSeriesAtZero(families, 'casecellshop.billing.gauge.read_failures', {
+        [GAUGE_NAME]: gauge,
+      });
+    expectSeriesAtZeroForEach(
+      families,
+      'casecellshop.outbox.attempts',
+      'casecellshop.outbox.attempt.outcome',
+    );
+    expectSeriesAtZero(families, 'casecellshop.outbox.published.messages');
+    expectSeriesAtZero(families, 'casecellshop.catalog.gauge.read_failures', {
+      [GAUGE_NAME]: 'catalog_sync_age',
+    });
+    expectSeriesAtZero(families, 'casecellshop.catalog.sync.missing_skus');
+  }, 60_000);
+
+  // A primeira rodada da sincronização já correu (o `beforeAll` a espera), e a spec não diz que o primeiro
+  // carregamento de uma loja vazia conta como correção (a correção é o campo que divergia do valor guardado no t0):
+  // por isso o teste afirma que a série de cada campo existe e é um contador, não que vale 0.
+  it('OBS-08 o /metrics do worker expõe a série de correções da sincronização para cada campo, mesmo antes de qualquer divergência', async () => {
+    const families = await readProcessMetrics(environment, 'worker-1', 9464);
+
+    for (const field of closedList(
+      'casecellshop.catalog.sync.corrections',
+      'casecellshop.catalog.sync.field',
+    ))
+      expect(
+        valueOf(families, promName('casecellshop.catalog.sync.corrections'), {
+          casecellshop_catalog_sync_field: field,
+        }),
+        `correções do campo ${field}`,
+      ).toBeGreaterThanOrEqual(0);
+  }, 60_000);
+});
 
 describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compose', () => {
   it('ORD-19 o POST /checkout vira invoiced pelo relay, pelo SQS e pelo worker: uma fatura no erp_sim, estoque baixado, linha publicada e a fila e a DLQ vazias', async () => {
