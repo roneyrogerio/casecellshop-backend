@@ -9,8 +9,8 @@ import {
   expect,
   it,
 } from 'vitest';
+import { registerSyncAgeGauge } from '../../../src/catalog/sync-age.ts';
 import type { AppLogger } from '../../../src/shared/logging.ts';
-import type { Telemetry } from '../../../src/shared/telemetry.ts';
 import { setSyncCompletedAt } from '../../helpers/catalog.ts';
 import {
   startCheckoutHarness,
@@ -22,8 +22,9 @@ import {
 } from '../../helpers/database.ts';
 import { captureLogs } from '../../helpers/logs.ts';
 import {
+  familyOf,
+  metricValue,
   parseExposition,
-  valueOf,
   type Exposition,
 } from '../../helpers/metrics.ts';
 import { interceptPool } from '../../helpers/worker.ts';
@@ -32,30 +33,8 @@ import { interceptPool } from '../../helpers/worker.ts';
 // lida do banco a cada coleta, para seguir crescendo com o worker parado. Aqui não há worker nem sincronização: só o
 // processo da API (o app do harness) e o banco, com o `last_completed_at` semeado no relógio do banco.
 
-const AGE_FAMILY = 'casecellshop_catalog_sync_age';
-const FAILURES_FAMILY = 'casecellshop_catalog_gauge_read_failures_total';
 const READ_FAILED = 'casecellshop.catalog.gauge.read_failed';
 const INJECTED_FAILURE = 'banco indisponível (injetado)';
-
-interface SyncAgeGaugeDependencies {
-  pool: pg.Pool;
-  telemetry: Telemetry;
-  logger: AppLogger;
-}
-
-// O arquivo da função de registro ainda não existe; a importação por URL deixa o typecheck passar e faz o teste
-// falhar na execução até o implementer criar `src/catalog/sync-age.ts`.
-async function loadRegister(): Promise<
-  (dependencies: SyncAgeGaugeDependencies) => () => void
-> {
-  const url = new URL('../../../src/catalog/sync-age.ts', import.meta.url).href;
-  const loaded = (await import(/* @vite-ignore */ url)) as {
-    registerSyncAgeGauge: (
-      dependencies: SyncAgeGaugeDependencies,
-    ) => () => void;
-  };
-  return loaded.registerSyncAgeGauge;
-}
 
 let database: TestDatabase;
 let harness: CheckoutHarness;
@@ -84,11 +63,10 @@ afterEach(async () => {
 
 const SILENT: AppLogger = captureLogs('casecellshop-api', 'silent').logger;
 
-async function register(
+function register(
   pool: pg.Pool = harness.pool,
   logger: AppLogger = SILENT,
-): Promise<() => void> {
-  const registerSyncAgeGauge = await loadRegister();
+): () => void {
   const remove = registerSyncAgeGauge({
     pool,
     telemetry: harness.telemetry,
@@ -105,13 +83,13 @@ async function scrapeApi(): Promise<Exposition> {
 }
 
 function ageOf(families: Exposition): number | undefined {
-  return valueOf(families, AGE_FAMILY);
+  return metricValue(families, 'casecellshop.catalog.sync.age');
 }
 
 function failuresOf(families: Exposition): number {
   return (
-    valueOf(families, FAILURES_FAMILY, {
-      casecellshop_gauge_name: 'catalog_sync_age',
+    metricValue(families, 'casecellshop.catalog.gauge.read_failures', {
+      'casecellshop.gauge.name': 'catalog_sync_age',
     }) ?? 0
   );
 }
@@ -126,7 +104,7 @@ async function completedAgo(seconds: number): Promise<void> {
 
 describe('CAT-15 a idade da sincronização no /metrics da API, lida do banco', () => {
   it('CAT-15 a coleta mostra now() - last_completed_at em segundos, no relógio do banco', async () => {
-    await register();
+    register();
     await completedAgo(90);
 
     const age = ageOf(await scrapeApi());
@@ -136,10 +114,10 @@ describe('CAT-15 a idade da sincronização no /metrics da API, lida do banco', 
   });
 
   it('CAT-15 o gauge é do tipo gauge, em segundos, e sai sem atributos', async () => {
-    await register();
+    register();
     await completedAgo(10);
 
-    const family = (await scrapeApi()).get(AGE_FAMILY);
+    const family = familyOf(await scrapeApi(), 'casecellshop.catalog.sync.age');
 
     expect(family?.type).toBe('gauge');
     expect(family?.samples).toHaveLength(1);
@@ -147,16 +125,18 @@ describe('CAT-15 a idade da sincronização no /metrics da API, lida do banco', 
   });
 
   it('CAT-15 sem rodada completa (last_completed_at nulo) não há ponto', async () => {
-    await register();
+    register();
 
     const families = await scrapeApi();
 
-    expect(families.get(AGE_FAMILY)?.samples ?? []).toEqual([]);
+    expect(
+      familyOf(families, 'casecellshop.catalog.sync.age')?.samples ?? [],
+    ).toEqual([]);
     expect(ageOf(families)).toBeUndefined();
   });
 
   it('CAT-15 com o worker parado a idade segue crescendo entre duas coletas, sem nenhuma sincronização rodando', async () => {
-    await register();
+    register();
     await completedAgo(30);
 
     const first = ageOf(await scrapeApi());
@@ -167,7 +147,7 @@ describe('CAT-15 a idade da sincronização no /metrics da API, lida do banco', 
   });
 
   it('CAT-15 a coleta lê o banco de novo: uma rodada completa gravada depois traz a idade de volta perto de 0', async () => {
-    await register();
+    register();
     await completedAgo(300);
     expect(ageOf(await scrapeApi())).toBeGreaterThanOrEqual(300);
 
@@ -182,7 +162,7 @@ describe('CAT-15 a idade da sincronização no /metrics da API, lida do banco', 
 
   it('CAT-15 a coleta faz uma consulta ao sync_state por scrape, e o remover devolvido tira o callback: o banco deixa de ser consultado', async () => {
     const probe = interceptPool(harness.pool, { match: /sync_state/i });
-    const remove = await register(probe.pool);
+    const remove = register(probe.pool);
     await completedAgo(5);
 
     const readsAfterEachScrape: number[] = [];
@@ -213,7 +193,7 @@ describe('CAT-15 a leitura da idade da sincronização que falha é contada e lo
       times: 1,
     });
     probe.armed = false;
-    await register(probe.pool, logs.logger);
+    register(probe.pool, logs.logger);
     await completedAgo(60);
     const take = async () => {
       const families = await scrapeApi();

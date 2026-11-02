@@ -6,15 +6,13 @@ import { registerOutboxAgeGauge } from '../../../src/billing/outbox-age.ts';
 import { createRelay } from '../../../src/billing/relay.ts';
 import { createStuckOrderMonitor } from '../../../src/billing/stuck-orders.ts';
 import { DEFAULT_CATALOG_SYNC_CONFIG } from '../../../src/catalog/config.ts';
+import { registerSyncAgeGauge } from '../../../src/catalog/sync-age.ts';
 import { createCatalogSync } from '../../../src/catalog/sync.ts';
 import { registerInventoryGauges } from '../../../src/checkout/inventory-gauges.ts';
 import { METRICS } from '../../../scripts/telemetry-catalog.ts';
-import { fromPino, type AppLogger } from '../../../src/shared/logging.ts';
+import { fromPino } from '../../../src/shared/logging.ts';
 import { createSemaphore } from '../../../src/shared/semaphore.ts';
-import {
-  createTelemetry,
-  type Telemetry,
-} from '../../../src/shared/telemetry.ts';
+import { createTelemetry } from '../../../src/shared/telemetry.ts';
 import { markSynced, seedCatalog } from '../../helpers/catalog.ts';
 import { createManualClock } from '../../helpers/clock.ts';
 import { buildReconciler, driveClock } from '../../helpers/dlq.ts';
@@ -57,10 +55,6 @@ interface ExportedMetric {
   // O processo cujo /metrics expõe a métrica: a API ou o worker.
   process: 'api' | 'worker';
 }
-
-// O counter de falhas de leitura dos gauges do catálogo (CAT-15) ainda não está declarado em src/catalog/telemetry.ts;
-// enquanto não estiver, este nome mantém a tabela abaixo tipada. Depois de declarado, a união o absorve.
-type PendingMetricName = 'casecellshop.catalog.gauge.read_failures';
 
 const EXPECTED = {
   'http.server.request.duration': {
@@ -263,7 +257,7 @@ const EXPECTED = {
     optionalLabels: [],
     process: 'api',
   },
-} as const satisfies Record<MetricName | PendingMetricName, ExportedMetric>;
+} as const satisfies Record<MetricName, ExportedMetric>;
 
 const ENTRIES = Object.entries(EXPECTED) as [MetricName, ExportedMetric][];
 // O exportador acrescenta a si mesmo a série `target_info` (os atributos do recurso): não é do catálogo.
@@ -278,22 +272,6 @@ let worker: Exposition;
 const workerTelemetry = createTelemetry({
   spanExporter: new InMemorySpanExporter(),
 });
-
-// A função de registro do gauge da idade da sincronização ainda não existe; a importação por URL mantém o typecheck
-// e faz o teste falhar na execução até o implementer criar `src/catalog/sync-age.ts`.
-type RegisterSyncAgeGauge = (dependencies: {
-  pool: WorkerSuite['pool'];
-  telemetry: Telemetry;
-  logger: AppLogger;
-}) => () => void;
-
-async function loadRegisterSyncAgeGauge(): Promise<RegisterSyncAgeGauge> {
-  const url = new URL('../../../src/catalog/sync-age.ts', import.meta.url).href;
-  const loaded = (await import(/* @vite-ignore */ url)) as {
-    registerSyncAgeGauge: RegisterSyncAgeGauge;
-  };
-  return loaded.registerSyncAgeGauge;
-}
 
 // Exercita o que grava um ponto em cada métrica do catálogo, pelos mesmos caminhos de produção:
 // a API (checkout e duração HTTP) e o worker (relay, tentativa, ERP, aceite ao faturamento, rejeição por
@@ -400,7 +378,6 @@ async function exerciseApi(running: WorkerSuite): Promise<() => void> {
     'select last_completed_at is not null as done from sync_state',
   );
   expect(completed.rows[0]?.done, 'há uma rodada completa gravada').toBe(true);
-  const registerSyncAgeGauge = await loadRegisterSyncAgeGauge();
   const gauges = {
     'idade da outbox': () =>
       registerOutboxAgeGauge({ pool, telemetry: checkout.telemetry, logger }),
