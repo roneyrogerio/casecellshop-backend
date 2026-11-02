@@ -8,6 +8,8 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 
 | Nome | No Prometheus | Instrumento | Unidade | Descrição |
 | --- | --- | --- | --- | --- |
+| `casecellshop.billing.gauge.read_failures` | `casecellshop_billing_gauge_read_failures_total` | contador | `{read}` | Leituras de gauge do faturamento que falharam no scrape; o gauge segue com o último valor lido. |
+| `casecellshop.checkout.gauge.read_failures` | `casecellshop_checkout_gauge_read_failures_total` | contador | `{read}` | Leituras dos gauges do estoque que falharam no scrape; os gauges seguem com o último valor lido. |
 | `casecellshop.checkout.requests` | `casecellshop_checkout_requests_total` | contador | `{request}` | Checkouts por desfecho. |
 | `casecellshop.erp.client.active_operations` | `casecellshop_erp_client_active_operations` | UpDownCounter | `{operation}` | Chamadas ao ERP em andamento. |
 | `casecellshop.erp.client.operation.duration` | `casecellshop_erp_client_operation_duration` | histograma | `s` | Duração das chamadas ao ERP, por operação e desfecho; o `_count` conta as chamadas. |
@@ -22,6 +24,18 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.outbox.published.messages` | `casecellshop_outbox_published_messages_total` | contador | `{message}` | Linhas da outbox publicadas no SQS pelo relay. |
 | `casecellshop.queue.messages` | `casecellshop_queue_messages` | gauge | `{message}` | Mensagens visíveis na fila, pelo `ApproximateNumberOfMessages` do SQS. |
 | `http.server.request.duration` | `http_server_request_duration` | histograma | `s` | Duração das requisições HTTP, base dos SLOs de latência. |
+
+### `casecellshop.billing.gauge.read_failures`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.gauge.name` | obrigatório | `queue_messages`, `outbox_oldest_pending_age` | Gauge cuja leitura falhou. |
+
+### `casecellshop.checkout.gauge.read_failures`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.gauge.name` | obrigatório | `inventory` | Leitura que falhou. |
 
 ### `casecellshop.checkout.requests`
 
@@ -105,8 +119,10 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | Nome | Níveis | Campos | Descrição |
 | --- | --- | --- | --- |
 | `casecellshop.api.started` | `info` | `port` | A API começou a escutar. |
+| `casecellshop.billing.gauge.read_failed` | `error` | `gauge`, `err` | A leitura de um gauge do faturamento falhou no scrape; o gauge segue com o último valor lido. |
 | `casecellshop.checkout.accepted` | `info` | `orderId` | Checkout aceito, com o pedido criado. |
 | `casecellshop.checkout.db.unavailable` | `warn` | `err`, `step` | O banco não respondeu no checkout; a resposta é 503. |
+| `casecellshop.checkout.gauge.read_failed` | `error` | `gauge`, `err` | A leitura dos gauges do estoque falhou no scrape; os gauges seguem com o último valor lido. |
 | `casecellshop.checkout.price_changed` | `warn` | `reason`, `items` | Checkout recusado porque o preço informado mudou. |
 | `casecellshop.checkout.rejected` | `warn` | `reason` | Checkout recusado; `reason` é o tipo do problem. |
 | `casecellshop.db.pool.failed` | `error` | `err` | Erro numa conexão ociosa do pool. |

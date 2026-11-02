@@ -75,6 +75,22 @@ export const BILLING_METRICS = {
       'Idade da linha mais antiga da outbox com o pedido pendente e fora da DLQ; 0 sem nenhuma.',
     attributes: {},
   },
+  'casecellshop.billing.gauge.read_failures': {
+    instrument: 'counter',
+    unit: '{read}',
+    description:
+      'Leituras de gauge do faturamento que falharam no scrape; o gauge segue com o último valor lido.',
+    attributes: {
+      'casecellshop.gauge.name': {
+        description: 'Gauge cuja leitura falhou.',
+        requirement: 'required',
+        values: {
+          kind: 'enum',
+          values: ['queue_messages', 'outbox_oldest_pending_age'],
+        },
+      },
+    },
+  },
 } as const satisfies Record<string, MetricSpec>;
 
 // Os instrumentos do faturamento, criados uma vez por `Telemetry` a partir da declaração acima.
@@ -200,6 +216,12 @@ export const BILLING_LOG_EVENTS = {
     description:
       'A verificação dos pedidos sem desfecho em 60 s falhou; a próxima tenta de novo.',
     fields: ['err'],
+  },
+  'casecellshop.billing.gauge.read_failed': {
+    levels: ['error'],
+    description:
+      'A leitura de um gauge do faturamento falhou no scrape; o gauge segue com o último valor lido.',
+    fields: ['gauge', 'err'],
   },
   'casecellshop.erp.config.rejected': {
     levels: ['warn'],

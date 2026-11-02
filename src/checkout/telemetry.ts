@@ -39,6 +39,19 @@ export const CHECKOUT_METRICS = {
       'SKUs com `reserved > on_hand`: reservas que o estoque já não cobre (furo de estoque).',
     attributes: {},
   },
+  'casecellshop.checkout.gauge.read_failures': {
+    instrument: 'counter',
+    unit: '{read}',
+    description:
+      'Leituras dos gauges do estoque que falharam no scrape; os gauges seguem com o último valor lido.',
+    attributes: {
+      'casecellshop.gauge.name': {
+        description: 'Leitura que falhou.',
+        requirement: 'required',
+        values: { kind: 'enum', values: ['inventory'] },
+      },
+    },
+  },
 } as const satisfies Record<string, MetricSpec>;
 
 // Os instrumentos do checkout, criados uma vez por `Telemetry` a partir da declaração acima.
@@ -61,6 +74,12 @@ export const CHECKOUT_LOG_EVENTS = {
     levels: ['warn'],
     description: 'Checkout recusado porque o preço informado mudou.',
     fields: ['reason', 'items'],
+  },
+  'casecellshop.checkout.gauge.read_failed': {
+    levels: ['error'],
+    description:
+      'A leitura dos gauges do estoque falhou no scrape; os gauges seguem com o último valor lido.',
+    fields: ['gauge', 'err'],
   },
   'casecellshop.checkout.db.unavailable': {
     levels: ['warn'],
