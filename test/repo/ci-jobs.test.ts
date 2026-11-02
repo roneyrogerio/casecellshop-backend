@@ -857,7 +857,8 @@ ${indent(DECIDE_RUN, 10)}
 `;
 
 // A lista mora no env do topo do workflow, e todo job a enxerga: o `decide` a compara com o diff, e os jobs que o
-// docs_only pode pular apagam os arquivos dela do checkout, para o resultado deles não depender desses arquivos.
+// docs_only pode pular trocam cada arquivo dela, no checkout, por uma pasta vazia de mesmo nome, para o resultado deles
+// não depender desses arquivos.
 const TOP_ENV = `env:
   DOCS_ONLY_PATHS: |
 ${indent(DOCS_PATHS_TEXT, 4)}
@@ -1940,14 +1941,14 @@ const CI_FUZZ_CASES: FuzzCase[] = [
     "    if: needs.changes.outputs.docs_only == 'true'\n",
   ],
   ['sem if (roda em PR só de documentação)', FUZZ_IF, ''],
-  ['sem o passo que tira os arquivos da lista', CLEANUP_STEP, ''],
+  ['sem o passo que troca os arquivos da lista por pastas', CLEANUP_STEP, ''],
   [
-    'com o passo que tira os arquivos depois do relatório',
+    'com o passo que troca os arquivos por pastas depois do relatório',
     CLEANUP_STEP + REPORT_DIR_STEP,
     REPORT_DIR_STEP + CLEANUP_STEP,
   ],
   [
-    'com o passo que tira os arquivos sem ler o DOCS_ONLY_PATHS',
+    'com o passo que troca os arquivos por pastas sem ler o DOCS_ONLY_PATHS',
     '"$DOCS_ONLY_PATHS"',
     '"README.md"',
   ],
