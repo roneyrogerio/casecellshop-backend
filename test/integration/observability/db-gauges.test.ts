@@ -241,9 +241,12 @@ describe('OBS-06 gauges de estoque lidos do banco no /metrics da API', () => {
     expect(probe.matched).toBe(1);
   });
 
-  it('OBS-06 a função devolvida remove os callbacks: as séries saem do /metrics', async () => {
+  // O requisito é a fonte deixar de ser consultada. O que o /metrics mostra depois não serve de prova: o
+  // PrometheusExporter é cumulativo e o SDK segue exportando o último valor de um gauge sem callback.
+  it('OBS-06 a função devolvida remove os callbacks: o banco deixa de ser consultado nos scrapes seguintes', async () => {
+    const probe = interceptPool(harness.pool, { match: /inventory/i });
     const remove = registerInventoryGauges({
-      pool: harness.pool,
+      pool: probe.pool,
       telemetry: harness.telemetry,
     });
     await seedProduct(database.pool, {
@@ -252,16 +255,15 @@ describe('OBS-06 gauges de estoque lidos do banco no /metrics da API', () => {
       reserved: 2,
     });
     expect(await reserved()).toBe(2);
+    expect(probe.matched, 'uma consulta no primeiro scrape').toBe(1);
+    await scrapeApi();
+    expect(probe.matched, 'uma consulta por scrape antes da remoção').toBe(2);
 
     remove();
+    await scrapeApi();
+    await scrapeApi();
 
-    const families = await scrapeApi();
-    expect(
-      metricValue(families, 'casecellshop.inventory.reserved'),
-    ).toBeUndefined();
-    expect(
-      metricValue(families, 'casecellshop.inventory.oversold_skus'),
-    ).toBeUndefined();
+    expect(probe.matched, 'nenhuma consulta depois de remove()').toBe(2);
   });
 });
 
@@ -355,12 +357,15 @@ describe('OBS-02 gauge da idade da linha mais antiga da outbox no /metrics da AP
     expect(await oldestAge()).toBe(0);
   });
 
-  it('OBS-02 o gauge é lido a cada scrape e a função devolvida remove o callback', async () => {
+  // Como no OBS-06: a prova é o banco deixar de ser consultado, não o que o /metrics mostra depois.
+  it('OBS-02 o gauge é lido a cada scrape e a função devolvida remove o callback: o banco deixa de ser consultado', async () => {
+    const probe = interceptPool(harness.pool, { match: /outbox/i });
     const remove = registerOutboxAgeGauge({
-      pool: harness.pool,
+      pool: probe.pool,
       telemetry: harness.telemetry,
     });
     expect(await oldestAge()).toBe(0);
+    expect(probe.matched, 'uma consulta no primeiro scrape').toBe(1);
     const orderId = await pendingOrderWithOutbox(200);
     expect(await oldestAge()).toBeGreaterThanOrEqual(200);
     await database.pool.query(
@@ -368,9 +373,12 @@ describe('OBS-02 gauge da idade da linha mais antiga da outbox no /metrics da AP
       [orderId],
     );
     expect(await oldestAge()).toBe(0);
+    expect(probe.matched, 'uma consulta por scrape antes da remoção').toBe(3);
 
     remove();
+    await scrapeApi();
+    await scrapeApi();
 
-    expect(await oldestAge()).toBeUndefined();
+    expect(probe.matched, 'nenhuma consulta depois de remove()').toBe(3);
   });
 });
