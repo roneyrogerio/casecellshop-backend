@@ -4,6 +4,7 @@ import type { Clock } from '../shared/clock.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
 import type {
+  CountInvoicesResult,
   CreateOrderResult,
   ErpCatalogItem,
   ErpCatalogPage,
@@ -81,10 +82,20 @@ function isConfigStatus(status: number): boolean {
   return status === 400 || status === 401 || status === 403;
 }
 
-async function call(
-  { transport, clock, timeoutMs }: ErpClientOptions,
-  request: ErpRequest,
-): Promise<Outcome> {
+// Como cada chamada traduz o que a corrida devolve; a tradução roda dentro da mesma função assíncrona
+// da corrida, para não somar passos de microtarefa que os testes de tempo do roteiro percebem.
+interface RaceMapping<T, R> {
+  value: (value: T) => R;
+  timeout: () => R;
+  rejected: (error: unknown) => R;
+}
+
+// Aplica o timeout a qualquer chamada ao ERP (a API ou a leitura do banco), pelo relógio injetável.
+async function raceWithTimeout<T, R>(
+  { clock, timeoutMs }: ErpClientOptions,
+  run: (signal: AbortSignal) => Promise<T>,
+  map: RaceMapping<T, R>,
+): Promise<R> {
   const controller = new AbortController();
   let timedOut = false;
   // O sleep do relógio injetável não se cancela: se a chamada termina antes, o abort
@@ -105,19 +116,48 @@ async function call(
     );
   });
   try {
-    return {
-      kind: 'response',
-      response: await Promise.race([
-        transport.send(request, controller.signal),
-        aborted,
-      ]),
-    };
+    return map.value(await Promise.race([run(controller.signal), aborted]));
   } catch (error) {
-    if (timedOut) return { kind: 'timeout' };
-    if (error instanceof ErpNetworkError)
-      return { kind: 'network', code: error.code };
-    return { kind: 'transport_error' };
+    return timedOut ? map.timeout() : map.rejected(error);
   }
+}
+
+function call(
+  options: ErpClientOptions,
+  request: ErpRequest,
+): Promise<Outcome> {
+  return raceWithTimeout<ErpResponse, Outcome>(
+    options,
+    (signal) => options.transport.send(request, signal),
+    {
+      value: (response) => ({ kind: 'response', response }),
+      timeout: () => ({ kind: 'timeout' }),
+      rejected: (error) =>
+        error instanceof ErpNetworkError
+          ? { kind: 'network', code: error.code }
+          : { kind: 'transport_error' },
+    },
+  );
+}
+
+// A leitura do banco do ERP não tem status HTTP: qualquer falha, o timeout ou uma contagem que não
+// seja inteiro não negativo é transitória, e a contagem nunca vira `ok` por engano (AD-031).
+function countInvoices(
+  options: ErpClientOptions,
+  reference: string,
+): Promise<CountInvoicesResult> {
+  return raceWithTimeout(
+    options,
+    (signal) => options.invoiceReader.countInvoices(reference, signal),
+    {
+      value: (count: unknown): CountInvoicesResult =>
+        typeof count === 'number' && Number.isSafeInteger(count) && count >= 0
+          ? { kind: 'ok', count }
+          : { kind: 'transient', cause: 'invalid_count' },
+      timeout: () => ({ kind: 'transient', cause: 'timeout' }),
+      rejected: () => ({ kind: 'transient', cause: 'reader_error' }),
+    },
+  );
 }
 
 // Desfechos de falha técnica: marcam o span com erro. As recusas de negócio (`permanent`) e
@@ -304,8 +344,9 @@ export function createErpClient(options: ErpClientOptions): ErpClient {
       observe(options, 'list_catalog', async () =>
         classifyList(await call(options, { op: 'listCatalog', page })),
       ),
-    countInvoicesByReference: () => {
-      throw new Error('não implementado');
-    },
+    countInvoicesByReference: (reference) =>
+      observe(options, 'count_invoices', () =>
+        countInvoices(options, reference),
+      ),
   };
 }

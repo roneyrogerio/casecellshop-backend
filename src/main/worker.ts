@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createLateCheck } from '../billing/late-check.ts';
 import { createReconciler } from '../billing/reconciliation.ts';
 import { createRelay } from '../billing/relay.ts';
 import { createWorker, DEFAULT_WORKER_CONFIG } from '../billing/worker.ts';
@@ -76,6 +77,16 @@ const reconciler = createReconciler({
   clock: systemClock,
 });
 
+// A verificação tardia também divide o semáforo do worker (AD-031).
+const lateCheck = createLateCheck({
+  pool,
+  erp,
+  semaphore,
+  logger,
+  telemetry,
+  clock: systemClock,
+});
+
 // A sincronização do catálogo usa o pool da loja e o mesmo semáforo: o limite de chamadas ao ERP vale para o processo.
 const catalogSync = createCatalogSync({
   pool,
@@ -101,6 +112,7 @@ const metricsPort = envPort('WORKER_METRICS_PORT', 9464);
 await worker.start();
 await relay.start();
 await reconciler.start();
+await lateCheck.start();
 await catalogSync.start();
 metricsServer.listen(metricsPort, () => {
   eventLogger(logger, MAIN_LOG_EVENTS).info(
@@ -118,6 +130,7 @@ installGracefulShutdown({
     await Promise.all([
       relay.stop(),
       reconciler.stop(),
+      lateCheck.stop(),
       worker.stop(),
       catalogSync.stop(),
     ]);
