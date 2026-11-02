@@ -1,3 +1,4 @@
+import { MessageNotInflight } from '@aws-sdk/client-sqs';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import {
   afterAll,
@@ -824,6 +825,34 @@ describe('ORD-14 a devolução da visibilidade para no primeiro erro que não se
       'chamadas de changeVisibility na rodada',
     ).toEqual(['stale', 'ok', 'ok']);
     // A mensagem roubada segue com o outro consumidor; as duas devolvidas ficam visíveis.
+    expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
+      visible: 2,
+      notVisible: 1,
+    });
+  });
+
+  it('ORD-14 um MessageNotInflight na primeira devolução não interrompe, como o stale: as outras duas mensagens ficam visíveis', async () => {
+    const rig = await createRig();
+    const { world } = rig;
+    await seedDead(rig, [{}, {}, {}]);
+    // O ElasticMQ 1.7.1 aceita o handle de visibilidade vencida sem erro; o MessageNotInflight é da AWS. A injeção
+    // lança o erro como o SDK o entrega (classe exportada, `name` MessageNotInflight), antes de chegar ao ElasticMQ.
+    const notInflight = new MessageNotInflight({
+      message: 'Message is not in flight.',
+      $metadata: {},
+    });
+    expect(notInflight.name).toBe('MessageNotInflight');
+    const injection = rig.dlq.inject('changeVisibility', 1, notInflight);
+
+    const result = await rig.reconciler.reconcileOnce();
+
+    expect(injection.fired, 'o MessageNotInflight foi injetado').toBe(1);
+    expect(result.seen).toBe(3);
+    expect(
+      rig.dlq.visibilityChanges.map((call) => call.result),
+      'chamadas de changeVisibility na rodada',
+    ).toEqual(['rejected', 'ok', 'ok']);
+    // A primeira segue em voo, porque a injeção não chegou ao ElasticMQ; as duas devolvidas ficam visíveis.
     expect(await countsOf(world.emq, world.queues.dlqUrl)).toEqual({
       visible: 2,
       notVisible: 1,
