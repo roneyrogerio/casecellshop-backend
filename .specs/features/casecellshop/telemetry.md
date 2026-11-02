@@ -8,6 +8,13 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 
 | Nome | No Prometheus | Instrumento | Unidade | Descrição |
 | --- | --- | --- | --- | --- |
+| `casecellshop.catalog.cache.lookups` | `casecellshop_catalog_cache_lookups_total` | contador | `{lookup}` | Leituras do cache da vitrine por resultado; o hit ratio sai daqui. |
+| `casecellshop.catalog.origin.active_loads` | `casecellshop_catalog_origin_active_loads` | UpDownCounter | `{load}` | Cargas do cache em andamento; o single-flight a mantém em no máximo 1 por instância. |
+| `casecellshop.catalog.origin.loads` | `casecellshop_catalog_origin_loads_total` | contador | `{load}` | Cargas do cache a partir do banco, por desfecho: o custo do cache em consultas à origem. |
+| `casecellshop.catalog.served_entry.age` | `casecellshop_catalog_served_entry_age` | histograma | `s` | Idade da entrada do cache servida, desde a carga que a gerou. |
+| `casecellshop.catalog.sync.age` | `casecellshop_catalog_sync_age` | gauge observável | `s` | Idade da última rodada completa da sincronização com o ERP; base do alerta de ERP fora. |
+| `casecellshop.catalog.sync.corrections` | `casecellshop_catalog_sync_corrections_total` | contador | `{correction}` | Campos que a sincronização corrigiu porque o ERP divergia do valor guardado no início da rodada. |
+| `casecellshop.catalog.sync.missing_skus` | `casecellshop_catalog_sync_missing_skus_total` | contador | `{sku}` | SKUs da loja ausentes do ERP numa rodada completa, zerados por ela. |
 | `casecellshop.checkout.requests` | `casecellshop_checkout_requests_total` | contador | `{request}` | Checkouts por desfecho. |
 | `casecellshop.erp.client.active_operations` | `casecellshop_erp_client_active_operations` | UpDownCounter | `{operation}` | Chamadas ao ERP em andamento. |
 | `casecellshop.erp.client.operation.duration` | `casecellshop_erp_client_operation_duration` | histograma | `s` | Duração das chamadas ao ERP, por operação e desfecho; o `_count` conta as chamadas. |
@@ -17,6 +24,42 @@ As regras de nome, de unidade e de tipo estão no `OBS-07` ([`spec.md`](spec.md)
 | `casecellshop.outbox.orphan_conclusions` | `casecellshop_outbox_orphan_conclusions_total` | contador | `{conclusion}` | Conclusões que não afetaram linha porque o token já não valia. |
 | `casecellshop.outbox.published.messages` | `casecellshop_outbox_published_messages_total` | contador | `{message}` | Linhas da outbox publicadas no SQS pelo relay. |
 | `http.server.request.duration` | `http_server_request_duration` | histograma | `s` | Duração das requisições HTTP, base dos SLOs de latência. |
+
+### `casecellshop.catalog.cache.lookups`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.cache.result` | obrigatório | `hit`, `miss`, `stale` | `hit` dentro do TTL, `miss` quando esperou uma carga, `stale` quando serviu a entrada expirada por erro ou pausa da origem. |
+
+### `casecellshop.catalog.origin.active_loads`
+
+Sem atributos.
+
+### `casecellshop.catalog.origin.loads`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.origin.outcome` | obrigatório | `ok`, `error` | Desfecho da carga. |
+
+### `casecellshop.catalog.served_entry.age`
+
+Fronteiras: 1, 2.5, 4.5, 5.5, 10, 20, 30, 45, 60
+
+Sem atributos.
+
+### `casecellshop.catalog.sync.age`
+
+Sem atributos.
+
+### `casecellshop.catalog.sync.corrections`
+
+| Atributo | Exigência | Valores | Descrição |
+| --- | --- | --- | --- |
+| `casecellshop.catalog.sync.field` | obrigatório | `price`, `on_hand`, `name` | Campo corrigido. |
+
+### `casecellshop.catalog.sync.missing_skus`
+
+Sem atributos.
 
 ### `casecellshop.checkout.requests`
 
@@ -78,6 +121,9 @@ Fronteiras: 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 2.5, 
 | Nome | Níveis | Campos | Descrição |
 | --- | --- | --- | --- |
 | `casecellshop.api.started` | `info` | `port` | A API começou a escutar. |
+| `casecellshop.catalog.origin.load_failed` | `warn` | `err` | A carga do cache a partir do banco falhou; a vitrine serve a entrada antiga até o teto ou responde 503. |
+| `casecellshop.catalog.sync.round.completed` | `info` | `skuCount`, `missingCount`, `duration_ms` | Fim de uma rodada completa da sincronização, com os SKUs lidos, os ausentes zerados e a duração. |
+| `casecellshop.catalog.sync.round.failed` | `warn` | `cause`, `page`, `err` | Rodada incompleta: o ERP falhou numa página (`cause`) ou o banco falhou (`err`); nenhum ausente é zerado. |
 | `casecellshop.checkout.accepted` | `info` | `orderId` | Checkout aceito, com o pedido criado. |
 | `casecellshop.checkout.db.unavailable` | `warn` | `err`, `step` | O banco não respondeu no checkout; a resposta é 503. |
 | `casecellshop.checkout.price_changed` | `warn` | `reason`, `items` | Checkout recusado porque o preço informado mudou. |
