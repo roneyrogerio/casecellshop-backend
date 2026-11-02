@@ -30,7 +30,7 @@ Seção: [Diagnóstico e arquitetura alvo](https://github.com/roneyrogerio/casec
 
 ## 2. Cache, invalidação e vitrine
 
-Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#cache-e-performance-da-vitrine). Critérios: `DOC-CAC-01` a `DOC-CAC-04`; testes `CAT-01` a `CAT-13` **[M4]** e `CHK-06`. O cache e a sincronização entram no M4: cada item desta resposta que cita um `CAT-*` é desse marco.
+Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casecellshop-backend/blob/main/ARCHITECTURE.md#cache-e-performance-da-vitrine). Critérios: `DOC-CAC-01` a `DOC-CAC-04`; testes `CAT-01` a `CAT-15` **[M4]** e `CHK-06`. O cache e a sincronização entram no M4: cada item desta resposta que cita um `CAT-*` é desse marco.
 
 **Camadas e o papel de cada uma** (`DOC-CAC-01`):
 
