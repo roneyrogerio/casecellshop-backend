@@ -120,7 +120,7 @@ O que B entrega:
 
 **Dias 0 a 30: tirar o ERP do caminho do cliente.** É o que este projeto implementa.
 
-- **Banco próprio da loja:** PostgreSQL com catálogo, preço, estoque, pedidos, chaves de idempotência e outbox **[implementado: `migrations/store/`]**.
+- **Banco próprio da loja:** PostgreSQL com catálogo, preço, estoque, pedidos, chaves de idempotência e outbox **[implementado: `migrations/store/`, `test/integration/checkout/store-schema.test.ts`, `CHK-01`]**.
 - **Checkout:** reserva atômica, idempotência e `202` **[implementado: `src/checkout/repository.ts`, `CHK-01` a `CHK-12`]**.
 - **Fila:** SQS, alimentado pela outbox do banco por um *Message Relay*; localmente, o ElasticMQ no compose **[implementado]**.
 - **Workers:** um worker para o envio ao ERP e para a sincronização **[implementado: `src/billing/worker.ts`, `ORD-01`; `src/catalog/sync.ts`, `CAT-09`]**.
@@ -323,7 +323,7 @@ As métricas saem em `/metrics`, e não por OTLP, porque OTLP exigiria um coleto
 
 `DOC-OBS-01`. Cada log é uma linha JSON, escrita pelo pino. O contexto da requisição (o `correlationId` e o span atual) viaja pelo `AsyncLocalStorage`, então nenhuma função precisa receber o contexto como parâmetro **[implementado: `src/shared/logging.ts`, `src/http/request-context.ts`, `OBS-01`]**.
 
-**Campos obrigatórios.** Os de identificação saem em toda linha; os de correlação, em toda linha escrita dentro de uma requisição, de uma tentativa do worker ou de um span:
+**Campos obrigatórios.** Os de identificação saem em toda linha; o `correlationId`, em toda linha escrita dentro de uma requisição ou de uma tentativa do worker; o `trace_id` e o `span_id`, em toda linha escrita dentro de um span:
 
 | Campo | Quando | O que é | De onde vem |
 | --- | --- | --- | --- |
@@ -332,10 +332,10 @@ As métricas saem em `/metrics`, e não por OTLP, porque OTLP exigiria um coleto
 | `service`, `env`, `version` | Toda linha | Processo, ambiente e versão | Os mesmos atributos de recurso dos traces, porque o Datadog só liga log e trace com a marcação unificada de serviço |
 | `event` | Toda linha | Nome do evento do catálogo, como `casecellshop.checkout.accepted` | O `eventLogger`, que vale sobre qualquer campo com o mesmo nome |
 | `msg` | Toda linha | Mensagem em português, para quem lê | O evento |
-| `correlationId` | Requisição, tentativa ou span | Identificador da requisição | O `X-Request-Id` válido do cliente, ou um UUID novo; volta no cabeçalho e no corpo do erro (`FND-03`), e viaja na mensagem da outbox até o worker |
-| `trace_id`, `span_id` | Requisição, tentativa ou span | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
+| `correlationId` | Requisição ou tentativa | Identificador da requisição | O `X-Request-Id` válido do cliente, ou um UUID novo; volta no cabeçalho e no corpo do erro (`FND-03`), e viaja na mensagem da outbox até o worker |
+| `trace_id`, `span_id` | Dentro de um span | Ligação com o trace (32 e 16 caracteres hexadecimais), com o `trace_flags` | O span atual |
 
-Os logs do próprio processo, fora de uma requisição, de uma tentativa ou de um span (a subida, o encerramento, o início e o fim do relay e do worker, a migração), saem sem os campos de correlação: não há requisição nem span a que ligar, e um valor inventado não levaria a lugar nenhum (`OBS-01`).
+Os logs do próprio processo, fora de uma requisição, de uma tentativa ou de um span (a subida, o encerramento, o início e o fim do relay e do worker, a migração), saem sem os campos de correlação: não há requisição nem span a que ligar, e um valor inventado não levaria a lugar nenhum. A rodada da sincronização roda num span, sem requisição: o log dela traz o `trace_id` e o `span_id`, sem `correlationId` (`OBS-01`).
 
 **Campos quando existem:** `route`, `method`, `status` e `duration_ms` no fim da requisição; `cache` (`hit`, `miss` ou `stale`) no fim de uma resposta `200` da vitrine; `orderId` e `sku`; `attempt` (o número de recebimentos da mensagem no SQS) e `cause` (por que a tentativa voltou à fila) no worker; `reason` (sempre em snake_case, como `out_of_stock` ou `erp_rejected`); e `err`, com o código do erro.
 
@@ -462,9 +462,9 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 **Runbook,** um por alerta, completo na seção "Runbooks" do README:
 
 - **DLQ:** o pedido segue `pending` com a reserva. Devolver as mensagens à fila (*redrive*), ou cancelar o pedido depois de confirmar no ERP que ele não existe; a reconciliação fatura sozinha o que o ERP já tem **[implementado: `src/main/runbook.ts`, `ORD-14`, `ORD-15`]**;
-- **ERP fora ou com erro de configuração:** os pedidos esperam na fila com a reserva feita, e a vitrine segue com o último estoque conhecido. Conferir o link com o datacenter e a credencial; depois da volta, os retries e a reconciliação esvaziam a fila;
-- **furo de estoque:** o gauge não leva o SKU, então os SKUs saem de uma consulta ao banco (`reserved > on_hand`); a decisão de repor ou cancelar é do negócio;
-- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP. Enquanto isso, a vitrine e o checkout usam o último preço e o último estoque conhecidos: o `409` de preço alterado não pega uma mudança feita no ERP, porque o banco da loja não a recebeu, e o cliente é cobrado pelo preço que viu, que o ERP fatura (H3). O risco que cresce é o furo de estoque por venda em outro canal, que o `casecellshop.inventory.oversold_skus` e o `casecellshop.erp.out_of_stock.rejections` mostram depois; pausar as vendas é decisão do negócio.
+- **ERP fora ou com erro de configuração:** os pedidos esperam na fila com a reserva feita, e a vitrine segue com o último estoque conhecido. Conferir o link com o datacenter e a credencial; depois da volta, os retries e a reconciliação esvaziam a fila **[implementado: README, seção "Runbooks", `OBS-03`]**;
+- **furo de estoque:** o gauge não leva o SKU, então os SKUs saem de uma consulta ao banco (`reserved > on_hand`); a decisão de repor ou cancelar é do negócio **[implementado: README, seção "Runbooks", `OBS-03`]**;
+- **sincronização parada:** conferir se o worker está vivo e o desfecho das chamadas de catálogo ao ERP. Enquanto isso, a vitrine e o checkout usam o último preço e o último estoque conhecidos: o `409` de preço alterado não pega uma mudança feita no ERP, porque o banco da loja não a recebeu, e o cliente é cobrado pelo preço que viu, que o ERP fatura (H3). O risco que cresce é o furo de estoque por venda em outro canal, que o `casecellshop.inventory.oversold_skus` e o `casecellshop.erp.out_of_stock.rejections` mostram depois; pausar as vendas é decisão do negócio **[implementado: README, seção "Runbooks", `OBS-03`]**.
 
 ## Concorrência e idempotência
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** M6 — Documentação e entrega, no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue nas pendências.
+**Marco atual:** M6 — Documentação e entrega, no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2.
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 

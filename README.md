@@ -751,6 +751,26 @@ Os commits feitos com IA levam o trailer `Assisted-by: <papel>:<modelo>`, na con
 | Tamanho, complexidade e sentido das dependências do código | [`.oxlintrc.json`](.oxlintrc.json) (AD-026) | lint no CI |
 | A `main` só muda por PR aprovado e com CI verde | ruleset do GitHub (AD-013) | — |
 
+**Qualidade do código gerado.** Uma instrução sozinha não impede a IA de errar em silêncio. Cada tipo de erro que as revisões dos primeiros PRs acharam passou a ter uma checagem de máquina, que roda no primeiro momento em que já pega o erro: na edição, na parada do agente, no `pre-push` (`npm run verify`), no CI ou na execução agendada.
+
+| Risco no código gerado | Ferramenta ou prática | Critério |
+| --- | --- | --- |
+| Teste que não prova o que diz | testes escritos antes do código, a partir do critério; o ID do critério no nome de cada teste, conferido pelo lint; controle negativo nos testes de concorrência; a tabela critério × teste publicada pelo CI | `AI-38`, `AI-18`, `CHK-02` |
+| Teste apagado, pulado ou afrouxado para passar | o lint reprova `.only` e `.skip`, e o `implementer` não edita testes | `AI-02`, `FND-08` |
+| Garantia que só vale com mock | integração contra PostgreSQL e ElasticMQ reais, pelo Testcontainers, sem mock de banco nem de fila | `FND-14` |
+| Casos que ninguém pensou | testes de propriedade (fast-check) nas funções que decidem prazos, classificam respostas e validam entradas; fuzzing da API pelo contrato (Schemathesis) | `FND-15`, `FND-16` |
+| SQL montado com entrada ou transação fora do lugar | Kysely com os tipos gerados do banco e regras de lint próprias | `AI-19`, `FND-09` |
+| Formato, tipos e estilo divergentes | Prettier, TypeScript com opções estritas e oxlint com limites de tamanho e de complexidade | `AI-34`, `AI-20` |
+| Código sem uso ou repetido | knip e jscpd, contra uma linha de base que só melhora | `AI-35`, `AI-36`, `AI-49` |
+| Cobertura caindo | cobertura medida no CI, com piso que só sobe | `AI-37`, `AI-49` |
+| Comentário que desliga uma checagem | teste que reprova os comentários de supressão do lint, do jscpd e da cobertura | `AI-47` |
+| Dependência vulnerável, adulterada ou recém-publicada | `npm audit`, `npm audit signatures`, a origem do lockfile conferida, espera mínima para versões novas e Dependabot | `AI-05`, `AI-39`, `AI-42`, `AI-45`, `AI-50` |
+| Falha de segurança no código ou no CI | CodeQL em todo PR, actionlint e zizmor nos workflows, e o `/security-review` antes de o PR sair do rascunho | `AI-44`, `AI-43`, `AI-16` |
+| Teste instável | a suíte embaralhada em várias sementes na execução agendada, que abre uma issue quando falha | `AI-46` |
+| O sistema montado, que nenhum teste vê inteiro | o `app-check`: sobe o compose e percorre o fluxo antes de o PR sair do rascunho | `AI-22` |
+
+O teste de mutação (Stryker), que mediria quantos erros plantados os testes pegam, não entrou: está nos "Adicionais" do [`ROADMAP.md`](.specs/project/ROADMAP.md).
+
 Os prompts que governam os agentes, as orientações do mantenedor que mudaram o rumo de cada marco e os erros da IA pegos antes do merge, com o relatório de revisão de cada um, estão no [`PROMPTS.md`](PROMPTS.md); os trechos que governam a fila e as respostas da IA recusadas ou corrigidas, no `ARCHITECTURE.md`, seção "Prompts de IA relevantes".
 
 ## Documentação
