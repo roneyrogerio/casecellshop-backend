@@ -391,7 +391,7 @@ Um exemplo, do checkout aceito:
 
 **O que é lido do banco sai da API.** Os gauges e counters derivados do banco (a idade da sincronização, a idade do pedido mais antigo, os pedidos sem desfecho, o estoque) saem da API, e não do worker, que é o processo monitorado: se o worker cai, as séries continuam e o alerta dispara.
 
-**Séries em zero.** Cada counter de lista fechada sai no `/metrics` em 0 desde a subida, uma série por combinação dos valores dos atributos; sem isso, a série nasceria com o primeiro evento, e o `increase` de um alerta não contaria esse evento **[implementado: `src/shared/telemetry-instruments.ts`, `OBS-08`]**. O histograma não nasce em 0, e por isso o erro de configuração do ERP tem um counter próprio. Os gauges que precisam existir têm um `absent` próprio: o da fila, que sai do worker, e o da idade da sincronização, que sai da API.
+**Séries em zero.** Cada counter de lista fechada sai no `/metrics` em 0 desde a subida, uma série por combinação dos valores dos atributos; sem isso, a série nasceria com o primeiro evento, e o `increase` de um alerta não contaria esse evento **[implementado: `src/shared/telemetry-instruments.ts`, `OBS-08`]**. O histograma não nasce em 0, e por isso o erro de configuração do ERP tem um counter próprio. Os gauges que precisam existir têm um `absent` próprio: o da fila, que sai do worker, e o da idade da sincronização, que sai da API. A API fora do ar tem alerta próprio, pelo `up` que o Prometheus grava a cada coleta.
 
 ### Traces de `GET /products` e do `POST /checkout` assíncrono
 
@@ -457,6 +457,8 @@ O SLI do aceite ao faturamento usa o `casecellshop.order.stuck`: a API marca cad
 | Furo de estoque | `casecellshop.inventory.oversold_skus`, `casecellshop.erp.out_of_stock.rejections`, `casecellshop.checkout.gauge.read_failures` | A loja prometeu mais do que o ERP tem (`OBS-06`) |
 | Erro de configuração no ERP | `casecellshop.erp.config_errors` | Uma credencial vencida faz todos os pedidos voltarem à fila |
 | Sincronização parada | `casecellshop.catalog.sync.age`, também com a série ausente, `casecellshop.catalog.gauge.read_failures` | A vitrine está ficando velha |
+| API fora do ar | `up`, a série que o Prometheus grava a cada coleta | Sem a API não há série de requisição, e nenhum *burn rate* dispara |
+| Vitrine com dado errado | `casecellshop.checkout.requests` com `price_changed` e `out_of_stock` | O cliente viu preço ou estoque que o checkout recusa; o alerta chega antes da reclamação |
 
 **Dashboard,** na ordem da jornada do cliente: vitrine (requisições, p99, `5xx`, taxa de acerto, idade da entrada servida e da sincronização), checkout (desfechos, p99, taxa de `price_changed`), fila e ERP (publicadas, tentativas por desfecho, DLQ, idade do mais antigo, aceite ao faturamento, chamadas em andamento contra o limite de 30, erros de configuração) e estoque (unidades reservadas, SKUs com furo).
 

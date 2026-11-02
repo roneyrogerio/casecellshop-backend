@@ -355,14 +355,27 @@ sum(increase(casecellshop_catalog_sync_missing_skus_total[1h]))
 
 ### Alertas
 
-As regras estão no formato de arquivo de regras do Prometheus ([regras de alerta](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)) e passam no `promtool check rules`. Cada uma traz a severidade (`page` acorda alguém; `ticket` vai para a fila do time) e o link do runbook.
+As regras estão no formato de arquivo de regras do Prometheus ([regras de alerta](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)). O `promtool check rules` não roda aqui (a troca está no [`STATE.md`](.specs/project/STATE.md), em "Escolhas de ferramenta"): o teste do `OBS-03` lê cada `expr` pelo analisador oficial do PromQL (`@prometheus-io/lezer-promql`) e confere a sintaxe, o nome e os rótulos de cada série contra o catálogo, os valores das listas fechadas, o `for`, a severidade, o resumo e a âncora do runbook. Ele não avalia as regras contra dados. Cada uma traz a severidade (`page` acorda alguém; `ticket` vai para a fila do time) e o link do runbook.
 
 Os alertas de SLO seguem o burn rate em várias janelas do livro de SRE do Google ([Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/), consultado em 02/11/2026): `page` com 14,4 vezes o ritmo que gasta o orçamento de 30 dias, em 1 h e em 5 min (2% do orçamento), ou 6 vezes, em 6 h e em 30 min (5%); `ticket` com 1 vez, em 3 dias e em 6 h (10%). A janela curta faz o alerta parar logo que o problema acaba, por isso essas regras não precisam de `for`.
+
+O alerta de API fora do ar lê o `up`, a série que o próprio Prometheus grava a cada coleta: 1 quando o alvo respondeu, 0 quando não ([séries geradas pela coleta](https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series), consultado em 02/11/2026). Com a API fora, nenhuma série de requisição chega, e nenhum *burn rate* dispara. O `job` das regras é o desta configuração de coleta, com os nomes dos serviços do compose:
+
+```yaml
+scrape_configs:
+  - job_name: casecellshop-api
+    static_configs:
+      - targets: ['api:3000']
+  - job_name: casecellshop-worker
+    static_configs:
+      - targets: ['worker:9464']
+```
 
 Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo, uma série por combinação dos valores dos atributos (`OBS-08`), como pede a documentação do Prometheus ([Avoid missing metrics](https://prometheus.io/docs/practices/instrumentation/#avoid-missing-metrics), consultado em 02/11/2026): sem isso, a série nasceria com o primeiro evento, e o `increase` não contaria esse evento, porque não haveria amostra anterior. Um histograma não nasce em 0 (a API do OpenTelemetry não o permite), e por isso o alerta de erro de configuração do ERP lê o counter próprio dele, e não o `_count` do histograma de duração. Os gauges da fila e da sincronização, que precisam existir, têm um `absent` próprio. Um gauge cuja leitura falha segue exportando o último valor, e a falha conta no counter de falhas de leitura da pasta; por isso os alertas de fila, de furo de estoque e de sincronização parada também disparam por esse counter, como pede o item "Leitura que falha" do [`design.md`](.specs/features/casecellshop/design.md), seção "Observabilidade" (na sincronização, `CAT-15`).
 
 | Alerta | Dispara quando | Severidade | Runbook |
 | --- | --- | --- | --- |
+| `CasecellshopApiForaDoAr` | nenhuma réplica da API responde à coleta, ou o alvo some, por 2 min | `page` | [API fora do ar](#api-fora-do-ar) |
 | `CasecellshopErrosBurnRateRapido` e `…Lento` | a vitrine ou o checkout gastam o orçamento de `5xx` | `page` e `ticket` | [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout) |
 | `CasecellshopVitrineLentaBurnRate…` e `CasecellshopCheckoutLentoBurnRate…` | a vitrine passa de 200 ms, ou o checkout de 500 ms, acima do orçamento | `page` e `ticket` | [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout) |
 | `CasecellshopFaturamentoBurnRate…` | pedidos sem desfecho em 60 s acima do orçamento | `page` e `ticket` | [Pendência antiga e burn rate do faturamento](#pendência-antiga-e-burn-rate-do-faturamento) |
@@ -374,11 +387,23 @@ Cada counter de lista fechada sai no `/metrics` em 0 desde a subida do processo,
 | `CasecellshopErpFalhando` | mais da metade das chamadas `transient` ou `ambiguous`, por 10 min | `ticket` | [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração) |
 | `CasecellshopSincronizacaoParada` | a última rodada completa tem mais de 3 min, a série some, ou a leitura dela falha, por 5 min | `page` | [Sincronização parada](#sincronização-parada) |
 | `CasecellshopVitrineServidaVelha` | a idade p99 da entrada servida passa de 30 s, por 5 min | `ticket` | [Vitrine servida velha](#vitrine-servida-velha) |
+| `CasecellshopVitrineComDadoErrado` | `price_changed` e `out_of_stock` passam de 10% dos checkouts decididos em 30 min, com ao menos 20 na janela, por 15 min | `ticket` | [Vitrine com dado errado](#vitrine-com-dado-errado) |
 
 ```yaml
 groups:
   - name: casecellshop
     rules:
+      - alert: CasecellshopApiForaDoAr
+        expr: |
+          max(up{job="casecellshop-api"}) == 0
+          or
+          absent(up{job="casecellshop-api"})
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Nenhuma réplica da API responde à coleta do /metrics
+          runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#api-fora-do-ar
       - alert: CasecellshopErrosBurnRateRapido
         expr: |
           (
@@ -610,11 +635,34 @@ groups:
         annotations:
           summary: A vitrine serve entradas com mais de 30 s no p99
           runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#vitrine-servida-velha
+      - alert: CasecellshopVitrineComDadoErrado
+        expr: |
+          (
+            sum(increase(casecellshop_checkout_requests_total{casecellshop_checkout_outcome=~"price_changed|out_of_stock"}[30m]))
+            / sum(increase(casecellshop_checkout_requests_total{casecellshop_checkout_outcome=~"accepted|price_changed|out_of_stock"}[30m]))
+          ) > 0.1
+          and
+          sum(increase(casecellshop_checkout_requests_total{casecellshop_checkout_outcome=~"accepted|price_changed|out_of_stock"}[30m])) >= 20
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Mais de 10% dos checkouts recusados por preço mudado ou falta de estoque que a vitrine não mostrou
+          runbook_url: https://github.com/roneyrogerio/casecellshop-backend/blob/main/README.md#vitrine-com-dado-errado
 ```
 
 ### Runbooks
 
 Os comandos rodam com o compose no ar. Para ler o banco: `docker compose exec postgres psql -U casecellshop -d casecellshop`.
+
+#### API fora do ar
+
+Sem a API, a vitrine e o checkout ficam fora; os pedidos já aceitos seguem com o worker, que não depende dela. O `up` em 0 com o contêiner de pé aponta a coleta, e não a API.
+
+1. Confira o contêiner: `docker compose ps api` e `docker compose logs --tail 100 api`. Uma saída na subida (configuração, banco) aparece antes de `casecellshop.api.started`; um encerramento, em `casecellshop.process.shutdown.started`.
+2. Com o contêiner de pé, confira a API de dentro dele: `docker compose exec api node -e "fetch('http://127.0.0.1:3000/health').then((r) => console.log(r.status))"`. `503` aponta o banco; siga [Burn rate da vitrine ou do checkout](#burn-rate-da-vitrine-ou-do-checkout), passo 2.
+3. Se a API responde e o `up` segue em 0, o problema é a coleta: veja o alvo em Status, Targets, no Prometheus, e a rede entre ele e a API.
+4. Contêiner parado: `docker compose up -d api`.
 
 #### Burn rate da vitrine ou do checkout
 
@@ -691,6 +739,15 @@ A idade da sincronização sai da API, lida do banco a cada coleta, e segue cres
 2. ERP fora: a loja segue com o último preço e estoque conhecidos; o checkout continua, e o preço cobrado é o do banco da loja (`CHK-06`). Siga [ERP falhando ou com erro de configuração](#erp-falhando-ou-com-erro-de-configuração).
 3. Worker de pé e sem chamadas: reinicie o worker (`docker compose restart worker`), que faz a carga na subida.
 4. Enquanto a sincronização não volta, uma venda em outro canal não aparece na loja: acompanhe o alerta [Furo de estoque](#furo-de-estoque).
+
+#### Vitrine com dado errado
+
+O cliente viu na vitrine um preço ou uma disponibilidade que o checkout recusou. O cliente não é cobrado errado, porque o checkout decide pelo banco da loja (`CHK-06`), mas a recusa é a reclamação que este alerta antecipa.
+
+1. No dashboard, em checkouts por desfecho, veja qual dos dois sobe.
+2. `price_changed`: o preço da vitrine estava velho. Confira a idade da entrada servida ([Vitrine servida velha](#vitrine-servida-velha)) e a idade da sincronização ([Sincronização parada](#sincronização-parada)). Com as duas normais, o ERP está mudando preços com frequência: as correções de `price` sobem no painel da sincronização, e o log `casecellshop.checkout.price_changed` traz os itens recusados.
+3. `out_of_stock`: confira as correções de `on_hand` na sincronização e o alerta [Furo de estoque](#furo-de-estoque). Uma promoção que esgota um SKU disputado também sobe esse desfecho, sem defeito na loja; nesse caso, feche o ticket.
+4. Não altere `products` nem `inventory` à mão: os dois vêm do ERP pela sincronização.
 
 #### Vitrine servida velha
 
