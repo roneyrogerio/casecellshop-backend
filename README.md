@@ -669,7 +669,7 @@ Se o alerta veio do counter de falhas de leitura, o gauge da fila está congelad
 
    - última chamada ao ERP há menos de 15 min (a janela de assentamento): recusa e diz quanto falta, porque uma criação em dúvida ainda pode virar fatura; rode de novo depois;
    - o ERP tem o pedido: recusa, porque ele já foi faturado; use o `redrive` ou espere a reconciliação;
-   - a consulta ao ERP falhou: recusa sem mudar nada; rode de novo quando o ERP responder;
+   - a consulta ao ERP falhou: recusa sem mudar o pedido; a consulta conta como chamada ao ERP, então rode de novo depois de 15 min, com o ERP respondendo;
    - o ERP responde que não tem o pedido: o pedido vira `failed` com o motivo `cancelled` e a reserva é liberada, só se ele ainda estava `pending` (`ORD-15`, `ORD-26`).
 
    Nas recusas o comando sai com código 1. O `cancel` não toca o SQS: a próxima rodada da reconciliação (até 5 min) encontra o pedido com desfecho e apaga a mensagem da DLQ sem chamar o ERP (`casecellshop.outbox.closed`); depois de um `redrive`, quem a apaga é o worker. Um pedido cancelado depois de um envio sem resposta entra na verificação tardia: se a fatura aparecer no ERP mesmo assim, o alerta [Fatura tardia ou duplicada](#fatura-tardia-ou-duplicada) dispara.
