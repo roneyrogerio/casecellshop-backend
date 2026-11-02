@@ -236,6 +236,8 @@ const FUZZ_IMAGE =
   /^ghcr\.io\/schemathesis\/schemathesis:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
 const SCHEMA_MOUNT = './openapi.yaml:/schema/openapi.yaml:ro';
 const REPORT_MOUNT = './schemathesis-report:/reports';
+// /app é o diretório de trabalho da imagem, onde o Schemathesis procura a configuração; em outro caminho ela é ignorada.
+const CONFIG_MOUNT = './schemathesis.toml:/app/schemathesis.toml:ro';
 
 // Uma opção da linha de comando, na forma `--opcao valor` ou `--opcao=valor`.
 function optionValue(args: string[], name: string): string | undefined {
@@ -298,6 +300,8 @@ function fuzzServiceViolations(compose: ComposeFile): string[] {
     violations.push(`falta o volume ${SCHEMA_MOUNT} (só leitura)`);
   if (!volumes.includes(REPORT_MOUNT))
     violations.push(`falta o volume ${REPORT_MOUNT}`);
+  if (!volumes.includes(CONFIG_MOUNT))
+    violations.push(`falta o volume ${CONFIG_MOUNT} (só leitura)`);
   if (service.ports !== undefined)
     violations.push('publica portas: deve falar pela rede do compose');
   return [...violations, ...fuzzCommandViolations(service.command)];
@@ -320,7 +324,7 @@ function goodFuzzCompose(): ComposeFile {
         profiles: ['fuzz'],
         image: `ghcr.io/schemathesis/schemathesis:4.2.0@sha256:${'a'.repeat(64)}`,
         depends_on: { api: { condition: 'service_healthy' } },
-        volumes: [SCHEMA_MOUNT, REPORT_MOUNT],
+        volumes: [SCHEMA_MOUNT, CONFIG_MOUNT, REPORT_MOUNT],
         command: [
           'run',
           '/schema/openapi.yaml',
@@ -453,25 +457,65 @@ describe('FND-16 as conferências do serviço schemathesis enxergam o que procur
     [
       'com o contrato montado sem :ro',
       (s) => {
-        s.volumes = ['./openapi.yaml:/schema/openapi.yaml', REPORT_MOUNT];
+        s.volumes = [
+          './openapi.yaml:/schema/openapi.yaml',
+          CONFIG_MOUNT,
+          REPORT_MOUNT,
+        ];
       },
     ],
     [
       'sem o volume do contrato',
       (s) => {
-        s.volumes = [REPORT_MOUNT];
+        s.volumes = [CONFIG_MOUNT, REPORT_MOUNT];
       },
     ],
     [
       'sem o volume do relatório',
       (s) => {
-        s.volumes = [SCHEMA_MOUNT];
+        s.volumes = [SCHEMA_MOUNT, CONFIG_MOUNT];
       },
     ],
     [
       'com o relatório em outro diretório do host',
       (s) => {
-        s.volumes = [SCHEMA_MOUNT, './report:/reports'];
+        s.volumes = [SCHEMA_MOUNT, CONFIG_MOUNT, './report:/reports'];
+      },
+    ],
+    [
+      'sem o volume da configuração do fuzzing',
+      (s) => {
+        s.volumes = [SCHEMA_MOUNT, REPORT_MOUNT];
+      },
+    ],
+    [
+      'com a configuração montada sem :ro',
+      (s) => {
+        s.volumes = [
+          SCHEMA_MOUNT,
+          './schemathesis.toml:/app/schemathesis.toml',
+          REPORT_MOUNT,
+        ];
+      },
+    ],
+    [
+      'com a configuração fora do /app, o diretório onde o Schemathesis a procura',
+      (s) => {
+        s.volumes = [
+          SCHEMA_MOUNT,
+          './schemathesis.toml:/schema/schemathesis.toml:ro',
+          REPORT_MOUNT,
+        ];
+      },
+    ],
+    [
+      'com a configuração de outro arquivo do host',
+      (s) => {
+        s.volumes = [
+          SCHEMA_MOUNT,
+          './fuzz.toml:/app/schemathesis.toml:ro',
+          REPORT_MOUNT,
+        ];
       },
     ],
     [
@@ -591,6 +635,11 @@ describe('FND-16 o serviço schemathesis do compose.yaml', () => {
   const compose = parse(
     readFileSync(join(root, 'compose.yaml'), 'utf8'),
   ) as ComposeFile;
+
+  it('FND-16 monta o schemathesis.toml em /app, só para leitura, e o arquivo existe no host', () => {
+    expect(compose.services?.['schemathesis']?.volumes).toContain(CONFIG_MOUNT);
+    expect(existsSync(join(root, 'schemathesis.toml'))).toBe(true);
+  });
 
   it('FND-16 usa o perfil fuzz, a imagem oficial por versão e digest, a API saudável, o contrato só para leitura e a rede do compose', () => {
     expect(fuzzServiceViolations(compose)).toEqual([]);

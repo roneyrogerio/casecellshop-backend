@@ -144,15 +144,26 @@ describe('OBS-07 o catálogo real segue as regras de nomes do OpenTelemetry', ()
     ]);
   });
 
-  it('OBS-07 o catálogo usa os três instrumentos, e as regras de fronteira e unidade não passam por não ter o que conferir', () => {
+  it('OBS-07 o catálogo usa os quatro instrumentos, e as regras de fronteira e unidade não passam por não ter o que conferir', () => {
     const instruments = new Set(
       Object.values<MetricLike>(METRICS).map((spec) => spec.instrument),
     );
     expect([...instruments].sort()).toEqual([
       'counter',
       'histogram',
+      'observable_gauge',
       'up_down_counter',
     ]);
+  });
+
+  it('OBS-07 o gauge observável do catálogo é a idade da última rodada da sincronização, sem fronteiras nem atributos', () => {
+    const gauges = Object.entries<MetricLike>(METRICS)
+      .filter(([, spec]) => spec.instrument === 'observable_gauge')
+      .map(([name]) => name);
+    expect(gauges).toEqual(['casecellshop.catalog.sync.age']);
+    const age = metricNamed('casecellshop.catalog.sync.age');
+    expect(age?.buckets).toBeUndefined();
+    expect(Object.keys(age?.attributes ?? {})).toEqual([]);
   });
 });
 
