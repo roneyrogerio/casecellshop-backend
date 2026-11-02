@@ -210,12 +210,8 @@ export function createLateCheck({
 
   return {
     async start() {
-      // Exporta as duas séries com 0 antes do primeiro achado, para o alerta ver o aumento desde o zero.
-      const metrics = billingMetrics(telemetry);
-      for (const cause of ['failed_order', 'duplicate'] as const)
-        metrics.add('casecellshop.order.late_invoices', 0, {
-          'casecellshop.order.late_invoice.cause': cause,
-        });
+      // Criar os instrumentos já exporta cada série do counter com 0 (OBS-08); não repetir o 0 à mão.
+      billingMetrics(telemetry);
       await runner.start();
     },
     stop: () => runner.stop(),

@@ -7,13 +7,11 @@ import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
 import type {
   CountInvoicesResult,
   CreateOrderResult,
-  ErpCatalogItem,
-  ErpCatalogPage,
   ErpClient,
-  ErpOrder,
   FindOrderResult,
   ListCatalogResult,
 } from './erp-client.ts';
+import { bodyCode, isRecord, parseCatalogPage, parseOrder } from './parsing.ts';
 import {
   ErpNetworkError,
   type ErpInvoiceReader,
@@ -42,41 +40,6 @@ type Outcome =
   | { kind: 'timeout' }
   // Rejeição que não é de rede nem o aborto do timeout: pode ter chegado ao ERP.
   | { kind: 'transport_error' };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function bodyCode(body: unknown): unknown {
-  return isRecord(body) ? body['code'] : undefined;
-}
-
-function parseOrder(body: unknown): ErpOrder | undefined {
-  if (!isRecord(body)) return undefined;
-  const { erpOrderId, reference } = body;
-  if (typeof erpOrderId !== 'string' || typeof reference !== 'string')
-    return undefined;
-  return { erpOrderId, reference };
-}
-
-function parseCatalogItem(value: unknown): ErpCatalogItem | undefined {
-  if (!isRecord(value)) return undefined;
-  const { sku, name, priceCents, onHand } = value;
-  if (
-    typeof sku !== 'string' ||
-    typeof name !== 'string' ||
-    // Dinheiro em centavos inteiros e estoque nunca negativo: um valor fora disso é contrato quebrado.
-    typeof priceCents !== 'number' ||
-    typeof onHand !== 'number' ||
-    !Number.isSafeInteger(priceCents) ||
-    !Number.isSafeInteger(onHand) ||
-    priceCents < 0 ||
-    onHand < 0
-  ) {
-    return undefined;
-  }
-  return { sku, name, priceCents, onHand };
-}
 
 // 400, 401, 403: erro do adaptador ou credencial vencida, em toda operação.
 function isConfigStatus(status: number): boolean {
@@ -295,20 +258,6 @@ function classifyFind(outcome: Outcome): FindOrderResult {
   }
   if (isConfigStatus(status)) return { kind: 'config_error', status };
   return { kind: 'transient', cause: `http_${status}` };
-}
-
-// Undefined quando o corpo não é uma página válida do catálogo.
-function parseCatalogPage(body: unknown): ErpCatalogPage | undefined {
-  if (
-    !isRecord(body) ||
-    !Array.isArray(body['items']) ||
-    typeof body['hasNext'] !== 'boolean'
-  )
-    return undefined;
-  const items = body['items'].map(parseCatalogItem);
-  if (!items.every((item): item is ErpCatalogItem => item !== undefined))
-    return undefined;
-  return { items, hasNext: body['hasNext'] };
 }
 
 function classifyList(outcome: Outcome): ListCatalogResult {
