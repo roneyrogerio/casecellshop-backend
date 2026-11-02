@@ -173,7 +173,11 @@ async function finishConclusion(
   } else {
     eventLogger(log, BILLING_LOG_EVENTS).warn(
       'casecellshop.order.failed',
-      { reason: outcome.reason },
+      {
+        reason: outcome.reason,
+        ...(outcome.skus ? { skus: outcome.skus } : {}),
+        ...(outcome.sku ? { sku: outcome.sku } : {}),
+      },
       'pedido falhou no ERP',
     );
   }

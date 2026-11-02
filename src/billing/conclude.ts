@@ -10,6 +10,9 @@ export type OrderConclusion =
   | {
       kind: 'failed';
       reason: 'erp_rejected' | 'erp_out_of_stock' | 'cancelled';
+      // Só para o log do order.failed (OBS-01); a transação não os usa.
+      skus?: string[];
+      sku?: string;
     };
 
 export interface ConclusionResult {

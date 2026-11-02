@@ -63,7 +63,12 @@ describe('OBS-06 rejeição por falta de estoque no ERP soma no counter dela', (
     const result = await client.createOrder(orderRequest);
 
     expect(sends(), 'a chamada chegou ao transporte').toBe(1);
-    expect(result).toEqual({ kind: 'permanent', reason: 'out_of_stock' });
+    // O sku do corpo do 422 vai na recusa, só para o log (OBS-01).
+    expect(result).toEqual({
+      kind: 'permanent',
+      reason: 'out_of_stock',
+      sku: 'ESTOQUE-CAPA-AZUL',
+    });
     expect(await rejections(telemetry)).toBe(1);
   });
 

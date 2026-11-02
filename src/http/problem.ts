@@ -17,6 +17,9 @@ export interface ProblemInit {
   errors?: { path: string; message: string }[];
   // Só no price-changed (AD-018): o preço atual de cada item que mudou.
   currentPrices?: { sku: string; unitPrice: number }[];
+  // Só para o log (OBS-01): o SKU em que a reserva parou. O problemHandler monta o corpo
+  // campo a campo e não o expõe.
+  logSku?: string;
   headers?: Record<string, string>;
 }
 

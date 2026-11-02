@@ -1,5 +1,6 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
+import { Sku } from '../contract/checkout.ts';
 import type { Clock } from '../shared/clock.ts';
 import type { Telemetry } from '../shared/telemetry.ts';
 import { erpMetrics, type ErpOperation, type ErpOutcome } from './telemetry.ts';
@@ -261,9 +262,12 @@ function classifyCreate(outcome: Outcome): CreateOrderResult {
       : { kind: 'ambiguous', cause: `http_${status}_invalid_body` };
   }
   if (status === 422) {
+    // O ERP é entrada externa: o sku só segue se tiver a forma do contrato.
+    const sku = Sku.safeParse(isRecord(body) ? body['sku'] : undefined);
     return {
       kind: 'permanent',
       reason: bodyCode(body) === 'out_of_stock' ? 'out_of_stock' : 'rejected',
+      ...(sku.success ? { sku: sku.data } : {}),
     };
   }
   return classifyCreateError(status);

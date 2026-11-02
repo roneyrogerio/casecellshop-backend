@@ -80,7 +80,7 @@ async function readCatalog(ctx: Context): Promise<CatalogRead> {
 
 // Conta o campo que o ERP corrigiu: só quando divergia do valor guardado no t0 e o comando gravou a linha.
 function countCorrections(
-  { telemetry }: Context,
+  { telemetry, logger }: Context,
   snapshot: StoreSnapshot,
   item: ErpCatalogItem,
   written: { product: boolean; inventory: boolean },
@@ -90,13 +90,21 @@ function countCorrections(
   const name = 'casecellshop.catalog.sync.corrections';
   const product = snapshot.products.get(item.sku);
   const stock = snapshot.inventory.get(item.sku);
+  const fields: ('price' | 'name' | 'on_hand')[] = [];
   if (written.product && product) {
-    if (product.priceCents !== item.priceCents)
-      metrics.add(name, 1, { [field]: 'price' });
-    if (product.name !== item.name) metrics.add(name, 1, { [field]: 'name' });
+    if (product.priceCents !== item.priceCents) fields.push('price');
+    if (product.name !== item.name) fields.push('name');
   }
   if (written.inventory && stock && stock.onHand !== item.onHand)
-    metrics.add(name, 1, { [field]: 'on_hand' });
+    fields.push('on_hand');
+  for (const corrected of fields) metrics.add(name, 1, { [field]: corrected });
+  // O sku só vai ao log (cardinalidade): uma linha por SKU cuja correção entrou no counter.
+  if (fields.length > 0)
+    eventLogger(logger, CATALOG_LOG_EVENTS).info(
+      'casecellshop.catalog.sync.sku.corrected',
+      { sku: item.sku, fields },
+      'SKU corrigido pela sincronização',
+    );
 }
 
 // Um comando por SKU e por tabela, em ordem de SKU: duas réplicas travam as linhas na mesma ordem.
@@ -144,7 +152,14 @@ async function zeroMissingSkus(
   let counted = 0;
   for (const sku of missing) {
     const changed = await zeroMissing(ctx.db, snapshot.t0, sku);
-    if ((snapshot.inventory.get(sku)?.onHand ?? 0) > 0 && changed) counted += 1;
+    if ((snapshot.inventory.get(sku)?.onHand ?? 0) > 0 && changed) {
+      counted += 1;
+      eventLogger(ctx.logger, CATALOG_LOG_EVENTS).warn(
+        'casecellshop.catalog.sync.sku.zeroed',
+        { sku },
+        'SKU ausente do ERP foi zerado',
+      );
+    }
   }
   catalogMetrics(ctx.telemetry).add(
     'casecellshop.catalog.sync.missing_skus',
