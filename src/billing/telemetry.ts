@@ -61,7 +61,7 @@ export const BILLING_METRICS = {
     description:
       'Achados da verificação tardia (AD-031): fatura de pedido falho ou fatura duplicada no ERP, um por pedido.',
     attributes: {
-      'casecellshop.order.late_invoice.cause': {
+      'casecellshop.late_invoice.cause': {
         description: 'O que a verificação tardia achou no ERP.',
         requirement: 'required',
         values: { kind: 'enum', values: ['failed_order', 'duplicate'] },
