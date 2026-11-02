@@ -312,7 +312,7 @@ histogram_quantile(0.99, sum by (le) (rate(casecellshop_order_accept_to_invoice_
 sum(increase(casecellshop_order_stuck_total[1h]))
 
 # Fila: achados da verificação tardia por causa (fatura de pedido falho, fatura duplicada), nas últimas 24 h
-sum by (casecellshop_order_late_invoice_cause) (increase(casecellshop_order_late_invoices_total[24h]))
+sum by (casecellshop_late_invoice_cause) (increase(casecellshop_order_late_invoices_total[24h]))
 ```
 
 ```promql
