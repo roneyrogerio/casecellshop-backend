@@ -152,6 +152,27 @@ function stableOutbox(row: OutboxRow) {
   };
 }
 
+// O cancelamento de um pedido que já não está pending (AD-031): devolve unchanged sem consultar o ERP (nenhuma
+// requisição nova) nem tomar a permissão de chamada (last_call_at, call_token, first_sent_at e published_at
+// ficam como estavam, para a verificação tardia não atrasar), e sem mexer no pedido nem no estoque.
+async function expectUnchangedWithoutTouchingErp(
+  world: Pick<QueueWorld, 'erp' | 'transport'>,
+  order: AcceptedOrder,
+): Promise<void> {
+  const footprint = await footprintOf(order);
+  const outbox = stableOutbox(await readOutbox(suite.pool, order.orderId));
+  const sendsBefore = world.transport.sends.length;
+
+  const result = await cancel(world, order.orderId);
+
+  expect(result).toEqual({ kind: 'unchanged' });
+  expect(world.transport.sends).toHaveLength(sendsBefore);
+  expect(await footprintOf(order)).toEqual(footprint);
+  expect(stableOutbox(await readOutbox(suite.pool, order.orderId))).toEqual(
+    outbox,
+  );
+}
+
 function redrive(world: QueueWorld): ReturnType<typeof redriveDlq> {
   return driveClock(
     redriveDlq({
@@ -306,16 +327,15 @@ describe('ORD-15 cancelamento pelo runbook', () => {
     ).toBe(before?.getTime());
   });
 
-  it('ORD-15 cancelar um pedido já faturado (o ERP tem a fatura) é recusado com erp_has_order e não muda o pedido nem o estoque', async () => {
+  it('ORD-15 cancelar um pedido já faturado, mesmo fora da janela de assentamento e com a fatura no ERP, devolve unchanged na hora: não consulta o ERP, não toma a permissão e não muda o pedido, o estoque nem a outbox', async () => {
     const world = await createWorld(suite);
     const order = await submitOrder(suite, world, { quantity: 2 });
     expect(await buildWorker(world).pollOnce()).toBe(1);
     await expectInvoiced(world, order);
     await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
 
-    const result = await cancel(world, order.orderId);
+    await expectUnchangedWithoutTouchingErp(world, order);
 
-    expect(result).toEqual({ kind: 'erp_has_order' });
     await expectInvoiced(world, order);
     expect(await invoices(order.orderId)).toBe(1);
   });
@@ -326,23 +346,19 @@ describe('ORD-15 cancelamento pelo runbook', () => {
       status: 'failed',
       reason: 'erp_rejected',
     });
-    const before = await footprintOf(order);
 
-    const result = await cancel(world, order.orderId);
+    await expectUnchangedWithoutTouchingErp(world, order);
 
-    expect(result).toEqual({ kind: 'unchanged' });
-    const after = await footprintOf(order);
-    expect(after.order).toEqual(before.order);
-    expect(after.order.failureReason).toBe('erp_rejected');
-    expect(after.inventory).toEqual(before.inventory);
+    expect((await readOrder(suite.pool, order.orderId)).failureReason).toBe(
+      'erp_rejected',
+    );
   });
 
   it('ORD-15 cancelar duas vezes só muda na primeira: a segunda devolve unchanged e a reserva não é liberada de novo', async () => {
     const { world, order } = await freshOrder();
 
     expect(await cancel(world, order.orderId)).toEqual({ kind: 'cancelled' });
-    // A primeira tomou a permissão de chamada: a segunda só passa quando a janela de assentamento correr.
-    await ageLastCall(suite.pool, order.orderId, PAST_WINDOW_SECONDS);
+    // A segunda não espera a janela de assentamento: o pedido já não está pending.
     expect(await cancel(world, order.orderId)).toEqual({ kind: 'unchanged' });
 
     await expectCancelled(order);
@@ -657,17 +673,79 @@ describe('ORD-26 cancelamento seguro pelo runbook', () => {
     expect(world.transport.sendsOf('createOrder')).toHaveLength(0);
   });
 
-  it('ORD-26 cancelar duas vezes seguidas, sem a janela correr, recusa a segunda com too_recent: a primeira tomou a permissão de chamada', async () => {
+  it('ORD-26 cancelar duas vezes seguidas, sem a janela correr, devolve unchanged na segunda: o pedido já não está pending, então não toma a permissão nem consulta o ERP de novo', async () => {
     const { world, order } = await freshOrder();
     expect(await cancel(world, order.orderId)).toEqual({ kind: 'cancelled' });
-    const after = await footprintOf(order);
-
-    const second = await cancel(world, order.orderId);
-
-    expect(second.kind).toBe('too_recent');
-    expect(await footprintOf(order)).toEqual(after);
     expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+
+    await expectUnchangedWithoutTouchingErp(world, order);
+
+    expect(world.transport.sendsOf('findOrder')).toHaveLength(1);
+    await expectCancelled(order);
   });
+
+  // Um pedido que já não está pending não tem o que cancelar: a tomada da permissão regravaria last_call_at e
+  // call_token e reiniciaria a janela da verificação tardia dele. Vale dentro da janela (onde a tomada daria
+  // too_recent) e fora dela (onde a consulta ao ERP daria erp_has_order).
+  const SETTLED_ORDERS: ReadonlyArray<{
+    name: string;
+    seed: (world: QueueWorld) => Promise<AcceptedOrder>;
+  }> = [
+    {
+      name: 'faturado, com a última chamada dentro da janela',
+      seed: async (world) => {
+        const order = await submitOrder(suite, world, { quantity: 2 });
+        expect(await buildWorker(world).pollOnce()).toBe(1);
+        await expectInvoiced(world, order);
+        return order;
+      },
+    },
+    {
+      name: 'falho, com a última chamada dentro da janela',
+      seed: async () => {
+        const order = await sentOrder(WITHIN_WINDOW_SECONDS, 1);
+        await seedOutcome(suite.pool, order, {
+          status: 'failed',
+          reason: 'erp_rejected',
+        });
+        return order;
+      },
+    },
+    {
+      name: 'faturado hoje (o ERP tem a fatura), com a última chamada fora da janela',
+      seed: async (world) => {
+        const order = await sentOrder(PAST_WINDOW_SECONDS, 1);
+        await erpHasInvoice(world, order);
+        await seedOutcome(suite.pool, order, { status: 'invoiced' });
+        return order;
+      },
+    },
+    {
+      name: 'falho, com a última chamada fora da janela e a fatura no ERP',
+      seed: async (world) => {
+        const order = await sentOrder(PAST_WINDOW_SECONDS, 1);
+        await erpHasInvoice(world, order);
+        await seedOutcome(suite.pool, order, {
+          status: 'failed',
+          reason: 'erp_out_of_stock',
+        });
+        return order;
+      },
+    },
+  ];
+
+  for (const { name, seed } of SETTLED_ORDERS) {
+    it(`ORD-26 pedido ${name}: devolve unchanged na hora, sem consultar o ERP nem tomar a permissão (last_call_at, call_token, first_sent_at e published_at ficam como estavam)`, async () => {
+      const world = await createWorld(suite, { withoutH1b: true });
+      const order = await seed(world);
+      const status = (await readOrder(suite.pool, order.orderId)).status;
+      expect(status).not.toBe('pending');
+
+      await expectUnchangedWithoutTouchingErp(world, order);
+
+      expect((await readOrder(suite.pool, order.orderId)).status).toBe(status);
+    });
+  }
 
   it('ORD-26 enquanto o cancelamento consulta o ERP, outra tentativa de chamada não consegue a permissão (o mesmo UPDATE a segura)', async () => {
     const world = await createWorld(suite, { withoutH1b: true });
@@ -848,6 +926,16 @@ describe('ORD-26 mensagem do comando para cada resultado', () => {
 
     expect(message).toMatch(/\b10\b/);
     expect(message).toMatch(/min/i);
+  });
+
+  it('ORD-26 too_recent com retryInMs 0 diz 1 min, o piso: "0 min" levaria o operador a repetir de imediato', () => {
+    const { message } = describeCancel(ORDER_ID, {
+      kind: 'too_recent',
+      retryInMs: 0,
+    });
+
+    expect(message).toContain('cerca de 1 min');
+    expect(message).not.toMatch(/\b0 min/);
   });
 
   it('ORD-26 erp_has_order e erp_unavailable falam do ERP, e cada resultado tem uma mensagem própria', () => {
