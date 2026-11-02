@@ -1,6 +1,7 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
+import { countingInvoices } from '../../test/helpers/invoice-reader.ts';
 import { metricValue, scrapeMetrics } from '../../test/helpers/metrics.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { createErpClient } from './acl.ts';
@@ -40,6 +41,7 @@ function clientOver(status: number, body?: unknown) {
   };
   const client = createErpClient({
     transport,
+    invoiceReader: countingInvoices(),
     clock: createManualClock(),
     timeoutMs: 10_000,
     telemetry,

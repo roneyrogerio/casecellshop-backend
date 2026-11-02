@@ -13,6 +13,7 @@ import {
   type TestDatabase,
 } from '../../helpers/database.ts';
 import { MIN_RETRY_DELAY_MS } from '../../helpers/erp.ts';
+import { readLateColumns } from '../../helpers/late-check.ts';
 
 // Permissão de chamada por pedido (AD-024; design.md, "Worker: envio"): uma chamada ao ERP por pedido a
 // cada atraso mínimo, decidida num UPDATE só pelo relógio do banco. É o que cumpre a H4 e impede duas
@@ -246,6 +247,100 @@ describe('ORD-11 a permissão de chamada exclui duas chamadas simultâneas do me
     const results = await Promise.all([naiveTake(), naiveTake()]);
 
     expect(results.filter(Boolean)).toHaveLength(2);
+  });
+});
+
+// A marca de envio (AD-031; design.md, "Worker: envio"): `create_calls` conta as criações mandadas ao ERP, somadas
+// antes de cada uma. Alimenta a regra dos candidatos da verificação tardia (`create_calls >= 2`, ou cancelado com
+// `>= 1`). A coluna é lida por SQL cru: os tipos gerados do Kysely só a conhecem depois da migração.
+describe('ORD-23 a permissão de chamada soma create_calls antes de cada criação mandada ao ERP', () => {
+  const workerOptions = { minDelayMs: MIN_RETRY_DELAY_MS, clearDead: true };
+  const reconciliationOptions = {
+    minDelayMs: MIN_RETRY_DELAY_MS,
+    clearDead: false,
+  };
+
+  async function createCalls(orderId: string): Promise<number> {
+    return (await readLateColumns(database.pool, orderId)).createCalls;
+  }
+
+  async function ageLastCall(orderId: string): Promise<void> {
+    await database.pool.query(
+      "update outbox set last_call_at = now() - interval '46 seconds' where order_id = $1",
+      [orderId],
+    );
+  }
+
+  it('ORD-23 a linha nova da outbox começa com create_calls 0', async () => {
+    const orderId = await seedOutbox();
+
+    expect(await createCalls(orderId)).toBe(0);
+  });
+
+  it('ORD-23 a tomada do worker com first_sent_at nulo soma 1, porque a criação vem logo depois', async () => {
+    const orderId = await seedOutbox();
+
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    expect(await createCalls(orderId)).toBe(1);
+  });
+
+  it('ORD-23 a tomada do worker com first_sent_at já preenchido não soma: o que vem depois é a consulta', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    await ageLastCall(orderId);
+
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    expect(await createCalls(orderId)).toBe(1);
+  });
+
+  it('ORD-23 a tomada recusada pelo atraso mínimo não soma', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+
+    const refused = await takeCallPermit(db(), orderId, workerOptions);
+
+    expect(refused.granted).toBe(false);
+    expect(await createCalls(orderId)).toBe(1);
+  });
+
+  it('ORD-23 a renovação que antecede a criação depois da consulta soma 1 com o token vigente', async () => {
+    const orderId = await seedOutbox();
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    await ageLastCall(orderId);
+    const second = granted(await takeCallPermit(db(), orderId, workerOptions));
+    expect(await createCalls(orderId)).toBe(1);
+
+    expect(await renewCallPermit(db(), orderId, second.token)).toBe(true);
+
+    expect(await createCalls(orderId)).toBe(2);
+  });
+
+  it('ORD-23 a renovação com um token que já não vale não soma', async () => {
+    const orderId = await seedOutbox();
+    const old = granted(await takeCallPermit(db(), orderId, workerOptions));
+    await ageLastCall(orderId);
+    granted(await takeCallPermit(db(), orderId, workerOptions));
+    const before = await createCalls(orderId);
+
+    expect(await renewCallPermit(db(), orderId, old.token)).toBe(false);
+
+    expect(await createCalls(orderId)).toBe(before);
+  });
+
+  it('ORD-23 a tomada da reconciliação (clearDead falso) e a da verificação tardia não somam, mesmo com first_sent_at nulo', async () => {
+    const orderId = await seedOutbox();
+
+    const permit = granted(
+      await takeCallPermit(db(), orderId, reconciliationOptions),
+    );
+
+    expect(permit.sentBefore).toBe(false);
+    expect(await createCalls(orderId)).toBe(0);
+    await ageLastCall(orderId);
+    granted(await takeCallPermit(db(), orderId, reconciliationOptions));
+    expect(await createCalls(orderId)).toBe(0);
   });
 });
 

@@ -14,6 +14,7 @@ import {
   ROUND_COMPLETED,
   ROUND_FAILED,
   useSyncDatabase,
+  type SyncRigOptions,
 } from '../../helpers/sync.ts';
 import { interceptPool } from '../../helpers/worker.ts';
 
@@ -22,6 +23,19 @@ import { interceptPool } from '../../helpers/worker.ts';
 // as linhas de log).
 
 const db = useSyncDatabase();
+
+// O ErpClient real, sobre o transporte e a leitura do ERP simulado e com a telemetria da sincronização.
+const realErpClient: NonNullable<SyncRigOptions['erp']> = ({
+  world,
+  telemetry,
+}) =>
+  createErpClient({
+    transport: world.transport,
+    invoiceReader: world.sim.invoiceReader,
+    clock: world.clock,
+    timeoutMs: ERP_TIMEOUT_MS,
+    telemetry,
+  });
 
 const CORRECTIONS = 'casecellshop.catalog.sync.corrections';
 const FIELD = 'casecellshop.catalog.sync.field';
@@ -194,15 +208,7 @@ describe('OBS-07 o span da rodada da sincronização', () => {
     await putErpCatalog(db.erpPool, 'SP', 120);
     // O ErpClient real, sobre o transporte do ERP simulado e com a telemetria da sincronização: os spans
     // `erp.list_catalog` são os que ele mesmo abre, filhos do span ativo, que na rodada é o `catalog.sync.round`.
-    const rig = db.rig({
-      erp: ({ world, telemetry }) =>
-        createErpClient({
-          transport: world.transport,
-          clock: world.clock,
-          timeoutMs: ERP_TIMEOUT_MS,
-          telemetry,
-        }),
-    });
+    const rig = db.rig({ erp: realErpClient });
 
     await rig.sync.runRound();
     await rig.sync.runRound();
@@ -234,15 +240,7 @@ describe('OBS-07 o span da rodada da sincronização', () => {
 
   it('OBS-07 a rodada com o ERP fora gera o span erp.list_catalog da chamada que falhou, filho da rodada e com status de erro', async () => {
     await putErpProducts(db.erpPool, [{ sku: 'SP-901' }]);
-    const rig = db.rig({
-      erp: ({ world, telemetry }) =>
-        createErpClient({
-          transport: world.transport,
-          clock: world.clock,
-          timeoutMs: ERP_TIMEOUT_MS,
-          telemetry,
-        }),
-    });
+    const rig = db.rig({ erp: realErpClient });
     failErpPageAfter(rig.world);
 
     expect((await rig.sync.runRound()).complete).toBe(false);
