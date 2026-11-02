@@ -186,13 +186,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # AI-53: sem os arquivos da lista, um teste que passe a lê-los reprova aqui, e
-      # pular o job no PR que só muda esses arquivos não perde nada.
-      - name: Tira os arquivos que o AI-53 não testa
+      # AI-53: uma pasta vazia no lugar de cada arquivo da lista. Um teste que leia um
+      # deles, pelo caminho ou depois de listar a pasta, reprova com EISDIR; apagado,
+      # o arquivo sumiria da listagem e o teste passaria sem conferi-lo. Assim pular o
+      # job no PR que só muda esses arquivos não perde nada.
+      - name: Troca os arquivos que o AI-53 não testa por pastas
         run: |
           mapfile -t paths <<< "$DOCS_ONLY_PATHS"
           for path in "${paths[@]}"; do
-            if [ -n "$path" ]; then rm -f -- "$path"; fi
+            # Uma pasta de verdade fica; um link para pasta sai, porque o teste
+            # leria pelo link o que ele aponta.
+            if [ -z "$path" ]; then continue; fi
+            if [ ! -d "$path" ] || [ -L "$path" ]; then rm -f -- "$path"; fi
+            mkdir -p -- "$path"
           done
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -282,11 +288,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Tira os arquivos que o AI-53 não testa
+      # AI-53: como no job test.
+      - name: Troca os arquivos que o AI-53 não testa por pastas
         run: |
           mapfile -t paths <<< "$DOCS_ONLY_PATHS"
           for path in "${paths[@]}"; do
-            if [ -n "$path" ]; then rm -f -- "$path"; fi
+            # Uma pasta de verdade fica; um link para pasta sai, porque o teste
+            # leria pelo link o que ele aponta.
+            if [ -z "$path" ]; then continue; fi
+            if [ ! -d "$path" ] || [ -L "$path" ]; then rm -f -- "$path"; fi
+            mkdir -p -- "$path"
           done
       - name: Cria o diretório do relatório
         # A imagem roda como uid 1000; montado sem existir, o diretório nasceria
@@ -307,8 +318,8 @@ jobs:
   # AI-42: o único check que o ruleset exige. Um job pulado conta como verde, e um
   # job que depende de outro que falhou é pulado; por isso este roda sempre e olha
   # o resultado de cada um. Mudar os jobs acima não mexe no ruleset.
-  # AI-53: pelo mesmo motivo, um job pulado só passa quando o changes decidiu que o
-  # PR é só de documentação, e só o test e o api-fuzz podem ser pulados.
+  # AI-53: pelo mesmo motivo, o ci-ok aceita só o que passa, e não reprova só o que
+  # falha: um resultado ausente ou que o GitHub venha a criar reprova também.
   ci-ok:
     name: ci-ok
     needs: [changes, checks, test, workflows, api-fuzz]
@@ -320,20 +331,23 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
         run: |
-          # Sem entrada, o jq não produz nada e sai com 0; o -e exige um objeto e
-          # reprova o vazio e o que não é JSON.
-          jq -e 'type == "object"' <<< "$RESULTS" > /dev/null
-          failed=$(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<< "$RESULTS")
-          if [ -n "$failed" ]; then
-            printf 'Falhou ou foi cancelado: %s\n' "$failed"
+          # Sem entrada, o jq não produz nada e sai com 0; o -e exige um objeto com
+          # algum job e reprova o vazio e o que não é JSON.
+          jq -e 'type == "object" and length > 0' <<< "$RESULTS" > /dev/null
+          # Passa o success, e o test e o api-fuzz pulados quando o changes decidiu
+          # que o PR é só de documentação; todo o resto vai para a lista.
+          rejected=$(jq -r --arg docs_only "$DOCS_ONLY" '
+            to_entries[]
+            | select(
+                .value.result != "success"
+                and (
+                  .value.result != "skipped"
+                  or $docs_only != "true"
+                  or (.key != "test" and .key != "api-fuzz")
+                )
+              )
+            | "\(.key): \(.value.result)"' <<< "$RESULTS")
+          if [ -n "$rejected" ]; then
+            printf 'Job que não passa:\n%s\n' "$rejected"
             exit 1
           fi
-          skipped=$(jq -r 'to_entries[] | select(.value.result == "skipped") | .key' <<< "$RESULTS")
-          mapfile -t skipped_jobs <<< "$skipped"
-          for job in "${skipped_jobs[@]}"; do
-            if [ -z "$job" ]; then continue; fi
-            if [ "$DOCS_ONLY" != true ] || { [ "$job" != test ] && [ "$job" != api-fuzz ]; }; then
-              echo "O job $job foi pulado sem o PR ser só de documentação."
-              exit 1
-            fi
-          done
