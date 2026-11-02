@@ -1,6 +1,6 @@
 # Roadmap
 
-**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. Em aberto, o PR #43 (`fix/alertas`) faz disparar os alertas da seção "Operação" do README que não disparavam (`OBS-08`, `OBS-09`, `OBS-03`). A seguir, os Adicionais, a começar pelo Stryker.
+**Marco atual:** nenhum: M1 a M6 concluídos, o M6 no PR #41. O M4 entrou pelos PRs #37 e #40, e o M5, pelos #38 e #39; do F2, o PR D (#33) entrou, e o PR E segue em aberto no plano do F2. O PR #43 (`fix/alertas`), que faz disparar os alertas da seção "Operação" do README que não disparavam (`OBS-08`, `OBS-09`, `OBS-03`), entrou em 02/11/2026. A seguir, os Adicionais, a começar pelo Stryker.
 
 Os critérios de aceite estão em [`spec.md`](../features/casecellshop/spec.md); o "como" de cada parte, em [`design.md`](../features/casecellshop/design.md).
 
@@ -165,6 +165,9 @@ Itens pedidos ou decididos pelo mantenedor que ainda não estão num PR. Cada um
 - **Achados `baixa` do #27 (B4b) que seguem abertos** (numeração do #27; os outros saíram no #30):
   - o merge do #30 pelo App, em 01/11/2026, confirmou o `env.HEAD` no `--jq` do `gh`: a aprovação no commit atual foi achada e o auto-merge ligado. Seguem a confirmar o `--author app/github-actions` no `gh issue list` do agendado e o segundo `gh pr merge --auto` num PR que já tem o auto-merge ligado. A busca do PR por `gh pr list --head`, do #30, roda pela primeira vez no próximo merge.
 - **Ambiente da sessão remota do Claude Code (PR de ambiente):** feito no PR do `AI-51` (AD-028); falta o mantenedor colar a chamada do `scripts/cloud-setup.ts` no script de preparo do ambiente em claude.ai/code (CONTRIBUTING.md, "Sessão do Claude Code na nuvem"; opcional, só acelera o início) e confirmar numa sessão nova que o relatório do início sai "Ambiente pronto". O GitHub MCP do `.mcp.json` segue fora da nuvem (AD-013); lá, o GitHub vem pelas ferramentas da própria sessão.
+- **Confirmações na AWS (do PR #43):** o ElasticMQ não reproduz o SQS nestes dois pontos, e a documentação da AWS não os responde. Entram quando houver uma fila SQS real para o teste:
+  - o erro que o `ChangeMessageVisibility` devolve com um *receipt handle* cuja visibilidade já venceu. O código trata o `MessageNotInflight` como o `stale` (`ORD-14`), e uma resposta `ok` ou `ReceiptHandleIsInvalid` também já é tratada;
+  - o que o `StartMessageMoveTask` faz com uma mensagem em voo na DLQ (risco R12 do `STATE.md`). Se ela não for movida nem perdida, o runbook da DLQ pode deixar de pedir o `redrive` fora de uma rodada.
 - **Varredura de simplificação** (pedido do mantenedor, depois do M3): procurar uma biblioteca que faz o que outra já faz, ou código nosso que uma dependência já resolve, e simplificar só com prova técnica de que a qualidade melhora.
 - **Ações nas contas do mantenedor:**
   - feitas em 01/11/2026:
