@@ -1,7 +1,11 @@
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createManualClock } from '../../test/helpers/clock.ts';
-import { countingInvoices } from '../../test/helpers/invoice-reader.ts';
+import {
+  countingInvoices,
+  rejectingInvoices,
+  type FakeInvoiceReader,
+} from '../../test/helpers/invoice-reader.ts';
 import {
   histogramCount,
   metricValue,
@@ -10,6 +14,7 @@ import {
 } from '../../test/helpers/metrics.ts';
 import { createTelemetry, type Telemetry } from '../shared/telemetry.ts';
 import { createErpClient } from './acl.ts';
+import { erpMetrics } from './telemetry.ts';
 import type { ErpClient, ErpOrderRequest } from './erp-client.ts';
 import {
   ErpNetworkError,
@@ -170,6 +175,86 @@ describe('OBS-02 o config_error de cada operação soma no counter dela', () => 
     expect(configErrors(families, 'create_order')).toBe(2);
     expect(configErrors(families, 'find_order')).toBe(1);
     expect(configErrors(families, 'list_catalog')).toBe(0);
+  });
+});
+
+// A contagem de faturas lê o banco do ERP, e não a API: não tem erro de configuração (a falha da leitura sai como
+// `transient` e alerta pelo CasecellshopVerificacaoTardiaSemLeitura). A série `count_invoices` nunca se moveria, então
+// o counter não a declara; o histograma de duração continua com as quatro operações.
+describe('OBS-08 o counter de erro de configuração só tem as operações da API', () => {
+  const API_OPERATIONS = ['create_order', 'find_order', 'list_catalog'];
+
+  // O ERP responde 200 a tudo; o que varia é o leitor do banco do ERP.
+  function readerOver(invoiceReader: FakeInvoiceReader) {
+    const telemetry = createTelemetry({
+      spanExporter: new InMemorySpanExporter(),
+    });
+    telemetries.push(telemetry);
+    const client = createErpClient({
+      transport: {
+        send: () => Promise.resolve({ status: 200, body: undefined }),
+      },
+      clock: createManualClock(),
+      timeoutMs: 10_000,
+      telemetry,
+      invoiceReader,
+    });
+    return { client, telemetry };
+  }
+
+  function operationsOfCounter(families: Exposition): string[] {
+    return (families.get('casecellshop_erp_config_errors_total')?.samples ?? [])
+      .map((sample) => sample.labels['casecellshop_erp_operation'] ?? '')
+      .sort();
+  }
+
+  it('OBS-08 logo depois da subida, antes de qualquer chamada, o counter tem as três operações da API em 0 e nenhuma série count_invoices', async () => {
+    const { telemetry } = responding(200);
+    // O worker cria os instrumentos do ERP na subida (src/main/worker.ts), e é aí que as séries nascem em 0.
+    erpMetrics(telemetry);
+
+    const families = await scrapeMetrics(telemetry);
+
+    for (const operation of API_OPERATIONS)
+      expect(
+        metricValue(families, COUNTER, { [OPERATION]: operation }),
+        `série de ${operation} em 0`,
+      ).toBe(0);
+    expect(
+      metricValue(families, COUNTER, { [OPERATION]: 'count_invoices' }),
+    ).toBeUndefined();
+    expect(operationsOfCounter(families)).toEqual([...API_OPERATIONS].sort());
+  });
+
+  it('OBS-08 a contagem de faturas, com sucesso ou com a leitura falhando, entra no histograma de duração e não cria série no counter de erro de configuração', async () => {
+    const reading = readerOver(countingInvoices(2));
+    const failingReader = rejectingInvoices();
+    const unreadable = readerOver(failingReader);
+
+    const counted = await reading.client.countInvoicesByReference(
+      orderRequest.reference,
+    );
+    const failed = await unreadable.client.countInvoicesByReference(
+      orderRequest.reference,
+    );
+
+    expect(counted).toEqual({ kind: 'ok', count: 2 });
+    expect(failed.kind).toBe('transient');
+    expect(failingReader.calls, 'a leitura falhou de fato').toHaveLength(1);
+    for (const [rig, outcome] of [
+      [reading, 'ok'],
+      [unreadable, 'transient'],
+    ] as const) {
+      const families = await scrapeMetrics(rig.telemetry);
+      expect(
+        histogramCount(families, DURATION, {
+          [OPERATION]: 'count_invoices',
+          'casecellshop.erp.outcome': outcome,
+        }),
+        `o histograma segue com count_invoices (${outcome})`,
+      ).toBe(1);
+      expect(operationsOfCounter(families)).toEqual([...API_OPERATIONS].sort());
+    }
   });
 });
 

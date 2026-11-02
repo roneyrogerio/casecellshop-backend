@@ -25,6 +25,7 @@ import {
   histogramCount,
   metricValue,
   parseExposition,
+  promLabel,
   promName,
   valueOf,
 } from '../../helpers/metrics.ts';
@@ -238,6 +239,16 @@ describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /met
       'casecellshop.erp.config_errors',
       OPERATION,
     );
+    // A leitura do banco do ERP (count_invoices) não usa a API e não tem erro de configuração: a série não existe.
+    for (const operation of ['create_order', 'find_order', 'list_catalog'])
+      expectSeriesAtZero(families, 'casecellshop.erp.config_errors', {
+        [OPERATION]: operation,
+      });
+    expect(
+      familyOf(families, 'casecellshop.erp.config_errors')?.samples.map(
+        (sample) => sample.labels[promLabel(OPERATION)],
+      ),
+    ).not.toContain('count_invoices');
     expectSeriesAtZero(families, 'casecellshop.outbox.orphan_conclusions');
     for (const gauge of ['queue_messages', 'outbox_oldest_pending_age'])
       expectSeriesAtZero(families, 'casecellshop.billing.gauge.read_failures', {

@@ -848,6 +848,19 @@ export async function ageLastCall(
   );
 }
 
+// O início da última criação enviada ao ERP (`last_create_at`, AD-031) fica velho: é por ele que o cancel mede a
+// janela de assentamento. Semeado à parte do `last_call_at`, que as consultas da reconciliação regravam.
+export async function ageLastCreate(
+  pool: pg.Pool,
+  orderId: string,
+  seconds: number,
+): Promise<void> {
+  await pool.query(
+    'update outbox set last_create_at = now() - make_interval(secs => $2) where order_id = $1',
+    [orderId, seconds],
+  );
+}
+
 // A mensagem volta a ficar visível e o atraso mínimo está cumprido: a próxima tentativa pode chamar o ERP.
 export async function makeClaimable(
   world: QueueWorld,

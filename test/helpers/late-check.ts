@@ -104,10 +104,15 @@ export async function readLateColumns(
 // Semeia o estado de uma linha da outbox como a deixaria um envio em dúvida: o número de criações mandadas ao
 // ERP e o início da última chamada, no passado pelo relógio do banco. `first_sent_at` acompanha, porque
 // houve ao menos uma chamada.
+// Com `lastCreateAgoSeconds`, semeia também o início da última criação (`last_create_at`), que o cancel mede.
 export async function seedSentState(
   pool: pg.Pool,
   orderId: string,
-  state: { createCalls: number; lastCallAgoSeconds: number },
+  state: {
+    createCalls: number;
+    lastCallAgoSeconds: number;
+    lastCreateAgoSeconds?: number;
+  },
 ): Promise<void> {
   await pool.query(
     `update outbox
@@ -117,6 +122,25 @@ export async function seedSentState(
       where order_id = $1`,
     [orderId, state.createCalls, state.lastCallAgoSeconds],
   );
+  if (state.lastCreateAgoSeconds !== undefined)
+    await pool.query(
+      'update outbox set last_create_at = now() - make_interval(secs => $2) where order_id = $1',
+      [orderId, state.lastCreateAgoSeconds],
+    );
+}
+
+// O início da última criação enviada ao ERP (AD-031), lido por SQL cru; `null` sem criação.
+export async function readLastCreateAt(
+  pool: pg.Pool,
+  orderId: string,
+): Promise<Date | null> {
+  const result = await pool.query<{ last_create_at: Date | null }>(
+    'select last_create_at from outbox where order_id = $1',
+    [orderId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error(`outbox inexistente para ${orderId}`);
+  return row.last_create_at;
 }
 
 export type SeededOutcome =
@@ -169,7 +193,8 @@ export async function markOthersChecked(
   );
 }
 
-// A última chamada ao ERP fora da janela de assentamento (15 min) e dentro dela, pelo relógio do banco.
+// A idade (da última chamada ao ERP na verificação tardia, da última criação no cancel) fora da janela de
+// assentamento (15 min) e dentro dela, pelo relógio do banco.
 export const PAST_WINDOW_SECONDS = SETTLE_WINDOW_SECONDS + 60;
 export const WITHIN_WINDOW_SECONDS = SETTLE_WINDOW_SECONDS - 60;
 
