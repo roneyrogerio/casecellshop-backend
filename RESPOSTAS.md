@@ -60,7 +60,7 @@ Checkout:
 
 Publicar direto num broker, sem outbox, ficou fora: o banco e o broker não têm transação comum, então publicar antes gera mensagem fantasma, e publicar depois, pedido fantasma. Entre as duas opções com outbox, o SQS assume o que a tabela fazia à mão: esconder a mensagem em processamento, contar os recebimentos, mandar para a DLQ e devolver à fila. É também a mesma fila que vai para a AWS. O custo é um contêiner, uma dependência e o relay a mais, e a entrega pelo menos uma vez, que a permissão de chamada por pedido no banco absorve.
 
-**Arquitetura de 30 a 90 dias.** Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine, e observabilidade básica (logs, métricas e traces da vitrine, do checkout e do worker). Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo].** Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
+**Arquitetura de 30 a 90 dias.** Dias 0 a 30, tirar o ERP do caminho do cliente: banco próprio da loja, checkout com reserva atômica, idempotência e `202`, fila SQS alimentada pela outbox, worker de envio, a sincronização e o cache em processo na vitrine, e observabilidade básica (logs, métricas e traces da vitrine, do checkout e do worker). Dias 30 a 60, operar com segurança: reconciliação com o ERP e runbook; objetivos de nível de serviço (SLOs), alertas e dashboard; um cache L2 compartilhado com várias instâncias da API e autenticação na borda **[alvo]**. Dias 60 a 90, escalar e reduzir a defasagem: CDC no lugar da sincronização se a defasagem medida pedir, EventBridge com um segundo consumidor, várias réplicas do worker e a migração para a nuvem **[alvo]**.
 
 **Nuvem.** É hipótese de evolução do datacenter atual, não premissa: cada componente tem um serviço gerenciado (RDS ou Aurora, ECS no Fargate, SQS, ElastiCache, Datadog ou CloudWatch, Secrets Manager), justificado pelo esforço operacional que tira. O ERP fica no datacenter, e a conexão híbrida (VPN ou link dedicado) passa a ser uma fonte de latência e de falha; para a loja, a queda do link é uma queda do ERP, que o desenho já absorve.
 
@@ -74,7 +74,7 @@ Seção: [Cache e performance da vitrine](https://github.com/roneyrogerio/casece
 
 - **rede de distribuição de conteúdo (CDN) e cache HTTP:** fora do escopo para o catálogo, que responde `Cache-Control: no-store`. Uma camada fora do serviço serviria dado defasado sem aparecer nas métricas, e sem o cabeçalho um cache intermediário pode aplicar frescor heurístico (RFC 9111). Com uma CDN, ela serve os estáticos, e o catálogo passa a levar `max-age` igual ao tempo de vida (TTL) restante **[alvo]**;
 - **em processo (L1):** o catálogo inteiro numa entrada, de onde as páginas são fatiadas, com TTL de 5 s ± 10%. Absorve as leituras: o banco recebe no máximo uma consulta por instância a cada TTL, qualquer que seja o tráfego;
-- **L2 compartilhado (Redis):** entre as instâncias da API, quando houver várias com taxa de acerto baixa **[alvo].** Com uma instância, seria um contêiner e um modo de falha a mais sem ganho;
+- **L2 compartilhado (Redis):** entre as instâncias da API, quando houver várias com taxa de acerto baixa **[alvo]**. Com uma instância, seria um contêiner e um modo de falha a mais sem ganho;
 - **banco da loja:** a cópia de catálogo, preço e estoque, atualizada pela sincronização a cada 60 s. É a origem do cache e a fonte de verdade do checkout, e é a camada que tira o ERP do caminho da vitrine; a sincronização lê o catálogo inteiro do ERP e grava só o que mudou.
 
 As defasagens somam: com o ERP respondendo, uma mudança chega à vitrine em até 65,5 s mais a duração de uma rodada de sincronização (60 s do intervalo mais 5,5 s do TTL).
@@ -156,7 +156,7 @@ Seção: [Mensageria e resiliência](https://github.com/roneyrogerio/casecellsho
 
 **Pedido fantasma e mensagem fantasma.** Não existem, pela transação única. A mensagem recebida do SQS só é apagada depois de gravado o desfecho, e um worker morto devolve a mensagem à fila. Contra a fatura duplicada, três proteções:
 
-- a permissão de chamada por pedido no banco, que deixa passar uma só chamada ao ERP por pedido a cada 45 s, mesmo com a mensagem repetida;
+- a permissão de chamada por pedido no banco, que deixa passar uma só tentativa por pedido a cada 45 s, mesmo com a mensagem repetida;
 - a consulta ao ERP pelo `orderId` antes de criar de novo, pela premissa de que a API do ERP aceita essa referência e permite consultá-la. A consulta só acontece 45 s depois do início da chamada anterior, pela premissa de que o ERP conclui ou abandona uma criação em até 40 s;
 - a premissa de que o ERP recusa uma segunda criação com a mesma referência.
 

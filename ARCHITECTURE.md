@@ -497,7 +497,7 @@ Dois pedidos com os mesmos SKUs em ordens diferentes (`{A, B}` e `{B, A}`) podem
 - **o mesmo pedido escrito de outro jeito** (itens em outra ordem): o hash normalizado é o mesmo, e a resposta é o pedido original;
 - **reprocessamento no worker:** o faturamento usa o `orderId` como referência no ERP, e o worker consulta o ERP por ela antes de criar de novo (H1a), 45 s depois do início da chamada anterior (H4). Com a H1b, o ERP também recusa a segunda criação com a mesma referência, e o pedido não é faturado duas vezes; sem a H1b e acima da H4, pode haver duas faturas, como o `ORD-06` demonstra (R6) **[implementado, `ORD-01` a `ORD-07`]** (AD-003, AD-024).
 
-Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode repetir com a mesma chave. A chave não expira: nenhum processo apaga `idempotency_keys`, então a mesma chave devolve o mesmo pedido a qualquer tempo. A limpeza das chaves antigas, depois de pelo menos 24 h, fica para a arquitetura alvo **[alvo]**.
+Qualquer falha desfaz a transação inteira, inclusive a chave, e o cliente pode repetir com a mesma chave. A chave não expira: nenhum processo apaga `idempotency_keys`, então a mesma chave devolve o mesmo pedido a qualquer tempo. A AD-001 prevê a limpeza por SQL documentado depois de pelo menos 24 h, e esse SQL ainda não existe (`SPEC_DEVIATION`, à espera da decisão do mantenedor).
 
 ### Como o teste prova que não há overselling
 
