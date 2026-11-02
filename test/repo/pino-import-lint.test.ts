@@ -84,6 +84,23 @@ function pinoForms(expected: 'blocked' | 'pass'): Line[] {
       label: "import dinâmico (await import('pino'))",
       dynamic: true,
     },
+    // A19: o subcaminho do pino entra pelas mesmas regras, estática e dinâmica.
+    {
+      text: "import { pino as sub } from 'pino/pino.js';",
+      expected,
+      label: 'import por nome do subcaminho (pino/pino.js)',
+    },
+    {
+      text: "import type { Logger as SubLogger } from 'pino/pino.js';",
+      expected,
+      label: 'import de tipo do subcaminho (pino/pino.js)',
+    },
+    {
+      text: "const dynamicSub = await import('pino/pino.js');",
+      expected,
+      label: "import dinâmico do subcaminho (await import('pino/pino.js'))",
+      dynamic: true,
+    },
   ];
 }
 
@@ -167,7 +184,7 @@ const blocked = SAMPLES.filter((entry) =>
 
 describe('OBS-07 em src/ o lint só deixa importar o pino em src/shared/logging.ts e no teste dele (A17)', () => {
   it.each(blocked)(
-    'OBS-07 em $file o import do pino (por nome, padrão, namespace, de tipo e dinâmico) reprova, e a regra de pastas de sempre continua',
+    'OBS-07 em $file o import do pino e do subcaminho dele (por nome, padrão, namespace, de tipo e dinâmico) reprova, e a regra de pastas de sempre continua',
     (entry) => {
       expect(defects(entry)).toEqual([]);
     },

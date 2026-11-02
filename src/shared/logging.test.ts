@@ -250,6 +250,32 @@ describe('OBS-07 eventLogger: a linha que sai', () => {
       'casecellshop.demo.failed',
     ]);
   });
+
+  // A18: o catálogo recusa `event` entre os campos, mas o logger não depende só disso. Esta declaração monta, de
+  // propósito e fora das regras, um evento que lista `event` nos campos; o nome do evento escrito por último vence.
+  it('OBS-07 um campo event que chega por fora do tipo não troca o nome do evento na linha', () => {
+    const { logger, lines } = capture();
+    const log = eventLogger(logger, {
+      'casecellshop.demo.shadowed': {
+        levels: ['info'],
+        description: 'Declaração fora das regras, para a prova de execução.',
+        fields: ['event', 'port'],
+      },
+    } as const satisfies Record<string, LogEventSpec>);
+
+    log.info(
+      'casecellshop.demo.shadowed',
+      { event: 'casecellshop.demo.impostor', port: 3000 },
+      'mensagem do evento',
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      event: 'casecellshop.demo.shadowed',
+      port: 3000,
+      msg: 'mensagem do evento',
+    });
+  });
 });
 
 // A17: o `AppLogger` que o resto de `src/` recebe só cria filhos; a prova de tipo está em

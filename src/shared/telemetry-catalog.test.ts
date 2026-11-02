@@ -432,3 +432,48 @@ describe('OBS-07 controles negativos: o nome do evento de log', () => {
     },
   );
 });
+
+// A18: um campo com o nome de uma chave da linha de log (a linha é `{ ...fields, event }` mais o que o pino põe) trocaria
+// o valor dela; o catálogo recusa o nome reservado entre os `fields` de um evento.
+describe('OBS-07 controles negativos: o nome reservado da linha de log nos campos do evento', () => {
+  const EVENT = 'casecellshop.checkout.rejected';
+
+  it.each(['event', 'level', 'msg', 'time', 'service', 'env', 'version'])(
+    'OBS-07 controle negativo: o evento que declara o campo reservado %s é acusado, e a mensagem cita o evento e o campo',
+    (field) => {
+      const violations = catalogViolations(BASE_METRICS, {
+        ...BASE_EVENTS,
+        [EVENT]: { ...VALID_EVENT, fields: ['orderId', field] },
+      });
+
+      expect(violations.length, `violações de ${field}`).toBeGreaterThan(0);
+      expect(
+        violations.some(
+          (violation) => violation.includes(EVENT) && violation.includes(field),
+        ),
+        `a mensagem cita ${EVENT} e ${field}: ${violations.join(' | ')}`,
+      ).toBe(true);
+    },
+  );
+
+  it('OBS-07 controle negativo: os campos comuns (orderId, err, status) não são acusados', () => {
+    const violations = catalogViolations(BASE_METRICS, {
+      ...BASE_EVENTS,
+      [EVENT]: { ...VALID_EVENT, fields: ['orderId', 'err', 'status'] },
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('OBS-07 controle negativo: um nome que só contém o reservado (eventType, timeout, level_name) não é acusado', () => {
+    const violations = catalogViolations(BASE_METRICS, {
+      ...BASE_EVENTS,
+      [EVENT]: {
+        ...VALID_EVENT,
+        fields: ['eventType', 'timeout', 'level_name'],
+      },
+    });
+
+    expect(violations).toEqual([]);
+  });
+});
