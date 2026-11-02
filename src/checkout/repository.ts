@@ -214,7 +214,9 @@ async function reserveStock(
       .executeTakeFirst();
     if (result.numUpdatedRows === 0n) {
       throw new Rollback(
-        problem(409, 'out-of-stock', 'Sem estoque suficiente'),
+        problem(409, 'out-of-stock', 'Sem estoque suficiente', {
+          logSku: item.sku,
+        }),
       );
     }
   }

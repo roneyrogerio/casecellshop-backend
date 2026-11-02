@@ -7,13 +7,14 @@ import type { Express } from 'express';
 import pg from 'pg';
 import { pino } from 'pino';
 import request from 'supertest';
+import { afterAll, beforeAll } from 'vitest';
 import { createApp } from '../../src/app.ts';
 import { checkoutRoute } from '../../src/contract/index.ts';
 import { LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from '../../src/db/pool.ts';
 import { fromPino, logContext } from '../../src/shared/logging.ts';
 import { createTelemetry, type Telemetry } from '../../src/shared/telemetry.ts';
 import { expectMatchesContract } from './contract.ts';
-import type { TestDatabase } from './database.ts';
+import { startMigratedDatabase, type TestDatabase } from './database.ts';
 import { createTestPool } from './pool.ts';
 
 // Tamanho fixo do pool da API nos testes de concorrência, o mesmo de produção (design.md, "Parâmetros").
@@ -127,6 +128,41 @@ export async function startCheckoutHarness(
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await telemetry.shutdown();
       await pool.end();
+    },
+  };
+}
+
+export interface CheckoutSuite {
+  readonly database: TestDatabase;
+  readonly harness: CheckoutHarness;
+}
+
+// O ciclo de vida de um arquivo de teste do checkout: um banco migrado e um app sobre ele, de pé antes de todos os
+// testes e fechados no fim. Os testes leem `database` e `harness` quando rodam, nunca antes.
+export function useCheckoutHarness(): CheckoutSuite {
+  let running: CheckoutSuite | undefined;
+  const current = (): CheckoutSuite => {
+    if (!running)
+      throw new Error('o banco e o app do arquivo ainda não subiram');
+    return running;
+  };
+  beforeAll(async () => {
+    const started = await startMigratedDatabase();
+    running = {
+      database: started,
+      harness: await startCheckoutHarness(started),
+    };
+  }, 120_000);
+  afterAll(async () => {
+    await running?.harness.close();
+    await running?.database.stop();
+  });
+  return {
+    get database() {
+      return current().database;
+    },
+    get harness() {
+      return current().harness;
     },
   };
 }

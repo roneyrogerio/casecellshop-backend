@@ -190,7 +190,7 @@ function createOnError(
       next(error);
       return;
     }
-    const { cause, currentPrices } = problem.init;
+    const { cause, currentPrices, logSku } = problem.init;
     const correlationId = res.locals['correlationId'] as string;
     checkoutMetrics(telemetry).add('casecellshop.checkout.requests', 1, {
       'casecellshop.checkout.outcome': outcomeOf(cause),
@@ -199,13 +199,18 @@ function createOnError(
     const reason = reasonOf(cause);
     log.warn(
       'casecellshop.checkout.rejected',
-      { reason, correlationId },
+      { reason, correlationId, ...(logSku ? { sku: logSku } : {}) },
       'checkout recusado',
     );
     if (currentPrices) {
       log.warn(
         'casecellshop.checkout.price_changed',
-        { reason, correlationId, items: currentPrices.length },
+        {
+          reason,
+          correlationId,
+          items: currentPrices.length,
+          skus: currentPrices.map((price) => price.sku),
+        },
         'preço alterado desde que o cliente o viu',
       );
     }

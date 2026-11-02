@@ -221,8 +221,9 @@ export const BILLING_LOG_EVENTS = {
   },
   'casecellshop.order.failed': {
     levels: ['warn'],
-    description: 'O pedido terminou sem faturamento; `reason` diz por quê.',
-    fields: ['reason'],
+    description:
+      'O pedido terminou sem faturamento; `reason` diz por quê. Na recusa do ERP, `skus` lista os SKUs do pedido e `sku` é o que o ERP apontou, quando é um deles.',
+    fields: ['reason', 'skus', 'sku'],
   },
   'casecellshop.order.stuck_check.failed': {
     levels: ['error'],
