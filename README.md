@@ -4,6 +4,8 @@
 
 Serviço entre a loja virtual da CaseCellShop e um ERP legado que não pode ser alterado: serve o catálogo do banco da loja, reserva o estoque de forma atômica no checkout e envia os pedidos ao ERP de forma assíncrona, por uma outbox e uma fila SQS. Node.js 26, TypeScript, PostgreSQL e OpenTelemetry. O ERP é simulado no processo do worker, atrás da porta `ErpClient`.
 
+**Por que o repositório é maior do que o desafio pede.** Ele tem dois objetivos. O primeiro é resolver o desafio: a solução cabe na tabela [Em resumo](#em-resumo) e no [`RESPOSTAS.md`](RESPOSTAS.md). O segundo, onde está a maior parte do trabalho, é mostrar uma [fábrica agêntica de software](#fábrica-agêntica-de-software): agentes de IA escrevem, testam e revisam o código de forma semiautomática, e a qualidade vem de verificações de máquina, não da leitura linha a linha. A estrutura dessa fábrica (agentes, hooks, especificações e checagens do CI) é o que faz o repositório parecer maior do que o serviço.
+
 ## Em resumo
 
 | Problema do desafio | Causa raiz | Solução | O que os testes provam |
@@ -21,9 +23,27 @@ Os IDs (`CAT-01`, `CHK-01`, `ORD-01`…) são os critérios de aceite do [`spec.
 - **Uso de IA:** [Como a IA foi usada](#como-a-ia-foi-usada) e [`PROMPTS.md`](PROMPTS.md).
 - **Operação:** SLOs, dashboard, alertas e runbooks na seção [Operação](#operação).
 
+## Fábrica agêntica de software
+
+Um dos focos do repositório é mostrar a IA escrevendo código de forma semiautomática, numa **fábrica agêntica de software** (do inglês *agentic software factory*): agentes do Claude Code escrevem, testam e revisam o código, e o mantenedor define a intenção e decide o merge. A revisão humana linha a linha não acompanha o volume que os agentes produzem; por isso a confiança no código vem de verificações de máquina independentes de quem o escreveu, e não da leitura de cada linha.
+
+O fluxo cobre os quatro termos da fórmula de confiança no código apresentada por Tariq Shaukat, da Sonar, no [AI Engineer 2026](https://youtu.be/LQW_Wvqhp04): intenção × guias × verificação independente × evidência auditável. Se qualquer termo for zero, a confiança também é.
+
+| Termo | Como o repositório faz |
+| --- | --- |
+| Intenção (*intent*) | critérios de aceite com ID no [`spec.md`](.specs/features/casecellshop/spec.md), aprovados pelo mantenedor antes do código; o contrato em `src/contract/` é a única fonte dos esquemas da API |
+| Guias (*guiderails*) | instruções por papel ([`AGENTS.md`](AGENTS.md), `.claude/rules/`) e hooks que barram, na hora da edição, o agente que sai dos arquivos do seu papel e devolvem o `implementer` enquanto lint, tipos ou testes falham |
+| Verificação independente | o `test-writer` escreve os testes sem ler a implementação; o `implementer` não pode alterar testes; o `reviewer`, só leitura, revisa cada parte do marco; lint, CodeQL, testes de propriedade, fuzzing pelo contrato e integração contra PostgreSQL e ElasticMQ reais |
+| Evidência auditável | cada teste começa pelo ID do critério que prova, e o CI publica a tabela critério × teste; o relatório do `reviewer` vai ao PR sem edição; os commits feitos com IA levam o trailer `Assisted-by`; os prompts e os erros da IA pegos antes do merge estão no [`PROMPTS.md`](PROMPTS.md) |
+
+A verificação roda em três ciclos: enquanto o agente trabalha (hooks na edição e na parada), em cada PR (CI e revisão de cada parte) e na manutenção (a execução agendada, que embaralha a suíte e abre issue quando falha, e o Dependabot).
+
+Regras, ferramentas e critérios de cada risco estão em [Como a IA foi usada](#como-a-ia-foi-usada).
+
 ## Índice
 
 - [Em resumo](#em-resumo)
+- [Fábrica agêntica de software](#fábrica-agêntica-de-software)
 - [Pré-requisitos](#pré-requisitos)
 - [Rodar](#rodar)
 - [Testar](#testar)
