@@ -26,6 +26,7 @@ import {
   metricValue,
   parseExposition,
   promLabel,
+  type Exposition,
   promName,
   valueOf,
 } from '../../helpers/metrics.ts';
@@ -50,6 +51,10 @@ let projectName: string;
 let apiPort: number;
 // O estoque do SKU no erp_sim, lido antes do checkout: a sincronização do worker o grava na loja na primeira rodada.
 let erpOnHand: number;
+// O /metrics dos dois processos lido no `beforeAll`, depois da primeira rodada da sincronização e antes de qualquer
+// checkout do arquivo: o bloco OBS-08 afirma sobre este retrato, e não sobre uma leitura feita no meio dos testes.
+let apiMetricsAtStartup: Exposition;
+let workerMetricsAtStartup: Exposition;
 
 function composeCli(args: string[]): Promise<string> {
   return runCompose(projectName, args);
@@ -104,6 +109,13 @@ beforeAll(async () => {
   );
   apiPort = publishedPort(environment, 'api-1', 3000);
   erpOnHand = await awaitFirstSyncRound();
+  // Nenhum checkout correu ainda: o `beforeAll` do ORD-19 só roda depois deste, qualquer que seja a ordem dos testes.
+  apiMetricsAtStartup = await readProcessMetrics(environment, 'api-1', 3000);
+  workerMetricsAtStartup = await readProcessMetrics(
+    environment,
+    'worker-1',
+    9464,
+  );
 }, 480_000);
 
 // O catálogo da loja vem do ERP simulado pela sincronização do worker (AD-009), que roda na subida e a cada 60 s.
@@ -190,15 +202,15 @@ async function queueCounts(queueName: string): Promise<QueueCounts> {
   return parseQueueCountsXml(result.stdout);
 }
 
-// OBS-08: este bloco vem antes de qualquer checkout do arquivo (os testes de um arquivo rodam na ordem em que são
-// declarados); o `beforeAll` só espera a primeira rodada da sincronização, pelo GET /products, que não grava nenhum
-// dos counters abaixo.
+// OBS-08: os testes afirmam sobre o retrato do /metrics tirado no `beforeAll` do arquivo, antes de qualquer checkout,
+// e por isso não dependem da ordem dos testes (nem da ordem dos blocos). O `beforeAll` só espera a primeira rodada da
+// sincronização, pelo GET /products, que não grava nenhum dos counters abaixo.
 describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /metrics trazem em 0 as séries dos counters', () => {
   const GAUGE_NAME = 'casecellshop.gauge.name';
   const OPERATION = 'casecellshop.erp.operation';
 
-  it('OBS-08 o /metrics da API traz em 0 o pedido sem desfecho, cada desfecho do checkout, as falhas de leitura dos gauges e as tentativas da outbox', async () => {
-    const families = await readProcessMetrics(environment, 'api-1', 3000);
+  it('OBS-08 o /metrics da API traz em 0 o pedido sem desfecho, cada desfecho do checkout, as falhas de leitura dos gauges e as tentativas da outbox', () => {
+    const families = apiMetricsAtStartup;
 
     expectSeriesAtZero(families, 'casecellshop.order.stuck');
     expectSeriesAtZeroForEach(
@@ -230,8 +242,8 @@ describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /met
     ).toEqual([]);
   }, 60_000);
 
-  it('OBS-08 o /metrics do worker traz em 0 a rejeição por falta de estoque, o erro de configuração por operação, a conclusão sem efeito e as falhas de leitura dos gauges', async () => {
-    const families = await readProcessMetrics(environment, 'worker-1', 9464);
+  it('OBS-08 o /metrics do worker traz em 0 a rejeição por falta de estoque, o erro de configuração por operação, a conclusão sem efeito e as falhas de leitura dos gauges', () => {
+    const families = workerMetricsAtStartup;
 
     expectSeriesAtZero(families, 'casecellshop.erp.out_of_stock.rejections');
     expectSeriesAtZeroForEach(
@@ -269,8 +281,8 @@ describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /met
   // A primeira rodada da sincronização já correu (o `beforeAll` a espera), e a spec não diz que o primeiro
   // carregamento de uma loja vazia conta como correção (a correção é o campo que divergia do valor guardado no t0):
   // por isso o teste afirma que a série de cada campo existe e é um contador, não que vale 0.
-  it('OBS-08 o /metrics do worker expõe a série de correções da sincronização para cada campo, mesmo antes de qualquer divergência', async () => {
-    const families = await readProcessMetrics(environment, 'worker-1', 9464);
+  it('OBS-08 o /metrics do worker expõe a série de correções da sincronização para cada campo, mesmo antes de qualquer divergência', () => {
+    const families = workerMetricsAtStartup;
 
     for (const field of closedList(
       'casecellshop.catalog.sync.corrections',
@@ -286,11 +298,16 @@ describe('OBS-08 logo depois da subida, antes do primeiro checkout, os dois /met
 });
 
 describe('ORD-19 o checkout chega a invoiced no sistema subido pelo docker compose', () => {
-  it('ORD-19 o POST /checkout vira invoiced pelo relay, pelo SQS e pelo worker: uma fatura no erp_sim, estoque baixado, linha publicada e a fila e a DLQ vazias', async () => {
-    const orderId = await placeOrder(SKU, QUANTITY, PRICE_CENTS);
+  // O checkout e a espera pelo faturamento ficam na preparação do bloco: os testes abaixo (as afirmações do ORD-19 e
+  // os /metrics do OBS-02, que só existem depois de um faturamento) valem em qualquer ordem.
+  let orderId: string;
 
+  beforeAll(async () => {
+    orderId = await placeOrder(SKU, QUANTITY, PRICE_CENTS);
     await awaitInvoiced(orderId);
+  }, 120_000);
 
+  it('ORD-19 o POST /checkout vira invoiced pelo relay, pelo SQS e pelo worker: uma fatura no erp_sim, estoque baixado, linha publicada e a fila e a DLQ vazias', async () => {
     expect(
       await psql(
         `select count(*) from erp_sim.invoices where reference = '${orderId}'`,

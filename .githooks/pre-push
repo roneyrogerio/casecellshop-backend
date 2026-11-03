@@ -20,6 +20,15 @@ esac
 # AI-17: o mesmo que o CI confere, sem os testes de integração, antes de o código
 # sair da máquina; um vermelho aqui custa um minuto, no CI custa um ciclo inteiro.
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# O git exporta GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE e afins para o hook, todos
+# apontando para este clone. Os testes montam repositórios temporários e rodam o
+# git neles; herdando essas variáveis, gravariam aqui (config, branches, a
+# identidade do bot). A documentação do githooks manda limpá-las antes de rodar o
+# git em outro repositório, com a lista que o próprio git dá.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 if ! npm run verify; then
   echo "pre-push: recusado. O npm run verify falhou; corrija antes de enviar (AI-17)." >&2
   exit 1

@@ -124,19 +124,6 @@ async function holdFirstPageAndStart(factory?: SyncFactory) {
   return { rig, hold, starting };
 }
 
-// A rodada da subida passa do intervalo (três vezes) enquanto está presa na leitura do ERP.
-async function slowInitialRound(factory?: SyncFactory) {
-  const { rig, hold, starting } = await holdFirstPageAndStart(factory);
-  rig.clock.advance(3 * INTERVAL_MS);
-  await settle(20);
-  return {
-    rig,
-    hold,
-    starting,
-    readsDuringSlowRound: rig.world.transport.sendsOf('listCatalog').length,
-  };
-}
-
 function untilListReads(
   transport: { sendsOf(op: 'listCatalog'): unknown[] },
   count: number,
@@ -144,6 +131,26 @@ function untilListReads(
   return until(() =>
     expect(transport.sendsOf('listCatalog').length).toBe(count),
   );
+}
+
+// A rodada da subida passa do intervalo (três vezes) enquanto está presa na leitura do ERP. Com `bothReadsExpected`,
+// espera a condição que o controle negativo afirma (a segunda leitura no ERP), e não um tempo fixo: sob carga a
+// segunda rodada pode demorar a chegar ao ERP. Sem ele, a espera curta é a que prova a ausência da segunda leitura.
+async function slowInitialRound(
+  options: { factory?: SyncFactory; bothReadsExpected?: boolean } = {},
+) {
+  const { factory, bothReadsExpected = false } = options;
+  const { rig, hold, starting } = await holdFirstPageAndStart(factory);
+  rig.clock.advance(3 * INTERVAL_MS);
+  await (bothReadsExpected
+    ? untilListReads(rig.world.transport, 2)
+    : settle(20));
+  return {
+    rig,
+    hold,
+    starting,
+    readsDuringSlowRound: rig.world.transport.sendsOf('listCatalog').length,
+  };
 }
 
 // Duas rodadas pedidas ao mesmo tempo, com a primeira presa na leitura do ERP. Com `bothReadsExpected`, espera a
@@ -190,9 +197,10 @@ describe('CAT-09 uma rodada lenta não se sobrepõe à seguinte', () => {
   });
 
   it('CAT-09 controle negativo: o laço que dispara uma rodada por intervalo sem esperar a anterior lê o ERP duas vezes ao mesmo tempo', async () => {
-    const { rig, hold, readsDuringSlowRound } = await slowInitialRound(
-      createNaiveCatalogSync(),
-    );
+    const { rig, hold, readsDuringSlowRound } = await slowInitialRound({
+      factory: createNaiveCatalogSync(),
+      bothReadsExpected: true,
+    });
 
     expect(readsDuringSlowRound).toBe(2);
     expect(rig.world.transport.maxInFlight).toBe(2);
