@@ -30,21 +30,30 @@ afterEach(cleanupTempDirs);
 interface FakeNpm {
   bin: string;
   calls(): { args: string; cwd: string }[];
+  // Nomes das variáveis GIT_* que o `npm` falso recebeu na última chamada (AI-17).
+  gitVariables(): string[];
 }
 
 function makeFakeNpm(exitCode: number): FakeNpm {
   const dir = makeTempDir('prepush-npm-');
   const bin = join(dir, 'bin');
   const log = join(dir, 'npm.log');
+  const envLog = join(dir, 'npm-git-env.log');
   mkdirSync(bin);
   const fake = join(bin, 'npm');
   writeFileSync(
     fake,
-    `#!/bin/sh\n{ echo "$*"; pwd; } >> '${log}'\nexit ${exitCode}\n`,
+    `#!/bin/sh\n{ echo "$*"; pwd; } >> '${log}'\nenv | grep '^GIT_' | cut -d= -f1 | sort > '${envLog}'\nexit ${exitCode}\n`,
   );
   chmodSync(fake, 0o755);
   return {
     bin,
+    gitVariables: () =>
+      existsSync(envLog)
+        ? readFileSync(envLog, 'utf8')
+            .split('\n')
+            .filter((line) => line !== '')
+        : [],
     calls: () => {
       if (!existsSync(log)) return [];
       const lines = readFileSync(log, 'utf8')
@@ -73,7 +82,7 @@ const REFS =
 // O hook roda dentro de um repositório de teste (a raiz dele é o que o `npm run verify` deve receber como cwd).
 function runHook(
   url: string,
-  options: { npmExit?: number; subdir?: string } = {},
+  options: { npmExit?: number; subdir?: string; gitHookEnv?: boolean } = {},
 ) {
   const project = makeTempDir('prepush-run-');
   initRepo(project);
@@ -81,10 +90,14 @@ function runHook(
   const cwd =
     options.subdir === undefined ? project : join(project, options.subdir);
   mkdirSync(cwd, { recursive: true });
+  const env = {
+    ...isolatedEnv(npm),
+    ...(options.gitHookEnv === true ? gitHookEnv(project) : {}),
+  };
   const result = runCommand(hook, ['origin', url], {
     input: REFS,
     cwd,
-    env: isolatedEnv(npm),
+    env,
   });
   return {
     code: result.status,
@@ -92,6 +105,19 @@ function runHook(
     error: result.error,
     npm,
     project,
+    env,
+  };
+}
+
+// O que o git exporta para um hook: o repositório e a árvore de trabalho de quem fez o push (numa worktree, também o
+// diretório comum e o índice dela).
+function gitHookEnv(project: string): Record<string, string> {
+  return {
+    GIT_DIR: join(project, '.git'),
+    GIT_WORK_TREE: project,
+    GIT_INDEX_FILE: join(project, '.git', 'index'),
+    GIT_COMMON_DIR: join(project, '.git'),
+    GIT_PREFIX: '',
   };
 }
 
@@ -272,5 +298,65 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).not.toBe('');
+  }, 60_000);
+});
+
+// O git exporta GIT_DIR e companhia para o hook. Se o `npm run verify` as herdar, os testes unitários que montam um
+// repositório temporário passam a operar no repositório de verdade (config, branches, HEAD), então o hook as tira
+// antes de chamar o npm.
+describe('AI-17 o pre-push roda o npm run verify sem nenhuma variável GIT_* no ambiente', () => {
+  const ACCEPTED = 'https://github.com/roneyrogerio/casecellshop-backend.git';
+  const EXPORTED = [
+    'GIT_COMMON_DIR',
+    'GIT_DIR',
+    'GIT_INDEX_FILE',
+    'GIT_PREFIX',
+    'GIT_WORK_TREE',
+  ];
+
+  // Controle positivo: o mesmo ambiente, entregue a um processo qualquer pelo mesmo caminho, traz as variáveis. Sem
+  // isto, "nenhuma variável chegou ao npm" valeria também para um teste que nunca as exportou.
+  it('AI-17 controle: o ambiente em que o hook roda traz as variáveis GIT_* exportadas', () => {
+    const project = makeTempDir('prepush-control-');
+    const env = { ...process.env, ...gitHookEnv(project) };
+
+    const result = runCommand(
+      'sh',
+      ['-c', "env | grep '^GIT_' | cut -d= -f1 | sort"],
+      { env },
+    );
+
+    expect(result.stdout.split('\n')).toEqual(expect.arrayContaining(EXPORTED));
+  }, 60_000);
+
+  it('AI-17 com GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR e GIT_PREFIX exportados, o npm run verify não recebe nenhuma variável GIT_*', () => {
+    const result = runHook(ACCEPTED, { gitHookEnv: true });
+
+    expect(Object.keys(result.env)).toEqual(expect.arrayContaining(EXPORTED));
+    expect(result.code).toBe(0);
+    expect(result.npm.calls()).toEqual([
+      { args: 'run verify', cwd: result.project },
+    ]);
+    expect(result.npm.gitVariables()).toEqual([]);
+  }, 60_000);
+
+  it('AI-17 mesmo as variáveis GIT_* que não são de caminho (GIT_AUTHOR_NAME, GIT_SSH_COMMAND) não chegam ao npm run verify', () => {
+    const project = makeTempDir('prepush-extra-');
+    initRepo(project);
+    const npm = makeFakeNpm(0);
+
+    const result = runCommand(hook, ['origin', ACCEPTED], {
+      input: REFS,
+      cwd: project,
+      env: {
+        ...isolatedEnv(npm),
+        GIT_AUTHOR_NAME: 'alguem',
+        GIT_SSH_COMMAND: 'ssh -i /nao/existe',
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(npm.calls()).toHaveLength(1);
+    expect(npm.gitVariables()).toEqual([]);
   }, 60_000);
 });
