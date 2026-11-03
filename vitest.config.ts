@@ -40,8 +40,12 @@ export default defineConfig({
           // e node, e não disputam a CPU com os prazos da integração (FND-13).
           sequence: { groupOrder: 1 },
           // FND-15: a semente e o número de casos do fast-check, fixos no PR e
-          // vindos do ambiente no agendado.
-          setupFiles: ['./test/helpers/property-setup.ts'],
+          // vindos do ambiente no agendado. O git-env-setup vem antes: sob um hook
+          // do git, as variáveis GIT_* fariam os testes gravarem no clone real (AI-17).
+          setupFiles: [
+            './test/helpers/git-env-setup.ts',
+            './test/helpers/property-setup.ts',
+          ],
         },
       },
       {
@@ -56,6 +60,8 @@ export default defineConfig({
           // derrubaram um banco no Docker de 4 CPUs e 6 GB (FND-13). Com os
           // contêineres da rodada (FND-14), o limite é revisto pela medição.
           maxWorkers: 4,
+          // Sob um hook do git, as variáveis GIT_* apontam para o clone real (AI-17).
+          setupFiles: ['./test/helpers/git-env-setup.ts'],
         },
       },
     ],
