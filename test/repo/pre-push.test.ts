@@ -302,9 +302,10 @@ describe('AI-17 o pre-push roda o npm run verify na raiz do repositório, depois
 });
 
 // O git exporta GIT_DIR e companhia para o hook. Se o `npm run verify` as herdar, os testes unitários que montam um
-// repositório temporário passam a operar no repositório de verdade (config, branches, HEAD), então o hook as tira
-// antes de chamar o npm.
-describe('AI-17 o pre-push roda o npm run verify sem nenhuma variável GIT_* no ambiente', () => {
+// repositório temporário passam a operar no repositório de verdade (config, branches, HEAD), então o hook tira as
+// que localizam o repositório (`git rev-parse --local-env-vars`, como o githooks recomenda) antes de chamar o npm.
+// As outras (GIT_AUTHOR_NAME, GIT_EDITOR...) saem do ambiente dos testes pelo git-env-setup.ts.
+describe('AI-17 o pre-push roda o npm run verify sem as variáveis GIT_* que localizam o repositório', () => {
   const ACCEPTED = 'https://github.com/roneyrogerio/casecellshop-backend.git';
   const EXPORTED = [
     'GIT_COMMON_DIR',
@@ -329,7 +330,7 @@ describe('AI-17 o pre-push roda o npm run verify sem nenhuma variável GIT_* no 
     expect(result.stdout.split('\n')).toEqual(expect.arrayContaining(EXPORTED));
   }, 60_000);
 
-  it('AI-17 com GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR e GIT_PREFIX exportados, o npm run verify não recebe nenhuma variável GIT_*', () => {
+  it('AI-17 com GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR e GIT_PREFIX exportados, o npm run verify não recebe nenhuma dessas variáveis', () => {
     const result = runHook(ACCEPTED, { gitHookEnv: true });
 
     expect(Object.keys(result.env)).toEqual(expect.arrayContaining(EXPORTED));
@@ -337,26 +338,60 @@ describe('AI-17 o pre-push roda o npm run verify sem nenhuma variável GIT_* no 
     expect(result.npm.calls()).toEqual([
       { args: 'run verify', cwd: result.project },
     ]);
-    expect(result.npm.gitVariables()).toEqual([]);
+    expect(
+      result.npm.gitVariables().filter((name) => EXPORTED.includes(name)),
+    ).toEqual([]);
   }, 60_000);
 
-  it('AI-17 mesmo as variáveis GIT_* que não são de caminho (GIT_AUTHOR_NAME, GIT_SSH_COMMAND) não chegam ao npm run verify', () => {
-    const project = makeTempDir('prepush-extra-');
+  // O contrato do hook é o da documentação do git (githooks): limpar as variáveis que localizam o repositório, as
+  // que `git rev-parse --local-env-vars` lista. A lista vem do git instalado, e não de uma cópia escrita à mão.
+  it('AI-17 nenhuma das variáveis que o git rev-parse --local-env-vars lista chega ao npm run verify', () => {
+    const listed = runCommand('git', ['rev-parse', '--local-env-vars'], {
+      cwd: root,
+    });
+    const names = listed.stdout.split('\n').filter((line) => line !== '');
+    expect(names).toEqual(expect.arrayContaining(EXPORTED));
+
+    const project = makeTempDir('prepush-local-env-');
     initRepo(project);
+    const gitDir = join(project, '.git');
+    // Valores que apontam para o repositório temporário ou que não fazem nada, para o `git` do próprio hook
+    // continuar funcionando com elas no ambiente.
+    const values: Record<string, string> = {
+      GIT_WORK_TREE: project,
+      GIT_OBJECT_DIRECTORY: join(gitDir, 'objects'),
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: '',
+      GIT_CONFIG_COUNT: '0',
+      GIT_CONFIG_PARAMETERS: '',
+      GIT_IMPLICIT_WORK_TREE: '0',
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_REPLACE_REF_BASE: 'refs/replace/',
+      GIT_PREFIX: '',
+    };
+    const exported = Object.fromEntries(
+      names.map((name) => [name, values[name] ?? gitDir]),
+    );
     const npm = makeFakeNpm(0);
+    const env = { ...isolatedEnv(npm), ...exported };
+
+    // Controle positivo: um processo qualquer, com o mesmo ambiente, recebe todas.
+    const control = runCommand(
+      'sh',
+      ['-c', "env | grep '^GIT_' | cut -d= -f1 | sort"],
+      { env },
+    );
+    expect(control.stdout.split('\n')).toEqual(expect.arrayContaining(names));
 
     const result = runCommand(hook, ['origin', ACCEPTED], {
       input: REFS,
       cwd: project,
-      env: {
-        ...isolatedEnv(npm),
-        GIT_AUTHOR_NAME: 'alguem',
-        GIT_SSH_COMMAND: 'ssh -i /nao/existe',
-      },
+      env,
     });
 
-    expect(result.status).toBe(0);
-    expect(npm.calls()).toHaveLength(1);
-    expect(npm.gitVariables()).toEqual([]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(npm.calls()).toEqual([{ args: 'run verify', cwd: project }]);
+    expect(npm.gitVariables().filter((name) => names.includes(name))).toEqual(
+      [],
+    );
   }, 60_000);
 });
