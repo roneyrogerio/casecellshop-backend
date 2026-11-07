@@ -1,5 +1,5 @@
 import * as fc from 'fast-check';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   configureProperties,
   DEFAULT_NUM_RUNS,
@@ -10,7 +10,9 @@ import {
 } from './property-setup.ts';
 
 // O arquivo é importado direto, sem depender de o vitest.config.ts já o ligar como setupFiles.
-afterEach(() => {
+// A importação (e o setupFiles) já configura o fast-check com o ambiente; zerar antes de cada teste, e não depois,
+// faz o primeiro teste partir do mesmo estado que os outros, também com a ordem embaralhada do agendado.
+beforeEach(() => {
   fc.resetConfigureGlobal();
 });
 
