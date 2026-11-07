@@ -30,12 +30,15 @@ jobs:
     permissions: {}
     steps:
       # Token de 1 hora, só com o que o merge pede; o App não tem outra permissão.
+      # A de issues é porque o GitHub fecha as issues do "Closes #N" em nome de
+      # quem mescla: sem ela, a issue fica aberta e nada avisa (a #53 do #54).
       - id: app-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.MERGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.MERGE_APP_PRIVATE_KEY }}
           permission-contents: write
+          permission-issues: write
           permission-pull-requests: write
 
       # A aprovação é conferida de novo pela API, no commit atual do PR: um push
