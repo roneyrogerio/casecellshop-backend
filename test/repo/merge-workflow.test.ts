@@ -117,7 +117,8 @@ function environmentName(job: CiJob): unknown {
     : environment;
 }
 
-// O token do App sai do ambiente `merge`, só com as duas permissões do merge, por action fixada por SHA.
+// O token do App sai do ambiente `merge`, só com as três permissões do merge, por action fixada por SHA. A de issues
+// existe porque o GitHub fecha as issues do `Closes #N` em nome de quem mescla: sem ela, elas ficam abertas, sem erro.
 function appTokenViolations(steps: CiStep[]): string[] {
   const step = steps.find((candidate) =>
     (candidate.uses ?? '').startsWith('actions/create-github-app-token@'),
@@ -138,6 +139,7 @@ function appTokenViolations(steps: CiStep[]): string[] {
   if (
     !same(scopes, [
       'permission-contents=write',
+      'permission-issues=write',
       'permission-pull-requests=write',
     ])
   )
@@ -358,6 +360,7 @@ jobs:
           client-id: \${{ vars.MERGE_APP_CLIENT_ID }}
           private-key: \${{ secrets.MERGE_APP_PRIVATE_KEY }}
           permission-contents: write
+          permission-issues: write
           permission-pull-requests: write
       - name: Liga o auto-merge com merge commit
         env:
@@ -491,6 +494,16 @@ const BY_APP_CASES: Case[] = [
     'sem permission-contents no token',
     '          permission-contents: write\n',
     '',
+  ],
+  [
+    'sem permission-issues no token',
+    '          permission-issues: write\n',
+    '',
+  ],
+  [
+    'com permission-issues só de leitura no token',
+    'permission-issues: write',
+    'permission-issues: read',
   ],
   [
     'sem permission-pull-requests no token',
@@ -669,6 +682,38 @@ describe('AI-10 as conferências do merge enxergam o que procuram (controle nega
           approvalNameOf(approval),
         ),
       ).not.toEqual([]);
+    },
+  );
+
+  it('AI-10 o token do App com as três permissões passa na conferência das permissões (controle positivo)', () => {
+    expect(appTokenViolations(stepsOfWorkflow(byApp))).toEqual([]);
+  });
+
+  it.each([
+    [
+      'sem permission-issues',
+      '          permission-issues: write\n',
+      '',
+      'permissões do token: [permission-contents=write, permission-pull-requests=write]',
+    ],
+    [
+      'com permission-issues só de leitura',
+      'permission-issues: write',
+      'permission-issues: read',
+      'permissões do token: [permission-contents=write, permission-issues=read, permission-pull-requests=write]',
+    ],
+    [
+      'com uma permissão a mais',
+      '          permission-pull-requests: write\n',
+      '          permission-pull-requests: write\n          permission-actions: write\n',
+      'permissões do token: [permission-actions=write, permission-contents=write, permission-issues=write, permission-pull-requests=write]',
+    ],
+  ])(
+    'AI-10 o token do App %s reprova pela lista de permissões',
+    (_label, from, to, expected) => {
+      expect(
+        appTokenViolations(stepsOfWorkflow(edited(BY_APP_GOOD, from, to))),
+      ).toEqual([expected]);
     },
   );
 
